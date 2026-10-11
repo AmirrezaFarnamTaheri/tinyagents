@@ -160,6 +160,16 @@ impl Tool for CanonicalSharedToolAdapter {
         .await
     }
 
+    async fn prepare_authorization(
+        &self,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        match self.resolved_tool() {
+            Some(tool) => tool.prepare_authorization(args).await,
+            None => Ok(None),
+        }
+    }
+
     async fn execute_with_context(
         &self,
         args: serde_json::Value,

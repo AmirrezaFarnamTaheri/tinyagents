@@ -415,3 +415,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Default for AgentHarness<State, Ctx> 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "mod_authorization_context_tests.rs"]
+mod authorization_context_tests;

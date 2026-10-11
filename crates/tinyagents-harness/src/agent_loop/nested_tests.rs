@@ -2074,6 +2074,64 @@ async fn a_tool_rule_refuses_a_nested_call() {
     assert_eq!(runs, 0);
 }
 
+struct PreboundTargetDispatch {
+    outer: Arc<Leaf>,
+    target: Arc<Leaf>,
+    target_arguments: Value,
+}
+
+#[async_trait]
+impl crate::tool::ToolDispatch<(), ()> for PreboundTargetDispatch {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.outer.clone()
+    }
+
+    fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
+        Some((self.target.as_ref(), &self.target_arguments))
+    }
+
+    async fn execute(
+        &self,
+        _state: &(),
+        _call_id: CallId,
+        arguments: Value,
+        _options: tinytools::ToolCallOptions,
+        _parent: &RunContext<()>,
+    ) -> anyhow::Result<ToolResult> {
+        self.target.execute(arguments).await
+    }
+}
+
+#[tokio::test]
+async fn nested_rules_check_prebound_targets_without_a_bind_call_result() {
+    let target = Leaf::new("leaf");
+    let caller = Caller::new("caller", vec![("routed", json!({}))]);
+    let outcomes = caller.outcomes();
+    let mut harness = harness_with(vec![parent_call("p1", "caller")], enabled());
+    harness.register_tool(Arc::new(caller));
+    harness.register_tool_dispatch(Arc::new(PreboundTargetDispatch {
+        outer: Leaf::new("routed"),
+        target: target.clone(),
+        target_arguments: json!({}),
+    }));
+    with_tool_rules(
+        &mut harness,
+        json!({ "rules": [ { "id": "no-leaf", "effect": "deny", "match": { "name": "leaf" } } ] }),
+    );
+
+    run(&harness, &EventRecorder::new())
+        .await
+        .expect("run succeeds with a nested refusal");
+
+    assert!(
+        outcomes.lock().unwrap()[0]
+            .as_ref()
+            .unwrap_err()
+            .contains("rule 'no-leaf'")
+    );
+    assert_eq!(target.runs(), 0);
+}
+
 #[tokio::test]
 async fn a_require_approval_rule_fails_a_nested_call_instead_of_deferring() {
     let (outcome, runs) = nested_refusal(Leaf::new("leaf"), |harness| {
