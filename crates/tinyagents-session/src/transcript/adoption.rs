@@ -50,6 +50,10 @@ const STALE_LOCK_AGE: Duration = Duration::from_secs(60);
 /// `thread_id` is passed separately from `session` because the legacy files are
 /// keyed by `_meta.thread_id`, which is what the host had before it had a
 /// session key, and the two are not required to be the same string.
+// keep until v3.0 (review after 2027-01-11): hosts must publish an explicit
+// pre-SessionRef upgrade/import boundary before removing this one-shot adopter.
+// Offline workspaces may still contain timestamped transcripts; absence of new
+// writes does not prove that every durable conversation has been adopted.
 pub fn adopt_legacy_session_transcripts(
     workspace_dir: &Path,
     session: &SessionRef,
