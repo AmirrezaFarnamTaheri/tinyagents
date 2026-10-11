@@ -3900,3 +3900,51 @@ async fn hosted_wildcard_scope_preserves_explicit_deferred_additions() {
         "deferred registration must remain discoverable rather than directly advertised"
     );
 }
+
+#[tokio::test]
+async fn hosted_model_hint_reaches_the_resolver_without_an_exact_pin() {
+    struct HintResolver;
+    #[async_trait]
+    impl ModelResolver<()> for HintResolver {
+        async fn resolve(
+            &self,
+            request: &crate::host::ModelResolveRequest,
+        ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+            assert_eq!(
+                request.model_pin, None,
+                "a router hint is not a concrete model id"
+            );
+            assert_eq!(
+                serde_json::to_value(request).unwrap()["model_hint"],
+                "reasoning"
+            );
+            Ok(Arc::new(ScriptedModel::new(vec![
+                ModelResponse::assistant("routed"),
+            ])))
+        }
+    }
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.model = tinyagents_definition::ModelSpec::Hint("reasoning".into());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(HintResolver),
+    );
+    let harness: AgentHarness<()> = AgentHarness::new();
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("hint-routing"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run.text().as_deref(), Some("routed"));
+}
