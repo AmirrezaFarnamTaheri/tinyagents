@@ -118,3 +118,26 @@ fn preflight_reserved_path_characters_preserve_original_source() {
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
 }
+
+#[tokio::test]
+async fn admitted_agent_import_preserves_source_and_retry_never_overwrites_native_edits() {
+    let (ledger, sibling) = ledgers();
+    let root = tempfile::tempdir().unwrap();
+    let input = super::super::agent_tests::run("run");
+    let original = crate::run_ledger::upsert_agent_run(root.path(), input).unwrap();
+    crate::run_ledger::append_run_event(root.path(), RunEventAppend { run_id: "run".into(), event_type: "old".into(), payload: serde_json::json!({"source":true}) }).unwrap();
+    crate::run_ledger::upsert_run_telemetry(root.path(), RunTelemetryUpsert { run_id: "run".into(), input_tokens: Some(7), ..Default::default() }).unwrap();
+    let path = crate::store::db_path(root.path());
+    let bytes = std::fs::read(&path).unwrap();
+    let source = QuiescentSource::asserted_by_trusted_host(&path, SourceOwner::asserted_by_trusted_host(ledger.scope().clone()));
+    let report = ledger.import_agent_family(&source, "import-1").await.unwrap();
+    assert_eq!(report.agent_runs, 1); assert_eq!(report.events, 1); assert_eq!(report.telemetry, 1);
+    let row = ledger.get_agent_run("run").await.unwrap().unwrap();
+    assert_eq!(row.started_at, original.started_at); assert_eq!(row.telemetry.unwrap().input_tokens, 7);
+    ledger.transition_agent_run_status("run", AgentRunStatus::Completed, None, None).await.unwrap();
+    assert_eq!(ledger.import_agent_family(&source, "import-1").await.unwrap(), report);
+    assert_eq!(ledger.get_agent_run("run").await.unwrap().unwrap().status, AgentRunStatus::Completed);
+    assert!(sibling.get_agent_run("run").await.unwrap().is_none());
+    assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}

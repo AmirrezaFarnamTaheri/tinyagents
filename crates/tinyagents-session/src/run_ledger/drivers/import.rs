@@ -172,3 +172,21 @@ fn source_sql_error(error: rusqlite::Error) -> StorageError {
 #[cfg(test)]
 #[path = "import_tests.rs"]
 mod tests;
+
+/// Counts committed together with an agent-family import receipt.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentImportReport {
+    pub agent_runs: usize,
+    pub events: usize,
+    pub telemetry: usize,
+}
+
+impl DriverRunLedger {
+    /// Import the agent family from a trusted quiescent classic source.
+    ///
+    /// # Errors
+    /// Source authority, unsupported schema, or native transaction refusal.
+    pub async fn import_agent_family(&self, _source: &QuiescentSource, _operation_id: &str) -> Result<AgentImportReport> {
+        Err(unsupported("import_agent_family"))
+    }
+}

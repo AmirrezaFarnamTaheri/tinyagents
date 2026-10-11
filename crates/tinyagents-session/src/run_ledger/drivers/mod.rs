@@ -9,7 +9,7 @@ mod events;
 mod effects;
 mod import;
 mod storage;
-pub use import::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
+pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
 use std::sync::Arc;
 use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};

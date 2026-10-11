@@ -2,7 +2,7 @@ use super::*;
 use serde_json::json;
 use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
 
-fn run(id: &str) -> AgentRunUpsert {
+pub(super) fn run(id: &str) -> AgentRunUpsert {
     AgentRunUpsert {
         id: id.into(), kind: AgentRunKind::WorkerThread,
         parent_run_id: Some("parent".into()), parent_thread_id: Some("thread".into()),
