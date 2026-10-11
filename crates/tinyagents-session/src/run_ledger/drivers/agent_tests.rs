@@ -41,13 +41,13 @@ async fn native_status_compare_and_swap_records_only_the_winning_event() {
     let a = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     a.upsert_agent_run(run("run")).await.unwrap();
     let event = || Some(RunEventAppend { run_id: "run".into(), event_type: "completed".into(), payload: json!({}) });
-    let result = a.transition_agent_run_status_from("run", &[AgentRunStatus::Running], AgentRunStatus::Completed,
+    let result = a.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Completed,
         None, Some(Utc::now()), event()).await.unwrap();
     assert!(matches!(result, RunTransition::Applied(_)));
-    let stale = a.transition_agent_run_status_from("run", &[AgentRunStatus::Running], AgentRunStatus::Failed,
-        Some("stale".into()), None, event()).await.unwrap();
+    let stale = a.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Failed,
+        Some("stale"), None, event()).await.unwrap();
     assert!(matches!(stale, RunTransition::StatusChanged(_)));
-    let events = a.list_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap();
+    let events = a.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap();
     assert_eq!(events.events.len(), 1);
     assert_eq!(events.events[0].sequence, 1);
 }
