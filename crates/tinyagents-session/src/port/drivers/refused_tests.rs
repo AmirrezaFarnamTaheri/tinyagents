@@ -8,6 +8,15 @@ fn refused() -> Refused {
 }
 
 #[tokio::test]
+async fn trusted_bootstrap_preserves_a_native_declaration_refusal() {
+    let error = super::super::DriverSessionStores::prepare_schema(&refused())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unavailable);
+    assert_eq!(error.message(), "down");
+}
+
+#[tokio::test]
 async fn every_document_call_reports_the_refusal() {
     let docs = refused();
     let kind = |error: StorageError| {

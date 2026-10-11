@@ -8,6 +8,82 @@ fn memory() -> DriverSessionStores {
     DriverSessionStores::new(Arc::new(MemoryStorage::new())).unwrap()
 }
 
+#[test]
+fn bootstrap_manifest_contains_all_session_document_indexes() {
+    use tinystoragedrivers_core::IndexSpec;
+    let specs = DriverSessionStores::collection_specs();
+    assert_eq!(specs.len(), 4);
+    assert_eq!(specs[0].name, "session_transcript_entries");
+    assert_eq!(
+        specs[0].indexes,
+        vec![
+            IndexSpec::new("by_stem", ["stem", "seq"]),
+            IndexSpec::new("by_stem_written", ["stem", "written"]),
+        ]
+    );
+    assert_eq!(specs[1].name, "session_transcripts");
+    assert_eq!(
+        specs[1].indexes,
+        vec![
+            IndexSpec::new("by_thread", ["thread_id", "created_at"]),
+            IndexSpec::new("by_agent_name", ["agent_name", "created_at"]),
+            IndexSpec::new("by_agent_id", ["agent_id", "created_at"]),
+        ]
+    );
+    assert_eq!(specs[2].name, "session_turn_states");
+    assert_eq!(
+        specs[2].indexes,
+        vec![IndexSpec::new("by_thread", ["thread_id"])]
+    );
+    assert_eq!(specs[3], DriverStore::collection_spec("session_kv"));
+    for spec in specs {
+        spec.validate().unwrap();
+        assert!(spec.ttl_field.is_none());
+        assert!(spec.search.is_none());
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let backends: Vec<Arc<dyn StorageBackend>> = vec![
+        Arc::new(MemoryStorage::new()),
+        Arc::new(SqliteStorage::open(directory.path().join("prepared.db")).unwrap()),
+    ];
+    for backend in backends {
+        let scoped = backend.for_scope(&Scope::local()).unwrap();
+        DriverSessionStores::prepare_schema(scoped.documents().as_ref())
+            .await
+            .unwrap();
+        scoped
+            .documents()
+            .put(
+                "session_kv",
+                "bootstrap-control",
+                serde_json::json!({"ns": "control", "value": "retained"}),
+                tinystoragedrivers_core::Precondition::Absent,
+            )
+            .await
+            .unwrap();
+        DriverSessionStores::prepare_schema(scoped.documents().as_ref())
+            .await
+            .unwrap();
+        assert_eq!(
+            scoped
+                .documents()
+                .get("session_kv", "bootstrap-control")
+                .await
+                .unwrap()
+                .unwrap()
+                .doc["value"],
+            "retained"
+        );
+        let provider = DriverSessionStores::new(backend).unwrap();
+        session_store_conformance(&provider).await;
+        session_store_isolation_conformance(&provider).await;
+    }
+}
+
 fn sqlite(dir: &tempfile::TempDir) -> DriverSessionStores {
     let storage = SqliteStorage::open(dir.path().join("sessions.db")).unwrap();
     DriverSessionStores::new(Arc::new(storage)).unwrap()

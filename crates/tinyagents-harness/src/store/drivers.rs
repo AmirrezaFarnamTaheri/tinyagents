@@ -70,6 +70,14 @@ impl DriverStore {
         }
     }
 
+    /// The declaration required by a store using `collection`.
+    ///
+    /// Trusted hosts can prepare it before issuing actor handles. Returning a
+    /// declaration grants no access and does not initialize the backend.
+    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
+        CollectionSpec::new(collection).index(IndexSpec::new("by_ns", ["ns"]))
+    }
+
     /// The document id of `key` in `namespace`. The namespace is
     /// length-prefixed so `("a/b", "c")` and `("a", "b/c")` never collide.
     fn id(namespace: &str, key: &str) -> String {
@@ -80,8 +88,7 @@ impl DriverStore {
     async fn declared(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
-                let spec =
-                    CollectionSpec::new(&self.collection).index(IndexSpec::new("by_ns", ["ns"]));
+                let spec = Self::collection_spec(self.collection.clone());
                 self.docs.ensure_collection(&spec).await.map_err(map_error)
             })
             .await
