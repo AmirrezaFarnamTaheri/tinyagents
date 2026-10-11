@@ -252,21 +252,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Resolves the effective host tool allow-list for `ctx`, or `Ok(None)`
     /// when nothing should be restricted.
     ///
-    /// Three cases:
-    /// - Not a hosted run at all (`host_invocation_binding` returns `None`):
-    ///   no host allow-list concept applies, so this returns `None` (allow
-    ///   every registered tool, same as an explicit-model run).
-    /// - Hosted, and the resolved [`crate::host::AgentDefinition`] declared a
-    ///   non-empty tool list: returns that set. Only those names are
-    ///   dispatchable, checked with plain set membership — no empty-set
-    ///   bypass (that bypass was I-9: an empty `HashSet` used to mean
-    ///   "unrestricted" instead of "nothing").
-    /// - Hosted, but the definition declared no tools at all (an empty or
-    ///   absent list): fails closed by default — returns `Some(HashSet::new())`,
-    ///   which allows nothing — unless
-    ///   [`crate::host::HostCapabilities::fail_closed_tool_allowlist`] was
-    ///   explicitly turned off on this host, in which case it returns `None`
-    ///   (legacy unrestricted behavior, opt-in only).
+    /// Explicit-model runs have no host allowlist. Named hosted scopes return
+    /// their exact names, including an empty deny-all set. A wildcard with
+    /// additions or exclusions stays dynamic; its exact exclusions are applied
+    /// by the shared gate. A bare hosted wildcard uses the host's fallback:
+    /// deny-all by default, unrestricted only with the legacy opt-in.
     pub(super) fn resolve_tool_allowlist(
         &self,
         ctx: &RunContext<Ctx>,
