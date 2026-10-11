@@ -375,7 +375,7 @@ fn generic_loader_skips_bad_files_and_preserves_source_for_valid_custom_agents()
 
 #[test]
 fn deferred_names_join_named_scope_before_denials_and_deduplication() {
-    let mut def = make_def("agent").with_tools(vec!["read".into()]);
+    let mut def = make_def("agent").with_tools(vec!["read"]);
     def.extra_tools = vec!["read".into(), "extra".into()];
     def.deferred_tools = vec!["deferred".into(), "read".into(), "denied".into()];
     def.disallowed_tools = vec!["denied".into()];
