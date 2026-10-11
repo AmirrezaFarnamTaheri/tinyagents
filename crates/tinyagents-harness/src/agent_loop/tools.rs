@@ -333,6 +333,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         else {
             return CallGate::Admit(tinytools::ApprovalDirective::Default);
         };
+        self.admit_dispatch(gate, dispatch.as_ref(), args)
+    }
+
+    fn admit_dispatch(
+        &self,
+        gate: &ToolGate,
+        dispatch: &dyn crate::tool::ToolDispatch<State, Ctx>,
+        args: &serde_json::Value,
+    ) -> CallGate {
         let approval = match gate.admit_call(dispatch.tool().as_ref(), args) {
             CallGate::Admit(approval) => approval,
             refusal @ CallGate::Refuse(_) => return refusal,
@@ -1045,7 +1054,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // (a JSON-encoded object decoded) or preparation can change what an
         // indirect target or an argument condition reads, so the final
         // decision is made here, before approval and dispatch.
-        match self.rule_admission(&gate, &call.name, &call.arguments) {
+        match self.admit_dispatch(&gate, dispatch.as_ref(), &call.arguments) {
             CallGate::Admit(approval) => rule_approval = rule_approval.strictest(approval),
             CallGate::Refuse(message) => {
                 ctx.limits.rollback_tool_calls(1);
