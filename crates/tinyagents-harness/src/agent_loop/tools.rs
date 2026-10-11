@@ -344,23 +344,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         dispatch: &dyn crate::tool::ToolDispatch<State, Ctx>,
         args: &serde_json::Value,
     ) -> CallGate {
-        let approval = match gate
-            .admit_call_async(dispatch.tool().as_ref(), args)
-            .await
-        {
+        let approval = match gate.admit_call_async(dispatch.tool().as_ref(), args).await {
             CallGate::Admit(approval) => approval,
             refusal @ CallGate::Refuse(_) => return refusal,
         };
         match dispatch.admission_target() {
-            Some((target, target_arguments)) => match gate
-                .admit_call_async(target, target_arguments)
-                .await
-            {
-                CallGate::Admit(target_approval) => {
-                    CallGate::Admit(approval.strictest(target_approval))
+            Some((target, target_arguments)) => {
+                match gate.admit_call_async(target, target_arguments).await {
+                    CallGate::Admit(target_approval) => {
+                        CallGate::Admit(approval.strictest(target_approval))
+                    }
+                    refusal @ CallGate::Refuse(_) => refusal,
                 }
-                refusal @ CallGate::Refuse(_) => refusal,
-            },
+            }
             None => CallGate::Admit(approval),
         }
     }

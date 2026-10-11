@@ -107,14 +107,19 @@ async fn admit_call_reports_approval_and_refusals() {
     let gate = ToolGate::new(None, &ToolRulePolicy::new(rules), None);
     let direct = tinytools::ToolExposure::Direct;
     assert_eq!(
-        gate.admit_call_async(&Named("send", direct), &json!({})).await,
+        gate.admit_call_async(&Named("send", direct), &json!({}))
+            .await,
         CallGate::Admit(ApprovalDirective::Required)
     );
     assert_eq!(
-        gate.admit_call_async(&Named("read", direct), &json!({})).await,
+        gate.admit_call_async(&Named("read", direct), &json!({}))
+            .await,
         CallGate::Admit(ApprovalDirective::Default)
     );
-    match gate.admit_call_async(&Named("drop", direct), &json!({})).await {
+    match gate
+        .admit_call_async(&Named("drop", direct), &json!({}))
+        .await
+    {
         CallGate::Refuse(message) => assert!(message.contains("rule 'nope'"), "{message}"),
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -156,16 +161,9 @@ impl Tool for AsyncTargetFailure {
 
 #[tokio::test]
 async fn async_target_resolution_failure_refuses_without_exposing_diagnostic() {
-    let gate = ToolGate::new(
-        None,
-        &ToolRulePolicy::new(deny("mcp_*_delete_*")),
-        None,
-    );
+    let gate = ToolGate::new(None, &ToolRulePolicy::new(deny("mcp_*_delete_*")), None);
 
-    match gate
-        .admit_call_async(&AsyncTargetFailure, &json!({}))
-        .await
-    {
+    match gate.admit_call_async(&AsyncTargetFailure, &json!({})).await {
         CallGate::Refuse(message) => {
             assert!(!message.contains("sensitive module diagnostic"));
         }

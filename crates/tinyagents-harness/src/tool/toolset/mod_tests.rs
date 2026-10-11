@@ -149,6 +149,14 @@ impl Tool for TaggedDispatcher {
             .as_str()
             .map(|name| tinytools::ToolSubject::named(name).into())
     }
+    async fn indirect_target_async(
+        &self,
+        args: &Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        Ok(args["action"]
+            .as_str()
+            .map(|name| tinytools::ToolSubject::named(format!("async_{name}")).into()))
+    }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success("ok"))
     }
@@ -167,6 +175,20 @@ fn an_override_keeps_what_tool_rules_read() {
     assert_eq!(
         tool.indirect_target(&serde_json::json!({ "action": "GMAIL_DELETE_EMAIL" })),
         Some(tinytools::ToolSubject::named("GMAIL_DELETE_EMAIL").into())
+    );
+}
+
+#[tokio::test]
+async fn an_override_forwards_async_indirect_targets() {
+    let tool = OverrideTool::new(Arc::new(TaggedDispatcher)).with_name("connector_execute");
+    let target = tool
+        .indirect_target_async(&serde_json::json!({ "action": "GMAIL_DELETE_EMAIL" }))
+        .await
+        .expect("target resolution succeeds");
+
+    assert_eq!(
+        target.map(|call| call.target.name),
+        Some("async_GMAIL_DELETE_EMAIL".to_owned())
     );
 }
 

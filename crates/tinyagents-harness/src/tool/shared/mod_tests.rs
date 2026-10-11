@@ -110,11 +110,28 @@ async fn canonical_adapter_preserves_spec_policy_context_and_result() {
                 ..ToolResult::default()
             })
         }
+        async fn indirect_target_async(
+            &self,
+            _args: &serde_json::Value,
+        ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+            Ok(Some(
+                tinytools::ToolSubject::named("shared_async_target").into(),
+            ))
+        }
     }
     let sets: Vec<Arc<Vec<Box<dyn Tool>>>> = vec![Arc::new(vec![Box::new(SharedRecordingTool(
         seen_context.clone(),
     ))])];
     let adapter = CanonicalSharedToolAdapter::for_name(sets, "recording").expect("registered tool");
+
+    assert_eq!(
+        adapter
+            .indirect_target_async(&serde_json::json!({}))
+            .await
+            .expect("shared target resolution succeeds")
+            .map(|call| call.target.name),
+        Some("shared_async_target".to_owned())
+    );
 
     assert_eq!(adapter.name(), "recording");
     assert_eq!(
