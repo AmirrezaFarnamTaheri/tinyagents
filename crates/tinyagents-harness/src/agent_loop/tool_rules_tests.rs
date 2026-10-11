@@ -4,7 +4,10 @@
 
 use super::*;
 
-use std::sync::Mutex;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -19,8 +22,10 @@ use crate::tool::packs::{PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, U
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::model::ModelResponse;
 use tinytools::{
-    RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRuleSet, ToolRules, ToolSubject,
+    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRuleSet,
+    ToolRules, ToolSubject,
 };
+use tokio::sync::Notify;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -145,6 +150,48 @@ fn tool_names(request: &tinyinference_llm::model::ModelRequest) -> Vec<String> {
     request.tools.iter().map(|tool| tool.name.clone()).collect()
 }
 
+struct BlockingTargetTool {
+    started: Notify,
+    dropped: Arc<AtomicBool>,
+}
+
+impl BlockingTargetTool {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            started: Notify::new(),
+            dropped: Arc::new(AtomicBool::new(false)),
+        })
+    }
+}
+
+#[async_trait]
+impl Tool for BlockingTargetTool {
+    fn name(&self) -> &str {
+        "blocked_target"
+    }
+    fn description(&self) -> &str {
+        "test tool whose target resolver stalls"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn indirect_target_async(&self, _: &Value) -> anyhow::Result<Option<IndirectCall>> {
+        struct MarkDropped(Arc<AtomicBool>);
+        impl Drop for MarkDropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let _drop_marker = MarkDropped(self.dropped.clone());
+        self.started.notify_one();
+        std::future::pending().await
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("unexpected execution"))
+    }
+}
+
 async fn run(harness: &AgentHarness<()>, name: &str) -> crate::middleware::AgentRun {
     harness
         .invoke(&(), (), RunConfig::new(name), vec![Message::user("go")])
@@ -208,6 +255,41 @@ async fn an_unconfigured_policy_changes_nothing() {
     harness.register_tool(RuleTool::new("b"));
     run(&harness, "plain").await;
     assert_eq!(tool_names(&model.requests()[0]), ["a", "b"]);
+}
+
+#[tokio::test]
+async fn indirect_target_resolution_obeys_run_cancellation() {
+    let tool = BlockingTargetTool::new();
+    let dropped = tool.dropped.clone();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(tool.clone());
+    harness.with_policy(RunPolicy {
+        tool_rules: ToolRulePolicy::new(rules(json!({ "rules": [
+            { "effect": "deny", "match": { "name": "resolved_target" } },
+        ] }))),
+        ..RunPolicy::default()
+    });
+    let cancellation = crate::cancel::CancellationToken::new();
+    let ctx = RunContext::new(RunConfig::new("cancel-target-resolution"), ())
+        .with_cancellation(cancellation.clone());
+    let gate = harness.resolve_tool_gate(&ctx).unwrap();
+    let mut admission = Box::pin(harness.rule_admission(
+        &ctx,
+        &gate,
+        "blocked_target",
+        &json!({}),
+    ));
+
+    tokio::select! {
+        _ = tool.started.notified() => {},
+        result = &mut admission => panic!("target resolution unexpectedly completed: {result:?}"),
+    }
+    cancellation.cancel();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut admission)
+        .await
+        .expect("cancellation should interrupt target resolution");
+    assert!(matches!(result, Err(crate::error::TinyAgentsError::Cancelled)));
+    assert!(dropped.load(Ordering::SeqCst), "resolver future was not dropped");
 }
 
 // ── Calls ───────────────────────────────────────────────────────────────────
