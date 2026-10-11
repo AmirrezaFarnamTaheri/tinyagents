@@ -326,13 +326,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// directive: it is not a tool the rules can describe, and the
     /// unknown-tool policy answers it below.
     fn rule_admission(&self, gate: &ToolGate, name: &str, args: &serde_json::Value) -> CallGate {
-        match gate
+        let Some(dispatch) = gate
             .allows_name(name)
             .then(|| self.tools.model_dispatch(name))
             .flatten()
-        {
-            Some(dispatch) => gate.admit_call(dispatch.tool().as_ref(), args),
-            None => CallGate::Admit(tinytools::ApprovalDirective::Default),
+        else {
+            return CallGate::Admit(tinytools::ApprovalDirective::Default);
+        };
+        let approval = match gate.admit_call(dispatch.tool().as_ref(), args) {
+            CallGate::Admit(approval) => approval,
+            refusal @ CallGate::Refuse(_) => return refusal,
+        };
+        match dispatch.admission_target() {
+            Some((target, target_arguments)) => match gate.admit_call(target, target_arguments) {
+                CallGate::Admit(target_approval) => {
+                    CallGate::Admit(approval.strictest(target_approval))
+                }
+                refusal @ CallGate::Refuse(_) => refusal,
+            },
+            None => CallGate::Admit(approval),
         }
     }
 

@@ -9,6 +9,7 @@ use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunConte
 use super::catalog::PackCatalog;
 use super::handle::{PackRegistryHandle, ToolVec};
 use super::render::{named_tool, render_pack};
+use super::types::{PackTarget, PinnedPackCall, ResolvedPackCall, resolve_call};
 
 /// Name of the disclosure-and-dispatch tool.
 pub const USE_SKILL: &str = "use_skill";
@@ -37,95 +38,28 @@ pub struct UseSkillTool {
     handle: PackRegistryHandle,
     catalog: PackCatalog,
     description: String,
-    extension: PackToolExtension,
 }
 
-/// Erased host metadata used by the harness to bind a packed target once per
-/// admitted call. The registry handle can be rebound while a host gate awaits;
-/// this value keeps the vocabulary and the registry lookup together.
-pub struct PackToolExtension {
-    handle: PackRegistryHandle,
-    catalog: PackCatalog,
-}
-
-/// A call-scoped target captured before authorization and reused for execution.
-pub(crate) struct PinnedPackCall {
-    outer: Arc<dyn Tool>,
-    target: PackTarget,
-}
-
-enum PackTarget {
-    Execute {
-        tools: ToolVec,
-        index: usize,
-        arguments: Value,
-    },
-    Answer(ToolResult),
-}
-
-impl PackToolExtension {
+impl PackRegistryHandle {
     pub(crate) fn bind_call(&self, outer: Arc<dyn Tool>, args: &Value) -> PinnedPackCall {
-        let target = match resolve_call(&self.handle, &self.catalog, args) {
-            ResolvedPackCall::Execute {
-                tools,
-                index,
-                arguments,
-            } => PackTarget::Execute {
-                tools,
-                index,
-                arguments,
+        let target = match self.catalog_for_binding() {
+            Some(catalog) => match resolve_call(self, &catalog, args) {
+                ResolvedPackCall::Execute {
+                    tools,
+                    index,
+                    arguments,
+                } => PackTarget::Execute {
+                    tools,
+                    index,
+                    arguments,
+                },
+                ResolvedPackCall::Answer(result) => PackTarget::Answer(result),
             },
-            ResolvedPackCall::Answer(result) => PackTarget::Answer(result),
+            None => PackTarget::Answer(ToolResult::error(
+                "packed tool catalog is unavailable for this registration",
+            )),
         };
         PinnedPackCall { outer, target }
-    }
-
-    /// The mutable registry view retained by this packed tool.
-    pub fn registry_handle(&self) -> &PackRegistryHandle {
-        &self.handle
-    }
-}
-
-enum ResolvedPackCall {
-    Execute {
-        tools: ToolVec,
-        index: usize,
-        arguments: Value,
-    },
-    Answer(ToolResult),
-}
-
-fn resolve_call(
-    handle: &PackRegistryHandle,
-    catalog: &PackCatalog,
-    args: &Value,
-) -> ResolvedPackCall {
-    let Some(skill) = args.get("skill").and_then(Value::as_str) else {
-        return ResolvedPackCall::Answer(ToolResult::error(format!(
-            "`skill` is required.\n\nSkills:\n{}",
-            catalog.pack_index_markdown()
-        )));
-    };
-
-    let Some(name) = named_tool(args) else {
-        return ResolvedPackCall::Answer(match render_pack(catalog, skill, handle) {
-            Ok(text) => ToolResult::success(text),
-            Err(message) => ToolResult::error(message),
-        });
-    };
-
-    let Some((tools, index)) = handle.resolve(catalog, skill, name) else {
-        return ResolvedPackCall::Answer(ToolResult::error(format!(
-            "{} No tool `{name}` in skill `{skill}`. Call `use_skill {{ \"skill\": \"{skill}\" }}` \
-             to see what it contains.\n\nSkills:\n{}",
-            catalog.not_found_marker(),
-            catalog.pack_index_markdown()
-        )));
-    };
-    ResolvedPackCall::Execute {
-        tools,
-        index,
-        arguments: args.get("args").cloned().unwrap_or_else(|| json!({})),
     }
 }
 
@@ -142,6 +76,10 @@ impl PinnedPackCall {
             PackTarget::Execute { arguments, .. } => Some(arguments),
             PackTarget::Answer(_) => None,
         }
+    }
+
+    pub(crate) fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
+        Some((self.selected()?, self.selected_arguments()?))
     }
 }
 
@@ -218,6 +156,10 @@ impl Tool for PinnedPackCall {
     fn external_effect(&self) -> bool {
         self.selected().is_some_and(|tool| tool.external_effect())
     }
+
+    fn supports_markdown(&self) -> bool {
+        self.outer.supports_markdown()
+    }
     fn external_effect_with_args(&self, _args: &Value) -> bool {
         match (self.selected(), self.selected_arguments()) {
             (Some(tool), Some(args)) => tool.external_effect_with_args(args),
@@ -244,6 +186,7 @@ impl Tool for PinnedPackCall {
 
 impl UseSkillTool {
     pub fn new(handle: PackRegistryHandle, catalog: PackCatalog) -> Self {
+        handle.register_catalog(catalog);
         let description = format!(
             "Reach a skill's tools. Their names, descriptions and argument schemas are NOT in \
              your context until you ask for them: call this with `skill` alone to see them, then \
@@ -251,10 +194,6 @@ impl UseSkillTool {
             catalog.pack_index_markdown()
         );
         Self {
-            extension: PackToolExtension {
-                handle: handle.clone(),
-                catalog,
-            },
             handle,
             catalog,
             description,
@@ -413,10 +352,10 @@ impl Tool for UseSkillTool {
         }
     }
 
-    /// The registry handle and catalog ride on the vocabulary's erased host
-    /// extension so the harness can pin one indirect target for an admitted
-    /// call. Hosts can read the handle through [`PackToolExtension`].
+    /// The registry handle rides on the vocabulary's erased host extension so
+    /// older hosts can continue downcasting it directly. The handle also keeps
+    /// the catalog needed to bind one indirect target per admitted call.
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
-        Some(&self.extension)
+        Some(&self.handle)
     }
 }

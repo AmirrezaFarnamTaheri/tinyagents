@@ -932,6 +932,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     return Err(TinyAgentsError::ToolFailed(message));
                 }
             };
+            if let Some((target, target_arguments)) = dispatch.admission_target() {
+                rule_approval = match gate.admit_call(target, target_arguments) {
+                    crate::tool::CallGate::Admit(approval) => {
+                        rule_approval.strictest(approval)
+                    }
+                    crate::tool::CallGate::Refuse(message) => {
+                        return Err(TinyAgentsError::ToolFailed(message));
+                    }
+                };
+            }
         }
 
         let needs_approval = match rule_approval {

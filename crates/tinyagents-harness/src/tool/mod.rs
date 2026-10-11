@@ -73,6 +73,13 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
         Ok(None)
     }
 
+    /// Returns the concrete target and effective arguments for call-rule
+    /// checks after an indirect call is bound. The dispatcher declaration is
+    /// still checked independently.
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        None
+    }
+
     /// Returns the concrete tool and effective arguments for policy checks
     /// after an indirect call has been bound. The outer declaration is still
     /// checked separately; this hook exposes the target that will execute.
@@ -153,9 +160,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
         }) else {
             return Ok(None);
         };
-        let tool: Arc<dyn tinytools::Tool> =
-            Arc::new(extension.bind_call(self.tool.clone(), arguments));
-        Ok(Some(Arc::new(BoundCanonicalDispatch { tool })))
+        let pinned = Arc::new(extension.bind_call(self.tool.clone(), arguments));
+        let tool: Arc<dyn tinytools::Tool> = pinned.clone();
+        Ok(Some(Arc::new(BoundCanonicalDispatch { tool, pinned })))
     }
 
     async fn execute(
@@ -175,12 +182,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
 
 struct BoundCanonicalDispatch {
     tool: Arc<dyn tinytools::Tool>,
+    pinned: Arc<crate::tool::packs::PinnedPackCall>,
 }
 
 #[async_trait]
 impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
         self.tool.clone()
+    }
+
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        self.pinned.admission_target()
     }
 
     fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {

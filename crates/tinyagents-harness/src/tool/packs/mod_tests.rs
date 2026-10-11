@@ -93,9 +93,8 @@ fn bound(tools: Vec<FakeTool>) -> Arc<Vec<Box<dyn Tool>>> {
 fn handle_of(tools: &[Box<dyn Tool>]) -> &PackRegistryHandle {
     find(tools, USE_SKILL)
         .host_extension()
-        .and_then(|any| any.downcast_ref::<super::tool::PackToolExtension>())
-        .map(super::tool::PackToolExtension::registry_handle)
-        .expect("use_skill carries its handle as a host extension")
+        .and_then(|any| any.downcast_ref::<PackRegistryHandle>())
+        .expect("use_skill preserves PackRegistryHandle as its host extension")
 }
 
 fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {

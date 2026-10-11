@@ -1,5 +1,76 @@
 //! Tool-pack types: the unit of on-demand tool disclosure.
 
+use std::sync::Arc;
+
+use serde_json::Value;
+use tinytools::{Tool, ToolResult};
+
+use super::{catalog::PackCatalog, handle::ToolVec};
+
+/// Compatibility name for the erased `use_skill` host extension.
+///
+/// This remains a type alias so callers that downcast `Tool::host_extension`
+/// to [`super::PackRegistryHandle`] keep observing the same concrete type.
+pub type PackToolExtension = super::PackRegistryHandle;
+
+/// A call-scoped target captured before authorization and reused for execution.
+pub(crate) struct PinnedPackCall {
+    pub(super) outer: Arc<dyn Tool>,
+    pub(super) target: PackTarget,
+}
+
+pub(super) enum PackTarget {
+    Execute {
+        tools: ToolVec,
+        index: usize,
+        arguments: Value,
+    },
+    Answer(ToolResult),
+}
+
+pub(super) enum ResolvedPackCall {
+    Execute {
+        tools: ToolVec,
+        index: usize,
+        arguments: Value,
+    },
+    Answer(ToolResult),
+}
+
+pub(super) fn resolve_call(
+    handle: &super::PackRegistryHandle,
+    catalog: &PackCatalog,
+    args: &Value,
+) -> ResolvedPackCall {
+    let Some(skill) = args.get("skill").and_then(Value::as_str) else {
+        return ResolvedPackCall::Answer(ToolResult::error(format!(
+            "`skill` is required.\n\nSkills:\n{}",
+            catalog.pack_index_markdown()
+        )));
+    };
+
+    let Some(name) = super::named_tool(args) else {
+        return ResolvedPackCall::Answer(match super::render_pack(catalog, skill, handle) {
+            Ok(text) => ToolResult::success(text),
+            Err(message) => ToolResult::error(message),
+        });
+    };
+
+    let Some((tools, index)) = handle.resolve(catalog, skill, name) else {
+        return ResolvedPackCall::Answer(ToolResult::error(format!(
+            "{} No tool `{name}` in skill `{skill}`. Call `use_skill {{ \"skill\": \"{skill}\" }}` \
+             to see what it contains.\n\nSkills:\n{}",
+            catalog.not_found_marker(),
+            catalog.pack_index_markdown()
+        )));
+    };
+    ResolvedPackCall::Execute {
+        tools,
+        index,
+        arguments: args.get("args").cloned().unwrap_or_else(|| serde_json::json!({})),
+    }
+}
+
 /// A named bundle of tools that is **not** advertised to the model by default.
 ///
 /// The pack's tools stay fully constructed and executable; what changes is that
