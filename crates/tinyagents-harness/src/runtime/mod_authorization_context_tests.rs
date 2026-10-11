@@ -1,4 +1,4 @@
-//! Tests for tool-prepared host authorization facts.
+use super::*;
 
 use std::sync::{
     Arc, Mutex,
