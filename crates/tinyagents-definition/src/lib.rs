@@ -42,13 +42,13 @@ impl fmt::Display for DefinitionRegistryError {
 
 impl std::error::Error for DefinitionRegistryError {}
 
-pub use definition::{AgentDefinition, Extensions, EXTENDED_MAX_TOOL_ITERATIONS, IterationPolicy};
+pub use definition::{AgentDefinition, EXTENDED_MAX_TOOL_ITERATIONS, Extensions, IterationPolicy};
 pub use execution_spec::{ModelSpec, SandboxMode, ToolScope};
+pub use loader::{load_dir, load_file};
 pub use prompt::PromptSource;
 pub use source::DefinitionSource;
 pub use subagents::{SkillsWildcard, SubagentEntry};
 pub use tier::{AgentTier, validate_tier_transition};
-pub use loader::{load_dir, load_file};
 
 mod definition;
 mod execution_spec;

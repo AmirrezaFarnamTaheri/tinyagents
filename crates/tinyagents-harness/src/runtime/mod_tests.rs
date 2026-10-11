@@ -2113,13 +2113,15 @@ async fn explicit_empty_tool_scope_denies_tools_with_legacy_host_fallback() {
         ModelResponse::assistant("recovered"),
     ]));
     // Explicit empty scope must override the host legacy fallback.
-    let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(Vec::<String>::new());
+    let definition =
+        AgentDefinition::new("helper", "Helper", "test helper").with_tools(Vec::<String>::new());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
         Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
         Arc::new(AllowAllSecurityGate),
         Arc::new(FixedModelResolver::new(model.clone())),
-    ).with_legacy_unrestricted_tool_allowlist();
+    )
+    .with_legacy_unrestricted_tool_allowlist();
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
 

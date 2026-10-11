@@ -29,7 +29,11 @@ impl ModelSpec {
     /// table takes priority over this default.
     /// A routing pin, or None when the caller should inherit its current model.
     pub fn pin(&self) -> Option<String> {
-        match self { Self::Inherit => None, Self::Exact(name) => Some(name.clone()), Self::Hint(hint) => Some(format!("hint:{hint}")) }
+        match self {
+            Self::Inherit => None,
+            Self::Exact(name) => Some(name.clone()),
+            Self::Hint(hint) => Some(format!("hint:{hint}")),
+        }
     }
     pub fn resolve(&self, parent_model: &str) -> String {
         match self {
@@ -72,10 +76,17 @@ impl<'de> Deserialize<'de> for ModelSpec {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
-        enum Tagged { Inherit, Exact(String), Hint(String) }
+        enum Tagged {
+            Inherit,
+            Exact(String),
+            Hint(String),
+        }
         #[derive(Deserialize)]
         #[serde(untagged)]
-        enum Wire { Tagged(Tagged), Legacy(String) }
+        enum Wire {
+            Tagged(Tagged),
+            Legacy(String),
+        }
         Ok(match Option::<Wire>::deserialize(deserializer)? {
             None | Some(Wire::Tagged(Tagged::Inherit)) => Self::Inherit,
             Some(Wire::Tagged(Tagged::Exact(name))) | Some(Wire::Legacy(name)) => Self::Exact(name),
@@ -87,10 +98,16 @@ impl<'de> Deserialize<'de> for ToolScope {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
-        enum Tagged { Wildcard, Named(Vec<String>) }
+        enum Tagged {
+            Wildcard,
+            Named(Vec<String>),
+        }
         #[derive(Deserialize)]
         #[serde(untagged)]
-        enum Wire { Tagged(Tagged), Legacy(Vec<String>) }
+        enum Wire {
+            Tagged(Tagged),
+            Legacy(Vec<String>),
+        }
         Ok(match Wire::deserialize(deserializer)? {
             Wire::Tagged(Tagged::Wildcard) => Self::Wildcard,
             Wire::Tagged(Tagged::Named(names)) | Wire::Legacy(names) => Self::Named(names),

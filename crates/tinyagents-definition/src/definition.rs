@@ -1,7 +1,10 @@
 //! Shared authored definition and host extension slot.
-use serde::{Deserialize, Serialize};
-use crate::{DefinitionSource, ModelSpec, PromptSource, SandboxMode, SubagentEntry, ToolScope, AgentTier, AgentDefinitionDiagnostic};
 use crate::subagents::deserialize_subagent_entries;
+use crate::{
+    AgentDefinitionDiagnostic, AgentTier, DefinitionSource, ModelSpec, PromptSource, SandboxMode,
+    SubagentEntry, ToolScope,
+};
+use serde::{Deserialize, Serialize};
 
 /// Unknown host fields retained verbatim by the default definition payload.
 pub type Extensions = std::collections::BTreeMap<String, serde_json::Value>;
@@ -102,29 +105,79 @@ pub struct AgentDefinition<X = Extensions> {
     #[serde(flatten, default)]
     pub extensions: X,
 }
-fn temperature() -> f64 { 0.4 }
-fn iterations() -> usize { 8 }
+fn temperature() -> f64 {
+    0.4
+}
+fn iterations() -> usize {
+    8
+}
 impl<X: Default> Default for AgentDefinition<X> {
     fn default() -> Self {
-        Self { id: String::new(), when_to_use: String::new(), display_name: None, role: None, system_prompt: Default::default(), model: Default::default(), temperature: temperature(), tools: Default::default(), disallowed_tools: vec![], skill_filter: None, extra_tools: vec![], deferred_tools: vec![], tool_rules: None, max_iterations: iterations(), iteration_policy: Default::default(), max_result_chars: None, max_turn_output_tokens: None, timeout_secs: None, sandbox_mode: Default::default(), background: false, subagents: vec![], delegate_name: None, agent_tier: Default::default(), source: Default::default(), extensions: X::default() }
+        Self {
+            id: String::new(),
+            when_to_use: String::new(),
+            display_name: None,
+            role: None,
+            system_prompt: Default::default(),
+            model: Default::default(),
+            temperature: temperature(),
+            tools: Default::default(),
+            disallowed_tools: vec![],
+            skill_filter: None,
+            extra_tools: vec![],
+            deferred_tools: vec![],
+            tool_rules: None,
+            max_iterations: iterations(),
+            iteration_policy: Default::default(),
+            max_result_chars: None,
+            max_turn_output_tokens: None,
+            timeout_secs: None,
+            sandbox_mode: Default::default(),
+            background: false,
+            subagents: vec![],
+            delegate_name: None,
+            agent_tier: Default::default(),
+            source: Default::default(),
+            extensions: X::default(),
+        }
     }
 }
 impl AgentDefinition {
     /// Construct a runtime catalogue entry with an inherited model and tools.
-    pub fn new(id: impl Into<String>, name: impl Into<String>, description: impl Into<String>) -> Self {
-        Self { id: id.into(), display_name: Some(name.into()), when_to_use: description.into(), ..Default::default() }
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            display_name: Some(name.into()),
+            when_to_use: description.into(),
+            ..Default::default()
+        }
     }
 }
 impl<X> AgentDefinition<X> {
     /// Display name or stable identity when no display name was authored.
-    pub fn display_name(&self) -> &str { self.display_name.as_deref().unwrap_or(&self.id) }
+    pub fn display_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.id)
+    }
     /// Declared agent ids. Skill wildcard entries never grant a delegate.
     pub fn allowed_subagent_ids(&self) -> Vec<String> {
-        self.subagents.iter().filter_map(|entry| match entry { SubagentEntry::AgentId(id) => Some(id.clone()), SubagentEntry::Skills(_) => None }).collect()
+        self.subagents
+            .iter()
+            .filter_map(|entry| match entry {
+                SubagentEntry::AgentId(id) => Some(id.clone()),
+                SubagentEntry::Skills(_) => None,
+            })
+            .collect()
     }
     /// Iteration cap after applying the extended-policy floor.
     pub fn effective_max_iterations(&self) -> usize {
-        match self.iteration_policy { IterationPolicy::Strict => self.max_iterations, IterationPolicy::Extended => self.max_iterations.max(EXTENDED_MAX_TOOL_ITERATIONS) }
+        match self.iteration_policy {
+            IterationPolicy::Strict => self.max_iterations,
+            IterationPolicy::Extended => self.max_iterations.max(EXTENDED_MAX_TOOL_ITERATIONS),
+        }
     }
     /// Materialize generic allow/deny semantics against a known catalogue.
     /// A wildcard with a denylist fails closed when no catalogue is supplied;
@@ -132,7 +185,10 @@ impl<X> AgentDefinition<X> {
     pub fn resolve_tool_scope(&self, registered: Option<&[String]>) -> ToolScope {
         let mut names = match &self.tools {
             ToolScope::Wildcard if self.disallowed_tools.is_empty() => return ToolScope::Wildcard,
-            ToolScope::Wildcard => match registered { Some(names) => names.to_vec(), None => return ToolScope::Named(vec![]) },
+            ToolScope::Wildcard => match registered {
+                Some(names) => names.to_vec(),
+                None => return ToolScope::Named(vec![]),
+            },
             ToolScope::Named(names) => names.clone(),
         };
         names.extend(self.extra_tools.iter().cloned());
@@ -144,18 +200,70 @@ impl<X> AgentDefinition<X> {
 
     /// Replace host metadata without projecting or reconstructing core fields.
     pub fn with_extensions<Y>(self, extensions: Y) -> AgentDefinition<Y> {
-        AgentDefinition { id: self.id, when_to_use: self.when_to_use, display_name: self.display_name, role: self.role, system_prompt: self.system_prompt, model: self.model, temperature: self.temperature, tools: self.tools, disallowed_tools: self.disallowed_tools, skill_filter: self.skill_filter, extra_tools: self.extra_tools, deferred_tools: self.deferred_tools, tool_rules: self.tool_rules, max_iterations: self.max_iterations, iteration_policy: self.iteration_policy, max_result_chars: self.max_result_chars, max_turn_output_tokens: self.max_turn_output_tokens, timeout_secs: self.timeout_secs, sandbox_mode: self.sandbox_mode, background: self.background, subagents: self.subagents, delegate_name: self.delegate_name, agent_tier: self.agent_tier, source: self.source, extensions }
+        AgentDefinition {
+            id: self.id,
+            when_to_use: self.when_to_use,
+            display_name: self.display_name,
+            role: self.role,
+            system_prompt: self.system_prompt,
+            model: self.model,
+            temperature: self.temperature,
+            tools: self.tools,
+            disallowed_tools: self.disallowed_tools,
+            skill_filter: self.skill_filter,
+            extra_tools: self.extra_tools,
+            deferred_tools: self.deferred_tools,
+            tool_rules: self.tool_rules,
+            max_iterations: self.max_iterations,
+            iteration_policy: self.iteration_policy,
+            max_result_chars: self.max_result_chars,
+            max_turn_output_tokens: self.max_turn_output_tokens,
+            timeout_secs: self.timeout_secs,
+            sandbox_mode: self.sandbox_mode,
+            background: self.background,
+            subagents: self.subagents,
+            delegate_name: self.delegate_name,
+            agent_tier: self.agent_tier,
+            source: self.source,
+            extensions,
+        }
     }
     /// Set an exact model pin.
-    pub fn with_model(mut self, model: impl Into<String>) -> Self { self.model = ModelSpec::Exact(model.into()); self }
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = ModelSpec::Exact(model.into());
+        self
+    }
     /// Set declared agent ids without adding skill wildcard entries.
-    pub fn with_subagents<I, S>(mut self, ids: I) -> Self where I: IntoIterator<Item=S>, S: Into<String> { self.subagents = ids.into_iter().map(|id| SubagentEntry::AgentId(id.into())).collect(); self }
+    pub fn with_subagents<I, S>(mut self, ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.subagents = ids
+            .into_iter()
+            .map(|id| SubagentEntry::AgentId(id.into()))
+            .collect();
+        self
+    }
     /// Set an explicit tool allowlist, including an explicit empty list.
-    pub fn with_tools<I, S>(mut self, tools: I) -> Self where I: IntoIterator<Item=S>, S: Into<String> { self.tools = ToolScope::Named(tools.into_iter().map(Into::into).collect()); self }
+    pub fn with_tools<I, S>(mut self, tools: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tools = ToolScope::Named(tools.into_iter().map(Into::into).collect());
+        self
+    }
     /// Set the shared pattern rules.
-    pub fn with_tool_rules(mut self, rules: tinytools::ToolRules) -> Self { self.tool_rules = Some(rules); self }
+    pub fn with_tool_rules(mut self, rules: tinytools::ToolRules) -> Self {
+        self.tool_rules = Some(rules);
+        self
+    }
     /// Set the host-defined routing role.
-    pub fn with_role(mut self, role: impl Into<String>) -> Self { self.role = Some(role.into()); self }
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
     /// Deterministic diagnostics for malformed required fields and lists.
     pub fn diagnostics(&self) -> Vec<AgentDefinitionDiagnostic> {
         let mut diagnostics = vec![];
@@ -164,13 +272,22 @@ impl<X> AgentDefinition<X> {
         crate::required_field(&mut diagnostics, "description", &self.when_to_use);
         let subagents = self.allowed_subagent_ids();
         crate::duplicate_values(&mut diagnostics, "subagents", &subagents);
-        let tools = match &self.tools { ToolScope::Named(tools) => tools.as_slice(), ToolScope::Wildcard => &[] };
+        let tools = match &self.tools {
+            ToolScope::Named(tools) => tools.as_slice(),
+            ToolScope::Wildcard => &[],
+        };
         crate::duplicate_values(&mut diagnostics, "tools", tools);
         for (field, values) in [("subagents", subagents.as_slice()), ("tools", tools)] {
-            for value in values { if value.trim().is_empty() { diagnostics.push(AgentDefinitionDiagnostic::empty_entry(field)); } }
+            for value in values {
+                if value.trim().is_empty() {
+                    diagnostics.push(AgentDefinitionDiagnostic::empty_entry(field));
+                }
+            }
         }
         diagnostics
     }
     /// Whether required fields and declared list entries are well formed.
-    pub fn is_valid(&self) -> bool { self.diagnostics().is_empty() }
+    pub fn is_valid(&self) -> bool {
+        self.diagnostics().is_empty()
+    }
 }

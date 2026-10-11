@@ -74,3 +74,17 @@ fn framing_lets_an_orchestrator_delegate() {
 fn default_role_is_the_unrestricted_orchestrator() {
     assert_eq!(SubagentRole::default(), SubagentRole::Orchestrator);
 }
+
+#[test]
+fn authored_tiers_map_to_runtime_delegation_roles() {
+    use tinyagents_definition::AgentTier;
+    assert_eq!(
+        SubagentRole::from(AgentTier::Chat),
+        SubagentRole::Orchestrator
+    );
+    assert_eq!(
+        SubagentRole::from(AgentTier::Reasoning),
+        SubagentRole::Orchestrator
+    );
+    assert_eq!(SubagentRole::from(AgentTier::Worker), SubagentRole::Leaf);
+}

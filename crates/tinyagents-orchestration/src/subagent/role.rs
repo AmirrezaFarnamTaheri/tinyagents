@@ -41,7 +41,8 @@ impl SubagentRole {
 impl From<tinyagents_definition::AgentTier> for SubagentRole {
     fn from(tier: tinyagents_definition::AgentTier) -> Self {
         match tier {
-            tinyagents_definition::AgentTier::Chat | tinyagents_definition::AgentTier::Reasoning => Self::Orchestrator,
+            tinyagents_definition::AgentTier::Chat
+            | tinyagents_definition::AgentTier::Reasoning => Self::Orchestrator,
             tinyagents_definition::AgentTier::Worker => Self::Leaf,
         }
     }

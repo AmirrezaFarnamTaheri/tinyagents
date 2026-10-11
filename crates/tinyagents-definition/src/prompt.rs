@@ -12,4 +12,8 @@ pub enum PromptSource {
     /// Entire prompt without composed identity, safety, tools or memory sections.
     Verbatim(String),
 }
-impl Default for PromptSource { fn default() -> Self { Self::Inline(String::new()) } }
+impl Default for PromptSource {
+    fn default() -> Self {
+        Self::Inline(String::new())
+    }
+}

@@ -1,6 +1,8 @@
 use super::*;
 
-fn make_def(id: &str) -> AgentDefinition { AgentDefinition::new(id, id, "test") }
+fn make_def(id: &str) -> AgentDefinition {
+    AgentDefinition::new(id, id, "test")
+}
 
 #[test]
 fn model_spec_resolve_inherit_uses_parent() {
@@ -304,11 +306,17 @@ fn legacy_catalogue_json_can_still_be_read() {
 fn extensions_retain_authored_host_fields_and_skip_runtime_only_members() {
     #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
     struct HostExtension {
-        #[serde(default)] omit_identity: bool,
-        #[serde(default)] searches_connected_mcp: bool,
-        #[serde(skip)] dynamic_prompt: Option<fn() -> String>,
+        #[serde(default)]
+        omit_identity: bool,
+        #[serde(default)]
+        searches_connected_mcp: bool,
+        #[serde(skip)]
+        dynamic_prompt: Option<fn() -> String>,
     }
-    let mut def: AgentDefinition<HostExtension> = toml::from_str("id='agent'\nwhen_to_use='test'\nomit_identity=true\nsearches_connected_mcp=true\n").unwrap();
+    let mut def: AgentDefinition<HostExtension> = toml::from_str(
+        "id='agent'\nwhen_to_use='test'\nomit_identity=true\nsearches_connected_mcp=true\n",
+    )
+    .unwrap();
     def.extensions.dynamic_prompt = Some(|| "built-in".into());
     let encoded = toml::to_string(&def).unwrap();
     assert!(!encoded.contains("dynamic_prompt"));
@@ -327,13 +335,23 @@ fn named_empty_and_denied_wildcards_never_become_unrestricted() {
     def.disallowed_tools = vec!["write".into()];
     assert_eq!(def.resolve_tool_scope(None), ToolScope::Named(vec![]));
     def.extra_tools = vec!["read".into(), "write".into()];
-    assert_eq!(def.resolve_tool_scope(Some(&["read".into(), "write".into()])), ToolScope::Named(vec!["read".into()]));
+    assert_eq!(
+        def.resolve_tool_scope(Some(&["read".into(), "write".into()])),
+        ToolScope::Named(vec!["read".into()])
+    );
 }
 
 #[test]
 fn portable_prompt_sources_roundtrip_and_dynamic_sources_are_not_authored() {
-    for prompt in [PromptSource::Inline("inline".into()), PromptSource::File { path: "prompt.md".into() }, PromptSource::Verbatim("verbatim".into())] {
-        let mut def = make_def("agent"); def.system_prompt = prompt.clone();
+    for prompt in [
+        PromptSource::Inline("inline".into()),
+        PromptSource::File {
+            path: "prompt.md".into(),
+        },
+        PromptSource::Verbatim("verbatim".into()),
+    ] {
+        let mut def = make_def("agent");
+        def.system_prompt = prompt.clone();
         let parsed: AgentDefinition = toml::from_str(&toml::to_string(&def).unwrap()).unwrap();
         assert_eq!(parsed.system_prompt, prompt);
     }
@@ -345,7 +363,11 @@ fn portable_prompt_sources_roundtrip_and_dynamic_sources_are_not_authored() {
 fn generic_loader_skips_bad_files_and_preserves_source_for_valid_custom_agents() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("valid.toml");
-    std::fs::write(&path, "id='custom'\nwhen_to_use='custom task'\n[system_prompt]\ninline='custom prompt'\n").unwrap();
+    std::fs::write(
+        &path,
+        "id='custom'\nwhen_to_use='custom task'\n[system_prompt]\ninline='custom prompt'\n",
+    )
+    .unwrap();
     std::fs::write(dir.path().join("bad.toml"), "not = [valid").unwrap();
     std::fs::write(dir.path().join("note.md"), "not TOML").unwrap();
     std::fs::create_dir(dir.path().join("nested.toml")).unwrap();
@@ -355,7 +377,12 @@ fn generic_loader_skips_bad_files_and_preserves_source_for_valid_custom_agents()
     assert_eq!(definitions[0].source, DefinitionSource::File(path));
     let missing = dir.path().join("missing.toml");
     std::fs::write(&missing, "id='custom'\nwhen_to_use='custom task'\n").unwrap();
-    assert!(load_file::<Extensions>(&missing).unwrap_err().to_string().contains("missing `system_prompt`"));
+    assert!(
+        load_file::<Extensions>(&missing)
+            .unwrap_err()
+            .to_string()
+            .contains("missing `system_prompt`")
+    );
     assert!(load_file::<Extensions>(&dir.path().join("absent.toml")).is_err());
     assert!(load_dir::<Extensions>(&dir.path().join("missing"), &mut definitions).is_err());
 }
