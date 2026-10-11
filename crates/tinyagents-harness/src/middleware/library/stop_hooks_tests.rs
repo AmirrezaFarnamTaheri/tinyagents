@@ -290,5 +290,5 @@ async fn an_empty_stop_hook_list_leaves_unsteered_calls_unchanged() {
         .after_model(&mut context, &(), &mut response)
         .await
         .unwrap();
-    assert_eq!(response.message.text(), "unchanged");
+    assert_eq!(response.text(), "unchanged");
 }
