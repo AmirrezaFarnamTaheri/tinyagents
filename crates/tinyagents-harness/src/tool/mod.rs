@@ -73,6 +73,13 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
         Ok(None)
     }
 
+    /// Returns the concrete tool and effective arguments for policy checks
+    /// after an indirect call has been bound. The outer declaration is still
+    /// checked separately; this hook exposes the target that will execute.
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        None
+    }
+
     /// Classifies output for the host security boundary.
     ///
     /// Normal tools produce tool-origin output. Typed recursive dispatchers
@@ -174,6 +181,10 @@ struct BoundCanonicalDispatch {
 impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
         self.tool.clone()
+    }
+
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        self.tool.indirect_target_arguments()
     }
 
     async fn execute(
