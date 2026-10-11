@@ -228,6 +228,24 @@ async fn successful_repeat_tracker_halt_maps_to_summary_and_pause() {
     );
 }
 
+/// Another guard sharing the slot stopped the run earlier in the batch: its
+/// summary names the cause and must survive this guard tripping as well.
+#[tokio::test]
+async fn a_halt_keeps_the_summary_of_a_guard_that_stopped_the_run_first() {
+    let handle = SteeringHandle::allow_all();
+    let earlier = "Stopping after 2 attempt(s): failure class `policy` still blocks operation \
+                   `shell` on `shell`.";
+    let summary = Arc::new(std::sync::Mutex::new(Some(earlier.to_string())));
+    let mw = new_mw(handle.clone(), summary.clone());
+
+    for _ in 0..DEFAULT_REPEAT_CALL_THRESHOLD {
+        run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), "ok", None).await;
+    }
+
+    assert_eq!(drain_pause_count(&handle), 1, "the guard still pauses the run");
+    assert_eq!(summary.lock().unwrap().as_deref(), Some(earlier));
+}
+
 #[tokio::test]
 async fn successful_repeat_tracker_resets_failed_and_exempt_batches() {
     let handle = SteeringHandle::allow_all();

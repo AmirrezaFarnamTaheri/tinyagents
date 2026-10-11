@@ -28,6 +28,11 @@ use super::wrap_up::DEFAULT_CLEARED_PLACEHOLDER;
 
 /// Shared slot a guard writes its root-cause halt summary into when it trips, so
 /// the turn can surface the cause instead of an empty or last-model reply.
+///
+/// Several guards can share one slot, and a halt only pauses the run at the
+/// top of the next iteration, so the rest of the batch still reaches every
+/// guard. The first guard to stop the run is its cause: a guard must not
+/// replace a summary that is already there.
 pub type HaltSummarySlot = Arc<Mutex<Option<String>>>;
 
 /// Whether a tool is contractually re-invoked with identical arguments (a
@@ -175,11 +180,24 @@ impl RepeatProgressMiddleware {
     /// Latch a root-cause halt: record the summary the turn surfaces instead of an
     /// empty/last-model reply, and pause at the top of the next iteration (before
     /// the next model call), matching the repeated-failure breaker's halt path.
+    ///
+    /// When another guard sharing the slot already stopped the run earlier in
+    /// the batch, its summary is kept: replacing it named the last guard to
+    /// trip as the cause instead of the first. The pause is sent either way.
     fn halt<C>(&self, ctx: &mut RunContext<C>, summary: String) {
         // Mark the run so the loop reports `TerminalReason::Halted` for the
         // pause this causes, not a plain steering pause.
         ctx.halted_by_guard = Some(summary.clone());
-        *lock(&self.halt_summary) = Some(summary);
+        {
+            let mut slot = lock(&self.halt_summary);
+            if slot.is_none() {
+                *slot = Some(summary);
+            } else {
+                tracing::debug!(
+                    "[tinyagents::mw] run already stopped by another guard; keeping its halt summary"
+                );
+            }
+        }
         self.handle.send(SteeringCommand::Pause);
     }
 }
