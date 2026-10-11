@@ -250,6 +250,23 @@ async fn a_halt_keeps_the_summary_of_a_guard_that_stopped_the_run_first() {
     assert_eq!(summary.lock().unwrap().as_deref(), Some(earlier));
 }
 
+/// The terminal outcome names the same first cause as the slot: the run's
+/// halt marker takes the summary already in the slot, and an earlier marker
+/// is never replaced.
+#[test]
+fn the_halt_marker_names_the_first_cause() {
+    let handle = SteeringHandle::allow_all();
+    let summary = Arc::new(std::sync::Mutex::new(Some("first cause".to_string())));
+    let mw = new_mw(handle.clone(), summary.clone());
+    let mut ctx = ctx();
+    mw.halt(&mut ctx, "later cause".to_string());
+    assert_eq!(ctx.halted_by_guard.as_deref(), Some("first cause"));
+    mw.halt(&mut ctx, "even later".to_string());
+    assert_eq!(ctx.halted_by_guard.as_deref(), Some("first cause"));
+    assert_eq!(summary.lock().unwrap().as_deref(), Some("first cause"));
+    assert_eq!(drain_pause_count(&handle), 2);
+}
+
 #[tokio::test]
 async fn successful_repeat_tracker_resets_failed_and_exempt_batches() {
     let handle = SteeringHandle::allow_all();

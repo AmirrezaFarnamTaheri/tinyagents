@@ -185,18 +185,20 @@ impl RepeatProgressMiddleware {
     /// the batch, its summary is kept: replacing it named the last guard to
     /// trip as the cause instead of the first. The pause is sent either way.
     fn halt<C>(&self, ctx: &mut RunContext<C>, summary: String) {
-        // Mark the run so the loop reports `TerminalReason::Halted` for the
-        // pause this causes, not a plain steering pause.
-        ctx.halted_by_guard = Some(summary.clone());
-        {
+        let first = {
             let mut slot = lock(&self.halt_summary);
-            if slot.is_none() {
-                *slot = Some(summary);
-            } else {
+            if slot.is_some() {
                 tracing::debug!(
                     "[tinyagents::mw] run already stopped by another guard; keeping its halt summary"
                 );
             }
+            slot.get_or_insert(summary).clone()
+        };
+        // Mark the run so the loop reports `TerminalReason::Halted` for the
+        // pause this causes, not a plain steering pause, with the same first
+        // cause the slot keeps.
+        if ctx.halted_by_guard.is_none() {
+            ctx.halted_by_guard = Some(first);
         }
         self.handle.send(SteeringCommand::Pause);
     }
