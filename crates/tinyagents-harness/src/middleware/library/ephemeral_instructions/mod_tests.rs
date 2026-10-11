@@ -37,6 +37,9 @@ async fn ephemeral_instructions_are_delivered_once_without_changing_the_source_h
     assert_eq!(original.messages.len(), 3);
     assert_eq!(outgoing.messages[3].text(), "first");
     assert_eq!(outgoing.messages[4].text(), "second");
+    // The dispatch hook stages content; the model base commits it after the
+    // wrap onion actually reaches the call.
+    assert_eq!(queue.drain_for(&context), vec!["first", "second"]);
     let mut next = original.clone();
     injector
         .before_model_dispatch(&mut context, &(), &mut next)
@@ -108,6 +111,7 @@ async fn ephemeral_instructions_are_isolated_by_context_instance() {
         .await
         .unwrap();
     assert_eq!(outgoing.messages.last().unwrap().text(), "first run");
+    assert_eq!(queue.drain_for(&first), vec!["first run"]);
     assert_eq!(queue.drain_for(&second), vec!["second run"]);
     queue.push(&first, "still first");
     <EphemeralInstructionMiddleware as Middleware<(), ()>>::on_error(
