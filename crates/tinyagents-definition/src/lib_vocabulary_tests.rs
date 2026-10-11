@@ -372,3 +372,15 @@ fn generic_loader_skips_bad_files_and_preserves_source_for_valid_custom_agents()
     assert!(load_file::<Extensions>(&dir.path().join("absent.toml")).is_err());
     assert!(load_dir::<Extensions>(&dir.path().join("missing"), &mut definitions).is_err());
 }
+
+#[test]
+fn deferred_names_join_named_scope_before_denials_and_deduplication() {
+    let mut def = make_def("agent").with_tools(vec!["read".into()]);
+    def.extra_tools = vec!["read".into(), "extra".into()];
+    def.deferred_tools = vec!["deferred".into(), "read".into(), "denied".into()];
+    def.disallowed_tools = vec!["denied".into()];
+    assert_eq!(
+        def.resolve_tool_scope(None),
+        ToolScope::Named(vec!["read".into(), "extra".into(), "deferred".into()])
+    );
+}

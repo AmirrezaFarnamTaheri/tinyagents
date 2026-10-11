@@ -180,6 +180,8 @@ impl<X> AgentDefinition<X> {
         }
     }
     /// Materialize generic allow/deny semantics against a known catalogue.
+    /// Named scopes include extra and deferred tools before deny filtering
+    /// and deduplication; registration still determines tool exposure.
     /// A wildcard with a denylist fails closed when no catalogue is supplied;
     /// a bare wildcard stays explicit, and a named-empty scope stays empty.
     pub fn resolve_tool_scope(&self, registered: Option<&[String]>) -> ToolScope {
@@ -192,6 +194,7 @@ impl<X> AgentDefinition<X> {
             ToolScope::Named(names) => names.clone(),
         };
         names.extend(self.extra_tools.iter().cloned());
+        names.extend(self.deferred_tools.iter().cloned());
         names.retain(|name| !self.disallowed_tools.contains(name));
         let mut seen = std::collections::HashSet::new();
         names.retain(|name| seen.insert(name.clone()));
