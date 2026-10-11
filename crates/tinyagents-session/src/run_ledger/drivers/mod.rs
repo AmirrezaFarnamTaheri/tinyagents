@@ -804,22 +804,23 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::list_agent_work`] without a weaker fallback.
     async fn list_agent_work(
         &self,
-        _limit: Option<u32>,
-        _display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
+        limit: Option<u32>,
+        display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<CommandCenterView> {
-        Err(unsupported("list_agent_work"))
+        let response = self.list_agent_runs(&AgentRunListRequest { limit: Some(limit.unwrap_or(200).min(500)), ..Default::default() }).await?;
+        Ok(super::command_center::build_view(response.runs, display_name))
     }
 
     /// Implement [`RunLedgerStore::apply_control`] without a weaker fallback.
     async fn apply_control(
         &self,
-        _run_id: &str,
-        _verb: ControlVerb,
-        _message: Option<&str>,
-        _reason: Option<&str>,
-        _display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
+        run_id: &str,
+        verb: ControlVerb,
+        message: Option<&str>,
+        reason: Option<&str>,
+        display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<AgentWorkRow> {
-        Err(unsupported("apply_control"))
+        super::command_center::native::apply_control(self, run_id, verb, message, reason, display_name).await
     }
 }
 

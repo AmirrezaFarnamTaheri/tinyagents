@@ -8,6 +8,7 @@
 //! an agent-id to display-name closure and own the RPC surface.
 
 mod control;
+pub(crate) mod native;
 mod types;
 mod view;
 
