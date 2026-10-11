@@ -196,6 +196,27 @@ fn reasoning_replays_verbatim_and_retains_multiple_spans() {
 }
 
 #[test]
+fn legacy_reasoning_replays_after_assistant_text() {
+    let mut row = TranscriptMessage::assistant("checking");
+    row.extra_metadata = Some(serde_json::json!({"reasoning_content": "plan the calls"}));
+
+    let Message::Assistant(assistant) = transcript_to_message(&row) else {
+        panic!("assistant");
+    };
+    assert_eq!(
+        assistant.content,
+        vec![
+            ContentBlock::Text("checking".into()),
+            ContentBlock::Thinking {
+                text: "plan the calls".into(),
+                signature: None,
+            },
+        ],
+        "legacy rows must preserve the pre-migration text-then-reasoning provider view"
+    );
+}
+
+#[test]
 fn signed_thinking_blocks_survive_native_replay() {
     let origin = MessageOrigin {
         provider: "anthropic".into(),

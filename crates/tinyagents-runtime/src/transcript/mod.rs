@@ -164,12 +164,12 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
                 .and_then(|meta| meta.get(REASONING_EXT_KEY))
                 .and_then(serde_json::Value::as_str);
             let mut content = Vec::new();
-            if let Some(blocks) = msg
+            let stored_blocks = msg
                 .extra_metadata
                 .as_ref()
                 .and_then(|meta| meta.get(REASONING_BLOCKS_EXT_KEY))
-                .and_then(serde_json::Value::as_array)
-            {
+                .and_then(serde_json::Value::as_array);
+            if let Some(blocks) = stored_blocks {
                 content.extend(blocks.iter().filter_map(|block| {
                     Some(ContentBlock::Thinking {
                         text: block.get("text")?.as_str()?.to_string(),
@@ -180,10 +180,19 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
                     })
                 }));
             }
+            let mut text_pushed = false;
             if content.is_empty() {
-                content.extend(reasoning_content_block(reasoning));
+                let reasoning = reasoning_content_block(reasoning);
+                // Legacy rows store assistant text in `content` and reasoning
+                // separately. Replay that historical text-then-reasoning order;
+                // signed `reasoning_blocks` above retain their recorded order.
+                if stored_blocks.is_none() && reasoning.is_some() && !text.is_empty() {
+                    content.push(ContentBlock::Text(text.clone()));
+                    text_pushed = true;
+                }
+                content.extend(reasoning);
             }
-            if !text.is_empty() {
+            if !text.is_empty() && !text_pushed {
                 content.push(ContentBlock::Text(text));
             } else if content.is_empty() && !msg.tool_calls.is_empty() {
                 // Native tool rounds retain the empty assistant text block
