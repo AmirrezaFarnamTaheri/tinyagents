@@ -616,3 +616,85 @@ fn score_can_target_a_single_observation() {
         "trace-1:trace-1:agent_turn-model-1:score:faithfulness"
     );
 }
+
+#[test]
+fn derives_the_otlp_trace_endpoint_beside_the_ingestion_endpoint() {
+    let direct = LangfuseClient::direct("https://lf.example.test/", "pk", "sk").unwrap();
+    assert_eq!(
+        direct.otlp_endpoint(),
+        "https://lf.example.test/api/public/otel/v1/traces"
+    );
+    let proxy = LangfuseClient::proxy("https://api.example.test", "token").unwrap();
+    assert_eq!(
+        proxy.otlp_endpoint(),
+        "https://api.example.test/telemetry/langfuse/otel/v1/traces"
+    );
+}
+
+/// Accepts one HTTP request on a loopback port, answers `status`, and returns
+/// the request line, the authorization header and the decoded body.
+fn serve_once(status: u16) -> (String, std::sync::mpsc::Receiver<(String, String, Value)>) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", socket.local_addr().unwrap());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (stream, _) = socket.accept().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let (mut auth, mut len) = (String::new(), 0_usize);
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header.trim().is_empty() {
+                break;
+            }
+            let (name, value) = header.split_once(':').unwrap();
+            match name.trim().to_ascii_lowercase().as_str() {
+                "authorization" => auth = value.trim().to_owned(),
+                "content-length" => len = value.trim().parse().unwrap(),
+                _ => {}
+            }
+        }
+        let mut body = vec![0; len];
+        reader.read_exact(&mut body).unwrap();
+        let mut stream = reader.into_inner();
+        write!(
+            stream,
+            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{{}}"
+        )
+        .unwrap();
+        tx.send((
+            line.trim().to_owned(),
+            auth,
+            serde_json::from_slice(&body).unwrap(),
+        ))
+        .unwrap();
+    });
+    (base, rx)
+}
+
+#[tokio::test]
+async fn sends_otlp_json_to_the_trace_endpoint_with_basic_auth() {
+    let (base, rx) = serve_once(200);
+    let client = LangfuseClient::direct(base, "pk-test", "sk-test").unwrap();
+    let body = json!({"resourceSpans": []});
+    client.send_otlp(body.clone()).await.unwrap();
+    let (line, auth, received) = rx.recv().unwrap();
+    assert_eq!(line, "POST /api/public/otel/v1/traces HTTP/1.1");
+    assert_eq!(auth, "Basic cGstdGVzdDpzay10ZXN0");
+    assert_eq!(received, body);
+}
+
+#[tokio::test]
+async fn reports_a_refused_otlp_request() {
+    let (base, _rx) = serve_once(413);
+    let client = LangfuseClient::proxy(base, "token").unwrap();
+    assert!(
+        client
+            .send_otlp(json!({"resourceSpans": []}))
+            .await
+            .is_err()
+    );
+}

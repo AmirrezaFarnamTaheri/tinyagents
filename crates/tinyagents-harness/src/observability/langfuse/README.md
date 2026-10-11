@@ -25,6 +25,11 @@ natural export boundary (end of run, end of turn, or on a timer).
 - `LangfuseClient::create_score` / `build_score_batch` — attaches a
   post-hoc evaluation (`LangfuseScore`) to an already-exported trace or
   observation.
+- `LangfuseClient::send_otlp` / `otlp_endpoint` — posts an OTLP/HTTP JSON
+  trace request (for example from `trace_export::otlp::otlp_requests`) to
+  `/api/public/otel/v1/traces`, or `/telemetry/langfuse/otel/v1/traces`
+  through the proxy. OTLP is Langfuse's supported trace path; the legacy
+  ingestion API is sunset on Langfuse Cloud on 2026-11-16.
 - `LangfuseClient::send_batch` — the shared HTTP transport (auth header,
   endpoint normalization, `207 Multi-Status` handling); reused by other
   exporters (e.g. `graph::observability`) that build their own `{"batch":
