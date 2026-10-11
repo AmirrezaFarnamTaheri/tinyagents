@@ -176,8 +176,11 @@ mod tests;
 /// Counts committed together with an agent-family import receipt.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentImportReport {
+    /// Agent run rows committed by this operation.
     pub agent_runs: usize,
+    /// Event receipts committed with their original ordinals.
     pub events: usize,
+    /// Run telemetry rows committed by this operation.
     pub telemetry: usize,
 }
 
