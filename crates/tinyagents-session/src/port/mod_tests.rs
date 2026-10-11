@@ -148,3 +148,39 @@ fn checked_accessor_arc_forwards_native_refusal() {
     );
     assert!(error.source().unwrap().is::<Native>());
 }
+
+/// Providers opt into a ledger explicitly; an Arc forwards the selected handle.
+#[test]
+fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
+    use crate::run_ledger::{RunLedgerStore, SqliteRunLedger};
+    struct LedgerProvider {
+        sessions: InMemorySessionStores,
+        ledger: Arc<dyn RunLedgerStore>,
+    }
+    impl SessionStoreProvider for LedgerProvider {
+        fn for_agent(&self, id: &str) -> AgentStores {
+            self.sessions.for_agent(id)
+        }
+        fn run_ledger_for_agent(&self, id: &str) -> Option<Arc<dyn RunLedgerStore>> {
+            (id == "allowed").then(|| self.ledger.clone())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    let provider = Arc::new(LedgerProvider {
+        sessions: InMemorySessionStores::new(),
+        ledger: ledger.clone(),
+    });
+    let selected = provider.run_ledger_for_agent("allowed").unwrap();
+    assert!(Arc::ptr_eq(&selected, &ledger));
+    assert!(provider.run_ledger_for_agent("denied").is_none());
+    assert!(
+        InMemorySessionStores::new()
+            .run_ledger_for_agent("allowed")
+            .is_none()
+    );
+    let default = FileStores {
+        workspace: dir.path().to_path_buf(),
+    };
+    assert!(default.run_ledger_for_agent("allowed").is_none());
+}
