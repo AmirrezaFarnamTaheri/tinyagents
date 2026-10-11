@@ -120,6 +120,8 @@ pub use retention::{
     RetentionReport, apply_retention, prune_run_events_before, prune_run_telemetry_before,
     prune_sessions_before, prune_tool_calls_before, reindex_fts, trim_session_messages,
 };
+#[cfg(feature = "storage-drivers")]
+pub use run_ledger::DriverRunLedger;
 pub use run_ledger::command_center::{
     CommandCenterView, ControlError, ControlVerb, apply_control, build_view, list_agent_work,
 };
