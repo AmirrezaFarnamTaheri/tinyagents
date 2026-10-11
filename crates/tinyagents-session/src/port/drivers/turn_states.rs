@@ -81,6 +81,7 @@ impl DriverTurnStates {
     {
         self.bridge.run(op(Arc::clone(&self.inner)))?
     }
+    /// Recovers interrupted turns while retaining native declaration, read and write errors.
     pub(super) fn mark_all_interrupted_checked(
         &self,
         now_rfc3339: &str,

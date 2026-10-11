@@ -543,3 +543,52 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
 }
+
+#[test]
+fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
+    use std::error::Error;
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let provider: Arc<dyn SessionStoreProvider> =
+        Arc::new(DriverSessionStores::new(backend.clone()).unwrap());
+    let first = provider.try_for_agent("agent").unwrap();
+    let cached = provider.try_for_agent("agent").unwrap();
+    assert!(Arc::ptr_eq(&first.turn_states, &cached.turn_states));
+    let rebound = provider.bind_actor(backend).unwrap().unwrap();
+    let independent = rebound.try_for_agent("agent").unwrap();
+    assert!(!Arc::ptr_eq(&first.turn_states, &independent.turn_states));
+    first
+        .turn_states
+        .put(&TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z"))
+        .unwrap();
+    assert!(independent.turn_states.get("t").unwrap().is_some());
+    assert!(
+        rebound
+            .try_for_agent("other")
+            .unwrap()
+            .turn_states
+            .get("t")
+            .unwrap()
+            .is_none()
+    );
+
+    let marker = Arc::new(NativeFailure);
+    let refused = provider
+        .bind_actor(Arc::new(NativeRefusal {
+            marker: marker.clone(),
+        }))
+        .unwrap()
+        .unwrap();
+    let error = refused.try_for_agent("agent").unwrap_err();
+    assert!(Arc::ptr_eq(
+        error
+            .source()
+            .unwrap()
+            .downcast_ref::<Arc<NativeFailure>>()
+            .unwrap(),
+        &marker
+    ));
+    assert!(Arc::ptr_eq(
+        &first.turn_states,
+        &provider.try_for_agent("agent").unwrap().turn_states
+    ));
+}
