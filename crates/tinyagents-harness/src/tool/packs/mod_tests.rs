@@ -260,10 +260,7 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     handle.bind(Arc::downgrade(&inner));
 
     let _full_catalog = UseSkillTool::new(handle.clone(), CATALOG);
-    let prefix_catalog = UseSkillTool::new(
-        handle.clone(),
-        PackCatalog::new(&PACKS[..1], MARKER),
-    );
+    let prefix_catalog = UseSkillTool::new(handle.clone(), PackCatalog::new(&PACKS[..1], MARKER));
     let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
     registry.register(Arc::new(prefix_catalog));
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();

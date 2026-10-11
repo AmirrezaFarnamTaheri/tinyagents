@@ -2123,10 +2123,12 @@ async fn nested_rules_check_prebound_targets_without_a_bind_call_result() {
         .await
         .expect("run succeeds with a nested refusal");
 
-    assert!(outcomes.lock().unwrap()[0]
-        .as_ref()
-        .unwrap_err()
-        .contains("rule 'no-leaf'"));
+    assert!(
+        outcomes.lock().unwrap()[0]
+            .as_ref()
+            .unwrap_err()
+            .contains("rule 'no-leaf'")
+    );
     assert_eq!(target.runs(), 0);
 }
 
