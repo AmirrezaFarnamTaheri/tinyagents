@@ -17,8 +17,7 @@
 //! switches by replacing `tinymemory_conversations::` with
 //! `tinyagents_session::threads::` plus those two names, and existing
 //! workspaces keep loading.
-//! The legacy API retains textual errors; the opt-in async persistence contract
-//! preserves typed failures. See `README.md` beside
+//! Errors stay `Result<_, String>` for that reason; see `README.md` beside
 //! this file for the layout, locking, and index design.
 //!
 //! ## Layout
@@ -26,14 +25,7 @@
 //! - `types` - the on-disk wire types (threads, messages, patches, hits).
 //! - `tokenize` - multilingual normalization + character n-gram tokenizer.
 //! - `inverted_index` - in-memory index over message content.
-//! - `persistence` - explicit async contract and classic compatibility adapter.
 //! - `store` - the JSONL [`ConversationStore`] and its free-function API.
-
-pub mod persistence;
-pub use persistence::{
-    ConversationError, ConversationPersistence, ConversationResult, ConversationTurnClaim,
-    ConversationTurnClaimOutcome, ConversationTurnClaimRequest, FileConversationStore,
-};
 
 mod inverted_index;
 mod store;
@@ -50,12 +42,3 @@ pub use types::{
     ThreadMessage, ThreadMessagePatch, is_deterministic_message_id, reply_run_id,
     run_reply_message_id,
 };
-
-#[cfg(test)]
-#[path = "persistence_tests.rs"]
-mod persistence_tests;
-
-#[cfg(feature = "storage-drivers")]
-pub mod driver;
-#[cfg(feature = "storage-drivers")]
-pub use driver::DriverConversationStore;

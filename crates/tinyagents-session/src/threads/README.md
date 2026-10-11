@@ -45,7 +45,7 @@ crate root (`tinyagents_session::ConversationStore`, ...). The free functions
 (`list_threads`, `append_message`, ...) stay under `threads::` so they are
 not confused with the SQLite session operations at the root.
 
-Legacy errors stay `Result<_, String>` rather than the crate's `TinyAgentsError`.
+Errors stay `Result<_, String>` rather than the crate's `TinyAgentsError`.
 That keeps the switch a pure path change for existing callers; converting
 the error type is a separate API change.
 
@@ -53,44 +53,9 @@ the error type is a separate API change.
 layout and proves it loads, re-encodes byte-for-byte, accepts appends in the
 same format, and is searchable.
 
-## Explicit async persistence
-
-The opt-in object-safe ConversationPersistence contract covers thread/message
-operations and exact substring search. FileConversationStore::new(workspace)
-adapts the existing JSONL implementation through Tokio's blocking pool; it
-preserves labels, deterministic/channel message deduplication, tail cuts,
-recreation and the local CJK index. It creates no files at construction.
-Its reads may repair classic stats, so it is not a read-only import reader.
-
-ConversationError distinguishes Legacy(String), unavailable authoritative
-operations, blocking worker failures, and native driver errors under the
-storage-drivers feature. SessionStoreProvider::conversations_for_agent returns
-a typed optional shared handle without changing existing AgentStores literals.
-Providers bind trusted conversation scope; thread IDs and payload metadata
-do not grant authority. A configured refusal must not select file persistence.
-
-Turn claim, renew, complete and release currently return typed Unsupported
-by default, including in the file adapter. Their contract requires durable
-completed-request deduplication and exact owner/epoch/expiry validation; a
-process mutex or lease precheck does not establish distributed turn ownership.
-With storage-drivers, DriverConversationStore::new(ScopedStorage) explicitly
-accepts an already-admitted profile scope. Single-document metadata CAS covers
-ensure/title/labels/working directory/tombstone; recreation opens a fresh UUID
-incarnation. Bounded backend pages read immutable committed message prefixes and
-revalidate metadata before returning. Search rebuilds a temporary owning index
-from exhaustive live backend reads, preserving local substring/CJK ranking.
-It does not use capped FullText or an authoritative process cache.
-
-The driver exposes no append/update/cut/purge or lease implementation; those
-operations return Unsupported. Metadata/stream format schema1 is an independent
-read prerequisite, not a target-import or cross-port writing protocol. No automatic
-host selection, import, generation purge or cross-port mutation protocol is
-introduced. Active turn writers and import receipts still need native authority
-validation before full cloud conversation execution can be enabled.
-
 ## File layout
 
-Every legacy file entry point takes the **workspace directory** and derives the root:
+Every entry point takes the **workspace directory** and derives the root:
 
 ```text
 {workspace_dir}/memory/conversations/
