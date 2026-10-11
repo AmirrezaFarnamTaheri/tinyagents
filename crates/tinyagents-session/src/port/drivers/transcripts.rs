@@ -216,7 +216,10 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
         CollectionSpec::new(INDEX)
             .index(IndexSpec::new("by_thread", ["thread_id", "created_at"]))
-            .index(IndexSpec::new("by_agent_name", ["agent_name", "created_at"]))
+            .index(IndexSpec::new(
+                "by_agent_name",
+                ["agent_name", "created_at"],
+            ))
             .index(IndexSpec::new("by_agent_id", ["agent_id", "created_at"])),
     ]
 }
