@@ -156,11 +156,15 @@ the member `stopped` — the bulk analogue of `release_agent_team_task`.
 
 ## Storage provider port
 
-`RunLedgerStore` is the object-safe, synchronous form of the existing ledger
+`RunLedgerStore` is the object-safe, async form of the existing ledger
 API. A handle binds its workspace or namespace once; payloads never choose
 another namespace. It covers agent runs, workflow leases/revisions, events,
 telemetry, teams/members/tasks, effects, entry trees, recovery classification,
-command-center controls, and the existing retention operations.
+command-center controls, and the existing retention operations. The three pure
+recovery helpers remain synchronous. Storage methods can await driver ports
+directly; no blocking bridge or caller-runtime reentry is required. The SQLite
+adapter polls the original short synchronous transactions; it keeps their
+existing execution behavior rather than adding a driver client.
 
 `SqliteRunLedger::new(workspace)` implements the port by delegating to the
 existing SQLite functions. Status CAS plus event remains one transaction;
