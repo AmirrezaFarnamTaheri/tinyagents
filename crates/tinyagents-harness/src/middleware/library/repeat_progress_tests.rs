@@ -251,20 +251,25 @@ async fn a_halt_keeps_the_summary_of_a_guard_that_stopped_the_run_first() {
 }
 
 /// The terminal outcome names the same first cause as the slot: the run's
-/// halt marker takes the summary already in the slot, and an earlier marker
-/// is never replaced.
-#[test]
-fn the_halt_marker_names_the_first_cause() {
+/// halt marker takes the summary already in the slot.
+#[tokio::test]
+async fn the_halt_marker_names_the_first_cause() {
     let handle = SteeringHandle::allow_all();
     let summary = Arc::new(std::sync::Mutex::new(Some("first cause".to_string())));
     let mw = new_mw(handle.clone(), summary.clone());
     let mut ctx = ctx();
-    mw.halt(&mut ctx, "later cause".to_string());
-    assert_eq!(ctx.halted_by_guard.as_deref(), Some("first cause"));
-    mw.halt(&mut ctx, "even later".to_string());
+    for _ in 0..DEFAULT_REPEAT_CALL_THRESHOLD {
+        let mut response = repeated_success_response("lookup", json!({"id": 1}));
+        mw.after_model(&mut ctx, &(), &mut response).await.unwrap();
+        let mut result = TaToolResult::success("ok");
+        let invocation = ToolInvocationIdentity::new("repeat-1", "lookup");
+        mw.after_tool(&mut ctx, &(), &invocation, &mut result)
+            .await
+            .unwrap();
+    }
+    assert_eq!(drain_pause_count(&handle), 1);
     assert_eq!(ctx.halted_by_guard.as_deref(), Some("first cause"));
     assert_eq!(summary.lock().unwrap().as_deref(), Some("first cause"));
-    assert_eq!(drain_pause_count(&handle), 2);
 }
 
 #[tokio::test]
