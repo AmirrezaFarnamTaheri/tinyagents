@@ -223,5 +223,5 @@ async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_wr
     assert!(matches!(actor.upsert_agent_run(run("run")).await.unwrap_err(), super::super::LedgerError::Driver(ref error)
         if error.kind() == tinystoragedrivers_core::ErrorKind::NotFound));
     let inspect = backend.for_scope(&scope).unwrap();
-    assert!(inspect.documents().collections().await.unwrap().is_empty());
+    assert!(inspect.documents().collections("").await.unwrap().is_empty());
 }
