@@ -4,6 +4,7 @@
 //! typed unsupported error. They never approximate a transaction with weaker
 //! individual writes or switch to a local SQLite database.
 
+mod agents;
 mod effects;
 mod import;
 mod storage;
@@ -151,8 +152,8 @@ fn unsupported(operation: &str) -> super::LedgerError {
 #[async_trait::async_trait]
 impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::upsert_agent_run`] without a weaker fallback.
-    async fn upsert_agent_run(&self, _upsert: AgentRunUpsert) -> Result<AgentRun> {
-        Err(unsupported("upsert_agent_run"))
+    async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun> {
+        self.upsert_agent(upsert).await
     }
 
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
@@ -316,8 +317,8 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::get_agent_run`] without a weaker fallback.
-    async fn get_agent_run(&self, _id: &str) -> Result<Option<AgentRun>> {
-        Err(unsupported("get_agent_run"))
+    async fn get_agent_run(&self, id: &str) -> Result<Option<AgentRun>> {
+        self.agent(id).await
     }
 
     /// Implement [`RunLedgerStore::transition_agent_run_status`] without a weaker fallback.
