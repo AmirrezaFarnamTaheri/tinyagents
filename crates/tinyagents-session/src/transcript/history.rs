@@ -1522,7 +1522,3 @@ fn head_generation_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "history_tests.rs"]
-mod tests;
