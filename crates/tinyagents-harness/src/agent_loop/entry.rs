@@ -423,9 +423,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
 
         let base = AgentLoopBase { harness: self };
-        match self
-            .middleware
-            .run_wrapped_agent(
+        let depth = crate::context::RunDepth::from(&ctx.config);
+        match crate::context::with_run_depth(
+            depth,
+            self.middleware.run_wrapped_agent(
                 &mut ctx,
                 state,
                 input,
@@ -433,8 +434,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 &mut terminal.run,
                 &mut status,
                 &base,
-            )
-            .await
+            ),
+        )
+        .await
         {
             Ok(()) => {
                 // A paused run is resumable, not finished: reporting it

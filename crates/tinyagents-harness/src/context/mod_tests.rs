@@ -640,21 +640,33 @@ async fn serialized_run_depth_keeps_the_child_limit_across_a_transport_hop() {
     with_run_depth(imported, async {
         let current = current_run_depth().unwrap();
         assert_eq!(current.depth, 3);
-        assert!(matches!(current.checked_child(), Err(crate::TinyAgentsError::SubAgentDepth(3))));
-    }).await;
+        assert!(matches!(
+            current.checked_child(),
+            Err(crate::TinyAgentsError::SubAgentDepth(3))
+        ));
+    })
+    .await;
     assert_eq!(current_run_depth(), None);
 }
 
 #[tokio::test]
 async fn nested_run_depth_scopes_restore_the_parent_and_do_not_leak_to_tasks() {
-    let root = RunDepth { depth: 0, max_depth: 3 };
+    let root = RunDepth {
+        depth: 0,
+        max_depth: 3,
+    };
     with_run_depth(root, async {
         let child = current_run_depth().unwrap().checked_child().unwrap();
         with_run_depth(child, async {
             assert_eq!(current_run_depth().unwrap().depth, 1);
-            assert_eq!(tokio::spawn(async { current_run_depth() }).await.unwrap(), None);
-        }).await;
+            assert_eq!(
+                tokio::spawn(async { current_run_depth() }).await.unwrap(),
+                None
+            );
+        })
+        .await;
         assert_eq!(current_run_depth(), Some(root));
-    }).await;
+    })
+    .await;
     assert_eq!(current_run_depth(), None);
 }
