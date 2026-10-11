@@ -127,11 +127,44 @@ fn per_token(rate_per_mtok: f64) -> Option<f64> {
 
 const VISION_INPUT_MODELS: &[&str] = &["minimax-m3"];
 
+// Only models with provider-published cache support are advertised as having
+// prompt caching. Some rows, notably Mistral, carry estimated cache rates for
+// cost modeling but do not establish that the provider supports the feature.
+const PROMPT_CACHING_MODELS: &[&str] = &[
+    "claude-fable-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "o3",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "deepseek-chat",
+    "deepseek-reasoner",
+    "kimi-k2.6",
+    "kimi-k2.5",
+    "qwen3-max",
+    "qwen-max",
+    "qwen-plus",
+    "qwen-flash",
+    "minimax-m3",
+    "minimax-m2.7",
+    "minimax-m2.7-highspeed",
+];
+
 /// Whether the published vision allowlist includes this decorated model id.
 pub fn model_accepts_image_input(model_id: &str) -> bool {
-    let normalized = normalize(model_id);
-    let bare = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
-    VISION_INPUT_MODELS.contains(&normalized.as_str()) || VISION_INPUT_MODELS.contains(&bare)
+    lookup(model_id).is_some_and(|price| VISION_INPUT_MODELS.contains(&price.model_id))
 }
 
 /// Project one published catalog row as flat metadata (not a tier-aware estimate) into a TinyAgents model-catalog entry.
@@ -166,7 +199,7 @@ pub fn flat_catalog_entry(price: &ModelPrice, source: &str) -> crate::ModelCatal
             tiers: Vec::new(),
         },
         capabilities: crate::ModelCapabilities {
-            prompt_caching: price.cached_input_per_mtok_usd > 0.0,
+            prompt_caching: PROMPT_CACHING_MODELS.contains(&price.model_id),
             vision: model_accepts_image_input(price.model_id),
             ..crate::ModelCapabilities::default()
         },
