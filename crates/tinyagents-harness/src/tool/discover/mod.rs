@@ -23,7 +23,7 @@ mod manifest;
 mod types;
 
 pub use bridge::{SearchAnswer, TOOL_SEARCH_NAME, answer_tool_search, bridge_schemas};
-pub use embedding_ranker::EmbeddingToolRanker;
+pub use embedding_ranker::{EmbeddingCache, EmbeddingToolRanker};
 // The BM25 arithmetic lives in `tinytools::rank` now, so a host ranks with the
 // same index the bridge does; the old paths keep resolving.
 pub use manifest::{MANIFEST_DESCRIPTION_CHARS, first_sentence, render_manifest};
