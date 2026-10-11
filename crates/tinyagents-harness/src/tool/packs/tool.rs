@@ -157,6 +157,11 @@ impl Tool for PinnedPackCall {
         self.outer.parameters_schema()
     }
 
+    fn policy(&self) -> tinytools::ToolPolicy {
+        self.selected()
+            .map_or_else(|| self.outer.policy(), Tool::policy)
+    }
+
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         self.execute_with_options(Value::Null, ToolCallOptions::default())
             .await
