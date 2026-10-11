@@ -78,6 +78,30 @@ or that starts with the reserved `sha256:` prefix, maps to `sha256:<hex>` of
 itself, so no raw id can name a hashed scope, and the driver enforces scopes, so the
 provider claims isolation and passes `session_store_isolation_conformance`.
 
+### Checked opening
+
+With `storage-drivers`, call `SessionStoreProvider::try_for_agent(agent_id)`
+through the provider trait when admission must be authoritative. It returns
+`Result<AgentStores, StorageError>`; driver scope admission and recovery failures
+retain their original error kind and native source. The `Arc<P>` implementation
+forwards the checked accessor. Legacy providers default to
+`Ok(self.for_agent(agent_id))`, so existing providers and store literals remain
+compatible.
+
+Driver recovery uses the same turn-state handles and blocking bridge as normal
+operations, without projecting errors through the legacy string interface.
+Failed recovery caches neither stores nor a successful recovery marker, so a
+later checked open retries. The existing infallible `for_agent` still returns
+refusing handles on driver failure. Hosts selecting configured storage must
+propagate checked errors rather than treating them as an absent provider.
+
+Regression evidence: the generic provider and Arc accessors previously returned
+successful refusing/legacy handles; recovery replaced native declaration and
+query errors with `Unavailable`. Behavioral tests reproduced those failures
+before the override, forwarding and typed recovery helper were added. Tests
+cover source identity, unusual key mapping, legacy file compatibility,
+successful cached handles, independent actor caches and recovery retry.
+
 ### Actor-owned providers
 
 With `storage-drivers`, `SessionStoreProvider::bind_actor(admitted_backend)`
