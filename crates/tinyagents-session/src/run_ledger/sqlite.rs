@@ -387,7 +387,7 @@ impl RunLedgerStore for SqliteRunLedger {
     async fn list_agent_work(
         &self,
         limit: Option<u32>,
-        display_name: &(dyn Fn(&str) -> Option<String> + Sync),
+        display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<CommandCenterView> {
         super::command_center::list_agent_work(&self.workspace_dir, limit, display_name)
     }
@@ -398,7 +398,7 @@ impl RunLedgerStore for SqliteRunLedger {
         verb: ControlVerb,
         message: Option<&str>,
         reason: Option<&str>,
-        display_name: &(dyn Fn(&str) -> Option<String> + Sync),
+        display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> std::result::Result<AgentWorkRow, ControlError> {
         super::command_center::apply_control(
             &self.workspace_dir,
