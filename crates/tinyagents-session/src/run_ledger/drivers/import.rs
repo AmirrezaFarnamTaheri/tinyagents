@@ -276,8 +276,10 @@ impl DriverRunLedger {
         for telemetry in loaded.telemetry { writes.push(put(TELEMETRY, key(&[&telemetry.run_id]), encode(&telemetry)?)); }
         let mut heads = std::collections::BTreeMap::<String,u64>::new();
         for event in loaded.events {
-            let next = event.sequence.checked_add(1).filter(|sequence| *sequence <= i64::MAX as u64)
-                .ok_or_else(|| StorageError::serialization("import event sequence exceeds classic range"))?;
+            if event.sequence == 0 || event.sequence > i64::MAX as u64 {
+                return Err(StorageError::serialization("import event sequence exceeds classic range").into());
+            }
+            let next = event.sequence + 1;
             heads.entry(event.run_id.clone()).and_modify(|current| *current = (*current).max(next)).or_insert(next);
             writes.push(put(EVENTS, key(&[&event.run_id, &event.sequence.to_string()]), encode(&event)?));
         }

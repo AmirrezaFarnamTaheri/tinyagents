@@ -19,8 +19,12 @@ impl DriverRunLedger {
     async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
         let head = self.read::<EventHead>(EVENT_HEADS, &input.run_id).await?;
         let sequence = head.as_ref().map_or(1, |head| head.doc.next);
-        let next = sequence.checked_add(1).filter(|value| *value <= i64::MAX as u64)
-            .ok_or_else(|| StorageError::serialization("event sequence exceeds classic range"))?;
+        if sequence == 0 || sequence > i64::MAX as u64 {
+            return Err(StorageError::serialization("event sequence exceeds classic range").into());
+        }
+        // The head may hold MAX + 1 as an exhausted sentinel; the event itself
+        // retains the full positive signed SQLite range.
+        let next = sequence + 1;
         let event = RunEvent { run_id: input.run_id.clone(), sequence, event_type: input.event_type.clone(),
             payload: input.payload.clone(), timestamp: Utc::now() };
         Ok(EventCommit {
