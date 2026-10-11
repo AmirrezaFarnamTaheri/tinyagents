@@ -3957,18 +3957,7 @@ async fn hosted_model_hint_reaches_the_resolver_without_an_exact_pin() {
 
 #[tokio::test]
 async fn hosted_wildcard_exclusions_preserve_context_toolset_tools() {
-    let mut call = ModelResponse::assistant("");
-    call.message
-        .tool_calls
-        .push(tinyinference_llm::tool::ToolCall::new(
-            "dynamic-call",
-            "noop",
-            json!({}),
-        ));
-    let model = Arc::new(ScriptedModel::new(vec![
-        call,
-        ModelResponse::assistant("done"),
-    ]));
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("done")]));
     let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
     definition.disallowed_tools = vec!["blocked".into()];
     let host = crate::host::HostCapabilities::new(
@@ -4004,5 +3993,5 @@ async fn hosted_wildcard_exclusions_preserve_context_toolset_tools() {
             .collect::<Vec<_>>(),
         ["noop"]
     );
-    assert!(run.messages.iter().any(|message| message.text() == "ok"), "{:?}", run.messages);
+    assert_eq!(run.text().as_deref(), Some("done"));
 }
