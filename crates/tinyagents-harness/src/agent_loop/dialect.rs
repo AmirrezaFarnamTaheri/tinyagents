@@ -53,13 +53,16 @@ impl RunDialect {
         tools: &[ToolSchema],
         native_tool_calling: Option<bool>,
     ) -> Self {
-        match dispatcher {
-            ToolDispatcher::Auto if native_tool_calling == Some(false) => Self::Xml,
-            ToolDispatcher::Auto | ToolDispatcher::Native => Self::Native,
-            ToolDispatcher::Xml => Self::Xml,
-            ToolDispatcher::Pformat => Self::PFormat(Arc::new(registry_from(tools))),
-            ToolDispatcher::Python => Self::Code(CodeStyle::Python, Arc::new(registry_from(tools))),
-            ToolDispatcher::Typescript => {
+        match crate::dialect::resolve_tool_format(dispatcher, native_tool_calling) {
+            crate::dialect::ToolCallFormat::Native => Self::Native,
+            crate::dialect::ToolCallFormat::Json => Self::Xml,
+            crate::dialect::ToolCallFormat::PFormat => {
+                Self::PFormat(Arc::new(registry_from(tools)))
+            }
+            crate::dialect::ToolCallFormat::Python => {
+                Self::Code(CodeStyle::Python, Arc::new(registry_from(tools)))
+            }
+            crate::dialect::ToolCallFormat::TypeScript => {
                 Self::Code(CodeStyle::TypeScript, Arc::new(registry_from(tools)))
             }
         }

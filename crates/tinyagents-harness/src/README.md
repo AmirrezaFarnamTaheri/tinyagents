@@ -91,3 +91,15 @@ Cargo features are crate-local (see `Cargo.toml`): `sqlite`, `storage-drivers`,
 `tracing` feature forwards to `tinytools-agent/tracing`, which enables that
 crate's `debug!`/`warn!` diagnostics (native-call parsing, malformed
 arguments).
+
+### Prompt catalogue compatibility
+
+catalog::render_description_catalogue renders description-only tools in input
+order and appends TinyTools' XML protocol. Empty input emits no bytes; authored
+descriptions, Unicode and embedded newlines remain intact. Its complete output
+is pinned to the frozen legacy channel-prompt golden fixture.
+
+dialect::resolve_tool_format bridges typed harness dispatch policy to the shared
+TinyTools selection rule. Unknown native support retains the harness's native
+default. dialect::dispatcher_for_format maps selected prompt formats to matching
+harness policy, keeping the native format's automatic fallback.

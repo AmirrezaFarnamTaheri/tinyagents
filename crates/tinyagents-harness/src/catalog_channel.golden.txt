@@ -1,0 +1,20 @@
+## Tools
+
+You have access to the following tools:
+
+- **file_read**: Read UTF-8 text → bytes
+- **tool_search**: Find a tool.
+Preserve line breaks.
+
+## Tool Use Protocol
+
+To use a tool, wrap a JSON object in <tool_call></tool_call> tags:
+
+```
+<tool_call>
+{"name": "tool_name", "arguments": {"param": "value"}}
+</tool_call>
+```
+
+You may use multiple tool calls in a single response. After tool execution, results appear in <tool_result> tags. Continue reasoning with the results until you can give a final answer.
+
