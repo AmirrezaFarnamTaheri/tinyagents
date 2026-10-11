@@ -97,6 +97,7 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
 
 #[cfg(feature = "storage-drivers")]
 #[test]
+/// Pins the default checked accessor for an unchanged file provider.
 fn checked_accessor_keeps_legacy_file_provider_compatible() {
     let dir = tempfile::tempdir().unwrap();
     let provider: &dyn SessionStoreProvider = &FileStores {
@@ -108,11 +109,13 @@ fn checked_accessor_keeps_legacy_file_provider_compatible() {
 
 #[cfg(feature = "storage-drivers")]
 #[test]
+/// Pins Arc forwarding rather than selecting the infallible default.
 fn checked_accessor_arc_forwards_native_refusal() {
     use std::error::Error;
     #[derive(Debug)]
     struct Native;
     impl std::fmt::Display for Native {
+        /// Displays the native test marker.
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("native marker")
         }
@@ -120,9 +123,11 @@ fn checked_accessor_arc_forwards_native_refusal() {
     impl Error for Native {}
     struct Checked;
     impl SessionStoreProvider for Checked {
+        /// Returns usable legacy stores to expose an incorrect default fallback.
         fn for_agent(&self, key: &str) -> AgentStores {
             InMemorySessionStores::default().for_agent(key)
         }
+        /// Refuses checked opening with an identifiable native input error.
         fn try_for_agent(
             &self,
             _: &str,

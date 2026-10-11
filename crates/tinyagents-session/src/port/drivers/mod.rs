@@ -203,6 +203,7 @@ impl DriverSessionStores {
         }
     }
 
+    /// Builds public stores and retains their exact typed recovery handle.
     fn build(&self, scoped: &ScopedStorage) -> (AgentStores, Arc<DriverTurnStates>) {
         let docs = Arc::clone(scoped.documents());
         // The provider's own id keeps two providers with the same driver and
@@ -231,6 +232,7 @@ impl DriverSessionStores {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
+    /// Opens through the driver accessor without erasing native refusal errors.
     fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
         DriverSessionStores::try_for_agent(self, agent_id)
     }

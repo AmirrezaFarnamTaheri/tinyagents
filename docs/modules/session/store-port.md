@@ -31,8 +31,10 @@ process that served it. The port lets both use the same runtime.
 
 ## Isolation
 
-`for_agent` is the only way to obtain stores, and the handles it returns are
-bound to that agent. A provider serving several users from one backend must
+`for_agent` and, with `storage-drivers`, `try_for_agent` obtain handles bound
+to that agent. Hosts that must propagate admission or recovery failures use
+`try_for_agent`; the legacy accessor can return refusing handles instead.
+A provider serving several users from one backend must
 make it impossible for one agent's handles to reach another's data; the
 single-user desktop layout shares one workspace between its agents and does
 not claim isolation.

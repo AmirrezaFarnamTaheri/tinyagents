@@ -281,6 +281,7 @@ impl TurnStates for TurnStateStore {
 
 /// A provider shared behind an [`Arc`] is still a provider.
 impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
+    /// Forwards checked opening to the shared provider, including its native errors.
     #[cfg(feature = "storage-drivers")]
     fn try_for_agent(
         &self,

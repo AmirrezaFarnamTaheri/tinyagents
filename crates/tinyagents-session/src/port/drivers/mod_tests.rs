@@ -284,6 +284,7 @@ struct FlakyDocs {
 }
 
 impl FlakyDocs {
+    /// Injects a typed refusal while the recovery backend is unavailable.
     fn check(&self) -> Result<(), StorageError> {
         if self.down.load(std::sync::atomic::Ordering::SeqCst) {
             Err(StorageError::unsupported(
@@ -302,6 +303,7 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
     fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
         self.inner.capabilities()
     }
+    /// Fails declaration when selected, otherwise delegates the native schema operation.
     async fn ensure_collection(
         &self,
         spec: &tinystoragedrivers_core::CollectionSpec,
@@ -445,6 +447,7 @@ fn a_failed_recovery_fails_closed_and_is_retried() {
 #[derive(Debug)]
 struct NativeFailure;
 impl std::fmt::Display for NativeFailure {
+    /// Displays the marker without changing its native error identity.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("native failure marker")
     }
@@ -456,15 +459,19 @@ struct NativeRefusal {
     marker: Arc<NativeFailure>,
 }
 impl StorageBackend for NativeRefusal {
+    /// Names the scope-refusing fixture backend.
     fn driver(&self) -> &'static str {
         "native-refusal"
     }
+    /// Advertises no optional native capabilities.
     fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
         Default::default()
     }
+    /// Refuses admission with the same source Arc supplied by the test.
     fn for_scope(&self, _: &Scope) -> Result<ScopedStorage, StorageError> {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
     }
+    /// Refuses named database access for this scope-only fixture.
     fn database(&self, _: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
         Err(StorageError::unsupported(
             tinystoragedrivers_core::Capability::Fencing,
@@ -474,6 +481,7 @@ impl StorageBackend for NativeRefusal {
 }
 
 #[test]
+/// Pins native scope error and source identity through object-safe checked opening.
 fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     use std::error::Error;
     let marker = Arc::new(NativeFailure);
@@ -497,6 +505,7 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
 }
 
 #[test]
+/// Pins native query errors, uncached failure and successful recovery retry.
 fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     use std::error::Error;
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -524,6 +533,7 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
 }
 
 #[test]
+/// Pins native declaration errors before turn recovery can proceed.
 fn checked_open_preserves_native_recovery_declaration_refusal() {
     use std::error::Error;
     let provider = DriverSessionStores::new(Arc::new(Flaky {
@@ -545,6 +555,7 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
 }
 
 #[test]
+/// Pins cache reuse, actor cache independence and durable scope isolation.
 fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     use std::error::Error;
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
