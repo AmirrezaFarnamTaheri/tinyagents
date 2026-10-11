@@ -98,7 +98,7 @@ impl DriverRunLedger {
             if records.first().is_none_or(|event| event.sequence != next + 1) {
                 return Err(StorageError::serialization("event projection has a missing receipt").into());
             }
-            let values = records.into_iter().map(serde_json::to_value).collect::<std::result::Result<Vec<_>, _>>()?;
+            let values = records.into_iter().map(serde_json::to_value).collect::<std::result::Result<Vec<_>, _>>().map_err(StorageError::from)?;
             match self.scoped.streams().append_batch_if_offset(&stream, next, values).await {
                 Ok(_) => continue,
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
