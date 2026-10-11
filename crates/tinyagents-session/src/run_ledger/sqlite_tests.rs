@@ -698,7 +698,7 @@ async fn adapter_lists_and_member_lifecycle_use_the_bound_database() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(running.member_status, AgentTeamMemberStatus::Running);
+    assert_eq!(running.member_status, AgentTeamMemberStatus::Active);
     let idle = ledger
         .mark_agent_team_member_idle("team", "member")
         .await
@@ -710,7 +710,7 @@ async fn adapter_lists_and_member_lifecycle_use_the_bound_database() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(closed.member_status, AgentTeamMemberStatus::Shutdown);
+    assert_eq!(closed.member_status, AgentTeamMemberStatus::Stopped);
     assert_eq!(released, vec!["task"]);
 }
 
@@ -795,7 +795,104 @@ async fn adapter_tree_navigation_effect_settlement_and_retention_round_trip() {
     assert_eq!(ledger.prune_sessions_before(cutoff).await.unwrap(), 0);
     assert_eq!(ledger.trim_session_messages("missing", 1).await.unwrap(), 0);
     assert_eq!(ledger.prune_tool_calls_before(cutoff).await.unwrap(), 0);
-    assert_eq!(ledger.prune_run_events_before(cutoff).await.unwrap(), 0);
+    let event = ledger
+        .append_run_event(RunEventAppend {
+            run_id: "event-run".into(),
+            event_type: "test".into(),
+            payload: json!({}),
+        })
+        .await
+        .unwrap();
+    assert_eq!(event.sequence, 1);
+    assert_eq!(ledger.prune_run_events_before(cutoff).await.unwrap(), 1);
     assert_eq!(ledger.reindex_fts().await.unwrap(), 0);
     assert!(ledger.entry_get("tree", &label).await.unwrap().is_some());
+}
+
+/// Installing the adapter keeps active session/message/tool tables, and classic retention cascades only finished sessions.
+#[tokio::test]
+async fn adapter_preserves_active_session_tables_and_retention_cascades() {
+    let dir = tempfile::tempdir().unwrap();
+    for id in ["active", "finished"] {
+        crate::ops::record_session_start(
+            dir.path(),
+            id,
+            "definition",
+            "Definition",
+            id,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let message =
+            crate::ops::record_message(dir.path(), id, "user", "record", None, None, None, None)
+                .unwrap();
+        crate::ops::record_tool_call(
+            dir.path(),
+            id,
+            Some(message),
+            "tool",
+            None,
+            None,
+            "completed",
+            None,
+        )
+        .unwrap();
+    }
+    crate::ops::record_session_end(
+        dir.path(),
+        "finished",
+        crate::types::SessionStatus::Completed,
+        1,
+        0,
+        0,
+        0,
+        0.0,
+    )
+    .unwrap();
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    assert!(
+        crate::ops::get_session(dir.path(), "active")
+            .unwrap()
+            .is_some()
+    );
+    let report = ledger
+        .apply_retention(chrono::Utc::now() + Duration::minutes(1))
+        .await
+        .unwrap();
+    assert_eq!(report.sessions, 1);
+    assert!(
+        crate::ops::get_session(dir.path(), "finished")
+            .unwrap()
+            .is_none()
+    );
+    crate::store::with_connection(dir.path(), |conn| {
+        for table in ["session_messages", "session_tool_calls"] {
+            let finished: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE session_id = 'finished'"),
+                [],
+                |row| row.get(0),
+            )?;
+            let active: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE session_id = 'active'"),
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(finished, 0);
+            // The global classic tool-call age pass also removes active sessions' old tool calls.
+            assert_eq!(active, if table == "session_messages" { 1 } else { 0 });
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        crate::ops::get_session(dir.path(), "active")
+            .unwrap()
+            .unwrap()
+            .status,
+        crate::types::SessionStatus::Running
+    );
 }
