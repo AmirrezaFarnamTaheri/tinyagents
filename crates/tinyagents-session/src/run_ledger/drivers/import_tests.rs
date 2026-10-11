@@ -194,3 +194,16 @@ async fn changed_source_cannot_reuse_a_committed_import_operation() {
     assert!(matches!(ledger.import_agent_family(&source, "import").await.unwrap_err(), super::super::super::LedgerError::Driver(ref error) if error.kind() == ErrorKind::Conflict));
     assert_eq!(ledger.get_agent_run("run").await.unwrap().unwrap().summary.as_deref(), Some("original"));
 }
+
+#[tokio::test]
+async fn imported_event_counter_can_allocate_the_last_classic_signed_sequence() {
+    let (ledger, _) = ledgers(); let root = tempfile::tempdir().unwrap();
+    let source = complete_source(&ledger, &root);
+    let db = rusqlite::Connection::open(source.path()).unwrap();
+    db.execute("DELETE FROM run_events WHERE sequence != 3", []).unwrap();
+    db.execute("UPDATE run_events SET sequence = ?1", [i64::MAX - 1]).unwrap(); drop(db);
+    ledger.import_agent_family(&source, "import").await.unwrap();
+    let input = || RunEventAppend { run_id: "run".into(), event_type: "last".into(), payload: serde_json::json!({}) };
+    assert_eq!(ledger.append_run_event(input()).await.unwrap().sequence, i64::MAX as u64);
+    assert!(matches!(ledger.append_run_event(input()).await.unwrap_err(), super::super::super::LedgerError::Driver(ref error) if error.kind() == ErrorKind::Serialization));
+}
