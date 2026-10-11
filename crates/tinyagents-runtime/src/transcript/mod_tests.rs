@@ -156,6 +156,20 @@ fn reasoning_replays_verbatim_and_retains_multiple_spans() {
         reasoning_from_content(&content).as_deref(),
         Some(" first \n\nsecond")
     );
+    let repeated = vec![
+        ContentBlock::Thinking {
+            text: "repeat".into(),
+            signature: None,
+        },
+        ContentBlock::Thinking {
+            text: "repeat".into(),
+            signature: None,
+        },
+    ];
+    assert_eq!(
+        reasoning_from_content(&repeated).as_deref(),
+        Some("repeat\n\nrepeat")
+    );
     assert!(reasoning_content_block(Some(" \n ")).is_none());
 }
 

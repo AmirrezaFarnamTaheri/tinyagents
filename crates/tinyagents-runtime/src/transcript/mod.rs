@@ -38,21 +38,37 @@ const REASONING_BLOCK_SEPARATOR: &str = "\n\n";
 /// line — keeping only the first silently dropped every later span from the
 /// persisted transcript and the reasoning shown for that step.
 pub fn reasoning_from_content(content: &[ContentBlock]) -> Option<String> {
-    let mut parts: Vec<String> = content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Thinking { text, .. } => Some(text.clone()),
-            ContentBlock::ProviderExtension(value) => value
-                .get(REASONING_EXT_KEY)
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
-            _ => None,
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect();
-    // A legacy row can carry the same reasoning both as a thinking block and
-    // under the provider-extension key; do not render it twice.
-    parts.dedup();
+    let mut parts = Vec::new();
+    for block in content {
+        let (text, is_thinking) = match block {
+            ContentBlock::Thinking { text, .. } => (text.as_str(), true),
+            ContentBlock::ProviderExtension(value) => (
+                value
+                    .get(REASONING_EXT_KEY)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                false,
+            ),
+            _ => continue,
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        // A legacy row can carry the same reasoning both as adjacent thinking
+        // and provider-extension blocks; do not render that pair twice. Keep
+        // repeated blocks of the same kind because each is a real reasoning
+        // span, even when their text happens to be identical.
+        if let Some((previous, previous_is_thinking)) = parts.last()
+            && previous == text
+            && *previous_is_thinking != is_thinking
+        {
+            // The current block is the legacy duplicate; retain the first
+            // span so a following same-kind span is still preserved.
+            continue;
+        }
+        parts.push((text.to_string(), is_thinking));
+    }
+    let parts: Vec<String> = parts.into_iter().map(|(text, _)| text).collect();
     match parts.len() {
         0 => None,
         1 => parts.into_iter().next(),
