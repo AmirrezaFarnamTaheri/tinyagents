@@ -1090,6 +1090,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
                 model_pin: definition.model.pin(),
+                model_hint: definition.model.hint(),
                 role: definition.role,
                 allowed_tools,
                 tool_rules,

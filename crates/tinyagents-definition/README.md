@@ -39,3 +39,10 @@ serde tests, and a hosted empty-scope regression. Run:
 cargo test -p tinyagents-definition
 cargo test -p tinyagents-harness explicit_empty_tool_scope
 ```
+
+Routing hints stay separate from exact model pins: ModelSpec::pin returns only
+an Exact selection, while hint returns the authored Hint value. The legacy
+resolve helper retains its hint-prefixed alias for callers using that vocabulary.
+Named tool scopes include extra and deferred names before deny filtering and
+deduplication. Wildcards with additions materialize a supplied catalogue;
+without one they fail closed. A bare wildcard retains the host fallback policy.

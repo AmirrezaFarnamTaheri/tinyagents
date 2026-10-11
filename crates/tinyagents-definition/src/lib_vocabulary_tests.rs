@@ -401,3 +401,19 @@ fn wildcard_additions_materialize_known_catalogues_and_remain_fail_closed_withou
         assert_eq!(def.resolve_tool_scope(None), ToolScope::Named(vec![]));
     }
 }
+
+#[test]
+fn model_hints_are_separate_from_exact_pins() {
+    assert_eq!(ModelSpec::Hint("reasoning".into()).pin(), None);
+    assert_eq!(
+        ModelSpec::Hint("reasoning".into()).hint().as_deref(),
+        Some("reasoning")
+    );
+    assert_eq!(
+        ModelSpec::Exact("model".into()).pin().as_deref(),
+        Some("model")
+    );
+    assert_eq!(ModelSpec::Exact("model".into()).hint(), None);
+    assert_eq!(ModelSpec::Inherit.pin(), None);
+    assert_eq!(ModelSpec::Inherit.hint(), None);
+}

@@ -19,12 +19,18 @@ pub enum ModelSpec {
 }
 
 impl ModelSpec {
-    /// Routing pin, or `None` when the caller should inherit its model.
+    /// Exact model pin. Inherited selections and routing hints have no pin.
     pub fn pin(&self) -> Option<String> {
         match self {
-            Self::Inherit => None,
+            Self::Inherit | Self::Hint(_) => None,
             Self::Exact(name) => Some(name.clone()),
-            Self::Hint(hint) => Some(format!("hint:{hint}")),
+        }
+    }
+    /// Host-interpreted routing hint, distinct from a concrete model id.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::Hint(hint) => Some(hint.clone()),
+            Self::Inherit | Self::Exact(_) => None,
         }
     }
     /// Resolve inherited selection against a parent model; hints become `hint:` aliases.
