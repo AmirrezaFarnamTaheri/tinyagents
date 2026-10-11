@@ -630,6 +630,7 @@ fn a_cleared_limit_kind_is_not_attributed_to_a_later_error() {
     assert_eq!(ctx.take_last_limit(), Some(LimitKind::ModelCalls));
 }
 
+/// A transport round-trip preserves depth and refuses a fourth child.
 #[tokio::test]
 async fn serialized_run_depth_keeps_the_child_limit_across_a_transport_hop() {
     let config = RunConfig::new("parent").with_depth(3).with_max_depth(3);
@@ -649,6 +650,7 @@ async fn serialized_run_depth_keeps_the_child_limit_across_a_transport_hop() {
     assert_eq!(current_run_depth(), None);
 }
 
+/// Nested task scopes restore their parent without leaking into spawned tasks.
 #[tokio::test]
 async fn nested_run_depth_scopes_restore_the_parent_and_do_not_leak_to_tasks() {
     let root = RunDepth {
@@ -671,6 +673,7 @@ async fn nested_run_depth_scopes_restore_the_parent_and_do_not_leak_to_tasks() {
     assert_eq!(current_run_depth(), None);
 }
 
+/// Untrusted maximum integer depth returns a typed refusal rather than panicking.
 #[test]
 fn checked_child_depth_rejects_overflow_in_serialized_transport_facts() {
     assert!(matches!(
