@@ -22,7 +22,7 @@
 //!   through constructor arguments.
 //!
 //! Type definitions live in `types`; this file holds the constructors and
-//! trait impls. Tests live in `test.rs`.
+//! trait impls. Tests live in sibling `*_tests.rs` files.
 //!
 //! # Testability
 //!

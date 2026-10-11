@@ -185,6 +185,7 @@ async fn stop_hooks_require_a_run_steering_handle_before_observing_calls() {
         })],
     );
     let mut context = RunContext::new(RunConfig::new("unsteered"), ());
+    assert!(middleware.before_agent(&mut context, &()).await.is_err());
     let error = middleware
         .after_model(&mut context, &(), &mut ModelResponse::assistant("done"))
         .await
@@ -276,4 +277,18 @@ async fn stop_hook_pause_prevents_the_next_model_call_in_the_native_loop() {
         "the completed call keeps its pending tool round"
     );
     assert_eq!(*observations.lock().unwrap(), vec![("budget", 1, 1)]);
+}
+
+/// No policies means no steering requirement and no fabricated accounting.
+#[tokio::test]
+async fn an_empty_stop_hook_list_leaves_unsteered_calls_unchanged() {
+    let middleware = StopHookMiddleware::<()>::new("model", Vec::new());
+    let mut context = RunContext::new(RunConfig::new("unsteered"), ());
+    let mut response = ModelResponse::assistant("unchanged");
+    middleware.before_agent(&mut context, &()).await.unwrap();
+    middleware
+        .after_model(&mut context, &(), &mut response)
+        .await
+        .unwrap();
+    assert_eq!(response.message.text(), "unchanged");
 }

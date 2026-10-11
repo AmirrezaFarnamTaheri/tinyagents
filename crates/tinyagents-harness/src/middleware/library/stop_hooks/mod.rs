@@ -149,9 +149,6 @@ where
             let run = runs
                 .get_mut(&context.instance_id())
                 .expect("active stop-hook run");
-            if run.stopped {
-                return Ok(());
-            }
             run.stopped = true;
             drop(runs);
             if let Some(observer) = &self.observer {
