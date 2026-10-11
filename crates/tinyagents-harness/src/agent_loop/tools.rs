@@ -274,6 +274,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
             return Ok(None);
         };
+        // Explicit wildcard policy covers context-dependent toolsets; a bare
+        // wildcard continues to use the host's undeclared-tool fallback.
         Ok(match &binding.allowed_tools {
             Some(declared) => Some(declared.clone()),
             None if binding.wildcard_tools => None,
@@ -284,7 +286,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
     }
 
-    /// Resolves the run's [`ToolGate`]: the exact allowlist from
+    /// Resolves the run's [`ToolGate`]: the allowlist and exact exclusions from
     /// [`Self::resolve_tool_allowlist`], the harness policy's
     /// [`tool_rules`](crate::runtime::RunPolicy::tool_rules) and, on a hosted
     /// run, the resolved definition's own rules. Every listing and admission
