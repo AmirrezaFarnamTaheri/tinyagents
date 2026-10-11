@@ -292,6 +292,7 @@ fn packed_binding_preserves_outer_policy_transform_approval() {
 
     assert!(dispatch.tool().policy().access.approval_required);
     let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+    assert!(bound.tool().policy().classified);
     assert!(
         bound.tool().policy().access.approval_required,
         "binding the concrete packed target must retain the outer approval policy"
