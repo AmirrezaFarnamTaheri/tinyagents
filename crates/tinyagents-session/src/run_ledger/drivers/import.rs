@@ -248,6 +248,9 @@ impl DriverRunLedger {
                 super::super::ops::map_run_telemetry_row(row)
             }).map_err(source_sql_error)?.collect::<std::result::Result<Vec<_>, _>>().map_err(source_sql_error)?
         };
+        for row in &runs { super::storage::encode(row)?; }
+        for row in &events { super::storage::encode(row)?; }
+        for row in &telemetry { super::storage::encode(row)?; }
         // A content digest identifies a receipt; only SourceOwner establishes tenancy.
         let mut file = std::fs::File::open(&source.path).map_err(|error| StorageError::backend("read source digest").with_source(error))?;
         let mut digest = Sha256::new(); let mut buffer = [0; 65536];
