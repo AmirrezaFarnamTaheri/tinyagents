@@ -11,6 +11,8 @@
 
 pub mod command_center;
 pub mod ops;
+pub mod port;
+pub mod sqlite;
 pub mod recovery;
 mod status_map;
 pub mod store;
