@@ -3829,3 +3829,74 @@ async fn hosted_named_scope_admits_a_tool_listed_only_as_deferred() {
         "deferred registration must remain discoverable rather than directly advertised"
     );
 }
+
+#[tokio::test]
+async fn hosted_wildcard_scope_preserves_explicit_deferred_additions() {
+    struct DeferredNoop;
+    #[async_trait]
+    impl Tool for DeferredNoop {
+        fn name(&self) -> &str {
+            "deferred_noop"
+        }
+        fn description(&self) -> &str {
+            "discoverable test tool"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn exposure(&self) -> tinytools::ToolExposure {
+            tinytools::ToolExposure::Deferred
+        }
+        async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::success("deferred tool executed"))
+        }
+    }
+    let mut call = ModelResponse::assistant("");
+    call.message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "deferred-call",
+            "deferred_noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        call,
+        ModelResponse::assistant("done"),
+    ]));
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.deferred_tools = vec!["deferred_noop".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(DeferredNoop));
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("deferred-scope"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("deferred tool executed"))
+    );
+    assert!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .all(|tool| tool.name != "deferred_noop"),
+        "deferred registration must remain discoverable rather than directly advertised"
+    );
+}
