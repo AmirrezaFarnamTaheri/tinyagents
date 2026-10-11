@@ -2,7 +2,7 @@
 use super::control::{ControlError, ControlVerb, plan_transition};
 use super::view::project_row;
 use super::AgentWorkRow;
-use crate::run_ledger::{AgentRunStatus, LedgerResult, RunEventAppend, RunLedgerStore, RunTransition};
+use crate::run_ledger::{LedgerResult, RunEventAppend, RunLedgerStore, RunTransition};
 use chrono::Utc;
 use serde_json::json;
 
