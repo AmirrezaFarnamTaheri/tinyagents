@@ -3,8 +3,9 @@
 //!
 //! [`WorkflowEngine`] drives the scheduler, manages child task creation and
 //! claim-based assignment, handles phase state persistence and transitions,
-//! and enforces bounded concurrency. It is generic over a host-supplied
-//! [`WorkflowExecutor`] that creates and monitors actual work.
+//! and enforces bounded concurrency. Legacy hosts supply [`WorkflowExecutor`];
+//! authoritative hosts select [`AsyncWorkflowExecutor`] and await the explicit
+//! async persistence entrypoints.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -24,7 +25,11 @@ use tinyagents_session::run_ledger::{
     try_claim_workflow_run, upsert_workflow_run,
 };
 
-use super::child_step::run_child_step;
+use super::child_step::run_child_step_authoritative;
+use super::persistence::{
+    AsyncWorkflowChildRegistration, AsyncWorkflowExecutor, AsyncWorkflowStore,
+    WorkflowPersistenceError, WorkflowPersistenceResult,
+};
 use super::state::{
     PhaseStatus, all_phases_completed, init_phase_states, next_runnable_phase, phase_prompt,
     reset_running_phases, set_phase_reason, set_phase_status, synthesize_summary, upstream_outputs,
@@ -197,6 +202,8 @@ pub trait WorkflowExecutor: Send + Sync {
 pub struct WorkflowEngine<S, E> {
     store: Arc<S>,
     executor: Arc<E>,
+    async_store: Option<Arc<dyn AsyncWorkflowStore>>,
+    async_executor: Option<Arc<dyn AsyncWorkflowExecutor>>,
     event_sink: Option<Arc<dyn GraphEventSink>>,
     event_seq: AtomicU64,
     lease_for: Duration,
@@ -219,6 +226,11 @@ struct PhaseRegistration<S: WorkflowStore> {
     run: parking_lot::Mutex<WorkflowRun>,
     phase_states: Value,
     lease_for: Duration,
+    async_store: Option<Arc<dyn AsyncWorkflowStore>>,
+    operation: tokio::sync::Mutex<()>,
+    failure: parking_lot::Mutex<Option<Arc<WorkflowPersistenceError>>>,
+    failure_notify: tokio::sync::Notify,
+    attempted: parking_lot::Mutex<Vec<String>>,
 }
 
 impl<S: WorkflowStore> PhaseRegistration<S> {
@@ -229,6 +241,11 @@ impl<S: WorkflowStore> PhaseRegistration<S> {
 
 impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration<S> {
     fn register(&self, child_id: String) -> Result<(), OrchestrationError> {
+        if self.async_store.is_some() {
+            return Err(OrchestrationError(
+                "authoritative registration requires register_async".into(),
+            ));
+        }
         let mut run = self.run.lock();
         if run.child_run_ids.iter().any(|known| known == &child_id) {
             return Ok(());
@@ -262,6 +279,69 @@ impl<S: WorkflowStore + 'static> WorkflowChildRegistration for PhaseRegistration
     }
 }
 
+#[async_trait]
+impl<S: WorkflowStore + 'static> AsyncWorkflowChildRegistration for PhaseRegistration<S> {
+    fn register(&self, child_id: String) -> WorkflowPersistenceResult<()> {
+        if self.async_store.is_none() {
+            return Ok(WorkflowChildRegistration::register(self, child_id)?);
+        }
+        self.attempted.lock().push(child_id);
+        let error = Arc::new(WorkflowPersistenceError::AsyncRegistrationRequired);
+        *self.failure.lock() = Some(error.clone());
+        self.failure_notify.notify_one();
+        Err(WorkflowPersistenceError::Registration(error))
+    }
+
+    async fn register_async(&self, child_id: String) -> WorkflowPersistenceResult<()> {
+        let Some(store) = &self.async_store else {
+            return Ok(WorkflowChildRegistration::register(self, child_id)?);
+        };
+        let _operation = self.operation.lock().await;
+        let run = self.current();
+        if run.child_run_ids.contains(&child_id) {
+            return Ok(());
+        }
+        self.attempted.lock().push(child_id.clone());
+        let mut children = run.child_run_ids.clone();
+        children.push(child_id);
+        let result = store
+            .compare_and_swap(
+                WorkflowRunUpsert {
+                    id: run.id.clone(),
+                    definition_id: run.definition_id.clone(),
+                    parent_thread_id: run.parent_thread_id.clone(),
+                    input: run.input.clone(),
+                    phase_states: self.phase_states.clone(),
+                    child_run_ids: children,
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    started_at: Some(run.started_at),
+                    completed_at: None,
+                },
+                run.revision,
+                &self.owner,
+                self.lease_for,
+            )
+            .await;
+        match result {
+            Ok(Some(updated)) => {
+                *self.run.lock() = updated;
+                Ok(())
+            }
+            other => {
+                let error = Arc::new(match other {
+                    Err(error) => error,
+                    Ok(None) => WorkflowPersistenceError::LeaseLost,
+                    Ok(Some(_)) => unreachable!(),
+                });
+                *self.failure.lock() = Some(error.clone());
+                self.failure_notify.notify_one();
+                Err(WorkflowPersistenceError::Registration(error))
+            }
+        }
+    }
+}
+
 impl<S, E> WorkflowEngine<S, E>
 where
     S: WorkflowStore + 'static,
@@ -271,6 +351,8 @@ where
         Self {
             store,
             executor,
+            async_store: None,
+            async_executor: None,
             event_sink: None,
             event_seq: AtomicU64::new(0),
             lease_for: WORKFLOW_LEASE,
@@ -326,6 +408,42 @@ where
         })
     }
 
+    /// Initialise using the authoritative asynchronous store when selected.
+    pub async fn initialise_async(
+        &self,
+        id: String,
+        definition: &WorkflowDefinition,
+        input: Value,
+        parent_thread_id: Option<String>,
+    ) -> WorkflowPersistenceResult<WorkflowRun> {
+        let row = WorkflowRunUpsert {
+            id,
+            definition_id: definition.id.clone(),
+            parent_thread_id,
+            input,
+            phase_states: init_phase_states(definition),
+            child_run_ids: Vec::new(),
+            status: WorkflowRunStatus::Running,
+            summary: None,
+            started_at: None,
+            completed_at: None,
+        };
+        match &self.async_store {
+            Some(store) => store.upsert(row).await,
+            None => Ok(self.store.upsert(row)?),
+        }
+    }
+
+    /// Drive using the typed authoritative contract.
+    pub async fn drive_async(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> WorkflowPersistenceResult<()> {
+        self.drive_inner(run_id, definition, cancel).await
+    }
+
     /// Drive a run to a terminal state. Completed phases are never executed
     /// again, so a host may safely call this after process restart or resume.
     pub async fn drive(
@@ -334,18 +452,90 @@ where
         definition: &WorkflowDefinition,
         cancel: CancellationToken,
     ) -> Result<(), OrchestrationError> {
+        if self.async_store.is_some() {
+            return Err(OrchestrationError(
+                "authoritative workflow requires drive_async".into(),
+            ));
+        }
+        self.drive_inner(run_id, definition, cancel)
+            .await
+            .map_err(WorkflowPersistenceError::into_legacy)
+    }
+
+    async fn load(&self, id: &str) -> WorkflowPersistenceResult<Option<WorkflowRun>> {
+        match &self.async_store {
+            Some(store) => store.load(id).await,
+            None => Ok(self.store.load(id)?),
+        }
+    }
+    async fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<WorkflowLeaseClaim> {
+        match &self.async_store {
+            Some(store) => store.claim(id, owner, lease).await,
+            None => Ok(self.store.claim(id, owner, lease)?),
+        }
+    }
+    async fn renew(
+        &self,
+        id: &str,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<bool> {
+        match &self.async_store {
+            Some(store) => store.renew(id, owner, lease).await,
+            None => Ok(self.store.renew(id, owner, lease)?),
+        }
+    }
+    async fn compare_and_swap(
+        &self,
+        row: WorkflowRunUpsert,
+        revision: u64,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<Option<WorkflowRun>> {
+        match &self.async_store {
+            Some(store) => store.compare_and_swap(row, revision, owner, lease).await,
+            None => Ok(self.store.compare_and_swap(row, revision, owner, lease)?),
+        }
+    }
+    async fn cancel_children(&self, ids: &[String]) {
+        match &self.async_executor {
+            Some(executor) => {
+                let mut seen = std::collections::HashSet::new();
+                let unique = ids
+                    .iter()
+                    .filter(|id| seen.insert((*id).clone()))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                executor.cancel_children(&unique).await;
+            }
+            None => self.executor.cancel_children(ids).await,
+        }
+    }
+
+    async fn drive_inner(
+        &self,
+        run_id: &str,
+        definition: &WorkflowDefinition,
+        cancel: CancellationToken,
+    ) -> WorkflowPersistenceResult<()> {
         // A driver lease is acquired before looking for runnable work.  This
         // is deliberately separate from the in-process cancellation token:
         // resume can race in another process, and only the durable lease
         // prevents both drivers from spawning the same phase.
         let owner = uuid::Uuid::new_v4().to_string();
-        let mut run = match self.store.claim(run_id, &owner, self.lease_for)? {
+        let mut run = match self.claim(run_id, &owner, self.lease_for).await? {
             WorkflowLeaseClaim::Acquired(run) => run,
             WorkflowLeaseClaim::Busy(_) => return Ok(()),
             WorkflowLeaseClaim::Missing => {
                 return Err(OrchestrationError(format!(
                     "workflow run {run_id} vanished before start"
-                )));
+                ))
+                .into());
             }
         };
         // A crashed owner can leave the durable phase marked `running`. That
@@ -360,23 +550,25 @@ where
         }) {
             // The previous owner may have crashed after registering remote
             // children. Fence side effects before making its phase runnable.
-            self.executor.cancel_children(&run.child_run_ids).await;
+            self.cancel_children(&run.child_run_ids).await;
             let mut phase_states = run.phase_states.clone();
             reset_running_phases(
                 &mut phase_states,
                 "workflow owner expired; phase will retry after lease takeover",
             );
-            run = self.persist(
-                &run,
-                PersistRequest {
-                    phase_states,
-                    child_run_ids: Vec::new(),
-                    status: WorkflowRunStatus::Running,
-                    summary: None,
-                    terminal: false,
-                },
-                &owner,
-            )?;
+            run = self
+                .persist(
+                    &run,
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: Vec::new(),
+                        status: WorkflowRunStatus::Running,
+                        summary: None,
+                        terminal: false,
+                    },
+                    &owner,
+                )
+                .await?;
         }
         self.emit(
             run_id,
@@ -390,25 +582,34 @@ where
 
         loop {
             if cancel.is_cancelled() {
-                self.executor.cancel_children(&run.child_run_ids).await;
+                self.cancel_children(&run.child_run_ids).await;
                 let mut phase_states = run.phase_states.clone();
                 reset_running_phases(
                     &mut phase_states,
                     "workflow interrupted; phase will retry on resume",
                 );
-                if let Err(error) = self.persist(
-                    &run,
-                    PersistRequest {
-                        phase_states,
-                        child_run_ids: run.child_run_ids.clone(),
-                        status: WorkflowRunStatus::Interrupted,
-                        summary: None,
-                        terminal: false,
-                    },
-                    &owner,
-                ) {
-                    if self.owner_lost(run_id, &owner)
-                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                if let Err(error) = self
+                    .persist(
+                        &run,
+                        PersistRequest {
+                            phase_states,
+                            child_run_ids: run.child_run_ids.clone(),
+                            status: WorkflowRunStatus::Interrupted,
+                            summary: None,
+                            terminal: false,
+                        },
+                        &owner,
+                    )
+                    .await
+                {
+                    if self.async_store.is_some() {
+                        return Err(error);
+                    }
+                    if self.owner_lost(run_id, &owner).await.unwrap_or(false)
+                        || self
+                            .emit_recorded_terminal(run_id, total_spawned as usize)
+                            .await
+                            .unwrap_or(false)
                     {
                         return Ok(());
                     }
@@ -420,18 +621,24 @@ where
             }
             let Some(phase) = next_runnable_phase(definition, &run.phase_states).cloned() else {
                 if all_phases_completed(definition, &run.phase_states) {
-                    if let Err(error) = self.persist(
-                        &run,
-                        PersistRequest {
-                            phase_states: run.phase_states.clone(),
-                            child_run_ids: run.child_run_ids.clone(),
-                            status: WorkflowRunStatus::Completed,
-                            summary: synthesize_summary(definition, &run.phase_states),
-                            terminal: true,
-                        },
-                        &owner,
-                    ) {
-                        if self.owner_lost(run_id, &owner) {
+                    if let Err(error) = self
+                        .persist(
+                            &run,
+                            PersistRequest {
+                                phase_states: run.phase_states.clone(),
+                                child_run_ids: run.child_run_ids.clone(),
+                                status: WorkflowRunStatus::Completed,
+                                summary: synthesize_summary(definition, &run.phase_states),
+                                terminal: true,
+                            },
+                            &owner,
+                        )
+                        .await
+                    {
+                        if self.async_store.is_some() {
+                            return Err(error);
+                        }
+                        if self.owner_lost(run_id, &owner).await.unwrap_or(false) {
                             return Ok(());
                         }
                         self.finish_failed(run_id, error.to_string());
@@ -440,18 +647,24 @@ where
                     self.finish_completed(run_id, total_spawned as usize);
                 } else {
                     let reason = "no runnable phase (dependency deadlock)".to_owned();
-                    if let Err(error) = self.persist(
-                        &run,
-                        PersistRequest {
-                            phase_states: run.phase_states.clone(),
-                            child_run_ids: run.child_run_ids.clone(),
-                            status: WorkflowRunStatus::Failed,
-                            summary: Some(reason.clone()),
-                            terminal: true,
-                        },
-                        &owner,
-                    ) {
-                        if self.owner_lost(run_id, &owner) {
+                    if let Err(error) = self
+                        .persist(
+                            &run,
+                            PersistRequest {
+                                phase_states: run.phase_states.clone(),
+                                child_run_ids: run.child_run_ids.clone(),
+                                status: WorkflowRunStatus::Failed,
+                                summary: Some(reason.clone()),
+                                terminal: true,
+                            },
+                            &owner,
+                        )
+                        .await
+                    {
+                        if self.async_store.is_some() {
+                            return Err(error);
+                        }
+                        if self.owner_lost(run_id, &owner).await.unwrap_or(false) {
                             return Ok(());
                         }
                         self.finish_failed(run_id, error.to_string());
@@ -484,8 +697,14 @@ where
                     // A host stop/resume fences this owner with a revision CAS.
                     // Do not turn that intentional hand-off into a stale
                     // failure event or overwrite the newer durable state.
-                    if self.owner_lost(run_id, &owner)
-                        || self.emit_recorded_terminal(run_id, total_spawned as usize)
+                    if self.async_store.is_some() {
+                        return Err(error);
+                    }
+                    if self.owner_lost(run_id, &owner).await.unwrap_or(false)
+                        || self
+                            .emit_recorded_terminal(run_id, total_spawned as usize)
+                            .await
+                            .unwrap_or(false)
                     {
                         return Ok(());
                     }
@@ -531,35 +750,39 @@ where
         total_spawned: u32,
         cancel: CancellationToken,
         owner: &str,
-    ) -> Result<(WorkflowRun, u32), OrchestrationError> {
+    ) -> WorkflowPersistenceResult<(WorkflowRun, u32)> {
         let mut phase_states = run.phase_states.clone();
         let mut child_ids = run.child_run_ids.clone();
         set_phase_status(&mut phase_states, &phase.name, PhaseStatus::Running, None);
-        let running = self.persist(
-            run,
-            PersistRequest {
-                phase_states: phase_states.clone(),
-                child_run_ids: child_ids.clone(),
-                status: WorkflowRunStatus::Running,
-                summary: None,
-                terminal: false,
-            },
-            owner,
-        )?;
+        let running = self
+            .persist(
+                run,
+                PersistRequest {
+                    phase_states: phase_states.clone(),
+                    child_run_ids: child_ids.clone(),
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    terminal: false,
+                },
+                owner,
+            )
+            .await?;
 
         let budget = definition.max_children.saturating_sub(total_spawned) as usize;
         if budget == 0 {
-            return self.fail_phase(
-                &running,
-                &mut phase_states,
-                child_ids,
-                phase,
-                format!(
-                    "max_children cap ({}) reached before phase '{}' completed",
-                    definition.max_children, phase.name
-                ),
-                owner,
-            );
+            return self
+                .fail_phase(
+                    &running,
+                    &mut phase_states,
+                    child_ids,
+                    phase,
+                    format!(
+                        "max_children cap ({}) reached before phase '{}' completed",
+                        definition.max_children, phase.name
+                    ),
+                    owner,
+                )
+                .await;
         }
         let capacity = phase.agent_ids.len().min(budget);
         let capped = capacity != phase.agent_ids.len();
@@ -581,8 +804,21 @@ where
             run: parking_lot::Mutex::new(running.clone()),
             phase_states: phase_states.clone(),
             lease_for: self.lease_for,
+            async_store: self.async_store.clone(),
+            operation: tokio::sync::Mutex::new(()),
+            failure: parking_lot::Mutex::new(None),
+            failure_notify: tokio::sync::Notify::new(),
+            attempted: parking_lot::Mutex::new(Vec::new()),
         });
         let executor = self.executor.clone();
+        let async_executor = self.async_executor.clone();
+        // Policy/parallel helpers carry textual ordinary child reasons.
+        // Retain authoritative sources and wake the phase even while an
+        // unrelated worker never finishes.
+        let typed_failure = Arc::new(parking_lot::Mutex::new(None));
+        let worker_failure = typed_failure.clone();
+        let typed_notify = Arc::new(tokio::sync::Notify::new());
+        let worker_notify = typed_notify.clone();
         let step_config = self.step_config.clone();
         let worker_cancel = cancel.clone();
         let worker_registration = registration.clone();
@@ -594,15 +830,34 @@ where
                 .with_cancellation(cancel.clone()),
             move |_index, request| {
                 let executor = executor.clone();
+                let async_executor = async_executor.clone();
+                let typed_failure = worker_failure.clone();
+                let typed_notify = worker_notify.clone();
                 let cancel = worker_cancel.clone();
                 let registration = worker_registration.clone();
                 let step_config = step_config.clone();
                 async move {
-                    run_child_step(&step_config, executor, request, cancel, registration)
-                        .await
-                        .map_err(|error| {
-                            tinyagents_harness::TinyAgentsError::Graph(error.to_string())
-                        })
+                    let async_registration = async_executor
+                        .as_ref()
+                        .map(|_| registration.clone() as Arc<dyn AsyncWorkflowChildRegistration>);
+                    run_child_step_authoritative(
+                        &step_config,
+                        executor,
+                        async_executor,
+                        request,
+                        cancel,
+                        registration,
+                        async_registration,
+                    )
+                    .await
+                    .map_err(|error| {
+                        let message = error.to_string();
+                        if !matches!(error, WorkflowPersistenceError::Legacy(_)) {
+                            *typed_failure.lock() = Some(error);
+                            typed_notify.notify_one();
+                        }
+                        tinyagents_harness::TinyAgentsError::Graph(message)
+                    })
                 }
             },
         );
@@ -615,47 +870,71 @@ where
         let outcomes = loop {
             tokio::select! {
                 outcomes = &mut outcomes => break outcomes,
+                _ = registration.failure_notify.notified() => {
+                    let error = registration.failure.lock().take().expect("registration notified failure");
+                    cancel.cancel();
+                    let mut children = registration.current().child_run_ids;
+                    children.extend(registration.attempted.lock().iter().cloned());
+                    self.cancel_children(&children).await;
+                    return Err(WorkflowPersistenceError::Registration(error));
+                }
+                _ = typed_notify.notified() => {
+                    let error = typed_failure.lock().take().expect("child notified failure");
+                    cancel.cancel();
+                    let mut children = registration.current().child_run_ids;
+                    children.extend(registration.attempted.lock().iter().cloned());
+                    self.cancel_children(&children).await;
+                    return Err(error);
+                }
+
                 _ = heartbeat.tick() => {
-                    let renewed = self.store.renew(&run.id, owner, self.lease_for);
+                    let renewed = self.renew(&run.id, owner, self.lease_for).await;
                     if !matches!(renewed, Ok(true)) {
                         cancel.cancel();
                         let children = registration.current().child_run_ids;
-                        self.executor.cancel_children(&children).await;
-                        if let Err(error) = renewed {
-                            return Err(OrchestrationError(format!(
-                                "workflow lease renewal errored; cancelled registered children: {error}"
-                            )));
-                        }
-                        return Err(OrchestrationError(
-                            "workflow lease renewal failed; cancelled registered children".to_owned(),
-                        ));
+                        self.cancel_children(&children).await;
+                        renewed?;
+                        return Err(WorkflowPersistenceError::LeaseRenewalLost);
                     }
                 }
             }
         };
+        let registration_error = registration.failure.lock().take();
+        let child_error = typed_failure.lock().take();
+        if let Some(error) = registration_error
+            .map(WorkflowPersistenceError::Registration)
+            .or(child_error)
+        {
+            let mut children = registration.current().child_run_ids;
+            children.extend(registration.attempted.lock().iter().cloned());
+            self.cancel_children(&children).await;
+            return Err(error);
+        }
         let outcomes = match outcomes {
             Ok(outcomes) => outcomes,
             Err(tinyagents_harness::TinyAgentsError::Cancelled) => {
                 let children = registration.current().child_run_ids;
-                self.executor.cancel_children(&children).await;
+                self.cancel_children(&children).await;
                 reset_running_phases(
                     &mut phase_states,
                     "workflow interrupted; phase will retry on resume",
                 );
-                let updated = self.persist(
-                    &registration.current(),
-                    PersistRequest {
-                        phase_states,
-                        child_run_ids: children,
-                        status: WorkflowRunStatus::Interrupted,
-                        summary: None,
-                        terminal: false,
-                    },
-                    owner,
-                )?;
+                let updated = self
+                    .persist(
+                        &registration.current(),
+                        PersistRequest {
+                            phase_states,
+                            child_run_ids: children,
+                            status: WorkflowRunStatus::Interrupted,
+                            summary: None,
+                            terminal: false,
+                        },
+                        owner,
+                    )
+                    .await?;
                 return Ok((updated, 0));
             }
-            Err(error) => return Err(OrchestrationError(error.to_string())),
+            Err(error) => return Err(OrchestrationError(error.to_string()).into()),
         };
         child_ids = registration.current().child_run_ids;
         let mut outputs = Vec::new();
@@ -669,6 +948,13 @@ where
                     // await completion. Keep older executors harmlessly
                     // compatible by accepting an already-present id only.
                     if !child_ids.iter().any(|id| id == &result.child_id) {
+                        if self.async_store.is_some() {
+                            self.cancel_children(std::slice::from_ref(&result.child_id))
+                                .await;
+                            return Err(WorkflowPersistenceError::UnregisteredChild(
+                                result.child_id,
+                            ));
+                        }
                         child_ids.push(result.child_id.clone());
                     }
                     let mut entry = json!({
@@ -689,22 +975,24 @@ where
         }
         if cancel.is_cancelled() {
             let children = registration.current().child_run_ids;
-            self.executor.cancel_children(&children).await;
+            self.cancel_children(&children).await;
             reset_running_phases(
                 &mut phase_states,
                 "workflow interrupted; phase will retry on resume",
             );
-            let updated = self.persist(
-                &registration.current(),
-                PersistRequest {
-                    phase_states,
-                    child_run_ids: children,
-                    status: WorkflowRunStatus::Interrupted,
-                    summary: None,
-                    terminal: false,
-                },
-                owner,
-            )?;
+            let updated = self
+                .persist(
+                    &registration.current(),
+                    PersistRequest {
+                        phase_states,
+                        child_run_ids: children,
+                        status: WorkflowRunStatus::Interrupted,
+                        summary: None,
+                        terminal: false,
+                    },
+                    owner,
+                )
+                .await?;
             return Ok((updated, 0));
         }
         if let Some(reason) = failure.or_else(|| {
@@ -715,14 +1003,16 @@ where
                 )
             })
         }) {
-            return self.fail_phase(
-                &registration.current(),
-                &mut phase_states,
-                child_ids,
-                phase,
-                reason,
-                owner,
-            );
+            return self
+                .fail_phase(
+                    &registration.current(),
+                    &mut phase_states,
+                    child_ids,
+                    phase,
+                    reason,
+                    owner,
+                )
+                .await;
         }
         set_phase_status(
             &mut phase_states,
@@ -730,21 +1020,23 @@ where
             PhaseStatus::Completed,
             Some(Value::Array(outputs)),
         );
-        let updated = self.persist(
-            &registration.current(),
-            PersistRequest {
-                phase_states,
-                child_run_ids: child_ids,
-                status: WorkflowRunStatus::Running,
-                summary: None,
-                terminal: false,
-            },
-            owner,
-        )?;
+        let updated = self
+            .persist(
+                &registration.current(),
+                PersistRequest {
+                    phase_states,
+                    child_run_ids: child_ids,
+                    status: WorkflowRunStatus::Running,
+                    summary: None,
+                    terminal: false,
+                },
+                owner,
+            )
+            .await?;
         Ok((updated, spawned))
     }
 
-    fn fail_phase(
+    async fn fail_phase(
         &self,
         run: &WorkflowRun,
         phase_states: &mut Value,
@@ -752,7 +1044,7 @@ where
         phase: &WorkflowPhase,
         reason: String,
         owner: &str,
-    ) -> Result<(WorkflowRun, u32), OrchestrationError> {
+    ) -> WorkflowPersistenceResult<(WorkflowRun, u32)> {
         set_phase_status(
             phase_states,
             &phase.name,
@@ -760,47 +1052,47 @@ where
             Some(json!([])),
         );
         set_phase_reason(phase_states, &phase.name, &reason);
-        let updated = self.persist(
-            run,
-            PersistRequest {
-                phase_states: phase_states.clone(),
-                child_run_ids: child_ids,
-                status: WorkflowRunStatus::Failed,
-                summary: Some(reason),
-                terminal: true,
-            },
-            owner,
-        )?;
+        let updated = self
+            .persist(
+                run,
+                PersistRequest {
+                    phase_states: phase_states.clone(),
+                    child_run_ids: child_ids,
+                    status: WorkflowRunStatus::Failed,
+                    summary: Some(reason),
+                    terminal: true,
+                },
+                owner,
+            )
+            .await?;
         Ok((updated, 0))
     }
 
-    fn persist(
+    async fn persist(
         &self,
         run: &WorkflowRun,
         request: PersistRequest,
         owner: &str,
-    ) -> Result<WorkflowRun, OrchestrationError> {
-        self.store
-            .compare_and_swap(
-                WorkflowRunUpsert {
-                    id: run.id.clone(),
-                    definition_id: run.definition_id.clone(),
-                    parent_thread_id: run.parent_thread_id.clone(),
-                    input: run.input.clone(),
-                    phase_states: request.phase_states,
-                    child_run_ids: request.child_run_ids,
-                    status: request.status,
-                    summary: request.summary,
-                    started_at: Some(run.started_at),
-                    completed_at: request.terminal.then(Utc::now),
-                },
-                run.revision,
-                owner,
-                self.lease_for,
-            )?
-            .ok_or_else(|| {
-                OrchestrationError("workflow lease lost before durable state transition".to_owned())
-            })
+    ) -> WorkflowPersistenceResult<WorkflowRun> {
+        self.compare_and_swap(
+            WorkflowRunUpsert {
+                id: run.id.clone(),
+                definition_id: run.definition_id.clone(),
+                parent_thread_id: run.parent_thread_id.clone(),
+                input: run.input.clone(),
+                phase_states: request.phase_states,
+                child_run_ids: request.child_run_ids,
+                status: request.status,
+                summary: request.summary,
+                started_at: Some(run.started_at),
+                completed_at: request.terminal.then(Utc::now),
+            },
+            run.revision,
+            owner,
+            self.lease_for,
+        )
+        .await?
+        .ok_or_else(|| WorkflowPersistenceError::LeaseLost)
     }
 
     fn emit(&self, run_id: &str, event: tinyagents_graph::GraphEvent) {
@@ -855,28 +1147,25 @@ where
 
     /// A lifecycle hand-off or lease takeover has fenced this driver. It must
     /// not manufacture a terminal graph event for the replacement owner.
-    fn owner_lost(&self, run_id: &str, owner: &str) -> bool {
-        self.store
-            .load(run_id)
-            .ok()
-            .flatten()
-            .is_some_and(|current| {
-                current.lease_owner.as_deref() != Some(owner)
-                    || current
-                        .lease_expires_at
-                        .is_none_or(|expires| expires <= Utc::now())
-            })
+    async fn owner_lost(&self, run_id: &str, owner: &str) -> WorkflowPersistenceResult<bool> {
+        Ok(self.load(run_id).await?.is_some_and(|current| {
+            current.lease_owner.as_deref() != Some(owner)
+                || current
+                    .lease_expires_at
+                    .is_none_or(|expires| expires <= Utc::now())
+        }))
     }
 
-    /// Returns true after emitting the terminal event already committed by a
-    /// newer lifecycle owner. This is the stale-driver escape hatch: it never
-    /// writes, so a stop/resume hand-off cannot be overwritten by its loser.
-    fn emit_recorded_terminal(&self, run_id: &str, steps: usize) -> bool {
-        let Ok(Some(current)) = self.store.load(run_id) else {
-            return false;
+    async fn emit_recorded_terminal(
+        &self,
+        run_id: &str,
+        steps: usize,
+    ) -> WorkflowPersistenceResult<bool> {
+        let Some(current) = self.load(run_id).await? else {
+            return Ok(false);
         };
         if !current.status.is_terminal() {
-            return false;
+            return Ok(false);
         }
         match current.status {
             WorkflowRunStatus::Completed => self.finish_completed(run_id, steps),
@@ -889,9 +1178,9 @@ where
                     .summary
                     .unwrap_or_else(|| "workflow phase failed".to_owned()),
             ),
-            WorkflowRunStatus::Pending | WorkflowRunStatus::Running => return false,
+            WorkflowRunStatus::Pending | WorkflowRunStatus::Running => return Ok(false),
         }
-        true
+        Ok(true)
     }
 }
 
@@ -900,5 +1189,66 @@ pub(super) fn render_compat_output(output: &Value) -> String {
         Value::String(text) => text.clone(),
         _ => serde_json::to_string(output)
             .unwrap_or_else(|_| "<unserializable workflow output>".to_owned()),
+    }
+}
+
+/// Placeholder legacy types for an explicitly authoritative engine.
+/// These callbacks always refuse; they never open a database.
+pub struct AuthoritativeWorkflow;
+
+impl WorkflowStore for AuthoritativeWorkflow {
+    fn load(&self, _: &str) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        Err(OrchestrationError("async store required".into()))
+    }
+    fn upsert(&self, _: WorkflowRunUpsert) -> Result<WorkflowRun, OrchestrationError> {
+        Err(OrchestrationError("async store required".into()))
+    }
+    fn claim(
+        &self,
+        _: &str,
+        _: &str,
+        _: Duration,
+    ) -> Result<WorkflowLeaseClaim, OrchestrationError> {
+        Err(OrchestrationError("async store required".into()))
+    }
+    fn compare_and_swap(
+        &self,
+        _: WorkflowRunUpsert,
+        _: u64,
+        _: &str,
+        _: Duration,
+    ) -> Result<Option<WorkflowRun>, OrchestrationError> {
+        Err(OrchestrationError("async store required".into()))
+    }
+    fn renew(&self, _: &str, _: &str, _: Duration) -> Result<bool, OrchestrationError> {
+        Err(OrchestrationError("async store required".into()))
+    }
+}
+#[async_trait]
+impl WorkflowExecutor for AuthoritativeWorkflow {
+    async fn execute(
+        &self,
+        _: WorkflowChildRequest,
+        _: CancellationToken,
+        _: Arc<dyn WorkflowChildRegistration>,
+    ) -> Result<WorkflowChildResult, OrchestrationError> {
+        Err(OrchestrationError("async executor required".into()))
+    }
+    async fn cancel_children(&self, _: &[String]) {}
+}
+impl WorkflowEngine<AuthoritativeWorkflow, AuthoritativeWorkflow> {
+    /// Select only the supplied asynchronous authority and child executor.
+    /// No legacy persistence callback or workspace fallback is installed.
+    pub fn new_async(
+        store: Arc<dyn AsyncWorkflowStore>,
+        executor: Arc<dyn AsyncWorkflowExecutor>,
+    ) -> Self {
+        let mut engine = Self::new(
+            Arc::new(AuthoritativeWorkflow),
+            Arc::new(AuthoritativeWorkflow),
+        );
+        engine.async_store = Some(store);
+        engine.async_executor = Some(executor);
+        engine
     }
 }

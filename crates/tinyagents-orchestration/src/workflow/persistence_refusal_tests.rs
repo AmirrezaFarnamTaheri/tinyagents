@@ -12,10 +12,7 @@ struct RefusedDocuments(ErrorKind);
 
 impl RefusedDocuments {
     fn refused<T>(&self) -> tinystoragedrivers_core::Result<T> {
-        Err(StorageError::new(
-            self.0.clone(),
-            "admitted backend refused",
-        ))
+        Err(StorageError::new(self.0, "admitted backend refused"))
     }
 }
 
@@ -80,7 +77,9 @@ impl DocumentStore for RefusedDocuments {
 
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
-    let ambient_db = std::env::current_dir().unwrap().join("session_db/sessions.db");
+    let ambient_db = std::env::current_dir()
+        .unwrap()
+        .join("session_db/sessions.db");
     let existed_before = ambient_db.exists();
     for kind in [
         ErrorKind::Unavailable,
@@ -93,7 +92,7 @@ async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
         let admitted = ScopedStorage::new(
             scope,
             "refused",
-            Arc::new(RefusedDocuments(kind.clone())),
+            Arc::new(RefusedDocuments(kind)),
             handles.streams().clone(),
             handles.blobs().clone(),
         );

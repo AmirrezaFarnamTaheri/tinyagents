@@ -128,6 +128,21 @@ pub trait SessionStoreProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Optional conversation handle admitted by the host for this agent.
+    ///
+    /// Conversations may span agents within one trusted profile scope. Providers
+    /// must bind that scope themselves, never derive authority from a thread ID.
+    /// Absence leaves selection to the host; a configured refusal remains Err
+    /// and must never cause local file fallback. Existing AgentStores literals
+    /// and classic providers remain compatible.
+    fn conversations_for_agent(
+        &self,
+        _agent_id: &str,
+    ) -> crate::threads::ConversationResult<Option<Arc<dyn crate::threads::ConversationPersistence>>>
+    {
+        Ok(None)
+    }
+
     /// Repairs state an unclean shutdown left behind, once, before any agent
     /// runs: turns that were in flight are marked interrupted, and so on.
     ///
@@ -320,6 +335,14 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
         (**self).bind_actor(backend)
+    }
+
+    fn conversations_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::threads::ConversationResult<Option<Arc<dyn crate::threads::ConversationPersistence>>>
+    {
+        (**self).conversations_for_agent(agent_id)
     }
 
     fn run_ledger_for_agent(

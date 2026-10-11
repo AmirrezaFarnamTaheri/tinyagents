@@ -3,9 +3,12 @@
 //! This contract does not choose a workspace, scope, backend, or fallback.
 //! The legacy engine is not switched by constructing this adapter.
 
-use super::{OrchestrationError, WorkflowChildRegistration};
+use super::{
+    OrchestrationError, WorkflowChildRegistration, WorkflowChildRequest, WorkflowChildResult,
+};
 use async_trait::async_trait;
 use std::{sync::Arc, time::Duration};
+use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{
     LedgerError, RunLedgerStore, WorkflowLeaseClaim, WorkflowRun, WorkflowRunUpsert,
 };
@@ -17,7 +20,7 @@ pub enum WorkflowPersistenceError {
     /// The authoritative ledger refused or failed an operation.
     #[error(transparent)]
     Ledger(#[from] LedgerError),
-    /// A legacy callback failed.
+    /// An orchestration failure uses the compatible legacy error type.
     #[error(transparent)]
     Legacy(#[from] OrchestrationError),
     /// A std duration cannot be represented by the ledger.
@@ -26,6 +29,18 @@ pub enum WorkflowPersistenceError {
     /// Synchronous registration cannot persist to an asynchronous authority.
     #[error("authoritative workflow registration requires register_async")]
     AsyncRegistrationRequired,
+    /// A child identity was not committed before its result was accepted.
+    #[error("workflow child {0} completed without committed registration")]
+    UnregisteredChild(String),
+    /// The revision or owner no longer authorizes this transition.
+    #[error("workflow lease lost before durable state transition")]
+    LeaseLost,
+    /// Heartbeat discovered a lease now owned by another driver or expired.
+    #[error("workflow lease renewal failed; cancelled registered children")]
+    LeaseRenewalLost,
+    /// A registration failed; shared ownership retains its exact error source.
+    #[error(transparent)]
+    Registration(Arc<WorkflowPersistenceError>),
 }
 
 /// Result returned by the authoritative asynchronous contract.
@@ -65,7 +80,8 @@ pub trait AsyncWorkflowStore: Send + Sync {
 /// Workflow adapter over a caller-admitted ledger handle.
 ///
 /// Every operation uses that handle; there is no SQLite fallback, runtime
-/// blocking bridge or ambient scope lookup. Engine wiring is a separate step.
+/// blocking bridge or ambient scope lookup. Select it explicitly through
+/// WorkflowEngine::new_async; constructing it does not switch a legacy engine.
 pub struct LedgerWorkflowStore {
     ledger: Arc<dyn RunLedgerStore>,
 }
@@ -171,3 +187,28 @@ impl AsyncWorkflowChildRegistration for LegacyWorkflowRegistration {
 #[cfg(test)]
 #[path = "persistence_tests.rs"]
 mod tests;
+
+/// Child execution that can await authoritative registration and retain errors.
+/// Cloud hosts must separately support child progress/status/event durability.
+#[async_trait]
+pub trait AsyncWorkflowExecutor: Send + Sync {
+    /// Register the real child before waiting, then return its terminal result.
+    async fn execute_async(
+        &self,
+        request: WorkflowChildRequest,
+        cancel: CancellationToken,
+        registration: Arc<dyn AsyncWorkflowChildRegistration>,
+    ) -> WorkflowPersistenceResult<WorkflowChildResult>;
+    /// Cancel real children admitted by this executor.
+    async fn cancel_children(&self, child_ids: &[String]);
+}
+
+impl WorkflowPersistenceError {
+    /// Project only at the explicitly legacy API boundary.
+    pub(super) fn into_legacy(self) -> OrchestrationError {
+        match self {
+            Self::Legacy(error) => error,
+            other => OrchestrationError(other.to_string()),
+        }
+    }
+}

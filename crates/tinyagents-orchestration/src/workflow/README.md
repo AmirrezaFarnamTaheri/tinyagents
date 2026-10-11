@@ -102,8 +102,20 @@ AsyncWorkflowChildRegistration requires the executor to await registration;
 its synchronous entrypoint refuses. LegacyWorkflowRegistration explicitly
 adapts existing desktop callbacks.
 
-These contracts are an adapter prerequisite. WorkflowEngine still uses the
-existing synchronous WorkflowStore and WorkflowExecutor contracts; constructing
-LedgerWorkflowStore does not switch engine persistence or migrate child
-progress/status/events. Hosts must not advertise cloud workflow execution until
-the shared engine and typed child-registration path are wired.
+WorkflowEngine::new keeps the synchronous desktop contracts compatible.
+WorkflowEngine::new_async selects only the supplied AsyncWorkflowStore and
+AsyncWorkflowExecutor. Its initialise_async and drive_async entrypoints await
+persistence, child registration and heartbeat renewal, preserving typed sources.
+Legacy initialise/drive entrypoints refuse on an authoritative instance.
+
+An async executor must await register_async before waiting for a child. A
+refused registration interrupts the phase even if an executor ignores the
+error, cancels attempted children, and prevents later success. Results without
+a committed registration are rejected. Native fenced/backend failures remain
+typed and do not become a successful lifecycle hand-off or a SQLite fallback.
+
+This implements workflow-row persistence only. Child progress/status/events,
+host provider routing, generation-bound import and owner-aware recovery are
+separate prerequisites. Hosts must not advertise a complete cloud workflow
+migration or opt in before those owning contracts and dependencies are
+available upstream.

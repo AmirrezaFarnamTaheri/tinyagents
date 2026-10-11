@@ -172,3 +172,50 @@ async fn explicit_legacy_registration_preserves_callback_results() {
     ));
     assert_eq!(callback.0.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
+    let workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
+    ledger.upsert_workflow_run(row()).await.unwrap();
+    let WorkflowLeaseClaim::Acquired(expired) = ledger
+        .try_claim_workflow_run("workflow", "old-owner", chrono::Duration::seconds(-1))
+        .await
+        .unwrap()
+    else {
+        panic!("initial claim refused")
+    };
+    let store = LedgerWorkflowStore::new(ledger);
+    let WorkflowLeaseClaim::Acquired(replacement) = store
+        .claim("workflow", "new-owner", Duration::from_secs(60))
+        .await
+        .unwrap()
+    else {
+        panic!("expired takeover refused")
+    };
+    assert!(replacement.revision > expired.revision);
+    assert!(
+        !store
+            .renew("workflow", "old-owner", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .compare_and_swap(
+                row(),
+                replacement.revision,
+                "old-owner",
+                Duration::from_secs(60)
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .renew("workflow", "new-owner", Duration::from_secs(60))
+            .await
+            .unwrap()
+    );
+}
