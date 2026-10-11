@@ -32,12 +32,12 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tinyagents_harness::store::SchemaAdmission;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
     Precondition, Query, Sort, StorageError, Version,
 };
 use tokio::sync::{Mutex, OnceCell};
-use tinyagents_harness::store::SchemaAdmission;
 
 use super::super::memory::MAX_GENERATIONS;
 use crate::transcript::{
@@ -805,7 +805,9 @@ impl DriverTranscriptLocator {
 
     /// Transcripts with an immutable schema policy shared by their history handles.
     pub fn new_with_schema_admission(
-        docs: Arc<dyn DocumentStore>, bridge: Blocking, label: impl Into<String>,
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {

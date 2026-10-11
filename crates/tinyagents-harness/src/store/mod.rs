@@ -33,9 +33,9 @@
 pub mod conformance;
 #[cfg(feature = "storage-drivers")]
 mod drivers;
+pub mod namespaced;
 #[cfg(feature = "storage-drivers")]
 mod schema_admission;
-pub mod namespaced;
 mod types;
 
 use std::collections::HashMap;

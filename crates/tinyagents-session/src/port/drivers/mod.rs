@@ -45,9 +45,9 @@ use tinystoragedrivers_core::{
 
 use super::{AgentStores, SessionStoreProvider};
 
+pub use tinyagents_harness::store::SchemaAdmission;
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
-pub use tinyagents_harness::store::SchemaAdmission;
 
 /// Prefix of the scopes agent ids are hashed into. Reserved: an agent id
 /// starting with it is hashed too, so it cannot name another agent's scope.
@@ -106,14 +106,21 @@ impl DriverSessionStores {
     /// # Errors
     /// Failure to start the blocking bridge.
     pub fn new_with_schema_admission(
-        backend: Arc<dyn StorageBackend>, schema_admission: SchemaAdmission,
+        backend: Arc<dyn StorageBackend>,
+        schema_admission: SchemaAdmission,
     ) -> Result<Self, StorageError> {
-        Ok(Self::with_bridge_and_schema_admission(backend, Blocking::new()?, schema_admission))
+        Ok(Self::with_bridge_and_schema_admission(
+            backend,
+            Blocking::new()?,
+            schema_admission,
+        ))
     }
 
     /// Share a bridge while keeping schema policy, caches and recovery independent.
     pub fn with_bridge_and_schema_admission(
-        backend: Arc<dyn StorageBackend>, bridge: Blocking, schema_admission: SchemaAdmission,
+        backend: Arc<dyn StorageBackend>,
+        bridge: Blocking,
+        schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
             backend,
@@ -203,7 +210,9 @@ impl DriverSessionStores {
             let documents = Arc::clone(scoped.documents());
             self.bridge.run(async move {
                 for spec in Self::collection_specs() {
-                    SchemaAdmission::ValidateOnly.admit(documents.as_ref(), &spec).await?;
+                    SchemaAdmission::ValidateOnly
+                        .admit(documents.as_ref(), &spec)
+                        .await?;
                 }
                 Ok::<_, StorageError>(())
             })??;
@@ -289,7 +298,11 @@ impl DriverSessionStores {
                 self.schema_admission,
             )),
             turn_states: turn_states.clone(),
-            kv: Arc::new(DriverStore::with_collection_and_schema_admission(docs, KV_COLLECTION, self.schema_admission)),
+            kv: Arc::new(DriverStore::with_collection_and_schema_admission(
+                docs,
+                KV_COLLECTION,
+                self.schema_admission,
+            )),
             journal: Arc::new(DriverAppendStore::with_prefix(
                 Arc::clone(scoped.streams()),
                 JOURNAL_PREFIX,
@@ -309,8 +322,12 @@ impl SessionStoreProvider for DriverSessionStores {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        let actor =
-            Self::with_bridge_and_schema_admission(backend, self.bridge.clone(), self.schema_admission).recover_on_open(self.recover_on_open);
+        let actor = Self::with_bridge_and_schema_admission(
+            backend,
+            self.bridge.clone(),
+            self.schema_admission,
+        )
+        .recover_on_open(self.recover_on_open);
         Ok(Some(Arc::new(actor)))
     }
 

@@ -100,7 +100,10 @@ impl DriverStore {
         self.declared
             .get_or_try_init(|| async {
                 let spec = Self::collection_spec(self.collection.clone());
-                self.schema_admission.admit(self.docs.as_ref(), &spec).await.map_err(map_error)
+                self.schema_admission
+                    .admit(self.docs.as_ref(), &spec)
+                    .await
+                    .map_err(map_error)
             })
             .await
             .map(|_| ())

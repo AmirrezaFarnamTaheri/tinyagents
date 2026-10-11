@@ -25,12 +25,12 @@ use tinystoragedrivers_core::{
 use tokio::sync::OnceCell;
 
 use super::super::TurnStates;
-use tinyagents_harness::store::SchemaAdmission;
 use super::super::memory::{
     COMPLETED_RETENTION, completed_newest_first, is_terminal, newest_first,
 };
 use super::transcripts::doc_key;
 use crate::turn_state::{TurnLifecycle, TurnState};
+use tinyagents_harness::store::SchemaAdmission;
 
 /// The collection turn snapshots live in.
 pub(super) const COLLECTION: &str = "session_turn_states";
@@ -65,7 +65,9 @@ impl DriverTurnStates {
 
     /// Turn states with an immutable schema policy and independent initialization.
     pub fn new_with_schema_admission(
-        docs: Arc<dyn DocumentStore>, bridge: Blocking, schema_admission: SchemaAdmission,
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
