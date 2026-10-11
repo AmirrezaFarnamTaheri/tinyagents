@@ -59,6 +59,8 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     pub(crate) wildcard_tools: bool,
     /// Exact definition exclusions, checked against every live tool catalogue.
     pub(crate) denied_tools: HashSet<String>,
+    /// Definition-local discovery exposure; never changes global registration.
+    pub(crate) deferred_tools: HashSet<String>,
     /// The resolved definition's pattern rules, stacked on the harness
     /// policy's by the loop's tool gate.
     pub(crate) tool_rules: Option<tinytools::ToolRules>,
@@ -79,6 +81,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             allowed_tools: self.allowed_tools.clone(),
             wildcard_tools: self.wildcard_tools,
             denied_tools: self.denied_tools.clone(),
+            deferred_tools: self.deferred_tools.clone(),
             tool_rules: self.tool_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),

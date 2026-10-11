@@ -61,6 +61,7 @@ pub(crate) enum CallGate {
 pub(crate) struct ToolGate {
     allowed: Option<HashSet<String>>,
     denied: HashSet<String>,
+    deferred: HashSet<String>,
     rules: Option<Arc<ToolRuleSet>>,
     context: RuleContext,
 }
@@ -85,6 +86,7 @@ impl ToolGate {
         Self {
             allowed,
             denied: HashSet::new(),
+            deferred: HashSet::new(),
             rules,
             context: policy.context.clone(),
         }
@@ -94,6 +96,20 @@ impl ToolGate {
     pub(crate) fn with_denied_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
         self.denied.extend(names);
         self
+    }
+
+    /// Defers these names for this invocation without widening hidden registrations.
+    pub(crate) fn with_deferred_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.deferred.extend(names);
+        self
+    }
+
+    /// Effective exposure after applying definition-local discovery policy.
+    pub(crate) fn exposure(&self, tool: &dyn Tool) -> ToolExposure {
+        match tool.exposure() {
+            ToolExposure::Direct if self.deferred.contains(tool.name()) => ToolExposure::Deferred,
+            exposure => exposure,
+        }
     }
 
     /// Whether the exact allowlist admits `name`. Rules are not consulted.
@@ -132,7 +148,7 @@ impl ToolGate {
     /// [`Self::lists`] on the surface a tool's exposure puts it on: search
     /// for a deferred tool, the catalogue otherwise.
     pub(crate) fn lists_tool(&self, tool: &dyn Tool) -> bool {
-        let surface = if tool.exposure() == ToolExposure::Deferred {
+        let surface = if self.exposure(tool) == ToolExposure::Deferred {
             Surface::Search
         } else {
             Surface::Catalog

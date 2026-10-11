@@ -1093,6 +1093,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
             }
         };
+        let deferred_tools = definition.deferred_tools.iter().cloned().collect();
         let tool_rules = definition.tool_rules;
         Ok(PreparedAgentTurn {
             binding: HostInvocationBinding {
@@ -1104,6 +1105,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 allowed_tools,
                 wildcard_tools,
                 denied_tools,
+                deferred_tools,
                 tool_rules,
                 progress: progress.clone(),
                 runtime: None,

@@ -288,7 +288,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let definition_rules = binding.as_ref().and_then(|b| b.tool_rules.as_ref());
         Ok(
             ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
-                .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned())),
+                .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
+                .with_deferred_names(binding.iter().flat_map(|b| b.deferred_tools.iter().cloned())),
         )
     }
 
@@ -320,15 +321,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let mut entries = self
             .tools
-            .deferred_schemas_with_families()
+            .names()
             .into_iter()
-            .filter(|(schema, _)| {
-                gate.lists(
-                    &schema.name,
-                    self.tools.get(&schema.name).as_deref(),
-                    tinytools::Surface::Search,
-                )
-            })
+            .filter_map(|name| self.tools.get(&name))
+            .filter(|tool| gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Deferred)
+            .filter(|tool| gate.lists(tool.name(), Some(tool.as_ref()), tinytools::Surface::Search))
+            .map(|tool| (crate::tool::provider_schema(tool.as_ref()), tool.family().map(str::to_owned)))
             .collect::<Vec<_>>();
         if let Some(preparation) = &self.policy.tool_schemas {
             let families: Vec<Option<String>> =
@@ -787,7 +785,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // declaration. Reported so an audit consumer can tell a
                 // deferred call from a direct one; admission is unchanged.
                 if self.policy.discovery.enabled
-                    && tool.exposure() == tinytools::ToolExposure::Deferred
+                    && gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Deferred
                 {
                     let record = ctx.emit(AgentEvent::DeferredToolCall {
                         call_id: CallId::new(call.id.clone()),
