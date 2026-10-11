@@ -215,7 +215,7 @@ async fn stop_hook_error_cleanup_retracts_a_queued_pause() {
         .after_model(&mut context, &(), &mut ModelResponse::assistant("first"))
         .await
         .unwrap();
-    assert!(context.steering.as_ref().unwrap().is_empty() == false);
+    assert!(!context.steering.as_ref().unwrap().is_empty());
     <StopHookMiddleware<Metrics> as Middleware<(), ()>>::on_error(
         &middleware,
         &mut context,
