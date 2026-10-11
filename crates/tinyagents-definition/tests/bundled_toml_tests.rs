@@ -29,6 +29,12 @@ fn every_bundled_agent_parses_without_changing_its_authored_vocabulary() {
         let authored: toml::Value = toml::from_str(&text).unwrap();
         let definition: AgentDefinition =
             toml::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert!(
+            definition.is_valid(),
+            "{}: {:?}",
+            path.display(),
+            definition.diagnostics()
+        );
         assert_eq!(
             definition.effective_max_iterations(),
             expected_caps[definition.id.as_str()]

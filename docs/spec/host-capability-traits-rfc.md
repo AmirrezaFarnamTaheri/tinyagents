@@ -252,7 +252,9 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
 ```
 
 `ModelResolveRequest` carries `agent_id`, `role`, `is_team_lead` and
-`model_pin`. The last was added by issue #89: `AgentDefinition.model` is
+`model_pin`, and optional `model_hint`. Exact `ModelSpec` values populate
+`model_pin`; Hint values populate `model_hint`, keeping routing aliases out
+of the concrete pin channel. The pin was added by issue #89: `AgentDefinition.model` is
 documented as the model an agent pins, and there was previously no field for it
 on the request, leaving `role` as the only string a wiring author could reach
 for. A host resolver reasonably reads `role` as a role vocabulary, so a model id

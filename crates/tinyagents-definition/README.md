@@ -23,13 +23,14 @@ API change requires consumers to replace direct string/list access with the
 model and tool scope types.
 
 `resolve_tool_scope` materializes extra tools and denials. An explicit empty
-named scope denies every tool. A wildcard with exclusions requires a registered
-catalogue to expand and otherwise fails closed. Plain wildcards retain the
+named scope denies every tool. The pure scope-resolution helper needs a catalogue to expand wildcard
+exclusions and fails closed without one. Hosted invocations retain explicit
+wildcard policy dynamically and check exact exclusions against live toolsets. Plain wildcards retain the
 host policy for undeclared tools. Skill selectors never add delegate ids.
 
 `validate_tier_transition` rejects worker parents and same-tier coordinator
 edges. It permits reasoning-to-chat handoffs. Orchestration maps both
-coordinator tiers to its orchestrator role and workers to its worker role;
+coordinator tiers to its orchestrator role and workers to its leaf role;
 host spawn depth and authorization checks remain separate.
 
 The tests include all 12 OpenHuman bundled definition TOMLs, generic loader and
@@ -46,3 +47,10 @@ resolve helper retains its hint-prefixed alias for callers using that vocabulary
 Named tool scopes include extra and deferred names before deny filtering and
 deduplication. Wildcards with additions materialize a supplied catalogue;
 without one they fail closed. A bare wildcard retains the host fallback policy.
+
+
+The bundled compatibility fixtures preserve authored fields and iteration caps.
+The orchestrator fixture removes one redundant `run_workflow` allowlist entry:
+membership and rendered tool schemas are unchanged, and every fixture passes
+semantic validation. Hosts migrating the original bundled source should make
+the same duplicate-entry cleanup before invoking it through the new vocabulary.

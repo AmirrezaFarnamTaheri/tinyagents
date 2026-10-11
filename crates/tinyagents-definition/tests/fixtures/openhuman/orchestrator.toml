@@ -342,7 +342,6 @@ named = [
     "describe_workflow",
     "list_workflow_runs",
     "read_workflow_run_log",
-    "run_workflow",
     "await_workflow",
     # Self-update — lets the orchestrator answer "am I up to date" /
     # "update OpenHuman" without sending the user to Settings →

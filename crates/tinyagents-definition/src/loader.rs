@@ -18,11 +18,23 @@ pub fn load_file<X: DeserializeOwned + Default>(path: &Path) -> Result<AgentDefi
             path.display()
         );
     }
+    let diagnostics = definition.diagnostics();
+    if !diagnostics.is_empty() {
+        bail!(
+            "{}: invalid definition: {}",
+            path.display(),
+            diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
     definition.source = DefinitionSource::File(path.to_path_buf());
     Ok(definition)
 }
 
-/// Append definitions from lowercase `.toml` files, skipping malformed files,
+/// Append definitions from lowercase `.toml` files, skipping malformed or semantically invalid files,
 /// non-files and unreadable entries. Failure to read the directory is an error.
 pub fn load_dir<X: DeserializeOwned + Default>(
     dir: &Path,

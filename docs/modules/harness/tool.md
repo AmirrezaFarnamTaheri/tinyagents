@@ -242,16 +242,19 @@ Provider-supplied tool calls must fail closed:
 - allowlist violations emit events and append repairable tool-result messages
   only when the agent loop policy allows recovery
 
-A hosted run's tool allow-list is fail-closed by default. The resolved
-`AgentDefinition.tools` list is collapsed to `Option<HashSet<String>>` at the
-host boundary: a declared, non-empty list is enforced by plain membership,
-and an empty or absent list means "the definition declared nothing" rather
-than "unrestricted" — under `HostCapabilities::fail_closed_tool_allowlist`
-(default `true`), that denies every registered tool. A host that relied on
-the old fail-open behavior (empty list = every tool) must opt back in
-explicitly via `HostCapabilities::with_legacy_unrestricted_tool_allowlist`.
-Explicit-model (non-hosted) runs have no allow-list concept and are
-unaffected.
+A hosted run's tool scope uses `ToolScope`. A named scope becomes an exact
+membership set; named-empty always denies every tool, including with the legacy
+unrestricted fallback. Extra and deferred names are admitted before exact
+definition exclusions. Deferred names stay out of the initial wire catalogue
+and enter discovery even when their global registration is Direct; Hidden
+registrations remain hidden.
+
+An explicit wildcard policy remains dynamic so context-dependent toolsets
+retain their permitted tools. The shared gate applies exact exclusions to both
+catalogue and dispatch. A bare wildcard uses the host fallback:
+`HostCapabilities::fail_closed_tool_allowlist` defaults to deny-all;
+`with_legacy_unrestricted_tool_allowlist` opts into unrestricted fallback.
+Explicit-model runs have no hosted scope and remain unaffected.
 
 ## Unknown-tool recovery
 
