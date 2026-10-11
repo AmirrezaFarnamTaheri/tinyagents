@@ -123,14 +123,23 @@ fn checked_accessor_arc_forwards_native_refusal() {
         fn for_agent(&self, key: &str) -> AgentStores {
             InMemorySessionStores::default().for_agent(key)
         }
-        fn try_for_agent(&self, _: &str) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
-            Err(tinystoragedrivers_core::StorageError::invalid_input("invalid key").with_source(Native))
+        fn try_for_agent(
+            &self,
+            _: &str,
+        ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+            Err(
+                tinystoragedrivers_core::StorageError::invalid_input("invalid key")
+                    .with_source(Native),
+            )
         }
     }
     let provider = Arc::new(Checked);
     // Dispatch through the Arc implementation, rather than deref coercion.
     let erased: &dyn SessionStoreProvider = &provider;
     let error = erased.try_for_agent("invalid").unwrap_err();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::InvalidInput);
+    assert_eq!(
+        error.kind(),
+        tinystoragedrivers_core::ErrorKind::InvalidInput
+    );
     assert!(error.source().unwrap().is::<Native>());
 }

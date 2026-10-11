@@ -282,6 +282,14 @@ impl TurnStates for TurnStateStore {
 /// A provider shared behind an [`Arc`] is still a provider.
 impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     #[cfg(feature = "storage-drivers")]
+    fn try_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+        (**self).try_for_agent(agent_id)
+    }
+
+    #[cfg(feature = "storage-drivers")]
     fn bind_actor(
         &self,
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
