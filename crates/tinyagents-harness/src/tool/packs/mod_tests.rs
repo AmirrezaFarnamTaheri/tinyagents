@@ -252,6 +252,31 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
 }
 
 #[tokio::test]
+async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
+    let handle = PackRegistryHandle::default();
+    let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
+    inner.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let inner = Arc::new(inner);
+    handle.bind(Arc::downgrade(&inner));
+
+    let _full_catalog = UseSkillTool::new(handle.clone(), CATALOG);
+    let prefix_catalog = UseSkillTool::new(
+        handle.clone(),
+        PackCatalog::new(&PACKS[..1], MARKER),
+    );
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(Arc::new(prefix_catalog));
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+    let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+
+    assert!(bound.admission_target().is_none());
+    let result = bound.tool().execute(arguments).await.unwrap();
+    assert!(result.is_error);
+    assert!(result.text().contains("catalog is unavailable"));
+}
+
+#[tokio::test]
 async fn a_tool_from_another_skill_is_refused() {
     // Cross-skill dispatch would make `skill` decoration and let a harmless
     // skill reach a dangerous tool.
