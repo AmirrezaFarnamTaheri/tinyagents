@@ -1,7 +1,8 @@
+use tinyagents_registry::ModelCatalogSnapshot;
+use tinyagents_registry::catalog::KNOWN_PROVIDERS;
 use tinyagents_registry::pricing::{
     KNOWN_MODEL_PRICING, estimate_cost_usd, flat_catalog_entry, lookup, model_accepts_image_input,
 };
-use tinyagents_registry::{KNOWN_PROVIDERS, ModelCatalogSnapshot};
 
 #[test]
 fn pricing_contract_preserves_decorated_lookup_and_cached_rates() {
