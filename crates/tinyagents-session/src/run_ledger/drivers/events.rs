@@ -78,6 +78,29 @@ impl DriverRunLedger {
         Ok(RunEventListResponse { count: events.len(), events })
     }
 
+    async fn validate_projection(&self, run_id: &str, stream: &str, next: u64) -> Result<u64> {
+        let mut offset = 0;
+        let mut after = 0;
+        while offset < next {
+            let limit = usize::try_from((next - offset).min(256)).expect("bounded projection page");
+            let entries = self.scoped.streams().read_window(stream, offset, limit).await?;
+            if entries.len() != limit { return Err(StorageError::serialization("event projection was truncated").into()); }
+            for entry in entries {
+                if entry.offset != offset { return Err(StorageError::serialization("event projection offset has a gap").into()); }
+                let event: RunEvent = serde_json::from_value(entry.value).map_err(StorageError::from)?;
+                if event.run_id != run_id || event.sequence <= after {
+                    return Err(StorageError::serialization("event projection identity or order differs").into());
+                }
+                // Event addresses include run and sequence separately to avoid ambiguous ids.
+                let native = self.scoped.documents().get(EVENTS, &key(&[run_id, &event.sequence.to_string()])).await?;
+                let expected = native.map(|row| super::storage::decode::<RunEvent>(row.doc)).transpose()?;
+                if expected.as_ref() != Some(&event) { return Err(StorageError::serialization("event projection differs from committed receipt").into()); }
+                offset += 1; after = event.sequence;
+            }
+        }
+        Ok(after)
+    }
+
     /// Replay committed event receipts into their native stream, without duplicate appends.
     ///
     /// Document receipts remain authoritative for atomic status/event visibility.
@@ -92,12 +115,10 @@ impl DriverRunLedger {
         let stream = format!("run_events:{}", key(&[run_id]));
         for _ in 0..CAS_ATTEMPTS {
             let next = self.scoped.streams().len(&stream).await?;
+            let after = self.validate_projection(run_id, &stream, next).await?;
             let records = self.events(&RunEventListRequest { run_id: run_id.into(),
-                after_sequence: Some(next), limit: Some(1000) }).await?.events;
+                after_sequence: Some(after), limit: Some(1000) }).await?.events;
             if records.is_empty() { return Ok(next); }
-            if records.first().is_none_or(|event| event.sequence != next + 1) {
-                return Err(StorageError::serialization("event projection has a missing receipt").into());
-            }
             let values = records.into_iter().map(serde_json::to_value).collect::<std::result::Result<Vec<_>, _>>().map_err(StorageError::from)?;
             match self.scoped.streams().append_batch_if_offset(&stream, next, values).await {
                 Ok(_) => continue,
