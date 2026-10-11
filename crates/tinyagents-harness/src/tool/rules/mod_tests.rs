@@ -179,3 +179,18 @@ fn exact_exclusions_apply_to_dynamic_wildcards_without_interpreting_patterns() {
     assert!(!restricted.allows_name("registered"));
     assert!(!restricted.allows_name("live_tool"));
 }
+
+#[test]
+fn definition_deferral_is_local_and_never_promotes_hidden_registrations() {
+    let direct = Named("selected", tinytools::ToolExposure::Direct);
+    let hidden = Named("hidden", tinytools::ToolExposure::Hidden);
+    let gate =
+        ToolGate::default().with_deferred_names(["selected".to_string(), "hidden".to_string()]);
+    assert_eq!(gate.exposure(&direct), tinytools::ToolExposure::Deferred);
+    assert_eq!(gate.exposure(&hidden), tinytools::ToolExposure::Hidden);
+    assert_eq!(direct.exposure(), tinytools::ToolExposure::Direct);
+    assert_eq!(
+        ToolGate::default().exposure(&direct),
+        tinytools::ToolExposure::Direct
+    );
+}
