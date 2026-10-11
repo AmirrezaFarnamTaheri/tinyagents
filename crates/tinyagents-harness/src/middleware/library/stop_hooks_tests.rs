@@ -120,3 +120,53 @@ async fn stop_hooks_require_a_run_steering_handle_before_observing_calls() {
     assert!(matches!(error, TinyAgentsError::Middleware(_)));
     assert!(observations.lock().unwrap().is_empty());
 }
+
+/// Successful cleanup also makes a reused context begin with an empty tally.
+#[tokio::test]
+async fn stop_hook_success_cleanup_restarts_the_completed_call_tally() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let middleware = StopHookMiddleware::<Metrics>::new("model", vec![
+        Arc::new(Hook { name: "observer", stop: false, observations: observations.clone() }),
+    ]);
+    let mut context = run();
+    middleware.after_model(&mut context, &(), &mut ModelResponse::assistant("first")).await.unwrap();
+    middleware.after_agent(&mut context, &(), &mut crate::middleware::AgentRun::new()).await.unwrap();
+    middleware.after_model(&mut context, &(), &mut ModelResponse::assistant("second")).await.unwrap();
+    assert_eq!(*observations.lock().unwrap(), vec![("observer", 1, 1), ("observer", 1, 1)]);
+}
+
+/// A harmless read tool gives the model a reason to request a second call.
+struct ReadTool;
+
+#[async_trait]
+impl tinytools::Tool for ReadTool {
+    fn name(&self) -> &str { "read" }
+    fn description(&self) -> &str { "Read fixed test data" }
+    fn parameters_schema(&self) -> serde_json::Value { serde_json::json!({"type": "object"}) }
+    fn policy(&self) -> tinytools::ToolPolicy { tinytools::ToolPolicy::read_only() }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("fixed result"))
+    }
+}
+
+/// The hook stops the real loop before a second provider call can be dispatched.
+#[tokio::test]
+async fn stop_hook_pause_prevents_the_next_model_call_in_the_native_loop() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(tinyinference_llm::providers::MockModel::with_tool_call(
+        "read", serde_json::json!({}),
+    ));
+    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    harness.register_model("model", model.clone());
+    harness.register_tool(Arc::new(ReadTool));
+    harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new("model", vec![
+        Arc::new(Hook { name: "budget", stop: true, observations: observations.clone() }),
+    ])));
+    let outcome = harness.invoke_in_context_with_status(
+        &(), run(), vec![Message::user("read and continue")],
+    ).await.unwrap();
+    assert_eq!(model.call_count(), 1);
+    assert_eq!(outcome.run.model_calls, 1);
+    assert_eq!(outcome.run.tool_calls, 1, "the completed call keeps its pending tool round");
+    assert_eq!(*observations.lock().unwrap(), vec![("budget", 1, 1)]);
+}
