@@ -1690,7 +1690,10 @@ fn get_optional_run_telemetry(
         .optional()
 }
 
-pub(super) fn map_agent_run_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRun> {
+pub(super) fn map_agent_run_row(
+    conn: &Connection,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<AgentRun> {
     let id: String = row.get(0)?;
     let checkpoint_json: Option<String> = row.get(9)?;
     let metadata_json: String = row.get(12)?;

@@ -45,7 +45,8 @@ pub(super) fn specs() -> Vec<CollectionSpec> {
     vec![
         CollectionSpec::new(IMPORTS),
         CollectionSpec::new(EVENT_HEADS),
-        CollectionSpec::new(EVENTS).index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
+        CollectionSpec::new(EVENTS)
+            .index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
         CollectionSpec::new(EFFECTS)
             .index(IndexSpec::new("run", ["record.runId"]))
             .index(IndexSpec::new("status", ["record.status"]))
@@ -128,7 +129,10 @@ impl DriverRunLedger {
             .get_or_try_init(|| async {
                 for spec in specs() {
                     if self.validate_collections {
-                        self.scoped.documents().validate_collection_spec(&spec).await?;
+                        self.scoped
+                            .documents()
+                            .validate_collection_spec(&spec)
+                            .await?;
                     } else {
                         self.scoped.documents().ensure_collection(&spec).await?;
                     }

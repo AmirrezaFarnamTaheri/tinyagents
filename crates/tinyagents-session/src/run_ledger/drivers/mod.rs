@@ -5,8 +5,8 @@
 //! individual writes or switch to a local SQLite database.
 
 mod agents;
-mod events;
 mod effects;
+mod events;
 mod import;
 mod storage;
 pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
@@ -57,19 +57,28 @@ impl DriverRunLedger {
     /// backend-internal schema initialization. This constructor controls only
     /// this adapter's document declaration policy, not backend authority.
     pub fn new_existing_schema(scoped: ScopedStorage) -> Self {
-        Self { validate_collections: true, ..Self::new(scoped) }
+        Self {
+            validate_collections: true,
+            ..Self::new(scoped)
+        }
     }
 
     /// Exact document declarations shared by bootstrap preparation and lazy admission.
-    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> { storage::specs() }
+    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> {
+        storage::specs()
+    }
 
     /// Prepare ledger declarations through an explicitly trusted document handle.
     ///
     /// # Errors
     /// The first native declaration refusal, with no fallback or rollback claim
     /// for earlier successful declarations. This does not prepare native internal schema.
-    pub async fn prepare_schema(documents: &dyn tinystoragedrivers_core::DocumentStore) -> std::result::Result<(), StorageError> {
-        for spec in Self::collection_specs() { documents.ensure_collection(&spec).await?; }
+    pub async fn prepare_schema(
+        documents: &dyn tinystoragedrivers_core::DocumentStore,
+    ) -> std::result::Result<(), StorageError> {
+        for spec in Self::collection_specs() {
+            documents.ensure_collection(&spec).await?;
+        }
         Ok(())
     }
 
@@ -354,10 +363,12 @@ impl RunLedgerStore for DriverRunLedger {
         error: Option<&str>,
         completed_at: Option<DateTime<Utc>>,
     ) -> Result<Option<AgentRun>> {
-        self.transition_agent(id, None, status, error, completed_at, None).await.map(|result| match result {
-            RunTransition::Applied(row) | RunTransition::StatusChanged(row) => Some(row),
-            RunTransition::NotFound => None,
-        })
+        self.transition_agent(id, None, status, error, completed_at, None)
+            .await
+            .map(|result| match result {
+                RunTransition::Applied(row) | RunTransition::StatusChanged(row) => Some(row),
+                RunTransition::NotFound => None,
+            })
     }
 
     /// Implement [`RunLedgerStore::transition_agent_run_status_from`] without a weaker fallback.
@@ -370,7 +381,8 @@ impl RunLedgerStore for DriverRunLedger {
         completed_at: Option<DateTime<Utc>>,
         event: Option<RunEventAppend>,
     ) -> Result<RunTransition> {
-        self.transition_agent(id, Some(expected), status, error, completed_at, event).await
+        self.transition_agent(id, Some(expected), status, error, completed_at, event)
+            .await
     }
 
     /// Implement [`RunLedgerStore::interrupt_orphaned_agent_runs`] without a weaker fallback.
@@ -379,10 +391,7 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::list_agent_runs`] without a weaker fallback.
-    async fn list_agent_runs(
-        &self,
-        request: &AgentRunListRequest,
-    ) -> Result<AgentRunListResponse> {
+    async fn list_agent_runs(&self, request: &AgentRunListRequest) -> Result<AgentRunListResponse> {
         self.agents(request).await
     }
 
@@ -831,8 +840,16 @@ impl RunLedgerStore for DriverRunLedger {
         limit: Option<u32>,
         display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<CommandCenterView> {
-        let response = self.list_agent_runs(&AgentRunListRequest { limit: Some(limit.unwrap_or(200).min(500)), ..Default::default() }).await?;
-        Ok(super::command_center::build_view(response.runs, display_name))
+        let response = self
+            .list_agent_runs(&AgentRunListRequest {
+                limit: Some(limit.unwrap_or(200).min(500)),
+                ..Default::default()
+            })
+            .await?;
+        Ok(super::command_center::build_view(
+            response.runs,
+            display_name,
+        ))
     }
 
     /// Implement [`RunLedgerStore::apply_control`] without a weaker fallback.
@@ -844,7 +861,15 @@ impl RunLedgerStore for DriverRunLedger {
         reason: Option<&str>,
         display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<AgentWorkRow> {
-        super::command_center::native::apply_control(self, run_id, verb, message, reason, display_name).await
+        super::command_center::native::apply_control(
+            self,
+            run_id,
+            verb,
+            message,
+            reason,
+            display_name,
+        )
+        .await
     }
 }
 

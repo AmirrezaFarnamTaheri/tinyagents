@@ -268,11 +268,17 @@ impl DriverSessionStores {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
-    fn run_ledger_for_agent(&self, agent_id: &str) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+    fn run_ledger_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         let mut ledgers = self.ledgers.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(ledger) = ledgers.get(agent_id) { return Ok(Some(ledger.clone())); }
+        if let Some(ledger) = ledgers.get(agent_id) {
+            return Ok(Some(ledger.clone()));
+        }
         let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
-        let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> = Arc::new(crate::run_ledger::DriverRunLedger::new(scoped));
+        let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
+            Arc::new(crate::run_ledger::DriverRunLedger::new(scoped));
         ledgers.insert(agent_id.to_owned(), ledger.clone());
         Ok(Some(ledger))
     }

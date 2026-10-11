@@ -687,11 +687,39 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
     let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     let same = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     assert!(Arc::ptr_eq(&one, &same));
-    one.append_run_event(crate::run_ledger::RunEventAppend { run_id: "run".into(), event_type: "one".into(), payload: serde_json::json!({}) }).await.unwrap();
+    one.append_run_event(crate::run_ledger::RunEventAppend {
+        run_id: "run".into(),
+        event_type: "one".into(),
+        payload: serde_json::json!({}),
+    })
+    .await
+    .unwrap();
     let bob = provider.run_ledger_for_agent("bob").unwrap().unwrap();
-    assert_eq!(bob.list_recent_run_events(&crate::run_ledger::RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 0);
-    let actor = provider.bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new())).unwrap().unwrap();
+    assert_eq!(
+        bob.list_recent_run_events(&crate::run_ledger::RunEventListRequest {
+            run_id: "run".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .count,
+        0
+    );
+    let actor = provider
+        .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+        .unwrap()
+        .unwrap();
     let rebound = actor.run_ledger_for_agent("alice").unwrap().unwrap();
     assert!(!Arc::ptr_eq(&one, &rebound));
-    assert_eq!(rebound.list_recent_run_events(&crate::run_ledger::RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 0);
+    assert_eq!(
+        rebound
+            .list_recent_run_events(&crate::run_ledger::RunEventListRequest {
+                run_id: "run".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .count,
+        0
+    );
 }

@@ -1,17 +1,35 @@
 //! Native agent records. Merge rules match the classic ledger without workspace lookup.
-use super::*;
 use super::storage::AGENTS;
+use super::*;
 
 impl DriverRunLedger {
     pub(super) async fn agent(&self, id: &str) -> Result<Option<AgentRun>> {
         use super::storage::{CAS_ATTEMPTS, key};
-        use tinystoragedrivers_core::{ErrorKind, ReadCheck, ExpectedDocument};
+        use tinystoragedrivers_core::{ErrorKind, ExpectedDocument, ReadCheck};
         for _ in 0..CAS_ATTEMPTS {
-            let Some(previous) = self.read::<AgentRun>(AGENTS, id).await? else { return Ok(None); };
+            let Some(previous) = self.read::<AgentRun>(AGENTS, id).await? else {
+                return Ok(None);
+            };
             let (telemetry, check) = self.telemetry_dependency(id).await?;
-            let checks = vec![check, ReadCheck { collection: AGENTS.into(), id: key(&[id]), expected: ExpectedDocument::Version(previous.version) }];
-            match self.scoped.documents().atomic_batch_checked(checks, vec![]).await {
-                Ok(_) => { let mut row = previous.doc; row.telemetry = telemetry; return Ok(Some(row)); },
+            let checks = vec![
+                check,
+                ReadCheck {
+                    collection: AGENTS.into(),
+                    id: key(&[id]),
+                    expected: ExpectedDocument::Version(previous.version),
+                },
+            ];
+            match self
+                .scoped
+                .documents()
+                .atomic_batch_checked(checks, vec![])
+                .await
+            {
+                Ok(_) => {
+                    let mut row = previous.doc;
+                    row.telemetry = telemetry;
+                    return Ok(Some(row));
+                }
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => return Err(error.into()),
             }
@@ -19,16 +37,27 @@ impl DriverRunLedger {
         Err(StorageError::conflict("agent read contention budget exhausted").into())
     }
 
-    pub(super) async fn telemetry_dependency(&self, id: &str) -> Result<(Option<RunTelemetry>, tinystoragedrivers_core::ReadCheck)> {
-        use tinystoragedrivers_core::{ReadCheck, ExpectedDocument};
+    pub(super) async fn telemetry_dependency(
+        &self,
+        id: &str,
+    ) -> Result<(Option<RunTelemetry>, tinystoragedrivers_core::ReadCheck)> {
+        use tinystoragedrivers_core::{ExpectedDocument, ReadCheck};
         let telemetry = self.read::<RunTelemetry>(TELEMETRY, id).await?;
-        let check = ReadCheck { collection: TELEMETRY.into(), id: super::storage::key(&[id]),
-            expected: telemetry.as_ref().map_or(ExpectedDocument::Absent, |row| ExpectedDocument::Version(row.version)) };
+        let check = ReadCheck {
+            collection: TELEMETRY.into(),
+            id: super::storage::key(&[id]),
+            expected: telemetry.as_ref().map_or(ExpectedDocument::Absent, |row| {
+                ExpectedDocument::Version(row.version)
+            }),
+        };
         Ok((telemetry.map(|row| row.doc), check))
     }
 
     pub(super) async fn agent_telemetry(&self, mut row: AgentRun) -> Result<AgentRun> {
-        row.telemetry = self.read::<RunTelemetry>(TELEMETRY, &row.id).await?.map(|t| t.doc);
+        row.telemetry = self
+            .read::<RunTelemetry>(TELEMETRY, &row.id)
+            .await?
+            .map(|t| t.doc);
         Ok(row)
     }
 
@@ -38,13 +67,28 @@ impl DriverRunLedger {
         let now = Utc::now();
         for _ in 0..CAS_ATTEMPTS {
             let previous = self.read::<AgentRun>(AGENTS, &upsert.id).await?;
-            let condition = previous.as_ref().map_or(Precondition::Absent, |row| Precondition::Version(row.version));
+            let condition = previous.as_ref().map_or(Precondition::Absent, |row| {
+                Precondition::Version(row.version)
+            });
             let mut row = merge_agent(previous.map(|row| row.doc), &upsert, now);
             let (telemetry, check) = self.telemetry_dependency(&upsert.id).await?;
             row.telemetry = None;
-            let writes = vec![WriteOp::Put { collection: AGENTS.into(), id: key(&[&row.id]), doc: encode(&row)?, precondition: condition }];
-            match self.scoped.documents().atomic_batch_checked(vec![check], writes).await {
-                Ok(_) => { row.telemetry = telemetry; return Ok(row); },
+            let writes = vec![WriteOp::Put {
+                collection: AGENTS.into(),
+                id: key(&[&row.id]),
+                doc: encode(&row)?,
+                precondition: condition,
+            }];
+            match self
+                .scoped
+                .documents()
+                .atomic_batch_checked(vec![check], writes)
+                .await
+            {
+                Ok(_) => {
+                    row.telemetry = telemetry;
+                    return Ok(row);
+                }
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => return Err(error.into()),
             }
@@ -54,15 +98,34 @@ impl DriverRunLedger {
 }
 
 impl DriverRunLedger {
-    pub(super) async fn agents(&self, request: &AgentRunListRequest) -> Result<AgentRunListResponse> {
+    pub(super) async fn agents(
+        &self,
+        request: &AgentRunListRequest,
+    ) -> Result<AgentRunListResponse> {
         let filter = eq_nonblank(Filter::All, "record.status", request.status.as_deref());
         let filter = eq_nonblank(filter, "record.kind", request.kind.as_deref());
-        let filter = eq_nonblank(filter, "record.parentRunId", request.parent_run_id.as_deref());
-        let filter = eq_nonblank(filter, "record.parentThreadId", request.parent_thread_id.as_deref());
-        let (rows, count) = self.page::<AgentRun>(AGENTS, filter, request.limit.unwrap_or(50).min(500) as u64,
-            request.offset.unwrap_or(0) as u64).await?;
+        let filter = eq_nonblank(
+            filter,
+            "record.parentRunId",
+            request.parent_run_id.as_deref(),
+        );
+        let filter = eq_nonblank(
+            filter,
+            "record.parentThreadId",
+            request.parent_thread_id.as_deref(),
+        );
+        let (rows, count) = self
+            .page::<AgentRun>(
+                AGENTS,
+                filter,
+                request.limit.unwrap_or(50).min(500) as u64,
+                request.offset.unwrap_or(0) as u64,
+            )
+            .await?;
         let mut runs = Vec::with_capacity(rows.len());
-        for row in rows { runs.push(self.agent_telemetry(row).await?); }
+        for row in rows {
+            runs.push(self.agent_telemetry(row).await?);
+        }
         Ok(AgentRunListResponse { runs, count })
     }
 
@@ -71,20 +134,40 @@ impl DriverRunLedger {
         use super::storage::{CAS_ATTEMPTS, encode, key};
         use tinystoragedrivers_core::{DocumentStoreExt, ErrorKind, Precondition, WriteOp};
         self.declare().await?;
-        let filter = Filter::eq("record.status", "running").or(Filter::eq("record.status", "pending"));
+        let filter =
+            Filter::eq("record.status", "running").or(Filter::eq("record.status", "pending"));
         for _ in 0..CAS_ATTEMPTS {
-            let rows = self.scoped.documents().query_all(AGENTS, &Query::filter(filter.clone())).await?;
+            let rows = self
+                .scoped
+                .documents()
+                .query_all(AGENTS, &Query::filter(filter.clone()))
+                .await?;
             let count = rows.len();
-            if count == 0 { return Ok(0); }
+            if count == 0 {
+                return Ok(0);
+            }
             let now = Utc::now();
-            let writes = rows.into_iter().map(|previous| {
-                let mut row: AgentRun = super::storage::decode(previous.doc)?;
-                row.status = AgentRunStatus::Interrupted;
-                row.completed_at = row.completed_at.or(Some(now)); row.updated_at = now;
-                Ok(WriteOp::Put { collection: AGENTS.into(), id: key(&[&row.id]), doc: encode(&row)?,
-                    precondition: Precondition::Version(previous.version) })
-            }).collect::<std::result::Result<Vec<_>, StorageError>>()?;
-            match self.scoped.documents().atomic_batch_checked(vec![], writes).await {
+            let writes = rows
+                .into_iter()
+                .map(|previous| {
+                    let mut row: AgentRun = super::storage::decode(previous.doc)?;
+                    row.status = AgentRunStatus::Interrupted;
+                    row.completed_at = row.completed_at.or(Some(now));
+                    row.updated_at = now;
+                    Ok(WriteOp::Put {
+                        collection: AGENTS.into(),
+                        id: key(&[&row.id]),
+                        doc: encode(&row)?,
+                        precondition: Precondition::Version(previous.version),
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, StorageError>>()?;
+            match self
+                .scoped
+                .documents()
+                .atomic_batch_checked(vec![], writes)
+                .await
+            {
                 Ok(_) => return Ok(count),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => return Err(error.into()),
@@ -94,14 +177,30 @@ impl DriverRunLedger {
     }
 }
 
-fn merge_agent(previous: Option<AgentRun>, upsert: &AgentRunUpsert, now: DateTime<Utc>) -> AgentRun {
+fn merge_agent(
+    previous: Option<AgentRun>,
+    upsert: &AgentRunUpsert,
+    now: DateTime<Utc>,
+) -> AgentRun {
     let first = previous.is_none();
     let mut row = previous.unwrap_or(AgentRun {
-        id: upsert.id.clone(), kind: upsert.kind, parent_run_id: None, parent_thread_id: None,
-        agent_id: None, status: upsert.status, prompt_ref: None, worker_thread_id: None,
-        checkpoint_path: None, checkpoint: None, summary: None, error: None,
-        metadata: upsert.metadata.clone(), telemetry: None,
-        started_at: upsert.started_at.unwrap_or(now), updated_at: now, completed_at: None,
+        id: upsert.id.clone(),
+        kind: upsert.kind,
+        parent_run_id: None,
+        parent_thread_id: None,
+        agent_id: None,
+        status: upsert.status,
+        prompt_ref: None,
+        worker_thread_id: None,
+        checkpoint_path: None,
+        checkpoint: None,
+        summary: None,
+        error: None,
+        metadata: upsert.metadata.clone(),
+        telemetry: None,
+        started_at: upsert.started_at.unwrap_or(now),
+        updated_at: now,
+        completed_at: None,
     });
     if !(row.kind == AgentRunKind::WorkerThread && upsert.kind == AgentRunKind::Subagent) {
         row.kind = upsert.kind;
@@ -116,7 +215,9 @@ fn merge_agent(previous: Option<AgentRun>, upsert: &AgentRunUpsert, now: DateTim
     row.checkpoint = upsert.checkpoint.clone().or(row.checkpoint);
     row.summary = upsert.summary.clone().or(row.summary);
     row.error = upsert.error.clone().or(row.error);
-    if first || upsert.metadata != serde_json::json!({}) { row.metadata = upsert.metadata.clone(); }
+    if first || upsert.metadata != serde_json::json!({}) {
+        row.metadata = upsert.metadata.clone();
+    }
     row.completed_at = upsert.completed_at.or(row.completed_at);
     row.updated_at = now;
     row
