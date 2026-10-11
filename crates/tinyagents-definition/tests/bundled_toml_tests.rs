@@ -10,11 +10,33 @@ fn every_bundled_agent_parses_without_changing_its_authored_vocabulary() {
         .collect();
     paths.sort();
     assert_eq!(paths.len(), 12);
+    let expected_caps = std::collections::BTreeMap::from([
+        ("orchestrator", 200),
+        ("planner", 50),
+        ("task_manager_agent", 50),
+        ("critic", 5),
+        ("image_agent", 8),
+        ("morning_briefing", 8),
+        ("summarizer", 1),
+        ("trigger_reactor", 6),
+        ("trigger_triage", 2),
+        ("video_agent", 8),
+        ("vision_agent", 6),
+        ("presentation_agent", 10),
+    ]);
     for path in paths {
         let text = std::fs::read_to_string(&path).unwrap();
         let authored: toml::Value = toml::from_str(&text).unwrap();
         let definition: AgentDefinition =
             toml::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert_eq!(
+            definition.effective_max_iterations(),
+            expected_caps[definition.id.as_str()]
+        );
+        assert_eq!(
+            definition.source,
+            tinyagents_definition::DefinitionSource::Builtin
+        );
         let serialized = toml::to_string(&definition).unwrap();
         let roundtrip: AgentDefinition = toml::from_str(&serialized).unwrap();
         let projected = serde_json::to_value(&definition).unwrap();

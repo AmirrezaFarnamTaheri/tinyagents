@@ -279,20 +279,6 @@ fn tier_display_matches_as_str() {
     assert_eq!(AgentTier::Worker.to_string(), "worker");
 }
 
-// ── Issue #4868 audit snapshot ──────────────────────────────────────────────
-//
-// The systemic fix in `build_session_agent_inner` makes every direct-
-// invocation call site (flows_build, flows_discover, agent-node runtime,
-// cron, MCP server, …) honor each agent's own `effective_max_iterations()`
-// instead of the global `config.agent.max_tool_iterations` default (10).
-// That changes the *runtime* iteration cap for every agent in the registry —
-// some go up (extended policy), some go down (declared max_iterations < 10),
-// most stay the same. This test pins the exact expected cap for every
-// built-in agent so an accidental `agent.toml` edit (or a new agent landing
-// with an unreviewed cap) shows up as a diff here rather than silently
-// changing runtime behavior. See PLAN/PR #4868 for the full before/after
-// audit table this list mirrors.
-
 #[test]
 fn legacy_catalogue_json_can_still_be_read() {
     let def: AgentDefinition = serde_json::from_value(serde_json::json!({"id":"worker", "name":"Worker", "description":"does work", "model":"exact-model", "tools":["read"], "subagents":["helper"]})).unwrap();
