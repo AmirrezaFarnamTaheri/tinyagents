@@ -186,3 +186,36 @@ fn custom_records_are_omitted_from_both_execution_projections() {
     row.role = "unknown".into();
     assert!(matches!(transcript_to_message(&row), Message::User(_)));
 }
+
+/// Native replay keeps a complete declaration/result pair correlated after projection.
+#[test]
+fn complete_native_tool_round_remains_valid_after_projection_and_replay() {
+    let mut assistant = tinyinference_llm::message::AssistantMessage::default();
+    assistant.tool_calls.push(TaToolCall::new(
+        "call-1",
+        "read",
+        serde_json::json!({"path":"a"}),
+    ));
+    let history = vec![
+        Message::Assistant(assistant),
+        Message::tool("call-1", "result"),
+    ];
+    let rows: Vec<_> = history
+        .iter()
+        .filter_map(message_to_native_transcript)
+        .collect();
+    let replay: Vec<_> = rows.iter().map(transcript_to_message).collect();
+    let Message::Assistant(assistant) = &replay[0] else {
+        panic!("assistant declaration");
+    };
+    let Message::Tool(tool) = &replay[1] else {
+        panic!("tool result");
+    };
+    assert_eq!(assistant.tool_calls.len(), 1);
+    assert_eq!(assistant.tool_calls[0].id, tool.tool_call_id);
+    assert_eq!(
+        assistant.tool_calls[0].arguments,
+        serde_json::json!({"path":"a"})
+    );
+    assert_eq!(replay, history);
+}
