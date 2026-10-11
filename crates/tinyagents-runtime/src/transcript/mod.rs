@@ -187,10 +187,6 @@ fn ta_call_to_row_call(call: &TaToolCall) -> TranscriptToolCall {
     }
 }
 
-/// Project a display/history row, omitting native tool declarations and media.
-///
-/// Tool result identities remain available to product views. These rows are not
-/// native provider replay input; use [`message_to_native_transcript`] for replay.
 /// Decode complete native history, rejecting incomplete or orphan tool rounds.
 ///
 /// Errors identify the invalid row or unanswered call. No rows are relabeled,
@@ -238,6 +234,10 @@ pub fn native_transcript_to_messages(
     Ok(messages)
 }
 
+/// Project a display/history row, omitting native tool declarations and media.
+///
+/// Tool result identities remain available to product views. These rows are not
+/// native provider replay input; use [`message_to_native_transcript`] for replay.
 pub fn message_to_display_transcript(msg: &Message) -> Option<TranscriptMessage> {
     Some(match msg {
         Message::System(_) => TranscriptMessage::system(msg.text()),
