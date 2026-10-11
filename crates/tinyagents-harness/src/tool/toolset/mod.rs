@@ -400,6 +400,13 @@ impl Tool for OverrideTool {
         self.inner.indirect_target(args)
     }
 
+    async fn indirect_target_async(
+        &self,
+        args: &Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        self.inner.indirect_target_async(args).await
+    }
+
     fn is_concurrency_safe(&self, args: &Value) -> bool {
         self.inner.is_concurrency_safe(args)
     }

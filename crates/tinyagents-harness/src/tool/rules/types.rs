@@ -186,11 +186,21 @@ impl ToolGate {
 
     /// Decides a concrete call. The allowlist is checked by the caller before
     /// lookup; this applies the rules, including any indirect target.
-    pub(crate) fn admit_call(&self, tool: &dyn Tool, args: &Value) -> CallGate {
+    pub(crate) async fn admit_call_async(&self, tool: &dyn Tool, args: &Value) -> CallGate {
         let Some(rules) = &self.rules else {
             return CallGate::Admit(ApprovalDirective::Default);
         };
-        let decision = rules.evaluate_call(tool, &self.context, args);
+        let decision = match rules.evaluate_call_async(tool, &self.context, args).await {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::debug!(
+                    target: "tinyagents::tool_rules",
+                    tool = %tool.name(),
+                    "[tool_rules] call refused because indirect target resolution failed"
+                );
+                return CallGate::Refuse("tool target could not be resolved".to_owned());
+            }
+        };
         if decision.callable {
             CallGate::Admit(decision.approval)
         } else {

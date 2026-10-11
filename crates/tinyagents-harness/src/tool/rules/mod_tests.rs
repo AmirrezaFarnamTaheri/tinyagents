@@ -97,8 +97,8 @@ fn lists_tool_picks_the_surface_from_exposure() {
     assert!(!gate.lists_tool(&Named("deferred", tinytools::ToolExposure::Deferred)));
 }
 
-#[test]
-fn admit_call_reports_approval_and_refusals() {
+#[tokio::test]
+async fn admit_call_reports_approval_and_refusals() {
     let rules: ToolRules = serde_json::from_value(json!({ "rules": [
         { "effect": "require_approval", "match": { "name": "send" } },
         { "id": "nope", "effect": "deny", "match": { "name": "drop" } },
@@ -107,21 +107,68 @@ fn admit_call_reports_approval_and_refusals() {
     let gate = ToolGate::new(None, &ToolRulePolicy::new(rules), None);
     let direct = tinytools::ToolExposure::Direct;
     assert_eq!(
-        gate.admit_call(&Named("send", direct), &json!({})),
+        gate.admit_call_async(&Named("send", direct), &json!({}))
+            .await,
         CallGate::Admit(ApprovalDirective::Required)
     );
     assert_eq!(
-        gate.admit_call(&Named("read", direct), &json!({})),
+        gate.admit_call_async(&Named("read", direct), &json!({}))
+            .await,
         CallGate::Admit(ApprovalDirective::Default)
     );
-    match gate.admit_call(&Named("drop", direct), &json!({})) {
+    match gate
+        .admit_call_async(&Named("drop", direct), &json!({}))
+        .await
+    {
         CallGate::Refuse(message) => assert!(message.contains("rule 'nope'"), "{message}"),
         other => panic!("expected a refusal, got {other:?}"),
     }
     assert_eq!(
-        ToolGate::default().admit_call(&Named("drop", direct), &json!({})),
+        ToolGate::default()
+            .admit_call_async(&Named("drop", direct), &json!({}))
+            .await,
         CallGate::Admit(ApprovalDirective::Default)
     );
+}
+
+struct AsyncTargetFailure;
+
+#[async_trait::async_trait]
+impl Tool for AsyncTargetFailure {
+    fn name(&self) -> &'static str {
+        "mcp_call_tool"
+    }
+
+    fn description(&self) -> &'static str {
+        "Calls a module-owned tool"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({ "type": "object" })
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("ok"))
+    }
+
+    async fn indirect_target_async(
+        &self,
+        _args: &serde_json::Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        anyhow::bail!("sensitive module diagnostic")
+    }
+}
+
+#[tokio::test]
+async fn async_target_resolution_failure_refuses_without_exposing_diagnostic() {
+    let gate = ToolGate::new(None, &ToolRulePolicy::new(deny("mcp_*_delete_*")), None);
+
+    match gate.admit_call_async(&AsyncTargetFailure, &json!({})).await {
+        CallGate::Refuse(message) => {
+            assert!(!message.contains("sensitive module diagnostic"));
+        }
+        CallGate::Admit(_) => panic!("a target resolution error must fail closed"),
+    }
 }
 
 #[test]

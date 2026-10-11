@@ -322,35 +322,73 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// An unregistered or allowlist-excluded name is admitted here with no
     /// directive: it is not a tool the rules can describe, and the
     /// unknown-tool policy answers it below.
-    fn rule_admission(&self, gate: &ToolGate, name: &str, args: &serde_json::Value) -> CallGate {
+    async fn rule_admission(
+        &self,
+        ctx: &RunContext<Ctx>,
+        gate: &ToolGate,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<CallGate> {
         let Some(dispatch) = gate
             .allows_name(name)
             .then(|| self.tools.model_dispatch(name))
             .flatten()
         else {
-            return CallGate::Admit(tinytools::ApprovalDirective::Default);
+            return Ok(CallGate::Admit(tinytools::ApprovalDirective::Default));
         };
-        self.admit_dispatch(gate, dispatch.as_ref(), args)
+        self.admit_dispatch(ctx, gate, dispatch.as_ref(), args)
+            .await
     }
 
-    fn admit_dispatch(
+    /// Evaluates rules and resolves any indirect target within this run's
+    /// remaining wall-clock budget and cancellation scope.
+    pub(super) async fn bounded_rule_admission(
         &self,
+        ctx: &RunContext<Ctx>,
+        gate: &ToolGate,
+        tool: &dyn tinytools::Tool,
+        args: &serde_json::Value,
+    ) -> Result<CallGate> {
+        ctx.bounded(
+            self.call_budget(ctx),
+            async { Ok(gate.admit_call_async(tool, args).await) },
+            || {
+                format!(
+                    "tool target resolution for run `{}` exceeded its remaining wall-clock budget",
+                    ctx.run_id()
+                )
+            },
+        )
+        .await
+    }
+
+    async fn admit_dispatch(
+        &self,
+        ctx: &RunContext<Ctx>,
         gate: &ToolGate,
         dispatch: &dyn crate::tool::ToolDispatch<State, Ctx>,
         args: &serde_json::Value,
-    ) -> CallGate {
-        let approval = match gate.admit_call(dispatch.tool().as_ref(), args) {
+    ) -> Result<CallGate> {
+        let approval = match self
+            .bounded_rule_admission(ctx, gate, dispatch.tool().as_ref(), args)
+            .await?
+        {
             CallGate::Admit(approval) => approval,
-            refusal @ CallGate::Refuse(_) => return refusal,
+            refusal @ CallGate::Refuse(_) => return Ok(refusal),
         };
         match dispatch.admission_target() {
-            Some((target, target_arguments)) => match gate.admit_call(target, target_arguments) {
-                CallGate::Admit(target_approval) => {
-                    CallGate::Admit(approval.strictest(target_approval))
+            Some((target, target_arguments)) => {
+                match self
+                    .bounded_rule_admission(ctx, gate, target, target_arguments)
+                    .await?
+                {
+                    CallGate::Admit(target_approval) => {
+                        Ok(CallGate::Admit(approval.strictest(target_approval)))
+                    }
+                    refusal @ CallGate::Refuse(_) => Ok(refusal),
                 }
-                refusal @ CallGate::Refuse(_) => refusal,
-            },
-            None => CallGate::Admit(approval),
+            }
+            None => Ok(CallGate::Admit(approval)),
         }
     }
 
@@ -717,7 +755,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // unknown-tool policy below) and any target it dispatches to, on the
         // raw provider arguments the host gate also sees.
         let gate = self.resolve_tool_gate(ctx)?;
-        let mut rule_approval = match self.rule_admission(&gate, &call.name, &model_arguments) {
+        let mut rule_approval = match self
+            .rule_admission(ctx, &gate, &call.name, &model_arguments)
+            .await?
+        {
             CallGate::Admit(approval) => approval,
             CallGate::Refuse(message) => {
                 ctx.limits.rollback_tool_calls(1);
@@ -855,18 +896,30 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // Rewrite mode: retarget to a fixed compatibility tool if
                 // that tool exists, otherwise fall through to recovery.
                 let rewrite_target = match &self.policy.unknown_tool {
-                    UnknownToolPolicy::Rewrite { tool_name } => self
-                        .tools
-                        .dispatch(tool_name)
-                        .filter(|_| gate.allows_name(tool_name))
-                        .and_then(|dispatch| {
-                            match gate.admit_call(dispatch.tool().as_ref(), &arguments) {
+                    UnknownToolPolicy::Rewrite { tool_name } => {
+                        if let Some(dispatch) = self
+                            .tools
+                            .dispatch(tool_name)
+                            .filter(|_| gate.allows_name(tool_name))
+                        {
+                            match self
+                                .bounded_rule_admission(
+                                    ctx,
+                                    &gate,
+                                    dispatch.tool().as_ref(),
+                                    &arguments,
+                                )
+                                .await?
+                            {
                                 CallGate::Admit(approval) => {
                                     Some((tool_name.clone(), dispatch, approval))
                                 }
                                 CallGate::Refuse(_) => None,
                             }
-                        }),
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 };
 
@@ -1053,7 +1106,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // (a JSON-encoded object decoded) or preparation can change what an
         // indirect target or an argument condition reads, so the final
         // decision is made here, before approval and dispatch.
-        match self.admit_dispatch(&gate, dispatch.as_ref(), &call.arguments) {
+        match self
+            .admit_dispatch(ctx, &gate, dispatch.as_ref(), &call.arguments)
+            .await?
+        {
             CallGate::Admit(approval) => rule_approval = rule_approval.strictest(approval),
             CallGate::Refuse(message) => {
                 ctx.limits.rollback_tool_calls(1);
