@@ -118,8 +118,10 @@ impl DriverSessionStores {
         self
     }
 
-    /// All document declarations required by this provider.
+    /// Core session declarations, excluding the optional run ledger.
     ///
+    /// Prepare optional ledger declarations separately with
+    /// [`crate::run_ledger::DriverRunLedger::prepare_schema`].
     /// Includes transcript entries and index, turn states, and key-value
     /// records. The journal uses streams and has no document declaration.
     /// These are also used by each store's lazy initialization. Returning
