@@ -336,7 +336,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         else {
             return Ok(CallGate::Admit(tinytools::ApprovalDirective::Default));
         };
-        self.admit_dispatch(ctx, gate, dispatch.as_ref(), args).await
+        self.admit_dispatch(ctx, gate, dispatch.as_ref(), args)
+            .await
     }
 
     /// Evaluates rules and resolves any indirect target within this run's
@@ -755,8 +756,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // raw provider arguments the host gate also sees.
         let gate = self.resolve_tool_gate(ctx)?;
         let mut rule_approval = match self
-            .rule_admission(&gate, &call.name, &model_arguments)
-            .await
+            .rule_admission(ctx, &gate, &call.name, &model_arguments)
+            .await?
         {
             CallGate::Admit(approval) => approval,
             CallGate::Refuse(message) => {
@@ -901,9 +902,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .dispatch(tool_name)
                             .filter(|_| gate.allows_name(tool_name))
                         {
-                            match gate
-                                .admit_call_async(dispatch.tool().as_ref(), &arguments)
-                                .await
+                            match self
+                                .bounded_rule_admission(
+                                    ctx,
+                                    &gate,
+                                    dispatch.tool().as_ref(),
+                                    &arguments,
+                                )
+                                .await?
                             {
                                 CallGate::Admit(approval) => {
                                     Some((tool_name.clone(), dispatch, approval))
@@ -1101,8 +1107,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // indirect target or an argument condition reads, so the final
         // decision is made here, before approval and dispatch.
         match self
-            .admit_dispatch(&gate, dispatch.as_ref(), &call.arguments)
-            .await
+            .admit_dispatch(ctx, &gate, dispatch.as_ref(), &call.arguments)
+            .await?
         {
             CallGate::Admit(approval) => rule_approval = rule_approval.strictest(approval),
             CallGate::Refuse(message) => {

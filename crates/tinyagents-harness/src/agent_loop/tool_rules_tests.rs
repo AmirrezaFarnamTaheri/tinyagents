@@ -22,8 +22,8 @@ use crate::tool::packs::{PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, U
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::model::ModelResponse;
 use tinytools::{
-    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRuleSet,
-    ToolRules, ToolSubject,
+    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRuleSet, ToolRules,
+    ToolSubject,
 };
 use tokio::sync::Notify;
 
@@ -290,8 +290,14 @@ async fn indirect_target_resolution_obeys_run_cancellation() {
     let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut run)
         .await
         .expect("cancellation should interrupt target resolution");
-    assert!(matches!(result, Err(crate::error::TinyAgentsError::Cancelled)));
-    assert!(dropped.load(Ordering::SeqCst), "resolver future was not dropped");
+    assert!(matches!(
+        result,
+        Err(crate::error::TinyAgentsError::Cancelled)
+    ));
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "resolver future was not dropped"
+    );
 }
 
 // ── Calls ───────────────────────────────────────────────────────────────────
