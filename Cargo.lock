@@ -1558,17 +1558,6 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
@@ -1768,7 +1757,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2",
  "tempfile",
  "tinyagents-harness",
  "tinyagents-tasks",
@@ -1799,7 +1788,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2",
  "tar",
  "tempfile",
  "thiserror",
@@ -1937,7 +1926,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2",
  "tempfile",
  "thiserror",
  "tinyagents-harness",
@@ -1968,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "httpdate",
@@ -1978,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-embeddings"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "once_cell",
@@ -1995,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-image"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2011,16 +2000,15 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-llm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "futures",
  "reqwest",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "thiserror",
  "tinyinference-core",
  "tinytools-agent",
@@ -2030,7 +2018,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-video"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -2117,7 +2105,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "fs2",
  "futures-util",
  "glob",
@@ -2128,7 +2116,7 @@ dependencies = [
  "reqwest",
  "rustix",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "tinytools",
  "tokio",
  "tracing",
