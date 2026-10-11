@@ -3779,7 +3779,7 @@ async fn hosted_named_scope_admits_a_tool_listed_only_as_deferred() {
             json!({"type":"object"})
         }
         fn exposure(&self) -> tinytools::ToolExposure {
-            tinytools::ToolExposure::Deferred
+            tinytools::ToolExposure::Direct
         }
         async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
             Ok(ToolResult::success("deferred tool executed"))
