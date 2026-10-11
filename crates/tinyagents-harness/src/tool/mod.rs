@@ -61,6 +61,25 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Canonical declaration exposed to the model and policy layer.
     fn tool(&self) -> Arc<dyn tinytools::Tool>;
 
+    /// Binds any mutable, indirect target to this admitted call.
+    ///
+    /// The harness invokes this once after argument preparation and validation,
+    /// then uses the returned dispatch for policy, authorization, and execution.
+    /// Implementations without call-scoped targets can keep the default.
+    fn bind_call(
+        &self,
+        _arguments: &Value,
+    ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
+        Ok(None)
+    }
+
+    /// Returns the concrete target and effective arguments for call-rule
+    /// checks after an indirect call is bound. The dispatcher declaration is
+    /// still checked independently.
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        None
+    }
+
     /// Classifies output for the host security boundary.
     ///
     /// Normal tools produce tool-origin output. Typed recursive dispatchers
@@ -123,6 +142,50 @@ struct CanonicalDispatch {
 impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for CanonicalDispatch {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
         self.tool.clone()
+    }
+
+    fn bind_call(
+        &self,
+        arguments: &Value,
+    ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
+        let Some(extension) = self.tool.host_extension().and_then(|extension| {
+            extension.downcast_ref::<crate::tool::packs::PackToolExtension>()
+        }) else {
+            return Ok(None);
+        };
+        let pinned = Arc::new(extension.bind_call(self.tool.clone(), arguments));
+        let tool: Arc<dyn tinytools::Tool> = pinned.clone();
+        Ok(Some(Arc::new(BoundCanonicalDispatch { tool, pinned })))
+    }
+
+    async fn execute(
+        &self,
+        _state: &State,
+        call_id: crate::ids::CallId,
+        arguments: Value,
+        options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<Ctx>,
+    ) -> anyhow::Result<tinytools::ToolResult> {
+        let context = ToolExecutionContext::from_run_context(parent, call_id);
+        self.tool
+            .execute_with_context(arguments, options, Some(&context))
+            .await
+    }
+}
+
+struct BoundCanonicalDispatch {
+    tool: Arc<dyn tinytools::Tool>,
+    pinned: Arc<crate::tool::packs::PinnedPackCall>,
+}
+
+#[async_trait]
+impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
+    fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        self.tool.clone()
+    }
+
+    fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
+        self.pinned.admission_target()
     }
 
     async fn execute(

@@ -353,6 +353,10 @@ impl Tool for OverrideTool {
             .await
     }
 
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        self.inner.prepare_authorization(args).await
+    }
+
     fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {
         self.inner.injected_arguments()
     }
