@@ -786,7 +786,7 @@ async fn adapter_tree_navigation_effect_settlement_and_retention_round_trip() {
         call_id: "call".into(),
         tool: "write".into(),
     }];
-    let strict = ledger.classify_recovery(&tail, &[effect.clone()]);
+    let strict = ledger.classify_recovery(&tail, std::slice::from_ref(&effect));
     assert_eq!(
         strict,
         ledger.classify_recovery_with(&tail, &[effect], MissingEffectRow::Uncertain)

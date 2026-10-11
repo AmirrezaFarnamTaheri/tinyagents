@@ -24,7 +24,9 @@
 //! and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
 //! checks it. A single-user host (the desktop app) may legitimately share one
-//! store between its agents, and simply does not claim isolation.
+//! store between its agents, and simply does not claim isolation. The optional
+//! [`SessionStoreProvider::run_ledger_for_agent`] handle follows the same identity
+//! boundary; selecting it is independent of transcript-store selection.
 //!
 //! # Sync and async
 //!
