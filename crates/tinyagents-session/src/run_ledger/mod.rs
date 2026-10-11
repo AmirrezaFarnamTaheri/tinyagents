@@ -10,6 +10,7 @@
 //! a run and the session that produced it are queryable together.
 
 pub mod command_center;
+pub mod error;
 pub mod ops;
 pub mod port;
 pub mod recovery;
