@@ -142,6 +142,26 @@ literals and providers are unchanged.
   returns stores that refuse every call with that error and does not cache
   them. `try_for_agent` returns the error itself.
 
+## Trusted schema preparation
+
+`DriverSessionStores::collection_specs()` returns the exact declarations used
+by the transcript, turn-state and key-value adapters. Hosts can include this
+manifest in their trusted bootstrap process without copying index definitions.
+The journal uses streams and has no document collection declaration.
+
+`DriverSessionStores::prepare_schema(documents).await` idempotently declares
+all four collections in the addressed logical database. Supply a trusted
+bootstrap document handle for each database, before issuing actors. It returns
+the first native error with its kind and cause. Earlier declarations can remain
+after a later failure; retrying is safe, but this is not an atomic migration.
+Native internal stream/blob metadata preparation remains the driver's job.
+
+This API does not grant a lease, bind actor identity, disable lazy declarations,
+or validate restricted actor reads. A host must separately use the owning
+native schema-validation contract when integrating actors without DDL authority.
+`DriverStore::collection_spec(collection)` also exposes the harness key-value
+declaration for hosts using that adapter independently.
+
 ## Conformance
 
 `testkit::conformance::session_store_conformance(&provider)` exercises a
