@@ -190,7 +190,7 @@ fn custom_records_are_omitted_from_both_execution_projections() {
 /// Native replay keeps a complete declaration/result pair correlated after projection.
 #[test]
 fn complete_native_tool_round_remains_valid_after_projection_and_replay() {
-    let mut assistant = tinyinference_llm::message::AssistantMessage::default();
+    let Message::Assistant(mut assistant) = Message::assistant("") else { unreachable!() };
     assistant.tool_calls.push(TaToolCall::new(
         "call-1",
         "read",
@@ -218,4 +218,20 @@ fn complete_native_tool_round_remains_valid_after_projection_and_replay() {
         serde_json::json!({"path":"a"})
     );
     assert_eq!(replay, history);
+}
+
+#[test]
+fn native_history_decode_rejects_display_rows_and_unanswered_or_duplicate_results() {
+    let Message::Assistant(mut assistant) = Message::assistant("") else { unreachable!() };
+    assistant.tool_calls = vec![TaToolCall::new("call-1", "read", serde_json::json!({}))];
+    let messages = vec![Message::Assistant(assistant), Message::tool("call-1", "result")];
+    let native: Vec<_> = messages.iter().filter_map(message_to_native_transcript).collect();
+    assert_eq!(native_transcript_to_messages(&native).unwrap(), messages);
+    let display: Vec<_> = messages.iter().filter_map(message_to_flat_transcript).collect();
+    assert!(native_transcript_to_messages(&display).unwrap_err().to_string().contains("orphan"));
+    assert!(native_transcript_to_messages(&native[..1]).unwrap_err().to_string().contains("unanswered"));
+    let mut duplicate = native.clone(); duplicate.push(native[1].clone());
+    assert!(native_transcript_to_messages(&duplicate).unwrap_err().to_string().contains("orphan"));
+    let mut interrupted = native.clone(); interrupted.insert(1, TranscriptMessage::user("interrupt"));
+    assert!(native_transcript_to_messages(&interrupted).is_err());
 }
