@@ -164,11 +164,12 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
         fn run_ledger_for_agent(
             &self,
             id: &str,
-        ) -> tinyagents_harness::error::Result<Option<Arc<dyn RunLedgerStore>>> {
+        ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn RunLedgerStore>>> {
             if id == "denied" {
                 return Err(tinyagents_harness::TinyAgentsError::Storage(
                     "admission refused".into(),
-                ));
+                )
+                .into());
             }
             Ok((id == "allowed").then(|| self.ledger.clone()))
         }

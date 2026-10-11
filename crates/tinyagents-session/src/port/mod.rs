@@ -124,7 +124,7 @@ pub trait SessionStoreProvider: Send + Sync {
     fn run_ledger_for_agent(
         &self,
         _agent_id: &str,
-    ) -> tinyagents_harness::error::Result<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         Ok(None)
     }
 
@@ -325,7 +325,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     fn run_ledger_for_agent(
         &self,
         agent_id: &str,
-    ) -> tinyagents_harness::error::Result<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         (**self).run_ledger_for_agent(agent_id)
     }
 

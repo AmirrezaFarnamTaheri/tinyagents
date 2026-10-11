@@ -12,11 +12,11 @@
 //! must not silently omit them. An implementation that cannot meet a method's
 //! contract must return an error instead of using another backend.
 
+use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::error::Result;
 use tinyagents_harness::tinyinference_llm::Message;
 
-use super::command_center::{AgentWorkRow, CommandCenterView, ControlError, ControlVerb};
+use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::ops::RunTransition;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
@@ -298,7 +298,7 @@ pub trait RunLedgerStore: Send + Sync {
         message: Option<&str>,
         reason: Option<&str>,
         display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
-    ) -> std::result::Result<AgentWorkRow, ControlError>;
+    ) -> Result<AgentWorkRow>;
 
     /// Pure recovery classification, preserving the existing missing-effect policy.
     fn classify_recovery_with(

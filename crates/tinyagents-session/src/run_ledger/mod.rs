@@ -20,6 +20,7 @@ pub mod store;
 pub mod tool_effects;
 pub mod types;
 
+pub use error::{LedgerError, LedgerResult};
 pub use port::RunLedgerStore;
 pub use sqlite::SqliteRunLedger;
 
