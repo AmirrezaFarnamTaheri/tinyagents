@@ -1081,9 +1081,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         // explicit empty set and therefore never widens through that fallback.
         let allowed_tools = match definition.resolve_tool_scope(None) {
             tinyagents_definition::ToolScope::Wildcard => None,
-            tinyagents_definition::ToolScope::Named(names) => {
-                (!names.is_empty()).then(|| names.into_iter().collect())
-            }
+            tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
         };
         let tool_rules = definition.tool_rules;
         Ok(PreparedAgentTurn {
