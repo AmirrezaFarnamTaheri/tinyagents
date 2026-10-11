@@ -177,5 +177,5 @@ pub fn flat_catalog_entry(price: &ModelPrice, source: &str) -> crate::ModelCatal
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
+#[path = "pricing_tests.rs"]
 mod tests;
