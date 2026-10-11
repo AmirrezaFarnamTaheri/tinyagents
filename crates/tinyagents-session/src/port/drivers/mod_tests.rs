@@ -679,3 +679,28 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
         &provider.try_for_agent("agent").unwrap().turn_states
     ));
 }
+
+
+async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
+    backend.prepare_schema().await.unwrap();
+    let bootstrap = backend.for_scope(&Scope::local()).unwrap();
+    DriverSessionStores::prepare_schema(bootstrap.documents().as_ref()).await.unwrap();
+    let restricted = backend.existing_schema().unwrap();
+    let actor = DriverSessionStores::new(restricted).unwrap().recover_on_open(true);
+    let opened = actor.try_for_agent("prepared-actor");
+    assert!(opened.is_ok(), "prepared restricted actor recovery refused: {:?}", opened.err());
+    session_store_conformance(&actor).await;
+    session_store_isolation_conformance(&actor).await;
+}
+
+#[tokio::test]
+async fn prepared_restricted_actor_recovers_and_uses_memory_stores() {
+    prepared_restricted_actor_contract(Arc::new(MemoryStorage::new())).await;
+}
+
+#[tokio::test]
+async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
+    let directory = tempfile::tempdir().unwrap();
+    prepared_restricted_actor_contract(Arc::new(SqliteStorage::open(
+        directory.path().join("prepared-actor.db")).unwrap())).await;
+}
