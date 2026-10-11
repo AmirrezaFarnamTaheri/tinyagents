@@ -161,3 +161,7 @@ mod test;
 #[cfg(test)]
 #[path = "wrap_up_tests.rs"]
 mod wrap_up_test;
+
+#[cfg(test)]
+#[path = "stop_hooks_tests.rs"]
+mod stop_hooks_test;
