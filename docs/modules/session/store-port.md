@@ -31,8 +31,10 @@ process that served it. The port lets both use the same runtime.
 
 ## Isolation
 
-`for_agent` is the only way to obtain stores, and the handles it returns are
-bound to that agent. A provider serving several users from one backend must
+`for_agent` and, with `storage-drivers`, `try_for_agent` obtain handles bound
+to that agent. Hosts that must propagate admission or recovery failures use
+`try_for_agent`; the legacy accessor can return refusing handles instead.
+A provider serving several users from one backend must
 make it impossible for one agent's handles to reach another's data; the
 single-user desktop layout shares one workspace between its agents and does
 not claim isolation.
@@ -77,6 +79,38 @@ Each agent id becomes a storage `Scope`. An id that is not a valid scope,
 or that starts with the reserved `sha256:` prefix, maps to `sha256:<hex>` of
 itself, so no raw id can name a hashed scope, and the driver enforces scopes, so the
 provider claims isolation and passes `session_store_isolation_conformance`.
+
+### Checked opening
+
+With `storage-drivers`, call `SessionStoreProvider::try_for_agent(agent_id)`
+through the provider trait when admission must be authoritative. It returns
+`Result<AgentStores, StorageError>`; driver scope admission and recovery failures
+retain their original error kind and native source. The `Arc<P>` implementation
+forwards the checked accessor. Legacy providers default to
+`Ok(self.for_agent(agent_id))`, so existing providers and store literals remain
+compatible.
+
+Driver recovery uses the same turn-state handles and blocking bridge as normal
+operations, without projecting errors through the legacy string interface.
+Failed recovery caches neither stores nor a successful recovery marker, so a
+later checked open retries. The existing infallible `for_agent` still returns
+refusing handles on driver failure. Hosts selecting configured storage must
+propagate checked errors rather than treating them as an absent provider.
+
+Regression evidence: the generic provider and Arc accessors previously returned
+successful refusing/legacy handles; recovery replaced native declaration and
+query errors with `Unavailable`. Behavioral tests reproduced those failures
+before the override, forwarding and typed recovery helper were added. Tests
+cover source identity, unusual key mapping, legacy file compatibility,
+successful cached handles, independent actor caches and recovery retry.
+
+Local validation on 2026-10-11 passed 559 feature-enabled tests and two
+doctests, 495 default-feature tests and two doctests, strict all-feature Clippy
+and rustdoc. The full instrumented suite passed serially with 83.76% overall
+line coverage; the changed provider modules had 100%, and the turn-state
+module 96.48%. An initial parallel instrumented run encountered a pre-existing
+transcript generation file-lock refusal; its failed log was retained and no
+test was skipped in the successful full rerun.
 
 ### Actor-owned providers
 

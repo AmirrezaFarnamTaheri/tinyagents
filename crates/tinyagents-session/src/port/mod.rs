@@ -13,9 +13,11 @@
 //!
 //! # Isolation
 //!
-//! [`SessionStoreProvider::for_agent`] is the only way to obtain stores, and
-//! the handles it returns are bound to that one agent. A provider that serves
-//! several users from one backend must make it impossible for one agent's
+//! [`SessionStoreProvider`] provides handles bound to one agent. With the
+//! `storage-drivers` feature, hosts that must propagate store-opening or
+//! recovery errors should use `try_for_agent`; the legacy `for_agent` accessor
+//! can return refusing handles instead. A provider that serves several users
+//! from one backend must make it impossible for one agent's
 //! handles to read or write another's data; [`InMemorySessionStores`] does,
 //! and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
@@ -66,6 +68,23 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Called whenever the runtime needs an agent's stores, so it should be
     /// cheap: hand out shared handles rather than opening connections.
     fn for_agent(&self, agent_id: &str) -> AgentStores;
+
+    /// Opens an agent's stores while retaining native admission and recovery errors.
+    ///
+    /// Legacy providers default to their infallible accessor. Driver providers
+    /// override this method so a configured refusal cannot become missing stores
+    /// or select a file fallback.
+    ///
+    /// # Errors
+    ///
+    /// The native backend error, including its source, when opening is refused.
+    #[cfg(feature = "storage-drivers")]
+    fn try_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+        Ok(self.for_agent(agent_id))
+    }
 
     /// Optionally create an independent actor provider over a host-admitted backend.
     ///
@@ -264,6 +283,15 @@ impl TurnStates for TurnStateStore {
 
 /// A provider shared behind an [`Arc`] is still a provider.
 impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
+    /// Forwards checked opening to the shared provider, including its native errors.
+    #[cfg(feature = "storage-drivers")]
+    fn try_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+        (**self).try_for_agent(agent_id)
+    }
+
     #[cfg(feature = "storage-drivers")]
     fn bind_actor(
         &self,

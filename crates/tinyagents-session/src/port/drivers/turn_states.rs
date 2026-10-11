@@ -74,12 +74,43 @@ impl DriverTurnStates {
         Fut: Future<Output = Result<T, StorageError>> + Send + 'static,
         T: Send + 'static,
     {
-        let inner = Arc::clone(&self.inner);
-        let future = op(inner);
-        match self.bridge.run(future) {
-            Ok(Ok(value)) => Ok(value),
-            Ok(Err(error)) | Err(error) => Err(error.to_string()),
-        }
+        self.run_checked(op).map_err(|error| error.to_string())
+    }
+
+    /// Uses the same blocking bridge without projecting native errors to strings.
+    fn run_checked<T, F, Fut>(&self, op: F) -> Result<T, StorageError>
+    where
+        F: FnOnce(Arc<Inner>) -> Fut,
+        Fut: Future<Output = Result<T, StorageError>> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.bridge.run(op(Arc::clone(&self.inner)))?
+    }
+    /// Recovers interrupted turns while retaining native declaration, read and write errors.
+    pub(super) fn mark_all_interrupted_checked(
+        &self,
+        now_rfc3339: &str,
+    ) -> Result<usize, StorageError> {
+        let now = now_rfc3339.to_string();
+        self.run_checked(|inner| async move {
+            let mut count = 0;
+            for stored in inner.query(Filter::All).await? {
+                let turn = stored.doc;
+                if is_terminal(&turn) {
+                    continue;
+                }
+                if inner
+                    .update(&turn.thread_id, &turn.request_id, |current| {
+                        interrupted(current, &now)
+                    })
+                    .await?
+                    .is_some()
+                {
+                    count += 1;
+                }
+            }
+            Ok(count)
+        })
     }
 }
 
@@ -355,26 +386,8 @@ impl TurnStates for DriverTurnStates {
     }
 
     fn mark_all_interrupted(&self, now_rfc3339: &str) -> Result<usize, String> {
-        let now = now_rfc3339.to_string();
-        self.run(|inner| async move {
-            let mut count = 0;
-            for stored in inner.query(Filter::All).await? {
-                let turn = stored.doc;
-                if is_terminal(&turn) {
-                    continue;
-                }
-                if inner
-                    .update(&turn.thread_id, &turn.request_id, |current| {
-                        interrupted(current, &now)
-                    })
-                    .await?
-                    .is_some()
-                {
-                    count += 1;
-                }
-            }
-            Ok(count)
-        })
+        self.mark_all_interrupted_checked(now_rfc3339)
+            .map_err(|error| error.to_string())
     }
 
     fn settle_turn(
