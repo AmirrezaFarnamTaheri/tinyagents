@@ -324,40 +324,70 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// unknown-tool policy answers it below.
     async fn rule_admission(
         &self,
+        ctx: &RunContext<Ctx>,
         gate: &ToolGate,
         name: &str,
         args: &serde_json::Value,
-    ) -> CallGate {
+    ) -> Result<CallGate> {
         let Some(dispatch) = gate
             .allows_name(name)
             .then(|| self.tools.model_dispatch(name))
             .flatten()
         else {
-            return CallGate::Admit(tinytools::ApprovalDirective::Default);
+            return Ok(CallGate::Admit(tinytools::ApprovalDirective::Default));
         };
-        self.admit_dispatch(gate, dispatch.as_ref(), args).await
+        self.admit_dispatch(ctx, gate, dispatch.as_ref(), args).await
+    }
+
+    /// Evaluates rules and resolves any indirect target within this run's
+    /// remaining wall-clock budget and cancellation scope.
+    pub(super) async fn bounded_rule_admission(
+        &self,
+        ctx: &RunContext<Ctx>,
+        gate: &ToolGate,
+        tool: &dyn tinytools::Tool,
+        args: &serde_json::Value,
+    ) -> Result<CallGate> {
+        ctx.bounded(
+            self.call_budget(ctx),
+            async { Ok(gate.admit_call_async(tool, args).await) },
+            || {
+                format!(
+                    "tool target resolution for run `{}` exceeded its remaining wall-clock budget",
+                    ctx.run_id()
+                )
+            },
+        )
+        .await
     }
 
     async fn admit_dispatch(
         &self,
+        ctx: &RunContext<Ctx>,
         gate: &ToolGate,
         dispatch: &dyn crate::tool::ToolDispatch<State, Ctx>,
         args: &serde_json::Value,
-    ) -> CallGate {
-        let approval = match gate.admit_call_async(dispatch.tool().as_ref(), args).await {
+    ) -> Result<CallGate> {
+        let approval = match self
+            .bounded_rule_admission(ctx, gate, dispatch.tool().as_ref(), args)
+            .await?
+        {
             CallGate::Admit(approval) => approval,
-            refusal @ CallGate::Refuse(_) => return refusal,
+            refusal @ CallGate::Refuse(_) => return Ok(refusal),
         };
         match dispatch.admission_target() {
             Some((target, target_arguments)) => {
-                match gate.admit_call_async(target, target_arguments).await {
+                match self
+                    .bounded_rule_admission(ctx, gate, target, target_arguments)
+                    .await?
+                {
                     CallGate::Admit(target_approval) => {
-                        CallGate::Admit(approval.strictest(target_approval))
+                        Ok(CallGate::Admit(approval.strictest(target_approval)))
                     }
-                    refusal @ CallGate::Refuse(_) => refusal,
+                    refusal @ CallGate::Refuse(_) => Ok(refusal),
                 }
             }
-            None => CallGate::Admit(approval),
+            None => Ok(CallGate::Admit(approval)),
         }
     }
 
