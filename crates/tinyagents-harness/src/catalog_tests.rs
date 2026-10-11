@@ -6,7 +6,10 @@ fn description_catalogue_matches_the_frozen_channel_prompt_bytes() {
         ("file_read", "Read UTF-8 text → bytes"),
         ("tool_search", "Find a tool.\nPreserve line breaks."),
     ];
-    assert_eq!(render_description_catalogue(&tools), include_str!("catalog_channel.golden.txt"));
+    assert_eq!(
+        render_description_catalogue(&tools),
+        include_str!("catalog_channel.golden.txt")
+    );
 }
 
 #[test]
