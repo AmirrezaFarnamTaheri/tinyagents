@@ -242,7 +242,11 @@ async fn a_halt_keeps_the_summary_of_a_guard_that_stopped_the_run_first() {
         run_successful_repeat_cycle(&mw, "lookup", json!({"id": 1}), "ok", None).await;
     }
 
-    assert_eq!(drain_pause_count(&handle), 1, "the guard still pauses the run");
+    assert_eq!(
+        drain_pause_count(&handle),
+        1,
+        "the guard still pauses the run"
+    );
     assert_eq!(summary.lock().unwrap().as_deref(), Some(earlier));
 }
 
