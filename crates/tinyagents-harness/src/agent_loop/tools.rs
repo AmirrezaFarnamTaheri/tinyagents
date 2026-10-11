@@ -106,6 +106,26 @@ use sha2::{Digest, Sha256};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
+/// Bind tool-produced authorization facts to both the caller's request and the
+/// validated arguments that will be executed. The host still owns the meaning
+/// of `facts`; this envelope only prevents facts from being replayed for a
+/// different call or argument shape.
+pub(super) fn bind_authorization_context(
+    tool_name: &str,
+    request_arguments: &serde_json::Value,
+    effective_arguments: &serde_json::Value,
+    facts: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    facts.map(|facts| {
+        serde_json::json!({
+            "tool_name": tool_name,
+            "request_arguments": request_arguments,
+            "effective_arguments": effective_arguments,
+            "tool_facts": facts,
+        })
+    })
+}
+
 /// How a single requested tool call was resolved during admission.
 enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
     /// A registered tool (possibly after an unknown-tool rewrite).
@@ -306,13 +326,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// directive: it is not a tool the rules can describe, and the
     /// unknown-tool policy answers it below.
     fn rule_admission(&self, gate: &ToolGate, name: &str, args: &serde_json::Value) -> CallGate {
-        match gate
+        let Some(dispatch) = gate
             .allows_name(name)
             .then(|| self.tools.model_dispatch(name))
             .flatten()
-        {
-            Some(dispatch) => gate.admit_call(dispatch.tool().as_ref(), args),
-            None => CallGate::Admit(tinytools::ApprovalDirective::Default),
+        else {
+            return CallGate::Admit(tinytools::ApprovalDirective::Default);
+        };
+        self.admit_dispatch(gate, dispatch.as_ref(), args)
+    }
+
+    fn admit_dispatch(
+        &self,
+        gate: &ToolGate,
+        dispatch: &dyn crate::tool::ToolDispatch<State, Ctx>,
+        args: &serde_json::Value,
+    ) -> CallGate {
+        let approval = match gate.admit_call(dispatch.tool().as_ref(), args) {
+            CallGate::Admit(approval) => approval,
+            refusal @ CallGate::Refuse(_) => return refusal,
+        };
+        match dispatch.admission_target() {
+            Some((target, target_arguments)) => match gate.admit_call(target, target_arguments) {
+                CallGate::Admit(target_approval) => {
+                    CallGate::Admit(approval.strictest(target_approval))
+                }
+                refusal @ CallGate::Refuse(_) => refusal,
+            },
+            None => CallGate::Admit(approval),
         }
     }
 
@@ -784,7 +825,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // hide disallowed schemas: a model can still fabricate a name, so the
         // dispatch boundary must reject it too.
         let is_allowed = gate.allows_name(&call.name);
-        let (dispatch, tool) = match is_allowed
+        let (mut dispatch, mut tool) = match is_allowed
             .then(|| self.tools.model_dispatch(&call.name))
             .flatten()
         {
@@ -998,12 +1039,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 message,
             )));
         }
+        // Indirect tools may resolve a mutable target. Freeze that target only
+        // after normalized, injected arguments are final, then use the bound
+        // dispatch for every remaining policy check and execution.
+        if let Some(bound) = dispatch
+            .bind_call(&call.arguments)
+            .map_err(|_| TinyAgentsError::Tool("tool call binding failed".to_string()))?
+        {
+            dispatch = bound;
+            tool = dispatch.tool();
+        }
         // Tool rules once more, on the arguments that will actually run. The
         // early check saw the raw provider payload; repair, normalization
         // (a JSON-encoded object decoded) or preparation can change what an
         // indirect target or an argument condition reads, so the final
         // decision is made here, before approval and dispatch.
-        match self.rule_admission(&gate, &call.name, &call.arguments) {
+        match self.admit_dispatch(&gate, dispatch.as_ref(), &call.arguments) {
             CallGate::Admit(approval) => rule_approval = rule_approval.strictest(approval),
             CallGate::Refuse(message) => {
                 ctx.limits.rollback_tool_calls(1);
@@ -1055,13 +1106,48 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // run is identified from its explicit RunContext binding; the
         // lower-level SDK path has no implicit host policy.
         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+            // Tool-specific facts are prepared asynchronously before the host
+            // decides whether the call may run. The runtime transports the
+            // opaque value only; interpretation and policy remain host-owned.
+            let effective_arguments = call.arguments.clone();
+            let authorization_facts = ctx
+                .bounded(
+                    self.call_budget(ctx),
+                    async {
+                        dispatch
+                            .tool()
+                            .prepare_authorization(&effective_arguments)
+                            .await
+                            .map_err(|_| {
+                                TinyAgentsError::Tool(
+                                    "tool authorization preparation failed".to_string(),
+                                )
+                            })
+                    },
+                    || {
+                        format!(
+                            "tool authorization preparation for run `{}` exceeded its remaining wall-clock budget",
+                            ctx.run_id()
+                        )
+                    },
+                )
+                .await?;
+            let authorization_context = super::tools::bind_authorization_context(
+                &call.name,
+                &model_arguments,
+                &effective_arguments,
+                authorization_facts,
+            );
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),
                 model_arguments,
                 binding.agent_id.clone(),
             )
             .with_call_id(CallId::new(call.id.clone()));
-            let authorization = binding.host.security.authorize_tool(&request);
+            let authorization = binding
+                .host
+                .security
+                .authorize_tool_with_context(&request, authorization_context.as_ref());
             let decision = ctx
                 .bounded(self.call_budget(ctx), authorization, || {
                     format!(

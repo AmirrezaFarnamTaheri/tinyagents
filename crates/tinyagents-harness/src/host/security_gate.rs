@@ -346,6 +346,27 @@ pub trait SecurityGate: Send + Sync {
     /// consent changed underneath it.
     async fn authorize_tool(&self, call: &ToolCallRequest) -> Result<GateDecision>;
 
+    /// Consults the host with optional runtime-generated authorization facts.
+    ///
+    /// When a registered tool returns prepared facts, the harness wraps them
+    /// in an invocation-bound JSON object with these stable fields:
+    /// `tool_name` (registered name), `request_arguments` (original call
+    /// arguments), `effective_arguments` (validated arguments passed to the
+    /// tool's preparation hook), and `tool_facts` (the opaque value returned by
+    /// that hook). The harness creates this envelope; model arguments cannot
+    /// supply or replace it. Hosts may interpret `tool_facts` and should verify
+    /// the call name and arguments they rely on. Existing gates remain
+    /// source-compatible: by default the context is ignored and
+    /// [`authorize_tool`](Self::authorize_tool) receives the unchanged
+    /// request.
+    async fn authorize_tool_with_context(
+        &self,
+        call: &ToolCallRequest,
+        _context: Option<&Value>,
+    ) -> Result<GateDecision> {
+        self.authorize_tool(call).await
+    }
+
     /// Consulted before untrusted `text` enters the model context.
     ///
     /// `origin` tells the host where the text came from; see [`ContentOrigin`]

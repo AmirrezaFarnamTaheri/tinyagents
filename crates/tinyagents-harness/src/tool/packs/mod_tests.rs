@@ -35,6 +35,7 @@ struct FakeTool {
     level: PermissionLevel,
     external: bool,
     timeout: ToolTimeout,
+    prepares_authorization: bool,
 }
 
 impl FakeTool {
@@ -44,6 +45,7 @@ impl FakeTool {
             level: PermissionLevel::ReadOnly,
             external: false,
             timeout: ToolTimeout::Inherit,
+            prepares_authorization: false,
         }
     }
 }
@@ -61,6 +63,11 @@ impl Tool for FakeTool {
     }
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success(format!("{}:{}", self.name, args)))
+    }
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(self
+            .prepares_authorization
+            .then(|| json!({"inner_args": args})))
     }
     fn permission_level(&self) -> PermissionLevel {
         self.level
@@ -87,7 +94,7 @@ fn handle_of(tools: &[Box<dyn Tool>]) -> &PackRegistryHandle {
     find(tools, USE_SKILL)
         .host_extension()
         .and_then(|any| any.downcast_ref::<PackRegistryHandle>())
-        .expect("use_skill carries its handle as a host extension")
+        .expect("use_skill preserves PackRegistryHandle as its host extension")
 }
 
 fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {
@@ -166,6 +173,130 @@ async fn dispatch_forwards_args_to_the_packed_tool() {
         .unwrap();
     assert!(!result.is_error);
     assert_eq!(result.text(), r#"a_one:{"marker":"x"}"#);
+}
+
+#[tokio::test]
+async fn authorization_preparation_forwards_inner_tool_arguments() {
+    let tools = bound(vec![FakeTool {
+        prepares_authorization: true,
+        ..FakeTool::plain("a_one")
+    }]);
+    let context = find(&tools, USE_SKILL)
+        .prepare_authorization(&json!({
+            "skill": "alpha",
+            "tool": "a_one",
+            "args": {"command": "printf safe"}
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        context,
+        Some(json!({"inner_args": {"command": "printf safe"}}))
+    );
+}
+
+struct RebindingTool(&'static str);
+
+#[async_trait]
+impl Tool for RebindingTool {
+    fn name(&self) -> &str {
+        "a_one"
+    }
+    fn description(&self) -> &str {
+        "rebinding test tool"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(self.0))
+    }
+    async fn prepare_authorization(&self, _args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(Some(json!({"authorized_tool": self.0})))
+    }
+}
+
+#[tokio::test]
+async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
+    let handle = PackRegistryHandle::default();
+    let mut original: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("authorized"))];
+    original.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let original = Arc::new(original);
+    handle.bind(Arc::downgrade(&original));
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(outer);
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let pinned = dispatch.bind_call(&args).unwrap().unwrap();
+    assert!(pinned.tool().supports_markdown());
+    assert!(
+        dispatch
+            .tool()
+            .host_extension()
+            .is_some_and(|extension| extension.is::<PackRegistryHandle>())
+    );
+    let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
+
+    let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
+    replacement.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let replacement = Arc::new(replacement);
+    handle.bind(Arc::downgrade(&replacement));
+
+    let result = pinned.tool().execute(args).await.unwrap();
+    assert_eq!(
+        authorization,
+        Some(json!({"authorized_tool": "authorized"}))
+    );
+    assert_eq!(result.text(), "authorized");
+}
+
+#[tokio::test]
+async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
+    let handle = PackRegistryHandle::default();
+    let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
+    inner.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let inner = Arc::new(inner);
+    handle.bind(Arc::downgrade(&inner));
+
+    let _full_catalog = UseSkillTool::new(handle.clone(), CATALOG);
+    let prefix_catalog = UseSkillTool::new(handle.clone(), PackCatalog::new(&PACKS[..1], MARKER));
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(Arc::new(prefix_catalog));
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+    let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+
+    assert!(bound.admission_target().is_none());
+    let result = bound.tool().execute(arguments).await.unwrap();
+    assert!(result.is_error);
+    assert!(result.text().contains("catalog is unavailable"));
+}
+
+#[test]
+fn packed_binding_preserves_outer_policy_transform_approval() {
+    let handle = PackRegistryHandle::default();
+    let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
+    inner.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let inner = Arc::new(inner);
+    handle.bind(Arc::downgrade(&inner));
+
+    let outer = Arc::new(
+        crate::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(handle, CATALOG)))
+            .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
+    );
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(outer);
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+
+    assert!(dispatch.tool().policy().access.approval_required);
+    let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+    assert!(bound.tool().policy().classified);
+    assert!(
+        bound.tool().policy().access.approval_required,
+        "binding the concrete packed target must retain the outer approval policy"
+    );
 }
 
 #[tokio::test]
