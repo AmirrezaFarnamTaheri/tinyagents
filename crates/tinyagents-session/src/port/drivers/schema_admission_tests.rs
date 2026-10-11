@@ -276,3 +276,22 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         }
     }
 }
+
+#[tokio::test]
+async fn legacy_actor_factory_inherits_validation_policy_without_declaring_schema() {
+    let (backend, observed) = prepared().await;
+    let original: Arc<dyn SessionStoreProvider> = Arc::new(
+        DriverSessionStores::new_with_schema_admission(
+            backend.clone(),
+            SchemaAdmission::ValidateOnly,
+        )
+        .unwrap()
+        .recover_on_open(true),
+    );
+    let actor = original.bind_actor(backend.clone()).unwrap().unwrap();
+    assert!(actor.try_for_agent("agent").is_ok());
+    session_store_conformance(actor.as_ref()).await;
+    let rebound = actor.bind_actor(backend).unwrap().unwrap();
+    assert!(rebound.try_for_agent("agent").is_ok());
+    assert_eq!(observed.declarations.load(Ordering::SeqCst), 0);
+}

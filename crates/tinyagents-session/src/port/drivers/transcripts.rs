@@ -225,7 +225,7 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
     ]
 }
 
-/// Declares both collections, once per locator.
+/// Admits both collections, once per locator.
 #[derive(Debug, Default)]
 struct Declared {
     admitted: OnceCell<()>,
