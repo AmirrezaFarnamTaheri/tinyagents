@@ -110,3 +110,8 @@ completes) the optional memory/learning/experience sinks. `agent_loop`, by
 contrast, knows nothing about hosts — it only sees the resolved model, the
 composed transcript, and a security-authorized tool set, which is what keeps
 the loop reusable for both hosted and unhosted (explicit-model) callers.
+
+ModelResolveRequest carries model_hint separately from model_pin. Hints are
+host-interpreted routing vocabulary; pins are concrete model identifiers.
+Definition hints reach every hosted provider resolution, unless an exact model
+override is present. Missing hints in older serialized requests remain None.

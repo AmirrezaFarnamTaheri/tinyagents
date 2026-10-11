@@ -1,0 +1,15 @@
+id = "summarizer"
+display_name = "Summarizer"
+when_to_use = "Supplies the model for TinyJuice's summary of oversized orchestrator tool results (above summarizer_payload_threshold_tokens, default 4000). Do NOT call from an LLM — this agent is runtime-dispatched only."
+temperature = 0.2
+max_iterations = 1
+sandbox_mode = "none"
+omit_identity = true
+omit_memory_context = true
+omit_safety_preamble = true
+
+[model]
+hint = "summarization"
+
+[tools]
+named = []

@@ -46,19 +46,21 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// Definition-selected pin passed to the host resolver at every provider
     /// call. It is advisory; the host remains the routing authority.
     pub(crate) model_pin: Option<String>,
+    /// Definition routing hint passed separately from concrete model pins.
+    pub(crate) model_hint: Option<String>,
     pub(crate) role: Option<String>,
     /// Canonical names the resolved definition authorizes for this exact run.
     ///
-    /// `None` means the definition declared no tools at all (an empty or
-    /// absent list) — [`crate::agent_loop`]'s `resolve_tool_allowlist` treats
-    /// that as fail-closed (deny every tool) by default, controlled by
-    /// [`HostCapabilities::fail_closed_tool_allowlist`]. `Some(set)` is
-    /// always the declared set, checked by plain membership: an empty
-    /// `HashSet` is never stored here (a declared-but-empty list is
-    /// collapsed to `None` at construction, so "nothing declared" and
-    /// "declared empty" share one fail-closed code path instead of an empty
-    /// set silently meaning "unrestricted", as it used to (I-9)).
+    /// A bare wildcard leaves the host's fallback policy in force via None.
+    /// Named scopes use Some(set); an empty set is
+    /// explicitly deny-all, including under the legacy unrestricted fallback.
     pub(crate) allowed_tools: Option<HashSet<String>>,
+    /// An explicit wildcard policy applies to live toolsets as well as registered tools.
+    pub(crate) wildcard_tools: bool,
+    /// Exact definition exclusions, checked against every live tool catalogue.
+    pub(crate) denied_tools: HashSet<String>,
+    /// Definition-local discovery exposure; never changes global registration.
+    pub(crate) deferred_tools: HashSet<String>,
     /// The resolved definition's pattern rules, stacked on the harness
     /// policy's by the loop's tool gate.
     pub(crate) tool_rules: Option<tinytools::ToolRules>,
@@ -74,8 +76,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             host: self.host.clone(),
             agent_id: self.agent_id.clone(),
             model_pin: self.model_pin.clone(),
+            model_hint: self.model_hint.clone(),
             role: self.role.clone(),
             allowed_tools: self.allowed_tools.clone(),
+            wildcard_tools: self.wildcard_tools,
+            denied_tools: self.denied_tools.clone(),
+            deferred_tools: self.deferred_tools.clone(),
             tool_rules: self.tool_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),

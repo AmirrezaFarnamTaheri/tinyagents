@@ -2098,6 +2098,61 @@ async fn hosted_definition_with_no_declared_tools_denies_every_tool() {
 }
 
 #[tokio::test]
+async fn explicit_empty_tool_scope_denies_tools_with_legacy_host_fallback() {
+    let mut fabricated_call = ModelResponse::assistant("");
+    fabricated_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1",
+            "noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        fabricated_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    // Explicit empty scope must override the host legacy fallback.
+    let definition =
+        AgentDefinition::new("helper", "Helper", "test helper").with_tools(Vec::<String>::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    )
+    .with_legacy_unrestricted_tool_allowlist();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("empty-allowlist"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `noop`")),
+        "a registered tool the definition never declared must be rejected, not silently run"
+    );
+    // No tool schema at all is offered to the provider — the registered
+    // catalogue is not leaked to a definition that declared nothing.
+    assert!(model.requests()[0].tools.is_empty());
+}
+
+#[tokio::test]
 async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
     // `answer` is registered globally but deliberately not allowed for this
     // hosted definition. It still cannot be used as a synthetic structured
@@ -3506,8 +3561,12 @@ fn host_invocation_binding_fails_closed_on_a_state_mismatch() {
                 host,
                 agent_id: "parent".to_string(),
                 model_pin: None,
+                model_hint: None,
                 role: None,
                 allowed_tools: None,
+                wildcard_tools: false,
+                denied_tools: Default::default(),
+                deferred_tools: Default::default(),
                 tool_rules: None,
                 progress: None,
                 runtime: None,
@@ -3559,8 +3618,12 @@ fn child_with_data_never_propagates_host_authority() {
                 host,
                 agent_id: "parent".to_string(),
                 model_pin: None,
+                model_hint: None,
                 role: None,
                 allowed_tools: None,
+                wildcard_tools: false,
+                denied_tools: Default::default(),
+                deferred_tools: Default::default(),
                 tool_rules: None,
                 progress: None,
                 runtime: None,
@@ -3641,4 +3704,302 @@ async fn hosted_error_run_terminal_outcome_message_is_sanitized() {
     let run = error.run.expect("partial run");
     let outcome = run.terminal.expect("typed outcome");
     assert!(!outcome.message.contains("secret"), "{}", outcome.message);
+}
+
+#[tokio::test]
+async fn hosted_wildcard_exclusions_preserve_other_registered_tools() {
+    let mut fabricated_call = ModelResponse::assistant("");
+    fabricated_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1",
+            "answer",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        fabricated_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    // Wildcard excludes answer while preserving the registered noop tool.
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.disallowed_tools = vec!["answer".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(AnswerCollisionTool));
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("empty-allowlist"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `answer`")),
+        "a registered tool the definition never declared must be rejected, not silently run"
+    );
+    assert_eq!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"]
+    );
+}
+
+#[tokio::test]
+async fn hosted_named_scope_admits_a_tool_listed_only_as_deferred() {
+    struct DeferredNoop;
+    #[async_trait]
+    impl Tool for DeferredNoop {
+        fn name(&self) -> &str {
+            "deferred_noop"
+        }
+        fn description(&self) -> &str {
+            "discoverable test tool"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn exposure(&self) -> tinytools::ToolExposure {
+            tinytools::ToolExposure::Direct
+        }
+        async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::success("deferred tool executed"))
+        }
+    }
+    let mut call = ModelResponse::assistant("");
+    call.message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "deferred-call",
+            "deferred_noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        call,
+        ModelResponse::assistant("done"),
+    ]));
+    let mut definition =
+        AgentDefinition::new("helper", "Helper", "test helper").with_tools(Vec::<String>::new());
+    definition.deferred_tools = vec!["deferred_noop".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(DeferredNoop));
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("deferred-scope"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("deferred tool executed"))
+    );
+    assert!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "tool_search")
+    );
+    assert!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .all(|tool| tool.name != "deferred_noop"),
+        "deferred registration must remain discoverable rather than directly advertised"
+    );
+}
+
+#[tokio::test]
+async fn hosted_wildcard_scope_preserves_explicit_deferred_additions() {
+    struct DeferredNoop;
+    #[async_trait]
+    impl Tool for DeferredNoop {
+        fn name(&self) -> &str {
+            "deferred_noop"
+        }
+        fn description(&self) -> &str {
+            "discoverable test tool"
+        }
+        fn parameters_schema(&self) -> serde_json::Value {
+            json!({"type":"object"})
+        }
+        fn exposure(&self) -> tinytools::ToolExposure {
+            tinytools::ToolExposure::Deferred
+        }
+        async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+            Ok(ToolResult::success("deferred tool executed"))
+        }
+    }
+    let mut call = ModelResponse::assistant("");
+    call.message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "deferred-call",
+            "deferred_noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        call,
+        ModelResponse::assistant("done"),
+    ]));
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.deferred_tools = vec!["deferred_noop".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(DeferredNoop));
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("deferred-scope"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("deferred tool executed"))
+    );
+    assert!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .all(|tool| tool.name != "deferred_noop"),
+        "deferred registration must remain discoverable rather than directly advertised"
+    );
+}
+
+#[tokio::test]
+async fn hosted_model_hint_reaches_the_resolver_without_an_exact_pin() {
+    struct HintResolver;
+    #[async_trait]
+    impl ModelResolver<()> for HintResolver {
+        async fn resolve(
+            &self,
+            request: &crate::host::ModelResolveRequest,
+        ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+            assert_eq!(
+                request.model_pin, None,
+                "a router hint is not a concrete model id"
+            );
+            assert_eq!(
+                serde_json::to_value(request).unwrap()["model_hint"],
+                "reasoning"
+            );
+            Ok(Arc::new(ScriptedModel::new(vec![
+                ModelResponse::assistant("routed"),
+            ])))
+        }
+    }
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.model = tinyagents_definition::ModelSpec::Hint("reasoning".into());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(HintResolver),
+    );
+    let harness: AgentHarness<()> = AgentHarness::new();
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("hint-routing"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(run.text().as_deref(), Some("routed"));
+}
+
+#[tokio::test]
+async fn hosted_wildcard_exclusions_preserve_context_toolset_tools() {
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("done")]));
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.disallowed_tools = vec!["blocked".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut live: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
+    live.register(Arc::new(NoopTool));
+    live.register(Arc::new(BlockedTool));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_toolset(Arc::new(live));
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("live-wildcard"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"]
+    );
+    assert_eq!(run.text().as_deref(), Some("done"));
 }
