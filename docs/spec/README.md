@@ -41,6 +41,7 @@ observability, or test contracts.
   - [Embeddings and retrieval](../modules/harness/embeddings.md)
   - [Media generation](../modules/harness/media.md)
   - [Prompt](../modules/harness/prompt.md)
+  - [Stop hooks](../modules/harness/stop-hooks.md)
   - [Tool](../modules/harness/tool.md)
   - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)

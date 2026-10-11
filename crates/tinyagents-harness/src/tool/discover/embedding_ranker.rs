@@ -10,8 +10,8 @@
 //! `retriever` inside `tinytools_jev::JevRanker` for every catalogue larger
 //! than one Jev `Choice`.
 //!
-//! Catalogue embeddings are cached in memory by content hash and, when a
-//! cache path is given, on disk keyed by the provider's signature, so a cold
+//! Catalogue embeddings are cached in memory by content hash and optionally
+//! through a host cache port or a disk file, keyed by embedding space, so a cold
 //! process pays for the catalogue once and every later search embeds only
 //! the intent (one provider call).
 
@@ -28,6 +28,30 @@ use tinytools::{RankCandidate, RankContext, RankError, RankHit, ToolRanker};
 /// failure cost one batch, not the catalogue.
 const EMBED_BATCH: usize = 64;
 
+/// Persistence for rebuildable catalogue embeddings, independent of storage drivers.
+///
+/// A host binds the handle to its tenant and credential namespace. The ranker
+/// supplies its embedding-space signature and stable summary/family hashes;
+/// cache implementations must keep signatures separate and merge stored deltas
+/// rather than replace unrelated entries. They must not cache intent vectors.
+///
+/// Errors are best-effort: the ranker recomputes cache misses and keeps vectors
+/// in memory when persistence fails. Error messages should not include secrets.
+#[async_trait::async_trait]
+pub trait EmbeddingCache: Send + Sync + std::fmt::Debug {
+    /// Load any available vectors for the requested hashes in this signature.
+    ///
+    /// Missing hashes are ordinary misses. The ranker rejects non-finite vectors
+    /// and vectors whose dimensions differ from the embedding model.
+    async fn load(&self, signature: &str, keys: &[u64]) -> crate::Result<HashMap<u64, Vec<f32>>>;
+
+    /// Merge newly computed vectors into this signature's cache.
+    ///
+    /// Calls can repeat the same keys and must be idempotent. Implementations
+    /// should coordinate concurrent writers so disjoint deltas are preserved.
+    async fn store(&self, signature: &str, values: &[(u64, Vec<f32>)]) -> crate::Result<()>;
+}
+
 /// Ranks tools by cosine similarity between the intent and each tool's
 /// summary, with catalogue embeddings cached.
 pub struct EmbeddingToolRanker {
@@ -37,6 +61,7 @@ pub struct EmbeddingToolRanker {
     signature: String,
     cache: RwLock<HashMap<u64, Vec<f32>>>,
     cache_path: Option<PathBuf>,
+    persistent_cache: Option<Arc<dyn EmbeddingCache>>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -51,6 +76,7 @@ impl std::fmt::Debug for EmbeddingToolRanker {
             .field("provider", &self.provider.name())
             .field("model", &self.provider.model_id())
             .field("cache_path", &self.cache_path)
+            .field("persistent_cache", &self.persistent_cache.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -69,6 +95,7 @@ impl EmbeddingToolRanker {
             signature: signature.into(),
             cache: RwLock::new(HashMap::new()),
             cache_path: None,
+            persistent_cache: None,
         }
     }
 
@@ -76,6 +103,11 @@ impl EmbeddingToolRanker {
     /// the provider's signature so a model change invalidates them. A
     /// missing or unreadable file is an empty cache, never an error.
     pub fn with_disk_cache(mut self, path: PathBuf) -> Self {
+        self.persistent_cache = None;
+        self.cache
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         let loaded = std::fs::read(&path)
             .ok()
             .and_then(|raw| serde_json::from_slice::<DiskCache>(&raw).ok())
@@ -89,6 +121,22 @@ impl EmbeddingToolRanker {
             *self.cache.write().unwrap_or_else(|p| p.into_inner()) = disk.entries;
         }
         self.cache_path = Some(path);
+        self
+    }
+
+    /// Persist catalogue embeddings through a host-supplied cache port.
+    ///
+    /// This replaces any previously selected disk cache and clears vectors
+    /// loaded from it. A failed port never falls back to a filesystem write.
+    /// Hosts should create a new ranker when its tenant or credential namespace
+    /// changes; its in-memory cache is bound to this handle.
+    pub fn with_cache(mut self, cache: Arc<dyn EmbeddingCache>) -> Self {
+        self.cache_path = None;
+        self.cache
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        self.persistent_cache = Some(cache);
         self
     }
 
@@ -117,7 +165,7 @@ impl EmbeddingToolRanker {
 
     /// Embeds every candidate not already cached, in batches.
     async fn ensure_cached(&self, candidates: &[RankCandidate]) -> Result<(), RankError> {
-        let missing: Vec<(u64, String)> = {
+        let mut missing: Vec<(u64, String)> = {
             let cache = self.cache.read().unwrap_or_else(|p| p.into_inner());
             let mut seen = std::collections::HashSet::new();
             candidates
@@ -129,6 +177,30 @@ impl EmbeddingToolRanker {
         };
         if missing.is_empty() {
             return Ok(());
+        }
+        if let Some(persistent) = &self.persistent_cache {
+            let keys: Vec<u64> = missing.iter().map(|(key, _)| *key).collect();
+            match persistent.load(&self.signature, &keys).await {
+                Ok(found) => {
+                    let mut cache = self.cache.write().unwrap_or_else(|p| p.into_inner());
+                    for key in keys {
+                        if let Some(vector) = found.get(&key).filter(|vector| {
+                            vector.len() == self.provider.dimensions()
+                                && vector.iter().all(|value| value.is_finite())
+                        }) {
+                            cache.insert(key, vector.clone());
+                        }
+                    }
+                    missing.retain(|(key, _)| !cache.contains_key(key));
+                }
+                Err(error) => tracing::warn!(
+                    error = %error,
+                    "[tool-search] could not load embedding cache"
+                ),
+            }
+            if missing.is_empty() {
+                return Ok(());
+            }
         }
         tracing::info!(
             missing = missing.len(),
@@ -153,9 +225,24 @@ impl EmbeddingToolRanker {
                     ),
                 });
             }
-            let mut cache = self.cache.write().unwrap_or_else(|p| p.into_inner());
-            for ((key, _), vector) in batch.iter().zip(vectors) {
-                cache.insert(*key, vector);
+            let delta: Vec<(u64, Vec<f32>)> = batch
+                .iter()
+                .zip(vectors)
+                .map(|((key, _), vector)| (*key, vector))
+                .collect();
+            {
+                let mut cache = self.cache.write().unwrap_or_else(|p| p.into_inner());
+                for (key, vector) in &delta {
+                    cache.insert(*key, vector.clone());
+                }
+            }
+            if let Some(persistent) = &self.persistent_cache
+                && let Err(error) = persistent.store(&self.signature, &delta).await
+            {
+                tracing::warn!(
+                    error = %error,
+                    "[tool-search] could not persist embedding cache"
+                );
             }
         }
         self.persist();

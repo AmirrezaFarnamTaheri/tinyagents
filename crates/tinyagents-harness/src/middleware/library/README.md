@@ -149,3 +149,9 @@ Grouped by extension shape:
   target profile the loop previews onto `RunContext::model_profile` and, for
   such a model, appends the text to the tail tool result or user turn under a
   `[harness note]` header instead.
+
+## Stop policies
+
+[StopHookMiddleware](stop_hooks/README.md) evaluates host-provided budget, goal
+and observer hooks after model calls. Accounting stays generic over host metrics;
+per-run state, ordering and once-only pause delivery belong to the harness.

@@ -857,17 +857,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<(Arc<dyn crate::tool::ToolDispatch<State, Ctx>>, ToolCall)> {
         let name = call.name.clone();
         let gate = self.resolve_tool_gate(ctx)?;
-        let Some(dispatch) = gate
+        let Some(mut dispatch) = gate
             .allows_name(&name)
             .then(|| self.tools.model_dispatch(&name))
             .flatten()
         else {
             return Err(TinyAgentsError::ToolNotFound(name));
         };
-        let tool = dispatch.tool();
+        let mut tool = dispatch.tool();
         // Tool rules apply to a nested call exactly as to a model call; a
         // refusal reads like any other nested-call failure.
-        let rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+        let mut rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
             crate::tool::CallGate::Admit(approval) => approval,
             crate::tool::CallGate::Refuse(message) => {
                 return Err(TinyAgentsError::ToolFailed(message));
@@ -917,6 +917,31 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             ))
         })?;
 
+        // Match the model-call path: after the final effective arguments have
+        // been validated, bind any indirect target and retain it through the
+        // nested authorization and execution path.
+        if let Some(bound) = dispatch
+            .bind_call(&call.arguments)
+            .map_err(|_| TinyAgentsError::Tool("tool call binding failed".to_string()))?
+        {
+            dispatch = bound;
+            tool = dispatch.tool();
+        }
+        rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+            crate::tool::CallGate::Admit(approval) => rule_approval.strictest(approval),
+            crate::tool::CallGate::Refuse(message) => {
+                return Err(TinyAgentsError::ToolFailed(message));
+            }
+        };
+        if let Some((target, target_arguments)) = dispatch.admission_target() {
+            rule_approval = match gate.admit_call(target, target_arguments) {
+                crate::tool::CallGate::Admit(approval) => rule_approval.strictest(approval),
+                crate::tool::CallGate::Refuse(message) => {
+                    return Err(TinyAgentsError::ToolFailed(message));
+                }
+            };
+        }
+
         let needs_approval = match rule_approval {
             tinytools::ApprovalDirective::Required => true,
             tinytools::ApprovalDirective::Waived => false,
@@ -946,6 +971,33 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
 
         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+            let effective_arguments = call.arguments.clone();
+            let authorization_facts = ctx
+                .bounded(
+                    self.call_budget(ctx),
+                    async {
+                        tool.prepare_authorization(&effective_arguments)
+                            .await
+                            .map_err(|_| {
+                                TinyAgentsError::Tool(
+                                    "tool authorization preparation failed".to_string(),
+                                )
+                            })
+                    },
+                    || {
+                        format!(
+                            "tool authorization preparation for run `{}` exceeded its remaining wall-clock budget",
+                            ctx.run_id()
+                        )
+                    },
+                )
+                .await?;
+            let authorization_context = super::tools::bind_authorization_context(
+                &name,
+                &model_arguments,
+                &effective_arguments,
+                authorization_facts,
+            );
             let request = crate::host::ToolCallRequest::new(
                 name.clone(),
                 model_arguments,
@@ -953,7 +1005,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             )
             .with_call_id(CallId::new(call.id.clone()))
             .with_parent_call_id(parent.clone());
-            let authorization = binding.host.security.authorize_tool(&request);
+            let authorization = binding
+                .host
+                .security
+                .authorize_tool_with_context(&request, authorization_context.as_ref());
             let decision = ctx
                 .bounded(self.call_budget(ctx), authorization, || {
                     format!(

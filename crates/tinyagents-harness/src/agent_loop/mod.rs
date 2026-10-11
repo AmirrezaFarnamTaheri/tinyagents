@@ -194,3 +194,7 @@ mod unknown_tool_test;
 #[cfg(test)]
 #[path = "wrap_concurrency_tests.rs"]
 mod wrap_concurrency_test;
+
+#[cfg(test)]
+#[path = "run_depth_tests.rs"]
+mod run_depth_test;
