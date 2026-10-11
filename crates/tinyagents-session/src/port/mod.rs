@@ -67,6 +67,26 @@ pub trait SessionStoreProvider: Send + Sync {
     /// cheap: hand out shared handles rather than opening connections.
     fn for_agent(&self, agent_id: &str) -> AgentStores;
 
+    /// Optionally create an independent actor provider over a host-admitted backend.
+    ///
+    /// The backend must already embody the actor authority supplied by the
+    /// host. This factory does not acquire a lease, resolve a tenant or repair
+    /// a mutable backend that borrows another actor grant. Driver providers
+    /// reuse their blocking bridge and layout but create independent caches and
+    /// recovery bookkeeping. Agent IDs and durable transcript stems stay the same.
+    /// Retained old providers keep their originally supplied backend.
+    ///
+    /// `Ok(None)` means this provider does not support actor rebinding. It does
+    /// not authorize selecting a different backend or a file fallback. Errors
+    /// retain their native sources; hosts must propagate a configured refusal.
+    #[cfg(feature = "storage-drivers")]
+    fn bind_actor(
+        &self,
+        _backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        Ok(None)
+    }
+
     /// Repairs state an unclean shutdown left behind, once, before any agent
     /// runs: turns that were in flight are marked interrupted, and so on.
     ///
@@ -244,6 +264,14 @@ impl TurnStates for TurnStateStore {
 
 /// A provider shared behind an [`Arc`] is still a provider.
 impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
+    #[cfg(feature = "storage-drivers")]
+    fn bind_actor(
+        &self,
+        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        (**self).bind_actor(backend)
+    }
+
     fn for_agent(&self, agent_id: &str) -> AgentStores {
         (**self).for_agent(agent_id)
     }

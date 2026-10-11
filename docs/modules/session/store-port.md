@@ -78,6 +78,27 @@ or that starts with the reserved `sha256:` prefix, maps to `sha256:<hex>` of
 itself, so no raw id can name a hashed scope, and the driver enforces scopes, so the
 provider claims isolation and passes `session_store_isolation_conformance`.
 
+### Actor-owned providers
+
+With `storage-drivers`, `SessionStoreProvider::bind_actor(admitted_backend)`
+optionally creates a provider for one host-admitted actor. `DriverSessionStores`
+reuses its blocking bridge and recovery policy while creating a fresh agent cache,
+recovery bookkeeping and provider identity. Repeated calls on the returned actor
+share its handles. Agent scopes and persisted transcript stems remain unchanged;
+old retained providers continue to use their original backend.
+
+The host must supply a backend already bound to the actor's authority, such as an
+immutable lease grant. This factory does not acquire a lease, resolve a profile,
+or make a backend that selects the latest grant safe. Fresh actors after takeover
+must receive a newly admitted backend; old actors must remain fenced by theirs.
+Synchronous transcript operations retain native storage errors through the
+blocking bridge. The legacy turn-state trait still exposes string errors.
+
+File and arbitrary providers default to `Ok(None)`, meaning rebinding is
+unsupported. Absence does not authorize a file or backend fallback. A configured
+factory refusal remains an error with its native source. Existing `AgentStores`
+literals and providers are unchanged.
+
 | Store | Backend shape |
 | --- | --- |
 | transcripts | `session_transcripts`: one index document per stem (thread, agent, sub-agent flag, creation time); `session_transcript_entries`: an append-only log per stem |

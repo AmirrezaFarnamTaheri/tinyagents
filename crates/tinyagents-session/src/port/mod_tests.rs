@@ -51,3 +51,46 @@ fn the_file_turn_state_store_is_a_turn_states() {
     assert!(turns.delete("t").unwrap());
     assert_eq!(turns.clear_all().unwrap(), 0);
 }
+
+#[cfg(feature = "storage-drivers")]
+#[test]
+fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
+    let dir = tempfile::tempdir().unwrap();
+    let provider = FileStores {
+        workspace: dir.path().to_path_buf(),
+    };
+    assert!(
+        provider
+            .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[cfg(feature = "storage-drivers")]
+#[test]
+fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
+    #[derive(Debug, thiserror::Error)]
+    #[error("actor admission retired")]
+    struct Retired;
+    struct RefusingProvider;
+    impl SessionStoreProvider for RefusingProvider {
+        fn for_agent(&self, id: &str) -> AgentStores {
+            InMemorySessionStores::default().for_agent(id)
+        }
+        fn bind_actor(
+            &self,
+            _: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError>
+        {
+            Err(tinystoragedrivers_core::StorageError::fenced("actor refused").with_source(Retired))
+        }
+    }
+    let provider: Arc<dyn SessionStoreProvider> = Arc::new(RefusingProvider);
+    let error = provider
+        .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+        .err()
+        .expect("configured refusal must remain an error");
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
+}
