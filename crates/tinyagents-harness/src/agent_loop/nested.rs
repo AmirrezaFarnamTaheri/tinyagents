@@ -857,17 +857,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     ) -> Result<(Arc<dyn crate::tool::ToolDispatch<State, Ctx>>, ToolCall)> {
         let name = call.name.clone();
         let gate = self.resolve_tool_gate(ctx)?;
-        let Some(dispatch) = gate
+        let Some(mut dispatch) = gate
             .allows_name(&name)
             .then(|| self.tools.model_dispatch(&name))
             .flatten()
         else {
             return Err(TinyAgentsError::ToolNotFound(name));
         };
-        let tool = dispatch.tool();
+        let mut tool = dispatch.tool();
         // Tool rules apply to a nested call exactly as to a model call; a
         // refusal reads like any other nested-call failure.
-        let rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+        let mut rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
             crate::tool::CallGate::Admit(approval) => approval,
             crate::tool::CallGate::Refuse(message) => {
                 return Err(TinyAgentsError::ToolFailed(message));
@@ -916,6 +916,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 "invalid arguments for nested call '{name}': {error}"
             ))
         })?;
+
+        // Match the model-call path: after the final effective arguments have
+        // been validated, bind any indirect target and retain it through the
+        // nested authorization and execution path.
+        if let Some(bound) = dispatch
+            .bind_call(&call.arguments)
+            .map_err(|_| TinyAgentsError::Tool("tool call binding failed".to_string()))?
+        {
+            dispatch = bound;
+            tool = dispatch.tool();
+            rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+                crate::tool::CallGate::Admit(approval) => rule_approval.strictest(approval),
+                crate::tool::CallGate::Refuse(message) => {
+                    return Err(TinyAgentsError::ToolFailed(message));
+                }
+            };
+        }
 
         let needs_approval = match rule_approval {
             tinytools::ApprovalDirective::Required => true,

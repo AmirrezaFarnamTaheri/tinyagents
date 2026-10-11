@@ -93,7 +93,8 @@ fn bound(tools: Vec<FakeTool>) -> Arc<Vec<Box<dyn Tool>>> {
 fn handle_of(tools: &[Box<dyn Tool>]) -> &PackRegistryHandle {
     find(tools, USE_SKILL)
         .host_extension()
-        .and_then(|any| any.downcast_ref::<PackRegistryHandle>())
+        .and_then(|any| any.downcast_ref::<super::tool::PackToolExtension>())
+        .map(super::tool::PackToolExtension::registry_handle)
         .expect("use_skill carries its handle as a host extension")
 }
 
@@ -193,6 +194,55 @@ async fn authorization_preparation_forwards_inner_tool_arguments() {
         context,
         Some(json!({"inner_args": {"command": "printf safe"}}))
     );
+}
+
+struct RebindingTool(&'static str);
+
+#[async_trait]
+impl Tool for RebindingTool {
+    fn name(&self) -> &str {
+        "a_one"
+    }
+    fn description(&self) -> &str {
+        "rebinding test tool"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(self.0))
+    }
+    async fn prepare_authorization(&self, _args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(Some(json!({"authorized_tool": self.0})))
+    }
+}
+
+#[tokio::test]
+async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
+    let handle = PackRegistryHandle::default();
+    let mut original: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("authorized"))];
+    original.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let original = Arc::new(original);
+    handle.bind(Arc::downgrade(&original));
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(outer);
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let pinned = dispatch.bind_call(&args).unwrap().unwrap();
+    let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
+
+    let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
+    replacement.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let replacement = Arc::new(replacement);
+    handle.bind(Arc::downgrade(&replacement));
+
+    let result = pinned.tool().execute(args).await.unwrap();
+    assert_eq!(
+        authorization,
+        Some(json!({"authorized_tool": "authorized"}))
+    );
+    assert_eq!(result.text(), "authorized");
 }
 
 #[tokio::test]

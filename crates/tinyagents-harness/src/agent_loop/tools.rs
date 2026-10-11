@@ -804,7 +804,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // hide disallowed schemas: a model can still fabricate a name, so the
         // dispatch boundary must reject it too.
         let is_allowed = gate.allows_name(&call.name);
-        let (dispatch, tool) = match is_allowed
+        let (mut dispatch, mut tool) = match is_allowed
             .then(|| self.tools.model_dispatch(&call.name))
             .flatten()
         {
@@ -1017,6 +1017,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
                 message,
             )));
+        }
+        // Indirect tools may resolve a mutable target. Freeze that target only
+        // after normalized, injected arguments are final, then use the bound
+        // dispatch for every remaining policy check and execution.
+        if let Some(bound) = dispatch
+            .bind_call(&call.arguments)
+            .map_err(|_| TinyAgentsError::Tool("tool call binding failed".to_string()))?
+        {
+            dispatch = bound;
+            tool = dispatch.tool();
         }
         // Tool rules once more, on the arguments that will actually run. The
         // early check saw the raw provider payload; repair, normalization

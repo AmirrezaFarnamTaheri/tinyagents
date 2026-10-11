@@ -1,5 +1,7 @@
 //! The always-on tool that stands in for every packed tool.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
@@ -35,6 +37,204 @@ pub struct UseSkillTool {
     handle: PackRegistryHandle,
     catalog: PackCatalog,
     description: String,
+    extension: PackToolExtension,
+}
+
+/// Erased host metadata used by the harness to bind a packed target once per
+/// admitted call. The registry handle can be rebound while a host gate awaits;
+/// this value keeps the vocabulary and the registry lookup together.
+pub struct PackToolExtension {
+    handle: PackRegistryHandle,
+    catalog: PackCatalog,
+}
+
+/// A call-scoped target captured before authorization and reused for execution.
+pub(crate) struct PinnedPackCall {
+    outer: Arc<dyn Tool>,
+    target: PackTarget,
+}
+
+enum PackTarget {
+    Execute {
+        tools: ToolVec,
+        index: usize,
+        arguments: Value,
+    },
+    Answer(ToolResult),
+}
+
+impl PackToolExtension {
+    pub(crate) fn bind_call(&self, outer: Arc<dyn Tool>, args: &Value) -> PinnedPackCall {
+        let target = match resolve_call(&self.handle, &self.catalog, args) {
+            ResolvedPackCall::Execute {
+                tools,
+                index,
+                arguments,
+            } => PackTarget::Execute {
+                tools,
+                index,
+                arguments,
+            },
+            ResolvedPackCall::Answer(result) => PackTarget::Answer(result),
+        };
+        PinnedPackCall { outer, target }
+    }
+
+    /// The mutable registry view retained by this packed tool.
+    pub fn registry_handle(&self) -> &PackRegistryHandle {
+        &self.handle
+    }
+}
+
+enum ResolvedPackCall {
+    Execute {
+        tools: ToolVec,
+        index: usize,
+        arguments: Value,
+    },
+    Answer(ToolResult),
+}
+
+fn resolve_call(
+    handle: &PackRegistryHandle,
+    catalog: &PackCatalog,
+    args: &Value,
+) -> ResolvedPackCall {
+    let Some(skill) = args.get("skill").and_then(Value::as_str) else {
+        return ResolvedPackCall::Answer(ToolResult::error(format!(
+            "`skill` is required.\n\nSkills:\n{}",
+            catalog.pack_index_markdown()
+        )));
+    };
+
+    let Some(name) = named_tool(args) else {
+        return ResolvedPackCall::Answer(match render_pack(catalog, skill, handle) {
+            Ok(text) => ToolResult::success(text),
+            Err(message) => ToolResult::error(message),
+        });
+    };
+
+    let Some((tools, index)) = handle.resolve(catalog, skill, name) else {
+        return ResolvedPackCall::Answer(ToolResult::error(format!(
+            "{} No tool `{name}` in skill `{skill}`. Call `use_skill {{ \"skill\": \"{skill}\" }}` \
+             to see what it contains.\n\nSkills:\n{}",
+            catalog.not_found_marker(),
+            catalog.pack_index_markdown()
+        )));
+    };
+    ResolvedPackCall::Execute {
+        tools,
+        index,
+        arguments: args.get("args").cloned().unwrap_or_else(|| json!({})),
+    }
+}
+
+impl PinnedPackCall {
+    fn selected(&self) -> Option<&dyn Tool> {
+        match &self.target {
+            PackTarget::Execute { tools, index, .. } => Some(tools[*index].as_ref()),
+            PackTarget::Answer(_) => None,
+        }
+    }
+
+    fn selected_arguments(&self) -> Option<&Value> {
+        match &self.target {
+            PackTarget::Execute { arguments, .. } => Some(arguments),
+            PackTarget::Answer(_) => None,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for PinnedPackCall {
+    fn name(&self) -> &str {
+        self.outer.name()
+    }
+    fn description(&self) -> &str {
+        self.outer.description()
+    }
+    fn parameters_schema(&self) -> Value {
+        self.outer.parameters_schema()
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        self.execute_with_options(Value::Null, ToolCallOptions::default())
+            .await
+    }
+
+    async fn execute_with_options(
+        &self,
+        _args: Value,
+        options: ToolCallOptions,
+    ) -> anyhow::Result<ToolResult> {
+        if let PackTarget::Answer(result) = &self.target {
+            return Ok(result.clone());
+        }
+        self.selected()
+            .expect("execute target has a tool")
+            .execute_with_options(
+                self.selected_arguments()
+                    .expect("execute target has args")
+                    .clone(),
+                options,
+            )
+            .await
+    }
+
+    async fn prepare_authorization(&self, _args: &Value) -> anyhow::Result<Option<Value>> {
+        let Some(tool) = self.selected() else {
+            return Ok(None);
+        };
+        tool.prepare_authorization(self.selected_arguments().expect("execute target has args"))
+            .await
+    }
+
+    async fn execute_with_context(
+        &self,
+        _args: Value,
+        options: ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        if let PackTarget::Answer(result) = &self.target {
+            return Ok(result.clone());
+        }
+        self.selected()
+            .expect("execute target has a tool")
+            .execute_with_context(
+                self.selected_arguments()
+                    .expect("execute target has args")
+                    .clone(),
+                options,
+                context,
+            )
+            .await
+    }
+
+    fn external_effect(&self) -> bool {
+        self.selected().is_some_and(|tool| tool.external_effect())
+    }
+    fn external_effect_with_args(&self, _args: &Value) -> bool {
+        match (self.selected(), self.selected_arguments()) {
+            (Some(tool), Some(args)) => tool.external_effect_with_args(args),
+            _ => false,
+        }
+    }
+    fn timeout_policy(&self, _args: &Value) -> tinytools::ToolTimeout {
+        match (self.selected(), self.selected_arguments()) {
+            (Some(tool), Some(args)) => tool.timeout_policy(args),
+            _ => tinytools::ToolTimeout::Inherit,
+        }
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        self.selected()
+            .map_or_else(|| self.outer.permission_level(), Tool::permission_level)
+    }
+    fn permission_level_with_args(&self, _args: &Value) -> PermissionLevel {
+        match (self.selected(), self.selected_arguments()) {
+            (Some(tool), Some(args)) => tool.permission_level_with_args(args),
+            _ => self.outer.permission_level(),
+        }
+    }
 }
 
 impl UseSkillTool {
@@ -46,6 +246,10 @@ impl UseSkillTool {
             catalog.pack_index_markdown()
         );
         Self {
+            extension: PackToolExtension {
+                handle: handle.clone(),
+                catalog,
+            },
             handle,
             catalog,
             description,
@@ -204,11 +408,10 @@ impl Tool for UseSkillTool {
         }
     }
 
-    /// The registry handle rides on the vocabulary's erased host extension:
-    /// `PackRegistryHandle` is a harness concept, and `tinytools` has no
-    /// business naming it. A host reads it back by downcasting to
-    /// [`PackRegistryHandle`].
+    /// The registry handle and catalog ride on the vocabulary's erased host
+    /// extension so the harness can pin one indirect target for an admitted
+    /// call. Hosts can read the handle through [`PackToolExtension`].
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
-        Some(&self.handle)
+        Some(&self.extension)
     }
 }
