@@ -131,7 +131,7 @@ impl DriverSessionStores {
     ///
     /// # Errors
     ///
-    /// Whatever [`StorageBackend::for_scope`] reports.
+    /// The native scope binding or recovery error, retaining its source.
     pub fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
         if let Some(stores) = self
             .agents
@@ -142,12 +142,12 @@ impl DriverSessionStores {
             return Ok(stores.clone());
         }
         let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
-        let stores = self.build(&scoped);
+        let (stores, turn_states) = self.build(&scoped);
         if self.recover_on_open {
             // Fail closed: stores whose recovery did not run must not start
             // turns a retried sweep would then mistake for crash residue.
             // Nothing is cached, so the next open tries again.
-            self.recover_agent(agent_id, &stores)?;
+            self.recover_agent(agent_id, &turn_states)?;
         }
         Ok(self
             .agents
@@ -165,7 +165,11 @@ impl DriverSessionStores {
     /// open of the same agent waits for it instead of handing out stores a
     /// still-running sweep could interrupt a new turn on. The agent is
     /// recorded only once the sweep succeeds.
-    fn recover_agent(&self, agent_id: &str, stores: &AgentStores) -> Result<(), StorageError> {
+    fn recover_agent(
+        &self,
+        agent_id: &str,
+        turn_states: &DriverTurnStates,
+    ) -> Result<(), StorageError> {
         let mut recovered = self
             .recovered
             .lock()
@@ -174,7 +178,7 @@ impl DriverSessionStores {
             return Ok(());
         }
         let now = chrono::Utc::now().to_rfc3339();
-        match stores.turn_states.mark_all_interrupted(&now) {
+        match turn_states.mark_all_interrupted_checked(&now) {
             Ok(count) => {
                 if count > 0 {
                     tracing::info!(
@@ -194,39 +198,45 @@ impl DriverSessionStores {
                     %error,
                     "[session-store] could not recover in-flight turns; retried on the next open"
                 );
-                Err(StorageError::unavailable(format!(
-                    "recovering in-flight turns failed: {error}"
-                )))
+                Err(error)
             }
         }
     }
 
-    fn build(&self, scoped: &ScopedStorage) -> AgentStores {
+    /// Builds public stores and retains their exact typed recovery handle.
+    fn build(&self, scoped: &ScopedStorage) -> (AgentStores, Arc<DriverTurnStates>) {
         let docs = Arc::clone(scoped.documents());
         // The provider's own id keeps two providers with the same driver and
         // scope from claiming one destination; unlike an address, it is
         // never reused.
         let label = format!("{}://{}/{}", scoped.driver(), self.id, scoped.scope());
-        AgentStores {
+        let turn_states = Arc::new(DriverTurnStates::new(
+            Arc::clone(&docs),
+            self.bridge.clone(),
+        ));
+        let stores = AgentStores {
             transcripts: Arc::new(DriverTranscriptLocator::new(
                 Arc::clone(&docs),
                 self.bridge.clone(),
                 label,
             )),
-            turn_states: Arc::new(DriverTurnStates::new(
-                Arc::clone(&docs),
-                self.bridge.clone(),
-            )),
+            turn_states: turn_states.clone(),
             kv: Arc::new(DriverStore::with_collection(docs, KV_COLLECTION)),
             journal: Arc::new(DriverAppendStore::with_prefix(
                 Arc::clone(scoped.streams()),
                 JOURNAL_PREFIX,
             )),
-        }
+        };
+        (stores, turn_states)
     }
 }
 
 impl SessionStoreProvider for DriverSessionStores {
+    /// Opens through the driver accessor without erasing native refusal errors.
+    fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
+        DriverSessionStores::try_for_agent(self, agent_id)
+    }
+
     fn bind_actor(
         &self,
         backend: Arc<dyn StorageBackend>,

@@ -94,3 +94,57 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
     assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
 }
+
+#[cfg(feature = "storage-drivers")]
+#[test]
+/// Pins the default checked accessor for an unchanged file provider.
+fn checked_accessor_keeps_legacy_file_provider_compatible() {
+    let dir = tempfile::tempdir().unwrap();
+    let provider: &dyn SessionStoreProvider = &FileStores {
+        workspace: dir.path().to_path_buf(),
+    };
+    let stores = provider.try_for_agent("a").unwrap();
+    assert!(stores.turn_states.list().unwrap().is_empty());
+}
+
+#[cfg(feature = "storage-drivers")]
+#[test]
+/// Pins Arc forwarding rather than selecting the infallible default.
+fn checked_accessor_arc_forwards_native_refusal() {
+    use std::error::Error;
+    #[derive(Debug)]
+    struct Native;
+    impl std::fmt::Display for Native {
+        /// Displays the native test marker.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("native marker")
+        }
+    }
+    impl Error for Native {}
+    struct Checked;
+    impl SessionStoreProvider for Checked {
+        /// Returns usable legacy stores to expose an incorrect default fallback.
+        fn for_agent(&self, key: &str) -> AgentStores {
+            InMemorySessionStores::default().for_agent(key)
+        }
+        /// Refuses checked opening with an identifiable native input error.
+        fn try_for_agent(
+            &self,
+            _: &str,
+        ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+            Err(
+                tinystoragedrivers_core::StorageError::invalid_input("invalid key")
+                    .with_source(Native),
+            )
+        }
+    }
+    let provider = Arc::new(Checked);
+    // Dispatch through the Arc implementation, rather than deref coercion.
+    let erased: &dyn SessionStoreProvider = &provider;
+    let error = erased.try_for_agent("invalid").unwrap_err();
+    assert_eq!(
+        error.kind(),
+        tinystoragedrivers_core::ErrorKind::InvalidInput
+    );
+    assert!(error.source().unwrap().is::<Native>());
+}
