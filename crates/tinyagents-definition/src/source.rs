@@ -1,26 +1,18 @@
-//! Provenance of a definition: built-in, custom TOML file, or the
-//! config-backed custom registry.
+//! Definition provenance supplied by loaders or host catalogues.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Where an [`super::AgentDefinition`] was loaded from. Used for telemetry and
-/// the `agent::list_definitions` RPC reply.
+/// Origin of a definition. Provenance is runtime metadata and is omitted from
+/// serialized [`crate::AgentDefinition`] values.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "kind", content = "path")]
 pub enum DefinitionSource {
-    /// Built-in definition shipped as part of the binary (loaded from
-    /// [`crate::load_dir`]).
+    /// Definition bundled by its host.
     #[default]
     Builtin,
-    /// Loaded from a TOML file at the given absolute path.
+    /// Definition loaded from the supplied TOML path.
     File(PathBuf),
-    /// Synthesized at lookup time from a user-authored
-    /// [`AgentRegistryEntry`](crate::AgentDefinition)
-    /// (`AgentRegistrySource::Custom`) by `agent_registry::defaults::definition_from_registry_entry`.
-    /// Never persisted in the [`super::AgentDefinitionRegistry`] — built fresh per
-    /// factory call so config edits take effect immediately (closes the gap
-    /// where custom agents ran persona-only instead of with their real tool
-    /// belt).
+    /// Definition projected from a host-managed configuration registry.
     CustomRegistry,
 }

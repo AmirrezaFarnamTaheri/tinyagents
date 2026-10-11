@@ -22,19 +22,15 @@ use serde::{Deserialize, Deserializer, Serialize};
 pub enum SubagentEntry {
     /// Delegate to a specific built-in or custom agent by id.
     AgentId(String),
-    /// Expand at build time to the connected Composio toolkits' actions as
-    /// `Deferred` tools — off the wire, found through the harness's
-    /// `tool_search`, and called directly by this agent. No sub-agent is
-    /// reachable through this entry: it widens the searchable catalogue,
-    /// not the spawnable set.
+    /// Host-expanded skill catalogue selector. It grants no delegate ids;
+    /// the host decides which skills are available and how to execute them.
     Skills(SkillsWildcard),
 }
 
 /// The `{ skills = "*" }` inline table in a `subagents` list.
 ///
-/// Today only `"*"` is meaningful (expand to every connected toolkit).
-/// Future: a `Vec<String>` variant to restrict expansion to specific
-/// toolkit slugs (e.g. `{ skills = ["gmail", "notion"] }`).
+/// The portable vocabulary recognizes `"*"` through [`Self::matches_all`].
+/// Hosts interpret any other selector according to their own catalogue policy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillsWildcard {
     /// Glob / wildcard pattern. Only `"*"` is currently supported.
@@ -62,7 +58,7 @@ where
 }
 
 impl SkillsWildcard {
-    /// True when this wildcard should expand to every connected toolkit.
+    /// True when this wildcard should expand to the whole host-provided skill catalogue.
     pub fn matches_all(&self) -> bool {
         self.skills == "*"
     }

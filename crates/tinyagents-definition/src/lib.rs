@@ -1,9 +1,9 @@
-//! Host-owned agent definition vocabulary.
+//! Portable agent authoring vocabulary, TOML loading, and catalogue ports.
 //!
-//! This lower-level crate deliberately knows only what a runtime may ask about
-//! an agent: its identity, description, declared model/tools/delegates, and a
-//! read-only catalogue seam. Authorization, prompt construction, and execution
-//! remain with the host and harness.
+//! [`AgentDefinition`] shares model, tool, iteration, delegation, and prompt
+//! declarations across hosts. Its flattened extension parameter holds host
+//! fields; prompt functions, catalogue roots, authorization, and execution
+//! remain host responsibilities.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
