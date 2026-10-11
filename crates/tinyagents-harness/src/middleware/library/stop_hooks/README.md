@@ -33,7 +33,9 @@ snapshot in registration order, including hooks after a stopping policy.
 The first stopping reason wins. The host callback and pause are delivered once;
 subsequent responses do not re-evaluate the stopped chain.
 
-The pause is processed at the next loop checkpoint. Tools already requested
+The pause targets the current run's steering lane. It is processed at the next
+loop checkpoint or the natural-finish boundary for a final response. Child
+stops cannot reach the parent, and a final stop leaves no queued pause behind. Tools already requested
 by the completed response keep their normal execution path. A stop prevents
 another model call rather than cancelling an admitted tool round.
 
@@ -47,5 +49,6 @@ hold the accounting mutex.
 
 `stop_hooks_tests.rs` covers ordered observation, first-reason selection,
 once-only delivery, context isolation, success/error cleanup, empty hook lists
-and missing steering, live cap narrowing and abandoned-context cleanup. A
+and missing steering, live cap narrowing, abandoned-context cleanup, child
+steering isolation and text-only final-response pause/handle reuse. A
 native-loop test confirms a stopping hook prevents a second provider call while retaining the completed call's pending tool round.
