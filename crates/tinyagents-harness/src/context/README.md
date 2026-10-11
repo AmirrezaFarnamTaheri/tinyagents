@@ -75,3 +75,9 @@ middleware, the agent loop, and graph nodes code against.
 - `RunContext` is intentionally not `Serialize`/`Deserialize` — it owns live
   counters, listener lists, and user handles. Only `RunConfig` (and
   `RunLineage`) are meant to be persisted or replayed.
+
+## Transport depth
+
+`RunDepth` is a serializable snapshot of a run's depth and inclusive child-depth cap. The live agent driver projects its actual `RunConfig` through `current_run_depth()` around model, tool and middleware execution. Hosts can stamp this snapshot onto a transport hop and install a validated incoming value with `with_run_depth`. Independent tasks do not inherit the scope automatically.
+
+The snapshot does not admit a child on its own. `RunDepth::checked_child()` delegates to the same guard as `RunConfig::child`, and receivers must validate untrusted transport input and keep their own policy ceiling. Scope installation cannot change a native run's explicit configuration.
