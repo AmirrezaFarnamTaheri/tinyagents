@@ -150,6 +150,10 @@ Grouped by extension shape:
   such a model, appends the text to the tail tool result or user turn under a
   `[harness note]` header instead.
 
+`EphemeralInstructionQueue` and its middleware deliver context-bound corrections
+to request copies without modifying transcript history. See
+[ephemeral instructions](ephemeral_instructions/README.md) for lifecycle and ordering.
+
 ## Stop policies
 
 [StopHookMiddleware](stop_hooks/README.md) evaluates host-provided budget, goal
