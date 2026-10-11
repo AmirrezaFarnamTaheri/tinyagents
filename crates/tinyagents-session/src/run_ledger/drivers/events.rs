@@ -177,7 +177,21 @@ impl DriverRunLedger {
             if entries.len() != limit {
                 return Err(StorageError::serialization("event projection was truncated").into());
             }
-            for entry in entries {
+            let receipts = self
+                .events(&RunEventListRequest {
+                    run_id: run_id.into(),
+                    after_sequence: Some(after),
+                    limit: Some(limit as u32),
+                })
+                .await?
+                .events;
+            if receipts.len() != entries.len() {
+                return Err(StorageError::serialization(
+                    "event projection exceeds committed receipts",
+                )
+                .into());
+            }
+            for (entry, expected) in entries.into_iter().zip(receipts) {
                 if entry.offset != offset {
                     return Err(
                         StorageError::serialization("event projection offset has a gap").into(),
@@ -185,24 +199,9 @@ impl DriverRunLedger {
                 }
                 let event: RunEvent =
                     serde_json::from_value(entry.value).map_err(StorageError::from)?;
-                if event.run_id != run_id || event.sequence <= after {
+                if event != expected {
                     return Err(StorageError::serialization(
-                        "event projection identity or order differs",
-                    )
-                    .into());
-                }
-                // Event addresses include run and sequence separately to avoid ambiguous ids.
-                let native = self
-                    .scoped
-                    .documents()
-                    .get(EVENTS, &key(&[run_id, &event.sequence.to_string()]))
-                    .await?;
-                let expected = native
-                    .map(|row| super::storage::decode::<RunEvent>(row.doc))
-                    .transpose()?;
-                if expected.as_ref() != Some(&event) {
-                    return Err(StorageError::serialization(
-                        "event projection differs from committed receipt",
+                        "event projection differs from ordered committed receipt",
                     )
                     .into());
                 }
