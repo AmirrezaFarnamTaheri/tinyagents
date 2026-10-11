@@ -867,7 +867,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let mut tool = dispatch.tool();
         // Tool rules apply to a nested call exactly as to a model call; a
         // refusal reads like any other nested-call failure.
-        let mut rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+        let mut rule_approval = match gate
+            .admit_call_async(tool.as_ref(), &call.arguments)
+            .await
+        {
             crate::tool::CallGate::Admit(approval) => approval,
             crate::tool::CallGate::Refuse(message) => {
                 return Err(TinyAgentsError::ToolFailed(message));
@@ -927,14 +930,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             dispatch = bound;
             tool = dispatch.tool();
         }
-        rule_approval = match gate.admit_call(tool.as_ref(), &call.arguments) {
+        rule_approval = match gate
+            .admit_call_async(tool.as_ref(), &call.arguments)
+            .await
+        {
             crate::tool::CallGate::Admit(approval) => rule_approval.strictest(approval),
             crate::tool::CallGate::Refuse(message) => {
                 return Err(TinyAgentsError::ToolFailed(message));
             }
         };
         if let Some((target, target_arguments)) = dispatch.admission_target() {
-            rule_approval = match gate.admit_call(target, target_arguments) {
+            rule_approval = match gate
+                .admit_call_async(target, target_arguments)
+                .await
+            {
                 crate::tool::CallGate::Admit(approval) => rule_approval.strictest(approval),
                 crate::tool::CallGate::Refuse(message) => {
                     return Err(TinyAgentsError::ToolFailed(message));

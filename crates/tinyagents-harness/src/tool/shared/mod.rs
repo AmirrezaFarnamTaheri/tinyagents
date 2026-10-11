@@ -124,6 +124,16 @@ impl Tool for CanonicalSharedToolAdapter {
             .and_then(|tool| tool.indirect_target(args))
     }
 
+    async fn indirect_target_async(
+        &self,
+        args: &serde_json::Value,
+    ) -> anyhow::Result<Option<tinytools::IndirectCall>> {
+        match self.resolved_tool() {
+            Some(tool) => tool.indirect_target_async(args).await,
+            None => Ok(None),
+        }
+    }
+
     fn injected_arguments(&self) -> Vec<tinytools::ToolInjectedArgument> {
         self.resolved_tool()
             .map(Tool::injected_arguments)
