@@ -670,3 +670,11 @@ async fn nested_run_depth_scopes_restore_the_parent_and_do_not_leak_to_tasks() {
     .await;
     assert_eq!(current_run_depth(), None);
 }
+
+#[test]
+fn checked_child_depth_rejects_overflow_in_serialized_transport_facts() {
+    assert!(matches!(
+        RunConfig::checked_child_depth(usize::MAX, usize::MAX),
+        Err(crate::TinyAgentsError::SubAgentDepth(usize::MAX))
+    ));
+}

@@ -1,6 +1,8 @@
 //! The live driver projects its configured depth instead of an ambient parent.
 use super::*;
 use crate::context::{RunDepth, current_run_depth, with_run_depth};
+use crate::middleware::Middleware;
+use async_trait::async_trait;
 use tinyinference_llm::providers::MockModel;
 
 struct RecordDepth(Arc<std::sync::Mutex<Vec<RunDepth>>>);
