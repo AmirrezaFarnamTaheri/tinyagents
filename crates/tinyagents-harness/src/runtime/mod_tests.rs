@@ -3950,3 +3950,55 @@ async fn hosted_model_hint_reaches_the_resolver_without_an_exact_pin() {
         .unwrap();
     assert_eq!(run.text().as_deref(), Some("routed"));
 }
+
+#[tokio::test]
+async fn hosted_wildcard_exclusions_preserve_context_toolset_tools() {
+    let mut call = ModelResponse::assistant("");
+    call.message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "dynamic-call",
+            "noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        call,
+        ModelResponse::assistant("done"),
+    ]));
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.disallowed_tools = vec!["blocked".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut live: crate::tool::ToolRegistry<(), ()> = crate::tool::ToolRegistry::new();
+    live.register(Arc::new(NoopTool));
+    live.register(Arc::new(BlockedTool));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_toolset(Arc::new(live));
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("live-wildcard"), ()),
+            ),
+            &(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"]
+    );
+    assert!(run.messages.iter().any(|message| message.text() == "ok"));
+}
