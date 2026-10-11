@@ -351,15 +351,15 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::interrupt_orphaned_agent_runs`] without a weaker fallback.
     async fn interrupt_orphaned_agent_runs(&self) -> Result<usize> {
-        Err(unsupported("interrupt_orphaned_agent_runs"))
+        self.interrupt_agents().await
     }
 
     /// Implement [`RunLedgerStore::list_agent_runs`] without a weaker fallback.
     async fn list_agent_runs(
         &self,
-        _request: &AgentRunListRequest,
+        request: &AgentRunListRequest,
     ) -> Result<AgentRunListResponse> {
-        Err(unsupported("list_agent_runs"))
+        self.agents(request).await
     }
 
     /// Implement [`RunLedgerStore::list_recent_run_events`] without a weaker fallback.

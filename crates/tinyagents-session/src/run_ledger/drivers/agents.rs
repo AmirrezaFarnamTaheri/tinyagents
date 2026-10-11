@@ -45,3 +45,44 @@ impl DriverRunLedger {
         self.agent_telemetry(row).await
     }
 }
+
+impl DriverRunLedger {
+    pub(super) async fn agents(&self, request: &AgentRunListRequest) -> Result<AgentRunListResponse> {
+        let filter = eq_nonblank(Filter::All, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(filter, "record.kind", request.kind.as_deref());
+        let filter = eq_nonblank(filter, "record.parentRunId", request.parent_run_id.as_deref());
+        let filter = eq_nonblank(filter, "record.parentThreadId", request.parent_thread_id.as_deref());
+        let (rows, count) = self.page::<AgentRun>(AGENTS, filter, request.limit.unwrap_or(50).min(500) as u64,
+            request.offset.unwrap_or(0) as u64).await?;
+        let mut runs = Vec::with_capacity(rows.len());
+        for row in rows { runs.push(self.agent_telemetry(row).await?); }
+        Ok(AgentRunListResponse { runs, count })
+    }
+
+    // The port admits this sweep only under exclusive process ownership.
+    pub(super) async fn interrupt_agents(&self) -> Result<usize> {
+        use super::storage::{CAS_ATTEMPTS, encode, key};
+        use tinystoragedrivers_core::{DocumentStoreExt, ErrorKind, Precondition, WriteOp};
+        self.declare().await?;
+        let filter = Filter::eq("record.status", "running").or(Filter::eq("record.status", "pending"));
+        for _ in 0..CAS_ATTEMPTS {
+            let rows = self.scoped.documents().query_all(AGENTS, &Query::filter(filter.clone())).await?;
+            let count = rows.len();
+            if count == 0 { return Ok(0); }
+            let now = Utc::now();
+            let writes = rows.into_iter().map(|previous| {
+                let mut row: AgentRun = super::storage::decode(previous.doc)?;
+                row.status = AgentRunStatus::Interrupted;
+                row.completed_at = row.completed_at.or(Some(now)); row.updated_at = now;
+                Ok(WriteOp::Put { collection: AGENTS.into(), id: key(&[&row.id]), doc: encode(&row)?,
+                    precondition: Precondition::Version(previous.version) })
+            }).collect::<std::result::Result<Vec<_>, StorageError>>()?;
+            match self.scoped.documents().atomic_batch_checked(vec![], writes).await {
+                Ok(_) => return Ok(count),
+                Err(error) if error.kind() == ErrorKind::Conflict => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(StorageError::conflict("exclusive agent sweep contention budget exhausted").into())
+    }
+}
