@@ -255,6 +255,17 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         Ok(())
     }
 
+    /// Runs after the model-wrap onion returns. `base_called` distinguishes a
+    /// real base invocation from a wrap middleware short-circuit.
+    async fn after_model_dispatch(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _base_called: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Runs for each streamed [`ModelDelta`] before it is forwarded or
     /// accumulated, allowing inspection or transformation of the chunk.
     async fn on_model_delta(

@@ -298,6 +298,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         Ok(())
     }
 
+    /// Notifies request observers whether the model-wrap onion reached its
+    /// base call, allowing staged request data to survive short-circuits.
+    pub async fn run_after_model_dispatch(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        base_called: bool,
+    ) -> Result<()> {
+        for middleware in self.middlewares.iter().rev() {
+            middleware
+                .after_model_dispatch(ctx, state, base_called)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Runs `before_model` while refreshing the selected profile before each
     /// hook. Earlier hooks may change the model or required capabilities.
     pub async fn run_before_model_with_profile<P, F>(

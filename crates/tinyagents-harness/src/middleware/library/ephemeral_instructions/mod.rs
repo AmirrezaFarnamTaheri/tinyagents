@@ -115,6 +115,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         Ok(())
     }
 
+    async fn after_model_dispatch(
+        &self,
+        context: &mut RunContext<Ctx>,
+        _state: &State,
+        base_called: bool,
+    ) -> Result<()> {
+        if base_called {
+            let count = self.queue.peek_for(context).len();
+            self.queue.commit_for(context, count);
+        }
+        Ok(())
+    }
+
     /// Commit staged instructions only after the model-wrap onion reached its
     /// base call. A short-circuiting wrap leaves them for the next request.
     pub(crate) fn commit_after_base<Ctx>(&self, context: &RunContext<Ctx>, count: usize) {
