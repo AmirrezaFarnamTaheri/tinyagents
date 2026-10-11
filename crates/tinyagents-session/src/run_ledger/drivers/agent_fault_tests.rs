@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tinystoragedrivers_core::{DocumentStore, CollectionSpec, Version, Versioned, Precondition, Page, ReadCheck, WriteOp, WriteResult};
 
 #[derive(Debug)]
-struct NoPostCommitReads { inner: Arc<dyn DocumentStore>, committed: AtomicBool }
+struct NoPostCommitReads { inner: Arc<dyn DocumentStore>, committed: AtomicBool, telemetry_race: Option<Value>, raced: AtomicBool }
 type NativeResult<T> = std::result::Result<T, StorageError>;
 
 #[async_trait::async_trait]
@@ -29,6 +29,11 @@ impl DocumentStore for NoPostCommitReads {
     async fn drop_collection(&self, collection: &str) -> NativeResult<()> { self.inner.drop_collection(collection).await }
     async fn atomic_batch_checked(&self, checks: Vec<ReadCheck>, writes: Vec<WriteOp>) -> NativeResult<Vec<WriteResult>> {
         let changed = writes.iter().any(|write| matches!(write, WriteOp::Put { collection, .. } if collection == storage::AGENTS));
+        if changed && !self.raced.swap(true, Ordering::SeqCst) {
+            if let Some(value) = &self.telemetry_race {
+                self.inner.put(storage::TELEMETRY, &storage::key(&["run"]), value.clone(), Precondition::Any).await?;
+            }
+        }
         let result = self.inner.atomic_batch_checked(checks, writes).await?;
         if changed { self.committed.store(true, Ordering::SeqCst); } Ok(result)
     }
@@ -36,7 +41,7 @@ impl DocumentStore for NoPostCommitReads {
 
 fn wrapped(native: &ScopedStorage) -> DriverRunLedger {
     DriverRunLedger::new(ScopedStorage::new(native.scope().clone(), "memory",
-        Arc::new(NoPostCommitReads { inner: native.documents().clone(), committed: AtomicBool::new(false) }),
+        Arc::new(NoPostCommitReads { inner: native.documents().clone(), committed: AtomicBool::new(false), telemetry_race: None, raced: AtomicBool::new(false) }),
         native.streams().clone(), native.blobs().clone()))
 }
 
@@ -56,4 +61,37 @@ async fn status_and_event_return_their_commit_without_a_fallible_postcommit_tele
     assert!(ledger.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Completed, None, None,
         Some(RunEventAppend { run_id: "run".into(), event_type: "done".into(), payload: serde_json::json!({}) })).await.is_ok());
     assert_eq!(DriverRunLedger::new(native).get_agent_run("run").await.unwrap().unwrap().status, AgentRunStatus::Completed);
+}
+
+
+#[tokio::test]
+async fn concurrent_telemetry_change_retries_before_agent_commit_and_returns_validated_rollup() {
+    for transition in [false, true] {
+        let backend = MemoryStorage::new();
+        let native = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+        let seed = DriverRunLedger::new(native.clone());
+        seed.upsert_agent_run(run("run")).await.unwrap();
+        seed.upsert_run_telemetry(RunTelemetryUpsert { run_id: "run".into(), input_tokens: Some(73), ..Default::default() }).await.unwrap();
+        let newer = native.documents().get(storage::TELEMETRY, &storage::key(&["run"])).await.unwrap().unwrap().doc;
+        seed.upsert_run_telemetry(RunTelemetryUpsert { run_id: "run".into(), input_tokens: Some(1), ..Default::default() }).await.unwrap();
+        let documents = Arc::new(NoPostCommitReads {
+            inner: native.documents().clone(), committed: AtomicBool::new(false),
+            telemetry_race: Some(newer), raced: AtomicBool::new(false),
+        });
+        let ledger = DriverRunLedger::new(ScopedStorage::new(native.scope().clone(), "memory",
+            documents.clone(), native.streams().clone(), native.blobs().clone()));
+        let committed = if transition {
+            match ledger.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Completed, None, None,
+                Some(RunEventAppend { run_id: "run".into(), event_type: "done".into(), payload: serde_json::json!({}) })).await.unwrap() {
+                RunTransition::Applied(row) => row,
+                other => panic!("expected applied transition, got {other:?}"),
+            }
+        } else {
+            ledger.upsert_agent_run(run("run")).await.unwrap()
+        };
+        assert!(documents.raced.load(Ordering::SeqCst));
+        assert!(documents.committed.load(Ordering::SeqCst));
+        assert_eq!(committed.telemetry.unwrap().input_tokens, 73);
+        assert_eq!(seed.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().events.len(), usize::from(transition));
+    }
 }

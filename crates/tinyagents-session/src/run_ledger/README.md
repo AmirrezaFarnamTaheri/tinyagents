@@ -193,48 +193,76 @@ The port returns `LedgerResult<T>`. `LedgerError` retains legacy SQLite and
 control errors and, with `storage-drivers`, native `StorageError` values. Native
 admission, fencing, conflict and capability kinds remain available to callers.
 
-### Scoped driver adapter: partial implementation
+### Scoped driver adapter
 
 With `storage-drivers`, `DriverRunLedger::new(scoped)` binds an explicitly
 admitted `ScopedStorage`. It opens no workspace database. The supplied native
 fence remains attached to its document handles.
 
-Currently implemented: workflow upsert/read/list and lease/revision/lifecycle
-CAS, telemetry field deltas, team/member/task upsert/read/list, and tool-effect
-start/settle/unresolved/interrupted operations, member running/idle transitions,
-and individual task release. Single-document updates use
-native version preconditions, retry only conflicts, and return their own
-committed body. Counts, offsets, merge rules, identity preservation, unique
-member names and workflow revisions follow the classic implementation.
+Implemented native families include agent upsert/read/filter/page, telemetry joins,
+status compare-and-swap, events and command-center controls; workflow
+upsert/read/list and lease/revision/lifecycle CAS; telemetry field deltas;
+team/member/task upsert/read/list; tool-effect start/settle/unresolved/interrupted;
+member running/idle transitions; and individual task release. Conflicts alone
+are retried. Native fencing, generation and capability refusals retain their
+typed sources. Agent writes validate the captured telemetry version in the same
+document batch and return the committed body without a fallible postcommit read.
 
-Other methods return typed `Unsupported` errors before writing. Agent-run
-telemetry joins, status/event commits, dependency claims, bulk member shutdown,
-entry-tree transactions, retention and shared-owner orphan recovery are not
-implemented. This adapter is not a complete migration. Existing callers are
-not routed to it automatically.
+Dependency-aware team claims/completion, bulk member shutdown, entry trees and
+retention still return typed Unsupported before writing. The orphan sweep is
+explicitly for an exclusive owner; it is not a shared-process lease reaper.
+Existing host callers are not routed to this adapter automatically.
+
+DriverSessionStores caches one optional native ledger handle per logical agent.
+Independent factories and actor bindings keep independent caches while sharing
+the same durable namespace. The provider currently constructs declaring ledger
+handles; the direct validation-only constructor below does not prove that a
+provider actor factory propagates validation-only admission.
 
 | Scoped collection | Records and query indexes |
 | --- | --- |
 | `run_ledger_workflow_runs` | Definition, status, parent thread, updated time and lease expiry |
 | `run_ledger_telemetry` | Run telemetry, updated time |
-| `run_ledger_agent_runs` | Reserved for runs; kind, status, parent/worker identities and updated time |
+| `run_ledger_agent_runs` | Runs; kind, status, parent/worker identities and updated time |
 | `run_ledger_teams` | Parent thread, status and updated time |
 | `run_ledger_members` | Team, creation time and unique `(teamId, name)` |
 | `run_ledger_tasks` | Team, status, claimant and `(teamId, orderIndex, created time)` |
 | `run_ledger_tool_effects` | Run, status and start time |
+| `run_ledger_event_outbox` | Authoritative events, unique per-run sequence |
+| `run_ledger_event_heads` | Next per-run event ordinal |
+| `run_ledger_agent_imports` | Scoped import operation receipt and source fingerprint |
 
 Records use a version-one envelope, original domain IDs and SQL-compatible
 RFC3339 timestamp sort keys. Physical document IDs are length-prefixed SHA256
 digests; effect IDs bind run and call identities. Durable metadata has no TTL.
 Unknown envelope schemas fail as typed serialization errors.
 
-Cross-document implementation requires atomic validation of read dependencies
-(such as unchanged dependency-task revisions) and atomic status/event commits.
-A document-only put/delete batch cannot atomically validate read-only rows or
-append a stream event. Implementing that backend needs an owning-driver
-transaction/read-validation contract or a durable event outbox with conditional
-stream append and replay reconciliation. The port does not approximate those
-guarantees or drop unsupported families.
+### Status, event receipts and stream projection
+
+A native checked document batch commits agent status, event allocation and its
+durable receipt together. Failed status CAS writes no event. Receipts are the
+authoritative event history; list cursors retain the classic signed event
+ordinals, including gaps imported after legacy pruning.
+
+Document and stream ports have no combined transaction.
+DriverRunLedger::reconcile_run_events explicitly projects receipts into the
+per-run stream using conditional append. It verifies the existing prefix
+against committed receipts, refuses corruption, and retries competing appends
+without duplicates. Stream offsets count projected entries; they are distinct
+from legacy event ordinals. Projection refusal preserves the successful
+document commit and returns a typed error only from the explicit reconciliation
+call. Reconstructed handles can replay outstanding receipts. Neither receipts
+nor projection currently implement retention.
+
+### Schema preparation and validation
+
+DriverRunLedger::collection_specs exposes the shared declarations.
+prepare_schema is an explicit trusted-bootstrap declaration operation.
+new_existing_schema validates those declarations rather than ensuring them;
+missing or incompatible schemas refuse before ledger records are written.
+The supplied ScopedStorage must also use the native ExistingSchema contract to
+restrict driver-internal initialization. The constructor does not infer
+authority from capabilities or turn arbitrary ports into restricted ports.
 
 ### Source admission before migration
 
@@ -250,5 +278,17 @@ WAL or journal sidecars with `LedgerError::SourceRequiresSnapshot`. The host mus
 supply a checkpointed database or consistent snapshot; the importer never
 checkpoints it. Sources are opened through SQLite immutable read-only access,
 which also avoids writing auxiliary shared-memory files. The retained snapshot
-discovers historical schema and columns without migrations. Target import writes
-and durable import receipts are not implemented yet.
+discovers historical schema and columns without migrations. import_agent_family supports the known agent_runs, run_events and run_telemetry
+schema. It validates all source rows before target declarations, commits all
+absent target records and a durable operation receipt in one native batch, and
+retains source bytes. An identical operation retry returns its receipt without
+overwriting later native edits; changed source bytes or target collisions
+refuse. The source fingerprint identifies content and grants no authority.
+Original event ordinals survive import, and allocation continues above their
+maximum.
+
+Hosts must still arrange source ownership, quiescence, snapshots and the
+migration checkpoint. Older incomplete layouts can be inspected but are not
+silently upgraded. Workflow/team/effect/tree/session import, automatic host
+migration, shared-owner recovery and generation-aware retention remain separate
+work.
