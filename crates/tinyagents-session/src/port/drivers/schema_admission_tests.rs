@@ -209,10 +209,12 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
 #[tokio::test]
 async fn explicit_actor_factory_selects_validation_without_changing_original_provider() {
     let (backend, observed) = prepared().await;
-    let original = DriverSessionStores::new(backend.clone())
-        .unwrap()
-        .recover_on_open(true);
-    let provider: Arc<dyn SessionStoreProvider> = Arc::new(original.clone());
+    let original = Arc::new(
+        DriverSessionStores::new(backend.clone())
+            .unwrap()
+            .recover_on_open(true),
+    );
+    let provider: Arc<dyn SessionStoreProvider> = original.clone();
     let actor = provider
         .bind_actor_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
         .unwrap()
