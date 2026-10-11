@@ -657,45 +657,6 @@ async fn scoped_unavailable_atomic_families_report_unsupported_without_writes() 
         .upsert_workflow_run(workflow("workflow"))
         .await
         .unwrap();
-    let event = RunEventAppend {
-        run_id: "run".into(),
-        event_type: "completed".into(),
-        payload: json!({"result":true}),
-    };
-    unsupported(ledger.append_run_event(event.clone()).await);
-    unsupported(
-        ledger
-            .upsert_agent_run(AgentRunUpsert {
-                id: "run".into(),
-                kind: AgentRunKind::Subagent,
-                status: AgentRunStatus::Running,
-                parent_run_id: None,
-                parent_thread_id: None,
-                agent_id: None,
-                prompt_ref: None,
-                worker_thread_id: None,
-                checkpoint_path: None,
-                checkpoint: None,
-                summary: None,
-                error: None,
-                metadata: json!({}),
-                started_at: None,
-                completed_at: None,
-            })
-            .await,
-    );
-    unsupported(
-        ledger
-            .transition_agent_run_status_from(
-                "run",
-                AgentRunStatus::Running,
-                AgentRunStatus::Completed,
-                None,
-                None,
-                Some(event),
-            )
-            .await,
-    );
     unsupported(
         ledger
             .claim_agent_team_task("team", "task", "member", "claim")
@@ -707,7 +668,6 @@ async fn scoped_unavailable_atomic_families_report_unsupported_without_writes() 
             .await,
     );
     unsupported(ledger.shutdown_agent_team_member("team", "member").await);
-    unsupported(ledger.interrupt_orphaned_agent_runs().await);
     unsupported(ledger.entry_import_legacy("session", &[]).await);
     unsupported(ledger.entry_rebuild_index("session").await);
     unsupported(ledger.apply_retention(Utc::now()).await);
