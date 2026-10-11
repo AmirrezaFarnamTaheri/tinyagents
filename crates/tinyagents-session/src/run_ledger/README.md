@@ -152,3 +152,40 @@ to `todo`** (clearing claimant + token) in the same transaction that marks
 the member `stopped` — the bulk analogue of `release_agent_team_task`.
 
 `status_map.rs` holds the total `From` conversions between `AgentRunStatus` and the canonical `tinyagents_tasks::OrchestrationTaskStatus` (`Paused` reads as `Awaiting`, `Interrupted` as `Abandoned`); the `AgentRunStatus` wire strings are unchanged. Mapping table: `tinyagents-tasks` README.
+
+
+## Storage provider port
+
+`RunLedgerStore` is the object-safe, synchronous form of the existing ledger
+API. A handle binds its workspace or namespace once; payloads never choose
+another namespace. It covers agent runs, workflow leases/revisions, events,
+telemetry, teams/members/tasks, effects, entry trees, recovery classification,
+command-center controls, and the existing retention operations.
+
+`SqliteRunLedger::new(workspace)` implements the port by delegating to the
+existing SQLite functions. Status CAS plus event remains one transaction;
+workflow ownership, expiry and revision are checked together; task dependency
+reads and claims retain their current transaction. Constructors do not open or
+migrate the database. Existing workspace-based APIs and all SQLite tables remain
+available, including the still-active session/message/tool-call tables.
+
+Providers may override `SessionStoreProvider::run_ledger_for_agent` to return an
+`Arc<dyn RunLedgerStore>`. Its default is `None`, independent of the existing
+`AgentStores` bundle. `None` does not authorize a local fallback. Hosts must
+select their policy explicitly; this new port does not route existing callers
+or migrate their data by itself. Shared hosts must supply handles bound to the
+admitted tenant and agent, and must not use the classic startup orphan sweep to
+interrupt another live process.
+
+The SQLite adapter preserves current task completion semantics: completion is
+validated against the member identity, not a takeover claim token. Retention
+preserves its existing scope: sessions/messages/tool calls, events and telemetry;
+it does not add pruning of workflows, teams, effects or entry trees.
+
+A future driver implementation requires atomic validation of read dependencies
+(such as unchanged dependency-task revisions) and atomic status/event commits.
+A document-only put/delete batch cannot atomically validate read-only rows or
+append a stream event. Implementing that backend needs an owning-driver
+transaction/read-validation contract or a durable event outbox with conditional
+stream append and replay reconciliation. The port does not approximate those
+guarantees or drop unsupported families.

@@ -4,7 +4,9 @@
 //! turn-state snapshots, its key-value records and its event journal — is
 //! reached through one [`SessionStoreProvider`]. The host installs a provider
 //! once; the runtime asks it for each agent's [`AgentStores`] and never names
-//! a file, a database or a directory itself.
+//! a file, a database or a directory itself. The provider may additionally return
+//! an optional bound [`crate::run_ledger::RunLedgerStore`] independently of this
+//! bundle, through [`SessionStoreProvider::run_ledger_for_agent`].
 //!
 //! That is what lets one process serve many users from a shared database: a
 //! cloud host implements the provider over its own store (MongoDB, Postgres,
