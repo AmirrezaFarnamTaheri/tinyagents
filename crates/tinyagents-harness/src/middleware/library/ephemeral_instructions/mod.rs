@@ -113,12 +113,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
     ) -> Result<()> {
         let instructions = {
             let mut runs = self.queue.runs.lock().unwrap_or_else(|p| p.into_inner());
-            let pending = runs.entry(context.instance_id()).or_insert_with(|| PendingInstructions {
-                lifecycle: Arc::downgrade(&context.lifecycle),
-                instructions: Vec::new(),
-                staged: None,
-            });
-            pending.staged.get_or_insert_with(|| pending.instructions.clone()).clone()
+            let pending =
+                runs.entry(context.instance_id())
+                    .or_insert_with(|| PendingInstructions {
+                        lifecycle: Arc::downgrade(&context.lifecycle),
+                        instructions: Vec::new(),
+                        staged: None,
+                    });
+            pending
+                .staged
+                .get_or_insert_with(|| pending.instructions.clone())
+                .clone()
         };
         for instruction in instructions {
             push_ephemeral_instruction(request, instruction, context.model_profile.as_ref());
@@ -141,7 +146,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
             .and_then(|pending| pending.staged.clone())
             .unwrap_or_default();
         for instruction in instructions {
-            if !request.messages.iter().any(|message| message.text().contains(&instruction)) {
+            if !request
+                .messages
+                .iter()
+                .any(|message| message.text().contains(&instruction))
+            {
                 push_ephemeral_instruction(request, instruction, context.model_profile.as_ref());
             }
         }

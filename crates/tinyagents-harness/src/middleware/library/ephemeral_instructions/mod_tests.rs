@@ -73,6 +73,46 @@ async fn ephemeral_instructions_for_hoisting_models_keep_the_system_prefix_uncha
     assert!(tail.contains("try a bounded read"));
 }
 
+/// Request rewrites cannot evict the staged prefix, and pushes made while the
+/// request is in flight are retained for the following request.
+#[tokio::test]
+async fn rewritten_requests_preserve_staged_prefix_and_defer_late_pushes() {
+    let mut context = context();
+    let queue = EphemeralInstructionQueue::new();
+    let injector = queue.middleware();
+    queue.push(&context, "first");
+    let mut outgoing = request();
+    injector
+        .before_model_dispatch(&mut context, &(), &mut outgoing)
+        .await
+        .unwrap();
+
+    queue.push(&context, "second");
+    outgoing.messages.clear();
+    injector
+        .after_model_rewrite(&mut context, &(), &mut outgoing)
+        .await
+        .unwrap();
+    assert!(
+        outgoing
+            .messages
+            .iter()
+            .any(|message| message.text() == "first")
+    );
+    assert!(
+        !outgoing
+            .messages
+            .iter()
+            .any(|message| message.text() == "second")
+    );
+
+    injector
+        .after_model_dispatch(&mut context, &(), true)
+        .await
+        .unwrap();
+    assert_eq!(queue.drain_for(&context), vec!["second"]);
+}
+
 /// A run ending before another request does not carry pending corrections forward.
 #[tokio::test]
 async fn ephemeral_instructions_are_cleared_after_success_and_error() {
