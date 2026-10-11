@@ -52,6 +52,7 @@ impl PackRegistryHandle {
             None if !slots.catalog_conflict => slots.catalog = Some(catalog),
             Some(existing)
                 if existing.packs().as_ptr() == catalog.packs().as_ptr()
+                    && existing.packs().len() == catalog.packs().len()
                     && existing.not_found_marker() == catalog.not_found_marker() => {}
             _ => {
                 slots.catalog = None;
