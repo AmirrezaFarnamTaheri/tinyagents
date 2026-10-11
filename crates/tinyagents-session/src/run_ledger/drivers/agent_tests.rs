@@ -90,3 +90,54 @@ async fn independent_event_allocators_replay_without_duplicates_and_keep_cursor_
     let page = b.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), after_sequence: Some(1), limit: Some(1) }).await.unwrap();
     assert_eq!(page.count, 1); assert_eq!(page.events[0].sequence, 2);
 }
+
+#[derive(Debug)]
+struct RefusingProjection(Arc<dyn tinystoragedrivers_core::StreamStore>);
+#[async_trait::async_trait]
+impl tinystoragedrivers_core::StreamStore for RefusingProjection {
+    async fn append(&self, stream: &str, value: serde_json::Value) -> std::result::Result<u64, StorageError> { self.0.append(stream, value).await }
+    async fn append_batch(&self, stream: &str, values: Vec<serde_json::Value>) -> std::result::Result<u64, StorageError> { self.0.append_batch(stream, values).await }
+    async fn append_batch_if_offset(&self, _: &str, _: u64, _: Vec<serde_json::Value>) -> std::result::Result<u64, StorageError> {
+        Err(StorageError::fenced("projection grant expired"))
+    }
+    async fn read_window(&self, stream: &str, from: u64, limit: usize) -> std::result::Result<Vec<tinystoragedrivers_core::StreamEntry>, StorageError> { self.0.read_window(stream, from, limit).await }
+    async fn len(&self, stream: &str) -> std::result::Result<u64, StorageError> { self.0.len(stream).await }
+    async fn truncate_before(&self, stream: &str, offset: u64) -> std::result::Result<u64, StorageError> { self.0.truncate_before(stream, offset).await }
+    async fn delete_stream(&self, stream: &str) -> std::result::Result<bool, StorageError> { self.0.delete_stream(stream).await }
+    async fn streams(&self, prefix: &str) -> std::result::Result<Vec<String>, StorageError> { self.0.streams(prefix).await }
+}
+
+#[tokio::test]
+async fn committed_status_and_event_survive_projection_refusal_and_process_reconstruction() {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("alice").unwrap();
+    let native = backend.for_scope(&scope).unwrap();
+    let refused = ScopedStorage::new(scope.clone(), "memory", native.documents().clone(),
+        Arc::new(RefusingProjection(native.streams().clone())), native.blobs().clone());
+    let a = DriverRunLedger::new(refused);
+    a.upsert_agent_run(run("run")).await.unwrap();
+    a.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Completed, None, Some(Utc::now()),
+        Some(RunEventAppend { run_id: "run".into(), event_type: "done".into(), payload: json!({"ok":true}) })).await.unwrap();
+    assert!(matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_core::ErrorKind::Fenced));
+    let reconstructed = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    assert_eq!(reconstructed.get_agent_run("run").await.unwrap().unwrap().status, AgentRunStatus::Completed);
+    assert_eq!(reconstructed.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 1);
+    assert_eq!(reconstructed.reconcile_run_events("run").await.unwrap(), 1);
+    assert_eq!(reconstructed.reconcile_run_events("run").await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn competing_handles_commit_exactly_one_status_and_event() {
+    let backend = MemoryStorage::new(); let scope = Scope::new("alice").unwrap();
+    let a = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    let b = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    a.upsert_agent_run(run("run")).await.unwrap();
+    let event = |label: &str| Some(RunEventAppend { run_id: "run".into(), event_type: label.into(), payload: json!({}) });
+    let (one, two) = tokio::join!(
+        a.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Completed, None, None, event("one")),
+        b.transition_agent_run_status_from("run", AgentRunStatus::Running, AgentRunStatus::Failed, Some("failure"), None, event("two")));
+    let results = [one.unwrap(), two.unwrap()];
+    assert_eq!(results.iter().filter(|r| matches!(r, RunTransition::Applied(_))).count(), 1);
+    assert_eq!(results.iter().filter(|r| matches!(r, RunTransition::StatusChanged(_))).count(), 1);
+    assert_eq!(a.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 1);
+}
