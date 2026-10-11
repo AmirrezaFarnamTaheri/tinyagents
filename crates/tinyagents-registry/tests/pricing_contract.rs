@@ -1,6 +1,8 @@
 use tinyagents_registry::pricing::{
     estimate_cost_usd, flat_catalog_entry, lookup, model_accepts_image_input,
+    KNOWN_MODEL_PRICING,
 };
+use tinyagents_registry::{ModelCatalogSnapshot, KNOWN_PROVIDERS};
 
 #[test]
 fn pricing_contract_preserves_decorated_lookup_and_cached_rates() {
@@ -14,4 +16,25 @@ fn pricing_contract_preserves_decorated_lookup_and_cached_rates() {
     assert_eq!(entry.source, "consumer-catalog");
     assert_eq!(entry.pricing.input_per_token, Some(5.0 / 1_000_000.0));
     assert!(model_accepts_image_input("minimax/minimax-m3"));
+}
+
+#[test]
+fn projected_pricing_rows_use_recognized_provider_ids() {
+    let snapshot = ModelCatalogSnapshot {
+        schema_version: 1,
+        snapshot_id: "pricing-test".to_string(),
+        created_at: "2026-07-01".to_string(),
+        currency: "USD".to_string(),
+        unit: "token".to_string(),
+        description: None,
+        sources: Vec::new(),
+        models: KNOWN_MODEL_PRICING
+            .iter()
+            .map(|price| flat_catalog_entry(price, "pricing-test"))
+            .collect(),
+    };
+
+    snapshot
+        .validate_with_providers(Some(KNOWN_PROVIDERS))
+        .expect("every projected pricing provider is recognized");
 }
