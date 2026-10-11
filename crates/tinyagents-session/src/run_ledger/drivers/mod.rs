@@ -4,7 +4,12 @@
 //! typed unsupported error. They never approximate a transaction with weaker
 //! individual writes or switch to a local SQLite database.
 
-use tinystoragedrivers_core::{Capability, Scope, ScopedStorage, StorageError};
+mod storage;
+
+use std::sync::Arc;
+use storage::{TELEMETRY, WORKFLOWS, eq_nonblank};
+use tinystoragedrivers_core::{Capability, Filter, Scope, ScopedStorage, StorageError};
+use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
 use chrono::{DateTime, Utc};
@@ -25,12 +30,16 @@ use crate::retention::RetentionReport;
 #[derive(Debug, Clone)]
 pub struct DriverRunLedger {
     scoped: ScopedStorage,
+    declared: Arc<OnceCell<()>>,
 }
 
 impl DriverRunLedger {
     /// Bind the already admitted scoped ports without opening any local database.
     pub fn new(scoped: ScopedStorage) -> Self {
-        Self { scoped }
+        Self {
+            scoped,
+            declared: Arc::new(OnceCell::new()),
+        }
     }
 
     /// The immutable namespace this handle was supplied for.
@@ -55,8 +64,46 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
-    async fn upsert_workflow_run(&self, _upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
-        Err(unsupported("upsert_workflow_run"))
+    async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
+        let now = Utc::now();
+        self.merge(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+            let first = previous.is_none();
+            let mut row = previous.unwrap_or(WorkflowRun {
+                id: upsert.id.clone(),
+                definition_id: upsert.definition_id.clone(),
+                parent_thread_id: None,
+                input: upsert.input.clone(),
+                phase_states: upsert.phase_states.clone(),
+                child_run_ids: upsert.child_run_ids.clone(),
+                status: upsert.status,
+                summary: None,
+                started_at: upsert.started_at.unwrap_or(now),
+                updated_at: now,
+                completed_at: None,
+                revision: 0,
+                lease_owner: None,
+                lease_expires_at: None,
+            });
+            row.definition_id = upsert.definition_id.clone();
+            row.parent_thread_id = upsert.parent_thread_id.clone().or(row.parent_thread_id);
+            row.input = upsert.input.clone();
+            row.phase_states = upsert.phase_states.clone();
+            row.child_run_ids = upsert.child_run_ids.clone();
+            row.status = upsert.status;
+            row.summary = upsert.summary.clone().or(row.summary);
+            row.updated_at = now;
+            row.completed_at = upsert.completed_at.or(row.completed_at);
+            if !first {
+                row.revision += 1;
+            }
+            if row.status.is_terminal() {
+                row.lease_owner = None;
+                row.lease_expires_at = None;
+            }
+            row
+        })
+        .await
+        .map_err(Into::into)
     }
 
     /// Implement [`RunLedgerStore::try_claim_workflow_run`] without a weaker fallback.
@@ -105,8 +152,42 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::upsert_run_telemetry`] without a weaker fallback.
-    async fn upsert_run_telemetry(&self, _upsert: RunTelemetryUpsert) -> Result<RunTelemetry> {
-        Err(unsupported("upsert_run_telemetry"))
+    async fn upsert_run_telemetry(&self, upsert: RunTelemetryUpsert) -> Result<RunTelemetry> {
+        let now = Utc::now();
+        self.merge(
+            TELEMETRY,
+            &upsert.run_id,
+            |previous: Option<RunTelemetry>| {
+                let mut row = previous.unwrap_or(RunTelemetry {
+                    run_id: upsert.run_id.clone(),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cached_input_tokens: 0,
+                    cost_usd: 0.0,
+                    elapsed_ms: None,
+                    tool_count: 0,
+                    model: None,
+                    provider: None,
+                    error: None,
+                    updated_at: Some(now),
+                });
+                row.input_tokens = upsert.input_tokens.unwrap_or(row.input_tokens);
+                row.output_tokens = upsert.output_tokens.unwrap_or(row.output_tokens);
+                row.cached_input_tokens = upsert
+                    .cached_input_tokens
+                    .unwrap_or(row.cached_input_tokens);
+                row.cost_usd = upsert.cost_usd.unwrap_or(row.cost_usd);
+                row.elapsed_ms = upsert.elapsed_ms.or(row.elapsed_ms);
+                row.tool_count = upsert.tool_count.unwrap_or(row.tool_count);
+                row.model = upsert.model.clone().or(row.model);
+                row.provider = upsert.provider.clone().or(row.provider);
+                row.error = upsert.error.clone().or(row.error);
+                row.updated_at = Some(now);
+                row
+            },
+        )
+        .await
+        .map_err(Into::into)
     }
 
     /// Implement [`RunLedgerStore::get_agent_run`] without a weaker fallback.
@@ -160,16 +241,38 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::get_workflow_run`] without a weaker fallback.
-    async fn get_workflow_run(&self, _id: &str) -> Result<Option<WorkflowRun>> {
-        Err(unsupported("get_workflow_run"))
+    async fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
+        Ok(self
+            .read::<WorkflowRun>(WORKFLOWS, id)
+            .await?
+            .map(|row| row.doc))
     }
 
     /// Implement [`RunLedgerStore::list_workflow_runs`] without a weaker fallback.
     async fn list_workflow_runs(
         &self,
-        _request: &WorkflowRunListRequest,
+        request: &WorkflowRunListRequest,
     ) -> Result<WorkflowRunListResponse> {
-        Err(unsupported("list_workflow_runs"))
+        let filter = eq_nonblank(
+            Filter::default(),
+            "record.definitionId",
+            request.definition_id.as_deref(),
+        );
+        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(
+            filter,
+            "record.parentThreadId",
+            request.parent_thread_id.as_deref(),
+        );
+        let (runs, count) = self
+            .page(
+                WORKFLOWS,
+                filter,
+                request.limit.unwrap_or(50).min(500),
+                request.offset.unwrap_or(0),
+            )
+            .await?;
+        Ok(WorkflowRunListResponse { runs, count })
     }
 
     /// Implement [`RunLedgerStore::upsert_agent_team`] without a weaker fallback.
