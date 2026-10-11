@@ -5,6 +5,7 @@
 //! individual writes or switch to a local SQLite database.
 
 mod agents;
+mod events;
 mod effects;
 mod import;
 mod storage;
@@ -273,8 +274,8 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::append_run_event`] without a weaker fallback.
-    async fn append_run_event(&self, _event: RunEventAppend) -> Result<RunEvent> {
-        Err(unsupported("append_run_event"))
+    async fn append_run_event(&self, event: RunEventAppend) -> Result<RunEvent> {
+        self.commit_event(event).await
     }
 
     /// Implement [`RunLedgerStore::upsert_run_telemetry`] without a weaker fallback.
@@ -324,25 +325,28 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::transition_agent_run_status`] without a weaker fallback.
     async fn transition_agent_run_status(
         &self,
-        _id: &str,
-        _status: AgentRunStatus,
-        _error: Option<&str>,
-        _completed_at: Option<DateTime<Utc>>,
+        id: &str,
+        status: AgentRunStatus,
+        error: Option<&str>,
+        completed_at: Option<DateTime<Utc>>,
     ) -> Result<Option<AgentRun>> {
-        Err(unsupported("transition_agent_run_status"))
+        self.transition_agent(id, None, status, error, completed_at, None).await.map(|result| match result {
+            RunTransition::Applied(row) | RunTransition::StatusChanged(row) => Some(row),
+            RunTransition::NotFound => None,
+        })
     }
 
     /// Implement [`RunLedgerStore::transition_agent_run_status_from`] without a weaker fallback.
     async fn transition_agent_run_status_from(
         &self,
-        _id: &str,
-        _expected: AgentRunStatus,
-        _status: AgentRunStatus,
-        _error: Option<&str>,
-        _completed_at: Option<DateTime<Utc>>,
-        _event: Option<RunEventAppend>,
+        id: &str,
+        expected: AgentRunStatus,
+        status: AgentRunStatus,
+        error: Option<&str>,
+        completed_at: Option<DateTime<Utc>>,
+        event: Option<RunEventAppend>,
     ) -> Result<RunTransition> {
-        Err(unsupported("transition_agent_run_status_from"))
+        self.transition_agent(id, Some(expected), status, error, completed_at, event).await
     }
 
     /// Implement [`RunLedgerStore::interrupt_orphaned_agent_runs`] without a weaker fallback.
@@ -361,9 +365,9 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::list_recent_run_events`] without a weaker fallback.
     async fn list_recent_run_events(
         &self,
-        _request: &RunEventListRequest,
+        request: &RunEventListRequest,
     ) -> Result<RunEventListResponse> {
-        Err(unsupported("list_recent_run_events"))
+        self.events(request).await
     }
 
     /// Implement [`RunLedgerStore::get_workflow_run`] without a weaker fallback.

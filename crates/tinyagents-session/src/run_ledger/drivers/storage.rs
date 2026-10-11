@@ -16,8 +16,10 @@ pub(super) const AGENTS: &str = "run_ledger_agent_runs";
 pub(super) const TEAMS: &str = "run_ledger_teams";
 pub(super) const MEMBERS: &str = "run_ledger_members";
 pub(super) const EFFECTS: &str = "run_ledger_tool_effects";
+pub(super) const EVENTS: &str = "run_ledger_event_outbox";
+pub(super) const EVENT_HEADS: &str = "run_ledger_event_heads";
 pub(super) const TASKS: &str = "run_ledger_tasks";
-const CAS_ATTEMPTS: usize = 64;
+pub(super) const CAS_ATTEMPTS: usize = 64;
 
 /// Length-prefixed identifiers preserve arbitrary classic IDs without exceeding driver limits.
 pub(super) fn key(parts: &[&str]) -> String {
@@ -40,6 +42,8 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// Declare only portable indexes; expiry never deletes durable run metadata.
 fn specs() -> Vec<CollectionSpec> {
     vec![
+        CollectionSpec::new(EVENT_HEADS),
+        CollectionSpec::new(EVENTS).index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
         CollectionSpec::new(EFFECTS)
             .index(IndexSpec::new("run", ["record.runId"]))
             .index(IndexSpec::new("status", ["record.status"]))
@@ -78,7 +82,7 @@ fn specs() -> Vec<CollectionSpec> {
 }
 
 /// Store SQL-compatible timestamp sort keys alongside the domain's camelCase serde shape.
-fn encode<T: Serialize + DeserializeOwned>(record: &T) -> Result<Value, StorageError> {
+pub(super) fn encode<T: Serialize + DeserializeOwned>(record: &T) -> Result<Value, StorageError> {
     let record = serde_json::to_value(record)?;
     // JSON may silently encode nonfinite floats as null; refuse a body that
     // the same domain type cannot read back before any native write occurs.
@@ -100,7 +104,7 @@ fn encode<T: Serialize + DeserializeOwned>(record: &T) -> Result<Value, StorageE
     )
 }
 
-fn decode<T: DeserializeOwned>(value: Value) -> Result<T, StorageError> {
+pub(super) fn decode<T: DeserializeOwned>(value: Value) -> Result<T, StorageError> {
     if value.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
         return Err(StorageError::serialization(
             "unsupported run-ledger document schema",
