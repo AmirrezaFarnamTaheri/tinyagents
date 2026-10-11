@@ -90,3 +90,20 @@ collects results, and manages state transitions durably.
    tasks, collects results, and persists state.
 4. On interruption, retry `engine.run()`: running phases reset to Pending;
    completed phases remain done.
+
+## Asynchronous authoritative persistence
+
+AsyncWorkflowStore and LedgerWorkflowStore retain a caller-supplied
+RunLedgerStore handle. The adapter awaits load, upsert, claim, compare-and-swap
+and lease renewal without choosing a workspace or falling back to SQLite.
+WorkflowPersistenceError retains LedgerError, including native driver kinds.
+
+AsyncWorkflowChildRegistration requires the executor to await registration;
+its synchronous entrypoint refuses. LegacyWorkflowRegistration explicitly
+adapts existing desktop callbacks.
+
+These contracts are an adapter prerequisite. WorkflowEngine still uses the
+existing synchronous WorkflowStore and WorkflowExecutor contracts; constructing
+LedgerWorkflowStore does not switch engine persistence or migrate child
+progress/status/events. Hosts must not advertise cloud workflow execution until
+the shared engine and typed child-registration path are wired.

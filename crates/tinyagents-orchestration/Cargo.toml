@@ -30,11 +30,13 @@ uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = []
+storage-drivers = ["tinyagents-session/storage-drivers"]
 tracing = [
     "tinyagents-harness/tracing",
 ]
 
 [dev-dependencies]
+tinystoragedrivers-core = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 tempfile = "3"

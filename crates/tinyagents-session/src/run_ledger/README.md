@@ -187,10 +187,68 @@ validated against the member identity, not a takeover claim token. Retention
 preserves its existing scope: sessions/messages/tool calls, events and telemetry;
 it does not add pruning of workflows, teams, effects or entry trees.
 
-A future driver implementation requires atomic validation of read dependencies
+### Typed errors
+
+The port returns `LedgerResult<T>`. `LedgerError` retains legacy SQLite and
+control errors and, with `storage-drivers`, native `StorageError` values. Native
+admission, fencing, conflict and capability kinds remain available to callers.
+
+### Scoped driver adapter: partial implementation
+
+With `storage-drivers`, `DriverRunLedger::new(scoped)` binds an explicitly
+admitted `ScopedStorage`. It opens no workspace database. The supplied native
+fence remains attached to its document handles.
+
+Currently implemented: workflow upsert/read/list and lease/revision/lifecycle
+CAS, telemetry field deltas, team/member/task upsert/read/list, and tool-effect
+start/settle/unresolved/interrupted operations, member running/idle transitions,
+and individual task release. Single-document updates use
+native version preconditions, retry only conflicts, and return their own
+committed body. Counts, offsets, merge rules, identity preservation, unique
+member names and workflow revisions follow the classic implementation.
+
+Other methods return typed `Unsupported` errors before writing. Agent-run
+telemetry joins, status/event commits, dependency claims, bulk member shutdown,
+entry-tree transactions, retention and shared-owner orphan recovery are not
+implemented. This adapter is not a complete migration. Existing callers are
+not routed to it automatically.
+
+| Scoped collection | Records and query indexes |
+| --- | --- |
+| `run_ledger_workflow_runs` | Definition, status, parent thread, updated time and lease expiry |
+| `run_ledger_telemetry` | Run telemetry, updated time |
+| `run_ledger_agent_runs` | Reserved for runs; kind, status, parent/worker identities and updated time |
+| `run_ledger_teams` | Parent thread, status and updated time |
+| `run_ledger_members` | Team, creation time and unique `(teamId, name)` |
+| `run_ledger_tasks` | Team, status, claimant and `(teamId, orderIndex, created time)` |
+| `run_ledger_tool_effects` | Run, status and start time |
+
+Records use a version-one envelope, original domain IDs and SQL-compatible
+RFC3339 timestamp sort keys. Physical document IDs are length-prefixed SHA256
+digests; effect IDs bind run and call identities. Durable metadata has no TTL.
+Unknown envelope schemas fail as typed serialization errors.
+
+Cross-document implementation requires atomic validation of read dependencies
 (such as unchanged dependency-task revisions) and atomic status/event commits.
 A document-only put/delete batch cannot atomically validate read-only rows or
 append a stream event. Implementing that backend needs an owning-driver
 transaction/read-validation contract or a durable event outbox with conditional
 stream append and replay reconciliation. The port does not approximate those
 guarantees or drop unsupported families.
+
+### Source admission before migration
+
+`SourceOwner::asserted_by_trusted_host(scope)` and
+`QuiescentSource::asserted_by_trusted_host(path, owner)` represent trusted host
+assertions. Hosts must validate the path-to-owner mapping and stop source writers
+for the complete inspection/import. Model input, stored rows and path digests
+cannot establish that authority.
+
+`preflight_source` compares source ownership with the target scope before source
+access. It rejects missing databases without creating directories, and refuses
+WAL or journal sidecars with `LedgerError::SourceRequiresSnapshot`. The host must
+supply a checkpointed database or consistent snapshot; the importer never
+checkpoints it. Sources are opened through SQLite immutable read-only access,
+which also avoids writing auxiliary shared-memory files. The retained snapshot
+discovers historical schema and columns without migrations. Target import writes
+and durable import receipts are not implemented yet.

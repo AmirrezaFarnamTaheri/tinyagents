@@ -15,6 +15,7 @@ pub(super) const TELEMETRY: &str = "run_ledger_telemetry";
 pub(super) const AGENTS: &str = "run_ledger_agent_runs";
 pub(super) const TEAMS: &str = "run_ledger_teams";
 pub(super) const MEMBERS: &str = "run_ledger_members";
+pub(super) const EFFECTS: &str = "run_ledger_tool_effects";
 pub(super) const TASKS: &str = "run_ledger_tasks";
 const CAS_ATTEMPTS: usize = 64;
 
@@ -39,6 +40,10 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// Declare only portable indexes; expiry never deletes durable run metadata.
 fn specs() -> Vec<CollectionSpec> {
     vec![
+        CollectionSpec::new(EFFECTS)
+            .index(IndexSpec::new("run", ["record.runId"]))
+            .index(IndexSpec::new("status", ["record.status"]))
+            .index(IndexSpec::new("started", ["startedSql"])),
         CollectionSpec::new(WORKFLOWS)
             .index(IndexSpec::new("definition", ["record.definitionId"]))
             .index(IndexSpec::new("status", ["record.status"]))
@@ -73,8 +78,11 @@ fn specs() -> Vec<CollectionSpec> {
 }
 
 /// Store SQL-compatible timestamp sort keys alongside the domain's camelCase serde shape.
-fn encode<T: Serialize>(record: &T) -> Result<Value, StorageError> {
+fn encode<T: Serialize + DeserializeOwned>(record: &T) -> Result<Value, StorageError> {
     let record = serde_json::to_value(record)?;
+    // JSON may silently encode nonfinite floats as null; refuse a body that
+    // the same domain type cannot read back before any native write occurs.
+    let _: T = serde_json::from_value(record.clone())?;
     let sql_time = |field: &str| -> Result<Value, StorageError> {
         record
             .get(field)
@@ -88,7 +96,7 @@ fn encode<T: Serialize>(record: &T) -> Result<Value, StorageError> {
             .map(|time| time.unwrap_or(Value::Null))
     };
     Ok(
-        json!({"schemaVersion":1,"updatedSql":sql_time("updatedAt")?,"createdSql":sql_time("createdAt")?,"record":record}),
+        json!({"schemaVersion":1,"updatedSql":sql_time("updatedAt")?,"createdSql":sql_time("createdAt")?,"startedSql":sql_time("startedAt")?,"record":record}),
     )
 }
 
@@ -133,6 +141,7 @@ impl DriverRunLedger {
             .await?
             .map(|found| {
                 Ok(Versioned {
+                    id: found.id,
                     version: found.version,
                     doc: decode(found.doc)?,
                 })
@@ -151,20 +160,42 @@ impl DriverRunLedger {
         T: Serialize + DeserializeOwned + Clone + Send + Sync,
         F: Fn(Option<T>) -> T + Send + Sync,
     {
+        self.change(collection, id, |previous| {
+            let record = merge(previous);
+            Ok((Some(record.clone()), record))
+        })
+        .await
+    }
+
+    /// Evaluate eligibility against the read version, re-evaluating only native CAS conflicts.
+    pub(super) async fn change<T, R, F>(
+        &self,
+        collection: &str,
+        id: &str,
+        change: F,
+    ) -> Result<R, StorageError>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync,
+        R: Send,
+        F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
+    {
         for _ in 0..CAS_ATTEMPTS {
             let previous = self.read::<T>(collection, id).await?;
             let condition = previous
                 .as_ref()
-                .map(|row| Precondition::IfVersion(row.version))
+                .map(|row| Precondition::Version(row.version))
                 .unwrap_or(Precondition::Absent);
-            let record = merge(previous.map(|row| row.doc));
+            let (record, result) = change(previous.map(|row| row.doc))?;
+            let Some(record) = record else {
+                return Ok(result);
+            };
             match self
                 .scoped
                 .documents()
                 .put(collection, &key(&[id]), encode(&record)?, condition)
                 .await
             {
-                Ok(_) => return Ok(record),
+                Ok(_) => return Ok(result),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => return Err(error),
             }

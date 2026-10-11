@@ -17,6 +17,10 @@ pub enum LedgerError {
     /// A command-center control was invalid or its classic operation failed.
     #[error(transparent)]
     Control(Box<super::command_center::ControlError>),
+    /// Source inspection is unsupported until the host supplies a checkpointed snapshot.
+    #[cfg(feature = "storage-drivers")]
+    #[error("legacy ledger source requires a host checkpoint or consistent snapshot: {path}")]
+    SourceRequiresSnapshot { path: std::path::PathBuf },
     /// A driver operation failed, retaining capability/conflict/admission kinds.
     #[cfg(feature = "storage-drivers")]
     #[error(transparent)]

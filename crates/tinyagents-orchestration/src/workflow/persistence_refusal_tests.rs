@@ -1,0 +1,131 @@
+use super::*;
+use serde_json::Value;
+use tinyagents_session::run_ledger::DriverRunLedger;
+use tinystoragedrivers_core::{
+    Capabilities, Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, MemoryStorage,
+    Page, Precondition, Query, Scope, ScopedStorage, Sort, StorageBackend, StorageError, Version,
+    Versioned,
+};
+
+#[derive(Debug)]
+struct RefusedDocuments(ErrorKind);
+
+impl RefusedDocuments {
+    fn refused<T>(&self) -> tinystoragedrivers_core::Result<T> {
+        Err(StorageError::new(
+            self.0.clone(),
+            "admitted backend refused",
+        ))
+    }
+}
+
+#[async_trait]
+impl DocumentStore for RefusedDocuments {
+    async fn drop_collection(&self, _: &str) -> tinystoragedrivers_core::Result<()> {
+        self.refused()
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+    async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+        self.refused()
+    }
+    async fn get(
+        &self,
+        _: &str,
+        _: &str,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.refused()
+    }
+    async fn put(
+        &self,
+        _: &str,
+        _: &str,
+        _: Value,
+        _: Precondition,
+    ) -> tinystoragedrivers_core::Result<Version> {
+        self.refused()
+    }
+    async fn delete(
+        &self,
+        _: &str,
+        _: &str,
+        _: Precondition,
+    ) -> tinystoragedrivers_core::Result<bool> {
+        self.refused()
+    }
+    async fn query(
+        &self,
+        _: &str,
+        _: &Query,
+    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+        self.refused()
+    }
+    async fn count(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        self.refused()
+    }
+    async fn delete_where(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        self.refused()
+    }
+    async fn claim(
+        &self,
+        _: &str,
+        _: &Filter,
+        _: &[Sort],
+        _: &Value,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.refused()
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn authoritative_refusals_preserve_native_kind_and_never_create_sqlite() {
+    let ambient_db = std::env::current_dir().unwrap().join("session_db/sessions.db");
+    let existed_before = ambient_db.exists();
+    for kind in [
+        ErrorKind::Unavailable,
+        ErrorKind::Fenced,
+        ErrorKind::Unsupported(Capability::Transactions),
+    ] {
+        let memory = MemoryStorage::new();
+        let scope = Scope::new("explicit-profile").unwrap();
+        let handles = memory.for_scope(&scope).unwrap();
+        let admitted = ScopedStorage::new(
+            scope,
+            "refused",
+            Arc::new(RefusedDocuments(kind.clone())),
+            handles.streams().clone(),
+            handles.blobs().clone(),
+        );
+        let store = LedgerWorkflowStore::new(Arc::new(DriverRunLedger::new(admitted)));
+        let outcomes = [
+            store.load("workflow").await.map(|_| ()),
+            store.upsert(row()).await.map(|_| ()),
+            store
+                .claim("workflow", "owner", Duration::from_secs(30))
+                .await
+                .map(|_| ()),
+            store
+                .compare_and_swap(row(), 0, "owner", Duration::from_secs(30))
+                .await
+                .map(|_| ()),
+            store
+                .renew("workflow", "owner", Duration::from_secs(30))
+                .await
+                .map(|_| ()),
+        ];
+        for outcome in outcomes {
+            let WorkflowPersistenceError::Ledger(LedgerError::Driver(error)) = outcome.unwrap_err()
+            else {
+                panic!("native error flattened")
+            };
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.message(), "admitted backend refused");
+        }
+    }
+    assert_eq!(
+        ambient_db.exists(),
+        existed_before,
+        "refusal created an ambient SQLite database"
+    );
+}

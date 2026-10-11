@@ -4,11 +4,16 @@
 //! typed unsupported error. They never approximate a transaction with weaker
 //! individual writes or switch to a local SQLite database.
 
+mod effects;
+mod import;
 mod storage;
+pub use import::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
 use std::sync::Arc;
-use storage::{TELEMETRY, WORKFLOWS, eq_nonblank};
-use tinystoragedrivers_core::{Capability, Filter, Scope, ScopedStorage, StorageError};
+use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
+use tinystoragedrivers_core::{
+    Capability, Filter, Query, Scope, ScopedStorage, Sort, StorageError,
+};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -48,6 +53,93 @@ impl DriverRunLedger {
     }
 }
 
+impl DriverRunLedger {
+    /// The timestamp is explicit internally so the expiry boundary is tested without sleeps.
+    async fn claim_workflow_at(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> Result<WorkflowLeaseClaim> {
+        self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
+            let Some(mut row) = previous else {
+                return Ok((None, WorkflowLeaseClaim::Missing));
+            };
+            if row.lease_owner.is_some()
+                && row.lease_owner.as_deref() != Some(owner)
+                && row.lease_expires_at.is_some_and(|expires| expires > now)
+            {
+                return Ok((None, WorkflowLeaseClaim::Busy(row)));
+            }
+            row.lease_owner = Some(owner.into());
+            row.lease_expires_at = Some(now + lease_for);
+            row.updated_at = now;
+            row.revision = next_revision(row.revision)?;
+            Ok((Some(row.clone()), WorkflowLeaseClaim::Acquired(row)))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
+    /// Renewal changes the native version, but preserves the workflow lifecycle revision.
+    async fn renew_workflow_at(
+        &self,
+        id: &str,
+        owner: &str,
+        lease_for: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
+            let Some(mut row) = previous else {
+                return Ok((None, false));
+            };
+            if row.lease_owner.as_deref() != Some(owner)
+                || row.lease_expires_at.is_none_or(|expires| expires <= now)
+            {
+                return Ok((None, false));
+            }
+            row.lease_expires_at = Some(now + lease_for);
+            row.updated_at = now;
+            Ok((Some(row), true))
+        })
+        .await
+        .map_err(Into::into)
+    }
+}
+
+/// Workflow revisions retain the classic signed SQLite range rather than overflowing on corrupt input.
+fn next_revision(revision: u64) -> std::result::Result<u64, StorageError> {
+    revision
+        .checked_add(1)
+        .filter(|revision| *revision <= i64::MAX as u64)
+        .ok_or_else(|| {
+            StorageError::serialization("workflow revision exceeds classic signed range")
+        })
+}
+
+/// Merge lifecycle fields without rewriting the immutable started-at timestamp.
+fn apply_workflow(
+    row: &mut WorkflowRun,
+    upsert: &WorkflowRunUpsert,
+    now: DateTime<Utc>,
+) -> std::result::Result<(), StorageError> {
+    row.definition_id = upsert.definition_id.clone();
+    row.parent_thread_id = upsert
+        .parent_thread_id
+        .clone()
+        .or(row.parent_thread_id.take());
+    row.input = upsert.input.clone();
+    row.phase_states = upsert.phase_states.clone();
+    row.child_run_ids = upsert.child_run_ids.clone();
+    row.status = upsert.status;
+    row.summary = upsert.summary.clone().or(row.summary.take());
+    row.updated_at = now;
+    row.completed_at = upsert.completed_at.or(row.completed_at);
+    row.revision = next_revision(row.revision)?;
+    Ok(())
+}
+
 fn unsupported(operation: &str) -> super::LedgerError {
     StorageError::unsupported(
         Capability::ValidatedBatch,
@@ -66,7 +158,7 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
         let now = Utc::now();
-        self.merge(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
             let first = previous.is_none();
             let mut row = previous.unwrap_or(WorkflowRun {
                 id: upsert.id.clone(),
@@ -94,56 +186,89 @@ impl RunLedgerStore for DriverRunLedger {
             row.updated_at = now;
             row.completed_at = upsert.completed_at.or(row.completed_at);
             if !first {
-                row.revision += 1;
+                row.revision = next_revision(row.revision)?;
             }
             if row.status.is_terminal() {
                 row.lease_owner = None;
                 row.lease_expires_at = None;
             }
-            row
+            Ok((Some(row.clone()), row))
         })
         .await
         .map_err(Into::into)
     }
 
-    /// Implement [`RunLedgerStore::try_claim_workflow_run`] without a weaker fallback.
     async fn try_claim_workflow_run(
         &self,
-        _id: &str,
-        _owner: &str,
-        _lease_for: chrono::Duration,
+        id: &str,
+        owner: &str,
+        lease_for: chrono::Duration,
     ) -> Result<WorkflowLeaseClaim> {
-        Err(unsupported("try_claim_workflow_run"))
+        self.claim_workflow_at(id, owner, lease_for, Utc::now())
+            .await
     }
 
-    /// Implement [`RunLedgerStore::compare_and_swap_workflow_run`] without a weaker fallback.
     async fn compare_and_swap_workflow_run(
         &self,
-        _upsert: WorkflowRunUpsert,
-        _expected_revision: u64,
-        _owner: &str,
-        _lease_for: chrono::Duration,
+        upsert: WorkflowRunUpsert,
+        expected_revision: u64,
+        owner: &str,
+        lease_for: chrono::Duration,
     ) -> Result<Option<WorkflowRun>> {
-        Err(unsupported("compare_and_swap_workflow_run"))
+        let now = Utc::now();
+        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+            let Some(mut row) = previous else {
+                return Ok((None, None));
+            };
+            if row.revision != expected_revision
+                || row.lease_owner.as_deref() != Some(owner)
+                || row.lease_expires_at.is_none_or(|expires| expires <= now)
+            {
+                return Ok((None, None));
+            }
+            apply_workflow(&mut row, &upsert, now)?;
+            if row.status.is_terminal() {
+                row.lease_owner = None;
+                row.lease_expires_at = None;
+            } else {
+                row.lease_expires_at = Some(now + lease_for);
+            }
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
     }
 
-    /// Implement [`RunLedgerStore::renew_workflow_run_lease`] without a weaker fallback.
     async fn renew_workflow_run_lease(
         &self,
-        _id: &str,
-        _owner: &str,
-        _lease_for: chrono::Duration,
+        id: &str,
+        owner: &str,
+        lease_for: chrono::Duration,
     ) -> Result<bool> {
-        Err(unsupported("renew_workflow_run_lease"))
+        self.renew_workflow_at(id, owner, lease_for, Utc::now())
+            .await
     }
 
-    /// Implement [`RunLedgerStore::compare_and_swap_workflow_run_lifecycle`] without a weaker fallback.
     async fn compare_and_swap_workflow_run_lifecycle(
         &self,
-        _upsert: WorkflowRunUpsert,
-        _expected_revision: u64,
+        upsert: WorkflowRunUpsert,
+        expected_revision: u64,
     ) -> Result<Option<WorkflowRun>> {
-        Err(unsupported("compare_and_swap_workflow_run_lifecycle"))
+        let now = Utc::now();
+        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+            let Some(mut row) = previous else {
+                return Ok((None, None));
+            };
+            if row.revision != expected_revision {
+                return Ok((None, None));
+            }
+            apply_workflow(&mut row, &upsert, now)?;
+            row.lease_owner = None;
+            row.lease_expires_at = None;
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
     }
 
     /// Implement [`RunLedgerStore::append_run_event`] without a weaker fallback.
@@ -275,55 +400,179 @@ impl RunLedgerStore for DriverRunLedger {
         Ok(WorkflowRunListResponse { runs, count })
     }
 
-    /// Implement [`RunLedgerStore::upsert_agent_team`] without a weaker fallback.
-    async fn upsert_agent_team(&self, _upsert: AgentTeamUpsert) -> Result<AgentTeam> {
-        Err(unsupported("upsert_agent_team"))
+    async fn upsert_agent_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {
+        let now = Utc::now();
+        Ok(self
+            .merge(TEAMS, &upsert.id, |previous: Option<AgentTeam>| AgentTeam {
+                id: upsert.id.clone(),
+                parent_thread_id: upsert.parent_thread_id.clone().or_else(|| {
+                    previous
+                        .as_ref()
+                        .and_then(|row| row.parent_thread_id.clone())
+                }),
+                lead_agent_id: upsert.lead_agent_id.clone(),
+                status: upsert.status,
+                summary: upsert
+                    .summary
+                    .clone()
+                    .or_else(|| previous.as_ref().and_then(|row| row.summary.clone())),
+                created_at: previous
+                    .as_ref()
+                    .map(|row| row.created_at)
+                    .unwrap_or(upsert.created_at.unwrap_or(now)),
+                updated_at: now,
+                closed_at: upsert
+                    .closed_at
+                    .or_else(|| previous.as_ref().and_then(|row| row.closed_at)),
+            })
+            .await?)
     }
 
-    /// Implement [`RunLedgerStore::get_agent_team`] without a weaker fallback.
-    async fn get_agent_team(&self, _id: &str) -> Result<Option<AgentTeam>> {
-        Err(unsupported("get_agent_team"))
+    async fn get_agent_team(&self, id: &str) -> Result<Option<AgentTeam>> {
+        Ok(self.read(TEAMS, id).await?.map(|row| row.doc))
     }
 
-    /// Implement [`RunLedgerStore::list_agent_teams`] without a weaker fallback.
     async fn list_agent_teams(
         &self,
-        _request: &AgentTeamListRequest,
+        request: &AgentTeamListRequest,
     ) -> Result<AgentTeamListResponse> {
-        Err(unsupported("list_agent_teams"))
+        let filter = eq_nonblank(
+            Filter::default(),
+            "record.parentThreadId",
+            request.parent_thread_id.as_deref(),
+        );
+        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let (teams, count) = self
+            .page(
+                TEAMS,
+                filter,
+                request.limit.unwrap_or(50).min(500),
+                request.offset.unwrap_or(0),
+            )
+            .await?;
+        Ok(AgentTeamListResponse { teams, count })
     }
 
-    /// Implement [`RunLedgerStore::upsert_agent_team_member`] without a weaker fallback.
     async fn upsert_agent_team_member(
         &self,
-        _upsert: AgentTeamMemberUpsert,
+        upsert: AgentTeamMemberUpsert,
     ) -> Result<AgentTeamMember> {
-        Err(unsupported("upsert_agent_team_member"))
+        let now = Utc::now();
+        Ok(self
+            .merge(MEMBERS, &upsert.id, |previous: Option<AgentTeamMember>| {
+                AgentTeamMember {
+                    id: upsert.id.clone(),
+                    team_id: previous
+                        .as_ref()
+                        .map(|row| row.team_id.clone())
+                        .unwrap_or_else(|| upsert.team_id.clone()),
+                    name: upsert.name.clone(),
+                    agent_id: upsert
+                        .agent_id
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|row| row.agent_id.clone())),
+                    member_status: upsert.member_status,
+                    current_task_id: upsert.current_task_id.clone().or_else(|| {
+                        previous
+                            .as_ref()
+                            .and_then(|row| row.current_task_id.clone())
+                    }),
+                    worker_thread_id: upsert.worker_thread_id.clone().or_else(|| {
+                        previous
+                            .as_ref()
+                            .and_then(|row| row.worker_thread_id.clone())
+                    }),
+                    run_id: upsert
+                        .run_id
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|row| row.run_id.clone())),
+                    created_at: previous
+                        .as_ref()
+                        .map(|row| row.created_at)
+                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                    updated_at: now,
+                }
+            })
+            .await?)
     }
 
-    /// Implement [`RunLedgerStore::get_agent_team_member`] without a weaker fallback.
-    async fn get_agent_team_member(&self, _id: &str) -> Result<Option<AgentTeamMember>> {
-        Err(unsupported("get_agent_team_member"))
+    async fn get_agent_team_member(&self, id: &str) -> Result<Option<AgentTeamMember>> {
+        Ok(self.read(MEMBERS, id).await?.map(|row| row.doc))
     }
 
-    /// Implement [`RunLedgerStore::list_agent_team_members`] without a weaker fallback.
-    async fn list_agent_team_members(&self, _team_id: &str) -> Result<Vec<AgentTeamMember>> {
-        Err(unsupported("list_agent_team_members"))
+    async fn list_agent_team_members(&self, team_id: &str) -> Result<Vec<AgentTeamMember>> {
+        Ok(self
+            .records(
+                MEMBERS,
+                Query::filter(Filter::eq("record.teamId", team_id)).sort(Sort::asc("createdSql")),
+            )
+            .await?)
     }
 
-    /// Implement [`RunLedgerStore::upsert_agent_team_task`] without a weaker fallback.
-    async fn upsert_agent_team_task(&self, _upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
-        Err(unsupported("upsert_agent_team_task"))
+    async fn upsert_agent_team_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
+        let now = Utc::now();
+        Ok(self
+            .merge(TASKS, &upsert.id, |previous: Option<AgentTeamTask>| {
+                let live = previous
+                    .as_ref()
+                    .filter(|_| upsert.status == AgentTeamTaskStatus::InProgress);
+                AgentTeamTask {
+                    id: upsert.id.clone(),
+                    team_id: previous
+                        .as_ref()
+                        .map(|row| row.team_id.clone())
+                        .unwrap_or_else(|| upsert.team_id.clone()),
+                    title: upsert.title.clone(),
+                    objective: upsert
+                        .objective
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|row| row.objective.clone())),
+                    status: upsert.status,
+                    owner_member_id: upsert.owner_member_id.clone().or_else(|| {
+                        previous
+                            .as_ref()
+                            .and_then(|row| row.owner_member_id.clone())
+                    }),
+                    claimed_by_member_id: live.and_then(|row| row.claimed_by_member_id.clone()),
+                    claim_token: live.and_then(|row| row.claim_token.clone()),
+                    depends_on: upsert.depends_on.clone(),
+                    gate_status: upsert
+                        .gate_status
+                        .clone()
+                        .unwrap_or_else(|| "pending".into()),
+                    gate_reason: upsert
+                        .gate_reason
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|row| row.gate_reason.clone())),
+                    evidence: upsert.evidence.clone(),
+                    source_run_id: upsert
+                        .source_run_id
+                        .clone()
+                        .or_else(|| previous.as_ref().and_then(|row| row.source_run_id.clone())),
+                    order_index: upsert.order_index,
+                    created_at: previous
+                        .as_ref()
+                        .map(|row| row.created_at)
+                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                    updated_at: now,
+                }
+            })
+            .await?)
     }
 
-    /// Implement [`RunLedgerStore::get_agent_team_task`] without a weaker fallback.
-    async fn get_agent_team_task(&self, _id: &str) -> Result<Option<AgentTeamTask>> {
-        Err(unsupported("get_agent_team_task"))
+    async fn get_agent_team_task(&self, id: &str) -> Result<Option<AgentTeamTask>> {
+        Ok(self.read(TASKS, id).await?.map(|row| row.doc))
     }
 
-    /// Implement [`RunLedgerStore::list_agent_team_tasks`] without a weaker fallback.
-    async fn list_agent_team_tasks(&self, _team_id: &str) -> Result<Vec<AgentTeamTask>> {
-        Err(unsupported("list_agent_team_tasks"))
+    async fn list_agent_team_tasks(&self, team_id: &str) -> Result<Vec<AgentTeamTask>> {
+        Ok(self
+            .records(
+                TASKS,
+                Query::filter(Filter::eq("record.teamId", team_id))
+                    .sort(Sort::asc("record.orderIndex"))
+                    .sort(Sort::asc("createdSql")),
+            )
+            .await?)
     }
 
     /// Implement [`RunLedgerStore::claim_agent_team_task`] without a weaker fallback.
@@ -358,54 +607,93 @@ impl RunLedgerStore for DriverRunLedger {
         Err(unsupported("shutdown_agent_team_member"))
     }
 
-    /// Implement [`RunLedgerStore::mark_agent_team_member_running`] without a weaker fallback.
     async fn mark_agent_team_member_running(
         &self,
-        _team_id: &str,
-        _member_id: &str,
-        _task_id: &str,
-        _worker_thread_id: &str,
-        _run_id: &str,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        Err(unsupported("mark_agent_team_member_running"))
+        let now = Utc::now();
+        self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
+            let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
+                return Ok((None, None));
+            };
+            row.member_status = AgentTeamMemberStatus::Active;
+            row.current_task_id = Some(task_id.into());
+            row.worker_thread_id = Some(worker_thread_id.into());
+            row.run_id = Some(run_id.into());
+            row.updated_at = now;
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
     }
 
-    /// Implement [`RunLedgerStore::mark_agent_team_member_idle`] without a weaker fallback.
     async fn mark_agent_team_member_idle(
         &self,
-        _team_id: &str,
-        _member_id: &str,
+        team_id: &str,
+        member_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        Err(unsupported("mark_agent_team_member_idle"))
+        let now = Utc::now();
+        self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
+            let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
+                return Ok((None, None));
+            };
+            row.member_status = AgentTeamMemberStatus::Idle;
+            row.current_task_id = None;
+            row.updated_at = now;
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
     }
 
-    /// Implement [`RunLedgerStore::release_agent_team_task`] without a weaker fallback.
-    async fn release_agent_team_task(&self, _team_id: &str, _task_id: &str) -> Result<bool> {
-        Err(unsupported("release_agent_team_task"))
+    async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
+        let now = Utc::now();
+        self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
+            let Some(mut row) = previous.filter(|row| {
+                row.team_id == team_id && row.status == AgentTeamTaskStatus::InProgress
+            }) else {
+                return Ok((None, false));
+            };
+            row.status = AgentTeamTaskStatus::Todo;
+            row.claimed_by_member_id = None;
+            row.claim_token = None;
+            row.gate_status = "pending".into();
+            row.gate_reason = None;
+            row.updated_at = now;
+            Ok((Some(row), true))
+        })
+        .await
+        .map_err(Into::into)
     }
 
-    /// Implement [`RunLedgerStore::record_tool_started`] without a weaker fallback.
-    async fn record_tool_started(&self, _start: ToolEffectStart) -> Result<ToolEffectRow> {
-        Err(unsupported("record_tool_started"))
+    async fn record_tool_started(&self, start: ToolEffectStart) -> Result<ToolEffectRow> {
+        self.effect_start(start).await
     }
 
-    /// Implement [`RunLedgerStore::settle_tool_effect`] without a weaker fallback.
-    async fn settle_tool_effect(&self, _settle: ToolEffectSettle) -> Result<Option<ToolEffectRow>> {
-        Err(unsupported("settle_tool_effect"))
+    async fn settle_tool_effect(&self, settle: ToolEffectSettle) -> Result<Option<ToolEffectRow>> {
+        self.effect_settle(settle).await
     }
 
-    /// Implement [`RunLedgerStore::list_unresolved_tool_effects`] without a weaker fallback.
-    async fn list_unresolved_tool_effects(&self, _run_id: &str) -> Result<Vec<ToolEffectRow>> {
-        Err(unsupported("list_unresolved_tool_effects"))
+    async fn list_unresolved_tool_effects(&self, run_id: &str) -> Result<Vec<ToolEffectRow>> {
+        self.effect_unresolved(run_id).await
     }
 
-    /// Implement [`RunLedgerStore::mark_tool_effect_interrupted`] without a weaker fallback.
     async fn mark_tool_effect_interrupted(
         &self,
-        _run_id: &str,
-        _call_id: &str,
+        run_id: &str,
+        call_id: &str,
     ) -> Result<Option<ToolEffectRow>> {
-        Err(unsupported("mark_tool_effect_interrupted"))
+        self.effect_settle(ToolEffectSettle {
+            run_id: run_id.into(),
+            call_id: call_id.into(),
+            status: super::tool_effects::ToolEffectStatus::Interrupted,
+            effect_summary: None,
+        })
+        .await
     }
 
     /// Implement [`RunLedgerStore::entry_append`] without a weaker fallback.
