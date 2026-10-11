@@ -564,7 +564,7 @@ async fn projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_even
     let stream = format!("run_events:{}", storage::key(&["run"]));
     native.streams().append(&stream, serde_json::to_value(second).unwrap()).await.unwrap();
     let error = ledger.reconcile_run_events("run").await.unwrap_err();
-    assert!(matches!(error, LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization));
+    assert!(matches!(error, crate::run_ledger::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization));
     assert_eq!(native.streams().len(&stream).await.unwrap(), 1);
     assert_eq!(ledger.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 2);
 }
