@@ -286,7 +286,7 @@ struct FlakyDocs {
 impl FlakyDocs {
     fn check(&self) -> Result<(), StorageError> {
         if self.down.load(std::sync::atomic::Ordering::SeqCst) {
-            Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Documents, "flaky backend is down").with_source(NativeFailure))
+            Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Fencing, "flaky backend is down").with_source(NativeFailure))
         } else {
             Ok(())
         }
@@ -456,7 +456,7 @@ impl StorageBackend for NativeRefusal {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
     }
     fn database(&self, _: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Documents, "database"))
+        Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Fencing, "database"))
     }
 }
 
@@ -484,7 +484,7 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
         storage: MemoryStorage::new(), down: down.clone(), reject_declaration: false,
     })).unwrap().recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Documents));
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Fencing));
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
     assert!(provider.recovered.lock().unwrap().is_empty());
@@ -503,7 +503,7 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
         reject_declaration: true,
     })).unwrap().recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Documents));
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Fencing));
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
 }
