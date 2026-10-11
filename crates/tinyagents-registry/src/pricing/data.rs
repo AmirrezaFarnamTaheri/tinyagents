@@ -5,7 +5,7 @@ use super::ModelPrice;
 /// Published list prices and context windows for the default models the product
 /// can route to.
 ///
-/// Sources (captured [`PRICING_AS_OF`]): vendor pricing/model pages. Anthropic
+/// Sources (captured [`super::PRICING_AS_OF`]): vendor pricing/model pages. Anthropic
 /// price rows are authoritative (cached = 0.1× input, the documented cache-read
 /// rate); other providers' cached rates use the published discount where known
 /// and a conservative provider-typical fraction otherwise. Context windows are
