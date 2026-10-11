@@ -116,11 +116,14 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Multi-tenant providers must resolve identity before returning the handle
     /// and must not derive scope from ledger payloads. This seam alone neither
     /// routes existing workspace-based callers nor migrates session tables.
+    ///
+    /// Scope/admission or backend errors must be returned as errors, distinct
+    /// from an unsupported ledger (`Ok(None)`), so callers can fail closed.
     fn run_ledger_for_agent(
         &self,
         _agent_id: &str,
-    ) -> Option<Arc<dyn crate::run_ledger::RunLedgerStore>> {
-        None
+    ) -> tinyagents_harness::error::Result<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+        Ok(None)
     }
 
     /// Repairs state an unclean shutdown left behind, once, before any agent
@@ -320,7 +323,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     fn run_ledger_for_agent(
         &self,
         agent_id: &str,
-    ) -> Option<Arc<dyn crate::run_ledger::RunLedgerStore>> {
+    ) -> tinyagents_harness::error::Result<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         (**self).run_ledger_for_agent(agent_id)
     }
 

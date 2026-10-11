@@ -485,7 +485,7 @@ fn adapter_control_and_retention_preserve_existing_tables_and_sequences() {
             &|_| None,
         )
         .unwrap();
-    assert_eq!(stopped.status, AgentRunStatus::Interrupted.as_str());
+    assert_eq!(stopped.status, AgentRunStatus::Cancelled.as_str());
     assert_eq!(ledger.list_agent_work(None, &|_| None).unwrap().total, 1);
     let request = RunEventListRequest {
         run_id: "agent".into(),

@@ -170,8 +170,9 @@ migrate the database. Existing workspace-based APIs and all SQLite tables remain
 available, including the still-active session/message/tool-call tables.
 
 Providers may override `SessionStoreProvider::run_ledger_for_agent` to return an
-`Arc<dyn RunLedgerStore>`. Its default is `None`, independent of the existing
-`AgentStores` bundle. `None` does not authorize a local fallback. Hosts must
+`Arc<dyn RunLedgerStore>`. Its default is `Ok(None)`, independent of the existing
+`AgentStores` bundle. `Ok(None)` does not authorize a local fallback. Admission or backend
+errors use the typed error result and are never disguised as absence. Hosts must
 select their policy explicitly; this new port does not route existing callers
 or migrate their data by itself. Shared hosts must supply handles bound to the
 admitted tenant and agent, and must not use the classic startup orphan sweep to
