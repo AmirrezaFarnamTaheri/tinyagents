@@ -35,8 +35,8 @@ pub use render::{
     NoSuchPackTool, named_tool, render_pack_filtered, route_sentence, scope_use_skill_spec,
 };
 pub use tool::{USE_SKILL, UseSkillTool};
-pub use types::{PackToolExtension, ToolPack};
 pub(crate) use types::PinnedPackCall;
+pub use types::{PackToolExtension, ToolPack};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

@@ -229,6 +229,13 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     registry.register(outer);
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
     let pinned = dispatch.bind_call(&args).unwrap().unwrap();
+    assert!(pinned.tool().supports_markdown());
+    assert!(
+        dispatch
+            .tool()
+            .host_extension()
+            .is_some_and(|extension| extension.is::<PackRegistryHandle>())
+    );
     let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
 
     let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];

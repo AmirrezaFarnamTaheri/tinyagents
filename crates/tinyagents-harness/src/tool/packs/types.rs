@@ -67,7 +67,10 @@ pub(super) fn resolve_call(
     ResolvedPackCall::Execute {
         tools,
         index,
-        arguments: args.get("args").cloned().unwrap_or_else(|| serde_json::json!({})),
+        arguments: args
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
     }
 }
 
