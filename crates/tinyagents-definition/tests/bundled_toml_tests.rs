@@ -15,7 +15,11 @@ fn every_bundled_agent_parses_without_changing_its_authored_vocabulary() {
         let authored: toml::Value = toml::from_str(&text).unwrap();
         let definition: AgentDefinition =
             toml::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        let projected = serde_json::to_value(definition).unwrap();
+        let serialized = toml::to_string(&definition).unwrap();
+        let roundtrip: AgentDefinition = toml::from_str(&serialized).unwrap();
+        let projected = serde_json::to_value(&definition).unwrap();
+        assert_eq!(serde_json::to_value(roundtrip).unwrap(), projected);
+
         for (field, value) in authored.as_table().unwrap() {
             let value = if field == "subagents" {
                 value.get("allowlist").unwrap_or(value)
