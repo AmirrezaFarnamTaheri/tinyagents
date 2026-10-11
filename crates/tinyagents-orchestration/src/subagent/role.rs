@@ -35,6 +35,19 @@ impl SubagentRole {
     }
 }
 
+/// Map authored hierarchy vocabulary onto runtime delegation capability.
+/// Chat/reasoning can orchestrate; a worker is a leaf. Tier-to-tier admission
+/// remains `tinyagents_definition::validate_tier_transition`.
+impl From<tinyagents_definition::AgentTier> for SubagentRole {
+    fn from(tier: tinyagents_definition::AgentTier) -> Self {
+        match tier {
+            tinyagents_definition::AgentTier::Chat
+            | tinyagents_definition::AgentTier::Reasoning => Self::Orchestrator,
+            tinyagents_definition::AgentTier::Worker => Self::Leaf,
+        }
+    }
+}
+
 /// Whether `name` is part of the delegation surface: this crate's fixed tools
 /// or one of the host's [`SubAgentTool`](super::SubAgentTool) names.
 pub fn is_delegation_tool(name: &str, host_delegation_tools: &[String]) -> bool {

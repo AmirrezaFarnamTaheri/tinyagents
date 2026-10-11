@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Host-neutral subagent invocation and lifecycle orchestration."
 
 [dependencies]
+tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.4" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }

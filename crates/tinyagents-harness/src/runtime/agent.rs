@@ -1077,21 +1077,35 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         messages.append(&mut preamble);
         messages.append(&mut request.messages);
         let progress = start_progress_dispatcher(host.progress.clone());
-        // An empty declared list and "declared nothing" are indistinguishable
-        // on `AgentDefinition::tools` (`Vec<String>`), so both collapse to
-        // `None` here — `resolve_tool_allowlist` in `agent_loop::tools`
-        // treats that as fail-closed by default (I-9), not as "unrestricted".
-        let declared_tools: std::collections::HashSet<String> =
-            definition.tools.into_iter().collect();
-        let allowed_tools = (!declared_tools.is_empty()).then_some(declared_tools);
+        // Bare wildcard keeps the host fallback; explicit wildcard policy must
+        // also cover tools supplied by a live, context-dependent toolset.
+        let registered = self.tools.names();
+        let wildcard_tools = matches!(definition.tools, tinyagents_definition::ToolScope::Wildcard)
+            && (!definition.disallowed_tools.is_empty()
+                || !definition.extra_tools.is_empty()
+                || !definition.deferred_tools.is_empty());
+        let denied_tools = definition.disallowed_tools.iter().cloned().collect();
+        let allowed_tools = if wildcard_tools {
+            None
+        } else {
+            match definition.resolve_tool_scope(Some(&registered)) {
+                tinyagents_definition::ToolScope::Wildcard => None,
+                tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
+            }
+        };
+        let deferred_tools = definition.deferred_tools.iter().cloned().collect();
         let tool_rules = definition.tool_rules;
         Ok(PreparedAgentTurn {
             binding: HostInvocationBinding {
                 host: host.clone(),
                 agent_id: request.agent_id.clone(),
-                model_pin: definition.model,
+                model_pin: definition.model.pin(),
+                model_hint: definition.model.hint(),
                 role: definition.role,
                 allowed_tools,
+                wildcard_tools,
+                denied_tools,
+                deferred_tools,
                 tool_rules,
                 progress: progress.clone(),
                 runtime: None,

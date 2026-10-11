@@ -85,13 +85,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             }
             run.final_response = Some(response);
             ctx.close_turn(self.policy.capture, messages);
-            if self
-                .continue_from_queue_at_finish(ctx, status, messages)
-                .await
-            {
-                return Ok(TurnFlow::NextTurn);
-            }
-            return Ok(TurnFlow::Exit(LoopExit::Finished));
+            return self.settle_natural_finish(ctx, status, messages).await;
         }
 
         // A real call that a length stop cut off was answered with a
@@ -152,13 +146,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 return Ok(TurnFlow::Exit(exit));
             }
             run.final_response = Some(response);
-            if self
-                .continue_from_queue_at_finish(ctx, status, messages)
-                .await
-            {
-                return Ok(TurnFlow::NextTurn);
-            }
-            return Ok(TurnFlow::Exit(LoopExit::Finished));
+            return self.settle_natural_finish(ctx, status, messages).await;
         }
 
         // `EndStrategy::Exhaustive`: the output tool this turn is

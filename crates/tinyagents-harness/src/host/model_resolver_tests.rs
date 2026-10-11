@@ -243,3 +243,16 @@ async fn usable_behind_a_trait_object() {
         .expect("invoke");
     assert_eq!(response.text(), "dyn");
 }
+
+#[test]
+fn routing_hints_roundtrip_separately_from_model_pins() {
+    let request = ModelResolveRequest::new("planner").with_model_hint("reasoning");
+    assert_eq!(request.model_pin, None);
+    assert_eq!(request.model_hint.as_deref(), Some("reasoning"));
+    let decoded: ModelResolveRequest =
+        serde_json::from_value(serde_json::to_value(&request).unwrap()).unwrap();
+    assert_eq!(decoded, request);
+    let legacy: ModelResolveRequest =
+        serde_json::from_value(serde_json::json!({"agent_id":"old"})).unwrap();
+    assert_eq!(legacy.model_hint, None);
+}

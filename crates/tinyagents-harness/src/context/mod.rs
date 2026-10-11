@@ -33,9 +33,11 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod depth;
 mod stats;
 mod types;
 
+pub use depth::{current_run_depth, with_run_depth};
 pub use stats::*;
 pub use types::*;
 
@@ -230,11 +232,10 @@ impl RunConfig {
     /// and the REPL sub-run builtin — funnels its `depth + 1` check through here
     /// so the fail-closed guard cannot drift out of sync between them.
     pub fn checked_child_depth(parent_depth: usize, max_depth: usize) -> Result<usize> {
-        let child_depth = parent_depth + 1;
-        if child_depth > max_depth {
-            return Err(crate::error::TinyAgentsError::SubAgentDepth(max_depth));
-        }
-        Ok(child_depth)
+        parent_depth
+            .checked_add(1)
+            .filter(|child_depth| *child_depth <= max_depth)
+            .ok_or(crate::error::TinyAgentsError::SubAgentDepth(max_depth))
     }
 
     /// Builds the [`RunConfig`] for a child run one level deeper than this one.

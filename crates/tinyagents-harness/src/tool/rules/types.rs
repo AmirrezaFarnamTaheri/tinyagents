@@ -60,6 +60,8 @@ pub(crate) enum CallGate {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolGate {
     allowed: Option<HashSet<String>>,
+    denied: HashSet<String>,
+    deferred: HashSet<String>,
     rules: Option<Arc<ToolRuleSet>>,
     context: RuleContext,
 }
@@ -83,16 +85,40 @@ impl ToolGate {
         };
         Self {
             allowed,
+            denied: HashSet::new(),
+            deferred: HashSet::new(),
             rules,
             context: policy.context.clone(),
         }
     }
 
+    /// Adds exact exclusions without freezing a dynamic wildcard catalogue.
+    pub(crate) fn with_denied_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.denied.extend(names);
+        self
+    }
+
+    /// Defers these names for this invocation without widening hidden registrations.
+    pub(crate) fn with_deferred_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.deferred.extend(names);
+        self
+    }
+
+    /// Effective exposure after applying definition-local discovery policy.
+    pub(crate) fn exposure(&self, tool: &dyn Tool) -> ToolExposure {
+        match tool.exposure() {
+            ToolExposure::Direct if self.deferred.contains(tool.name()) => ToolExposure::Deferred,
+            exposure => exposure,
+        }
+    }
+
     /// Whether the exact allowlist admits `name`. Rules are not consulted.
     pub(crate) fn allows_name(&self, name: &str) -> bool {
-        self.allowed
-            .as_ref()
-            .is_none_or(|allowed| allowed.contains(name))
+        !self.denied.contains(name)
+            && self
+                .allowed
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(name))
     }
 
     /// Whether `name` may be listed on `surface` (catalogue or search).
@@ -122,7 +148,7 @@ impl ToolGate {
     /// [`Self::lists`] on the surface a tool's exposure puts it on: search
     /// for a deferred tool, the catalogue otherwise.
     pub(crate) fn lists_tool(&self, tool: &dyn Tool) -> bool {
-        let surface = if tool.exposure() == ToolExposure::Deferred {
+        let surface = if self.exposure(tool) == ToolExposure::Deferred {
             Surface::Search
         } else {
             Surface::Catalog
@@ -137,6 +163,9 @@ impl ToolGate {
     /// (which names registered tools) does not apply; the rules do, so a
     /// host can withhold discovery itself.
     pub(crate) fn admits_intrinsic(&self, name: &str, surface: Surface) -> CallGate {
+        if self.denied.contains(name) {
+            return CallGate::Refuse(format!("tool '{name}' is denied by the definition"));
+        }
         let Some(rules) = &self.rules else {
             return CallGate::Admit(ApprovalDirective::Default);
         };

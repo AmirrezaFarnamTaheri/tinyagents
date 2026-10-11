@@ -9,7 +9,7 @@ this file is the map of the module.
 | `types.rs`    | `ToolDiscoveryPolicy` (the knobs, the host `ranker` and `DiscoveryRankMode`), `DeferredCatalog` (a run's deferred schemas, BM25-indexed, name-sorted, ranked through the policy), `DeferredTool`, `RankedSearch` |
 | `manifest.rs` | `render_manifest` — the budgeted listing inside `tool_search`'s description: full → names → count |
 | `bridge.rs`   | The one intrinsic tool, `tool_search`: `bridge_schemas`, `answer_tool_search` (async; returns a `SearchAnswer`) |
-| `embedding_ranker.rs` | `EmbeddingToolRanker` — a semantic `tinytools::ToolRanker` over any `EmbeddingModel`, cached in memory and optionally on disk by embedding-space signature |
+| `embedding_ranker.rs` | `EmbeddingToolRanker` — a semantic `tinytools::ToolRanker` over any `EmbeddingModel`, cached in memory and optionally through `EmbeddingCache` or disk by embedding-space signature |
 | `mod_tests.rs` | Unit tests for all of the above                                      |
 
 The agent loop (`agent_loop/run_loop.rs`, `agent_loop/tools.rs`) is the only
@@ -32,3 +32,17 @@ Invariants worth keeping:
   answer BM25 answers instead and `RankedSearch::fallback` says why.
   `DiscoveryRankMode::Compare` serves the host ranker and carries the BM25
   ranking alongside for comparison. BM25 itself lives in `tinytools::rank`.
+
+## Persisting catalogue embeddings
+
+`EmbeddingToolRanker::with_cache(Arc<dyn EmbeddingCache>)` accepts a host's
+async cache handle. The ranker requests missing summary/family hashes under its
+embedding-space signature and stores only newly computed catalogue vectors.
+Hosts bind that handle to the tenant, credentials and backend; create a new
+ranker when those change because its in-memory vectors belong to that handle.
+
+Cache implementations merge deltas rather than replace unrelated entries.
+Unreadable caches, failed writes and malformed vectors are rebuildable misses.
+The ranker never persists search intent vectors and never switches a failed
+host cache to a filesystem cache. with_disk_cache remains available for local
+hosts. Selecting either cache replaces a previously selected cache.
