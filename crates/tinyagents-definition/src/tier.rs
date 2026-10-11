@@ -16,6 +16,7 @@ pub enum AgentTier {
     /// Coordinator for reasoning and decomposition.
     Reasoning,
     /// Leaf executor, forbidden from delegating to another agent.
+    #[serde(alias = "worker_leaf")]
     #[default]
     Worker,
 }

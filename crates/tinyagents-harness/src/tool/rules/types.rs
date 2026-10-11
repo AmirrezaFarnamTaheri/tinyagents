@@ -163,6 +163,9 @@ impl ToolGate {
     /// (which names registered tools) does not apply; the rules do, so a
     /// host can withhold discovery itself.
     pub(crate) fn admits_intrinsic(&self, name: &str, surface: Surface) -> CallGate {
+        if self.denied.contains(name) {
+            return CallGate::Refuse(format!("tool '{name}' is denied by the definition"));
+        }
         let Some(rules) = &self.rules else {
             return CallGate::Admit(ApprovalDirective::Default);
         };

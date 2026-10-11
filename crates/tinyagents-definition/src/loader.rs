@@ -12,7 +12,11 @@ pub fn load_file<X: DeserializeOwned + Default>(path: &Path) -> Result<AgentDefi
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut definition: AgentDefinition<X> = toml::from_str(&content)
         .with_context(|| format!("parsing {} as AgentDefinition TOML", path.display()))?;
-    if matches!(&definition.system_prompt, PromptSource::Inline(body) if body.is_empty()) {
+    let prompt_is_blank = match &definition.system_prompt {
+        PromptSource::Inline(body) | PromptSource::Verbatim(body) => body.trim().is_empty(),
+        PromptSource::File { path } => path.trim().is_empty(),
+    };
+    if prompt_is_blank {
         bail!(
             "{}: missing `system_prompt` — custom definitions must set an inline string or a file path",
             path.display()

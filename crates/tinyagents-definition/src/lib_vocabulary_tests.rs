@@ -471,3 +471,30 @@ fn loader_rejects_semantically_invalid_authored_definitions() {
     );
     assert_eq!(loaded[0].source, DefinitionSource::File(valid));
 }
+
+#[test]
+fn loader_rejects_blank_values_for_every_prompt_source() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, prompt) in [
+        ("blank-inline", "{inline=' ' }"),
+        ("blank-file", "{file={path='   '}}"),
+        ("blank-verbatim", "{verbatim='\\n'}"),
+    ] {
+        let path = dir.path().join(format!("{name}.toml"));
+        std::fs::write(
+            &path,
+            format!("id='agent'\nwhen_to_use='task'\nsystem_prompt={prompt}\n"),
+        )
+        .unwrap();
+        assert!(
+            load_file::<Extensions>(&path).is_err(),
+            "{name} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn legacy_worker_leaf_tier_deserializes_as_worker() {
+    let tier: AgentTier = serde_json::from_value(serde_json::json!("worker_leaf")).unwrap();
+    assert_eq!(tier, AgentTier::Worker);
+}

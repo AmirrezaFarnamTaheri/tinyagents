@@ -163,6 +163,21 @@ fn an_intrinsic_follows_the_rules_per_surface() {
 }
 
 #[test]
+fn exact_denials_apply_to_intrinsic_tools() {
+    let gate = ToolGate::new(None, &ToolRulePolicy::default(), None)
+        .with_denied_names(["tool_search".to_string()]);
+
+    assert!(matches!(
+        gate.admits_intrinsic("tool_search", Surface::Catalog),
+        CallGate::Refuse(_)
+    ));
+    assert!(matches!(
+        gate.admits_intrinsic("tool_search", Surface::Call),
+        CallGate::Refuse(_)
+    ));
+}
+
+#[test]
 fn exact_exclusions_apply_to_dynamic_wildcards_without_interpreting_patterns() {
     let gate = ToolGate::new(None, &ToolRulePolicy::default(), None)
         .with_denied_names(["blocked".to_string(), "literal*".to_string()]);
