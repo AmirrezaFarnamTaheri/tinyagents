@@ -173,6 +173,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
                 .and_then(|pending| pending.staged.as_ref())
                 .map_or(0, Vec::len);
             self.queue.commit_for(context, count);
+        } else if let Some(pending) = self
+            .queue
+            .runs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get_mut(&context.instance_id())
+        {
+            // A short-circuited request did not consume anything. Drop only
+            // its snapshot so the next request includes pushes made meanwhile.
+            pending.staged = None;
         }
         Ok(())
     }
