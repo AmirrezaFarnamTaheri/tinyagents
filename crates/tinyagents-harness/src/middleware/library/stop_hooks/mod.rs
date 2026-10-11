@@ -120,6 +120,10 @@ where
             return Ok(());
         }
         let steering = self.steering(context)?;
+        let model = response
+            .resolved_model
+            .as_ref()
+            .map_or(self.model.as_str(), |resolved| resolved.name.as_str());
         let (iteration, metrics) = {
             let mut runs = self
                 .runs
@@ -140,7 +144,7 @@ where
                 return Ok(());
             }
             run.iteration = run.iteration.saturating_add(1);
-            run.metrics.record_model(&self.model, response);
+            run.metrics.record_model(model, response);
             (run.iteration, run.metrics.clone())
         };
         let state = TurnState {
@@ -151,7 +155,7 @@ where
                 .max_model_calls
                 .min(u32::MAX as usize) as u32,
             cost: &metrics,
-            model: &self.model,
+            model,
         };
         let mut first_stop = None;
         for hook in &self.hooks {
@@ -162,7 +166,7 @@ where
                     hook: hook.name().to_owned(),
                     reason,
                     iteration,
-                    model: self.model.clone(),
+                    model: model.to_owned(),
                 });
             }
         }
@@ -202,6 +206,12 @@ where
         context: &mut RunContext<Ctx>,
         _error: &TinyAgentsError,
     ) -> Result<()> {
+        if let Some(steering) = &context.steering {
+            steering.retract(
+                &SteeringTarget::Run(context.run_id().clone()),
+                &SteeringCommand::Pause,
+            );
+        }
         self.forget(context);
         Ok(())
     }

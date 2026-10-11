@@ -7,8 +7,35 @@ struct Metrics {
 }
 
 impl StopHookMetrics for Metrics {
-    fn record_model(&mut self, _model: &str, _response: &ModelResponse) {
+    fn record_model(&mut self, model: &str, _response: &ModelResponse) {
         self.completed_calls += 1;
+        assert_eq!(model, "model");
+    }
+}
+
+#[derive(Clone, Default)]
+struct ModelMetrics {
+    models: Vec<String>,
+}
+
+impl StopHookMetrics for ModelMetrics {
+    fn record_model(&mut self, model: &str, _response: &ModelResponse) {
+        self.models.push(model.to_owned());
+    }
+}
+
+struct ModelHook;
+
+#[async_trait]
+impl StopHook<ModelMetrics> for ModelHook {
+    fn name(&self) -> &str {
+        "observer"
+    }
+
+    async fn check(&self, state: &TurnState<'_, ModelMetrics>) -> StopDecision {
+        assert_eq!(state.model, "fallback");
+        assert_eq!(state.cost.models, ["fallback"]);
+        StopDecision::Continue
     }
 }
 
@@ -170,6 +197,50 @@ async fn stop_hook_error_cleanup_restarts_the_completed_call_tally() {
         *observations.lock().unwrap(),
         vec![("observer", 1, 1), ("observer", 1, 1)]
     );
+}
+
+/// An error after a stop vote retracts the queued pause before handle reuse.
+#[tokio::test]
+async fn stop_hook_error_cleanup_retracts_a_queued_pause() {
+    let middleware = StopHookMiddleware::<Metrics>::new(
+        "model",
+        vec![Arc::new(Hook {
+            name: "budget",
+            stop: true,
+            observations: Arc::new(Mutex::new(Vec::new())),
+        })],
+    );
+    let mut context = run();
+    middleware
+        .after_model(&mut context, &(), &mut ModelResponse::assistant("first"))
+        .await
+        .unwrap();
+    assert!(context.steering.as_ref().unwrap().is_empty() == false);
+    <StopHookMiddleware<Metrics> as Middleware<(), ()>>::on_error(
+        &middleware,
+        &mut context,
+        &TinyAgentsError::Model("failed after response".into()),
+    )
+    .await
+    .unwrap();
+    assert!(context.steering.as_ref().unwrap().is_empty());
+}
+
+/// Completed-call accounting uses the runtime-selected model when available.
+#[tokio::test]
+async fn stop_hook_metrics_receive_the_resolved_model_name() {
+    let middleware = StopHookMiddleware::<ModelMetrics>::new("primary", vec![Arc::new(ModelHook)]);
+    let mut context = run();
+    let mut response = ModelResponse::assistant("fallback");
+    response.resolved_model = Some(tinyinference_llm::model::ResolvedModel {
+        name: "fallback".into(),
+        requested: Some("primary".into()),
+        source: tinyinference_llm::model::ModelResolutionSource::RequestOverride,
+    });
+    middleware
+        .after_model(&mut context, &(), &mut response)
+        .await
+        .unwrap();
 }
 
 /// A stopping policy must not silently continue when its pause cannot be delivered.
