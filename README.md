@@ -264,3 +264,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## License
 
 TinyAgents is licensed under [GPL-3.0-only](LICENSE).
+
+`tinyagents-runtime::transcript` supplies [mechanical execution projections](crates/tinyagents-runtime/src/transcript/README.md)
+for native tool rounds, ordered media references and reasoning replay. Hosts
+retain their lossless durable codecs and legacy marker policy.

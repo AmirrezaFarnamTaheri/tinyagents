@@ -3,13 +3,19 @@
 //! These helpers do not replace a lossless host [`crate::TranscriptCodec`].
 //! They intentionally project provider-neutral execution fields; hosts retain
 //! durable dialects, raw argument strings, metadata, and legacy marker policy.
-use tinyagents_session::transcript::{TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall};
-use tinyinference_llm::message::{AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, SystemMessage, ToolMessage, UserMessage};
+use tinyagents_session::transcript::{
+    TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall,
+};
+use tinyinference_llm::message::{
+    AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, SystemMessage, ToolMessage,
+    UserMessage,
+};
 use tinyinference_llm::tool::ToolCall as TaToolCall;
 
 /// Conventional provider reasoning field carried by durable assistant rows.
 pub const REASONING_EXT_KEY: &str = "reasoning_content";
 
+/// Preserve a nonblank reasoning span verbatim for execution replay.
 pub fn reasoning_content_block(reasoning: Option<&str>) -> Option<ContentBlock> {
     let reasoning = reasoning?;
     // Store verbatim (only gate on non-empty after a trim): thinking-mode
@@ -71,6 +77,8 @@ fn reasoning_extra_metadata(content: &[ContentBlock]) -> Option<serde_json::Valu
 /// message is what stops the harness re-sending orphan `tool` messages, which
 /// native providers reject (`assistant message with 'tool_calls' must be
 /// followed by tool messages`).
+/// Convert one typed durable row to a provider-neutral execution message.
+/// Untyped user text stays literal; hosts apply any legacy marker policy.
 pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
     let text = msg.content.clone();
     match msg.role.as_str() {
@@ -148,7 +156,6 @@ fn user_blocks_from_parts(parts: &[TranscriptPart]) -> Vec<ContentBlock> {
     }
 }
 
-
 fn data_uri_mime(reference: &str) -> Option<String> {
     let rest = reference.strip_prefix("data:")?;
     let mime = rest.split([';', ',']).next()?.trim();
@@ -175,7 +182,6 @@ fn ta_call_to_row_call(call: &TaToolCall) -> TranscriptToolCall {
         extra_content: None,
     }
 }
-
 
 pub fn message_to_flat_transcript(msg: &Message) -> Option<TranscriptMessage> {
     Some(match msg {
@@ -270,7 +276,7 @@ fn user_row(msg: &Message, user: &UserMessage) -> TranscriptMessage {
     )
 }
 
-
+/// Project a durable path or URL into an unresolved inference media reference.
 pub fn media_from_part(source: &TranscriptMediaRef, mime: &str) -> MediaRef {
     match source {
         TranscriptMediaRef::Path { path } => MediaRef::Path {
@@ -284,6 +290,8 @@ pub fn media_from_part(source: &TranscriptMediaRef, mime: &str) -> MediaRef {
     }
 }
 
+/// Project unresolved media into a durable part; inline provider bytes return None.
+/// Kinds audio/video select those variants; other kinds select a document.
 pub fn part_from_media(media: &MediaRef, kind: &str) -> Option<TranscriptPart> {
     let (source, mime_type) = match media {
         MediaRef::Path { path, media_type } => (
@@ -304,7 +312,6 @@ pub fn part_from_media(media: &MediaRef, kind: &str) -> Option<TranscriptPart> {
         _ => TranscriptPart::Document { source, mime_type },
     })
 }
-
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
