@@ -36,7 +36,7 @@ and `src/agent_loop/nested.rs` (the runner).
 | Arguments | Injected-argument preparation, the `InvalidArgsPolicy` normalisation, schema validation. Invalid arguments are an `Err` naming the tool. |
 | Approval | A tool that is external or declares `approval_required` **fails**: `nested call '<name>' requires approval; nested calls cannot be deferred`. The parent is never deferred. A `CallDeferred`/`ApprovalRequired` raised during execution is the same refusal. |
 | Middleware admission | `Middleware::check_nested_tool(&RunContext, &State, &ToolCall)` on every registered middleware, in order, after validation and before host authorization; the first `Err` refuses the call. This is how a middleware's `before_tool` **enforcement** reaches nested calls: `ToolAllowlistMiddleware`, `ToolPolicyMiddleware` (deny mask, sandbox, classification, approval grants), `HumanApprovalMiddleware` (a flagged tool fails with the approval error unless its callback allows; it never interrupts or defers) and `PlanModeMiddleware` implement it over the same decision as `before_tool`. The default admits. |
-| Host authorization | `SecurityGate::authorize_tool` for a hosted run; a denial is an `Err`. The `ToolCallRequest` has `parent_call_id: Some(..)` (`is_nested()`): a nested call cannot be prompted for, so a host gate that would normally ask a human must **fail closed** for it. |
+| Host authorization | `SecurityGate::authorize_tool_with_context` for a hosted run; a denial is an `Err`. Its default delegates to `authorize_tool`. When preparation returns facts, the harness supplies an invocation-bound envelope with `tool_name`, original `request_arguments`, validated `effective_arguments`, and opaque `tool_facts`; model arguments cannot supply that envelope. The `ToolCallRequest` has `parent_call_id: Some(..)` (`is_nested()`): a nested call cannot be prompted for, so a host gate that would normally ask a human must **fail closed** for it. |
 | Tool-wrap onion | `ToolMiddleware::wrap_tool` runs around the tool, so a policy middleware can deny or rewrite a nested call. |
 | Timeouts | The per-tool timeout policy and the run's remaining wall-clock budget. |
 | Budget | One `max_tool_calls` pool shared with model-issued calls (below). |
@@ -49,6 +49,11 @@ A tool that reports its own failure (`ToolResult::is_error`) is an `Ok` result,
 exactly as for a model-issued call. A refusal is an `Err(TinyAgentsError)`; a
 tool that forwards it with `?` is answered to the model as
 `TinyAgentsError::ToolFailed` (the message above reaches the model verbatim).
+
+For indirect dispatchers, the harness binds the concrete target after argument
+normalization and validation. Tool rules then inspect both the dispatcher and
+the bound target using the target's effective arguments; preparation,
+authorization facts, and execution all use that same bound instance.
 
 Outside the agent loop (no runner installed) `call_tool` returns
 `ToolFailed("cannot call tool '<name>' ...: nested tool calls are only available

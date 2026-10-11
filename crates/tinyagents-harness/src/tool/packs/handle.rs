@@ -42,9 +42,38 @@ pub struct PackRegistryHandle {
 struct Slots {
     durable: Option<ToolRegistryRef>,
     synthesized: Option<ToolRegistryRef>,
+    catalog: Option<PackCatalog>,
+    catalog_conflict: bool,
 }
 
 impl PackRegistryHandle {
+    pub(super) fn register_catalog(&self, catalog: PackCatalog) {
+        self.with_slots(|slots| match slots.catalog {
+            None if !slots.catalog_conflict => slots.catalog = Some(catalog),
+            Some(existing)
+                if existing.packs().as_ptr() == catalog.packs().as_ptr()
+                    && existing.packs().len() == catalog.packs().len()
+                    && existing.not_found_marker() == catalog.not_found_marker() => {}
+            _ => {
+                slots.catalog = None;
+                slots.catalog_conflict = true;
+            }
+        });
+    }
+
+    pub(super) fn catalog_for_binding(&self) -> Option<PackCatalog> {
+        let slots = match self.inner.read() {
+            Ok(slots) => slots,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (!slots.catalog_conflict).then_some(slots.catalog).flatten()
+    }
+
+    /// Returns this handle, preserving the historical erased-extension API.
+    pub fn registry_handle(&self) -> &PackRegistryHandle {
+        self
+    }
+
     /// Point this handle at the durable registry it lives in, replacing any
     /// previous binding.
     ///
