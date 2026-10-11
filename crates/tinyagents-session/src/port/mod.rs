@@ -67,6 +67,23 @@ pub trait SessionStoreProvider: Send + Sync {
     /// cheap: hand out shared handles rather than opening connections.
     fn for_agent(&self, agent_id: &str) -> AgentStores;
 
+    /// Opens an agent's stores while retaining native admission and recovery errors.
+    ///
+    /// Legacy providers default to their infallible accessor. Driver providers
+    /// override this method so a configured refusal cannot become missing stores
+    /// or select a file fallback.
+    ///
+    /// # Errors
+    ///
+    /// The native backend error, including its source, when opening is refused.
+    #[cfg(feature = "storage-drivers")]
+    fn try_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
+        Ok(self.for_agent(agent_id))
+    }
+
     /// Optionally create an independent actor provider over a host-admitted backend.
     ///
     /// The backend must already embody the actor authority supplied by the
