@@ -9,6 +9,7 @@ type NativeResult<T> = std::result::Result<T, StorageError>;
 
 #[async_trait::async_trait]
 impl DocumentStore for NoPostCommitReads {
+    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities { self.inner.capabilities() }
     async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> { self.inner.ensure_collection(spec).await }
     async fn get(&self, collection: &str, id: &str) -> NativeResult<Option<Versioned<Value>>> {
         if collection == storage::TELEMETRY && self.committed.load(Ordering::SeqCst) {
