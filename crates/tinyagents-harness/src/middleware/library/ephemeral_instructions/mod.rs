@@ -24,6 +24,7 @@ impl EphemeralInstructionQueue {
             .or_insert_with(|| PendingInstructions {
                 lifecycle: Arc::downgrade(&context.lifecycle),
                 instructions: Vec::new(),
+                staged: None,
             })
             .instructions
             .push(instruction);
@@ -47,6 +48,7 @@ impl EphemeralInstructionQueue {
         };
         let remove = count.min(pending.instructions.len());
         pending.instructions.drain(..remove);
+        pending.staged = None;
         if pending.instructions.is_empty() {
             runs.remove(&context.instance_id());
         }
@@ -109,8 +111,39 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        for instruction in self.queue.peek_for(context) {
+        let instructions = {
+            let mut runs = self.queue.runs.lock().unwrap_or_else(|p| p.into_inner());
+            let pending = runs.entry(context.instance_id()).or_insert_with(|| PendingInstructions {
+                lifecycle: Arc::downgrade(&context.lifecycle),
+                instructions: Vec::new(),
+                staged: None,
+            });
+            pending.staged.get_or_insert_with(|| pending.instructions.clone()).clone()
+        };
+        for instruction in instructions {
             push_ephemeral_instruction(request, instruction, context.model_profile.as_ref());
+        }
+        Ok(())
+    }
+
+    async fn after_model_rewrite(
+        &self,
+        context: &mut RunContext<Ctx>,
+        _state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        let instructions = self
+            .queue
+            .runs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&context.instance_id())
+            .and_then(|pending| pending.staged.clone())
+            .unwrap_or_default();
+        for instruction in instructions {
+            if !request.messages.iter().any(|message| message.text().contains(&instruction)) {
+                push_ephemeral_instruction(request, instruction, context.model_profile.as_ref());
+            }
         }
         Ok(())
     }
@@ -122,7 +155,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         base_called: bool,
     ) -> Result<()> {
         if base_called {
-            let count = self.queue.peek_for(context).len();
+            let count = self
+                .queue
+                .runs
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&context.instance_id())
+                .and_then(|pending| pending.staged.as_ref())
+                .map_or(0, Vec::len);
             self.queue.commit_for(context, count);
         }
         Ok(())

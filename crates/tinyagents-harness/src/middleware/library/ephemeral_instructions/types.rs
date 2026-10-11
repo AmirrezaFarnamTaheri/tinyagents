@@ -24,4 +24,6 @@ pub struct EphemeralInstructionMiddleware {
 pub(super) struct PendingInstructions {
     pub(super) lifecycle: Weak<()>,
     pub(super) instructions: Vec<String>,
+    /// The exact prefix injected into the current request, if any.
+    pub(super) staged: Option<Vec<String>>,
 }

@@ -255,6 +255,17 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         Ok(())
     }
 
+    /// Re-apply staged ephemeral content after request-rewriting middleware
+    /// has finished, while keeping it outside the admission estimate.
+    async fn after_model_rewrite(
+        &self,
+        _ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _request: &mut ModelRequest,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Runs after the model-wrap onion returns. `base_called` distinguishes a
     /// real base invocation from a wrap middleware short-circuit.
     async fn after_model_dispatch(

@@ -524,6 +524,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ControlEffect::Exit(exit) => return Ok(exit),
             }
 
+            // Request reducers run after the admission estimate and may evict
+            // the staged correction. Re-apply only the original staged prefix
+            // after those rewrites; instructions queued during this call stay
+            // pending for the next request.
+            self.middleware
+                .run_after_model_rewrite(ctx, state, &mut request)
+                .await?;
+
             // Resolve the model for the event/log name before invoking.
             // Hosted turns install their routing decision against this live
             // `RunContext`; explicit-model SDK calls continue to resolve only

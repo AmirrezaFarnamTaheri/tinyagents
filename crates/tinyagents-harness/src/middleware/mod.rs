@@ -298,6 +298,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         Ok(())
     }
 
+    /// Re-applies request-scoped content after all request-control rewrites.
+    pub async fn run_after_model_rewrite(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &State,
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        for middleware in &self.middlewares {
+            middleware.after_model_rewrite(ctx, state, request).await?;
+        }
+        Ok(())
+    }
+
     /// Notifies request observers whether the model-wrap onion reached its
     /// base call, allowing staged request data to survive short-circuits.
     pub async fn run_after_model_dispatch(
