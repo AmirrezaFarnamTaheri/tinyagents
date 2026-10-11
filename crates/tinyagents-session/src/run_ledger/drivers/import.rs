@@ -187,7 +187,8 @@ impl DriverRunLedger {
     /// # Errors
     /// Source authority, unsupported schema, or native transaction refusal.
     pub async fn import_agent_family(&self, source: &QuiescentSource, operation_id: &str) -> Result<AgentImportReport> {
-        tinystoragedrivers_core::document::validate_id(operation_id)?;
+        tinystoragedrivers_core::ReadCheck { collection: super::storage::IMPORTS.into(), id: operation_id.into(),
+            expected: tinystoragedrivers_core::ExpectedDocument::Absent }.validate()?;
         let loaded = self.load_agent_import(source)?;
         self.commit_agent_import(loaded, operation_id).await
     }
