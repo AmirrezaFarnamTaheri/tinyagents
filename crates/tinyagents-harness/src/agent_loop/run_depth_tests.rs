@@ -67,3 +67,48 @@ async fn driver_scopes_the_real_configured_depth_for_unary_and_streaming_runs() 
     );
     assert_eq!(current_run_depth(), None);
 }
+
+struct RecordErrorDepth(Arc<std::sync::Mutex<Vec<Option<RunDepth>>>>);
+
+#[async_trait]
+impl Middleware<(), ()> for RecordErrorDepth {
+    fn name(&self) -> &str {
+        "record-error-depth"
+    }
+
+    async fn on_error(&self, _ctx: &mut RunContext<()>, _error: &TinyAgentsError) -> Result<()> {
+        self.0.lock().unwrap().push(current_run_depth());
+        Ok(())
+    }
+}
+
+/// A driver failure keeps its own depth visible while middleware finalizes it.
+#[tokio::test]
+async fn error_middleware_keeps_the_failed_runs_configured_depth() {
+    let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.push_middleware(Arc::new(RecordErrorDepth(observed.clone())));
+    let configured = RunDepth {
+        depth: 3,
+        max_depth: 3,
+    };
+    let parent = RunDepth {
+        depth: 1,
+        max_depth: 8,
+    };
+    with_run_depth(parent, async {
+        let config = RunConfig::new("missing-model")
+            .with_depth(3)
+            .with_max_depth(3);
+        assert!(
+            harness
+                .invoke_in_context(&(), RunContext::new(config, ()), vec![Message::user("go")])
+                .await
+                .is_err()
+        );
+        assert_eq!(current_run_depth(), Some(parent));
+    })
+    .await;
+    assert_eq!(*observed.lock().unwrap(), vec![Some(configured)]);
+    assert_eq!(current_run_depth(), None);
+}
