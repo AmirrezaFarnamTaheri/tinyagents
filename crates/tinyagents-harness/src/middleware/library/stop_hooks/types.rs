@@ -23,7 +23,7 @@ impl StopHookMetrics for () {
 pub struct TurnState<'a, Metrics = ()> {
     /// One-based count of model responses observed in this run.
     pub iteration: u32,
-    /// Configured model-call cap, saturated to the counter's range.
+    /// Live model-call cap, saturated to the counter's range.
     pub max_iterations: u32,
     /// Host-defined cumulative accounting through the completed call.
     pub cost: &'a Metrics,
@@ -68,6 +68,7 @@ pub struct StopReport {
 /// State belongs to a context instance, never its reusable durable run id.
 #[derive(Default)]
 pub(super) struct HookRunState<Metrics> {
+    pub(super) lifecycle: std::sync::Weak<()>,
     pub(super) metrics: Metrics,
     pub(super) iteration: u32,
     pub(super) stopped: bool,

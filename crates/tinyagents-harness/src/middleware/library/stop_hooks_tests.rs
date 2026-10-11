@@ -304,7 +304,9 @@ struct LifetimeObserver(Arc<Mutex<Vec<std::sync::Weak<()>>>>);
 
 #[async_trait]
 impl StopHook<LifetimeMetrics> for LifetimeObserver {
-    fn name(&self) -> &str { "lifetime" }
+    fn name(&self) -> &str {
+        "lifetime"
+    }
     async fn check(&self, state: &TurnState<'_, LifetimeMetrics>) -> StopDecision {
         self.0.lock().unwrap().push(Arc::downgrade(&state.cost.0));
         StopDecision::Continue
@@ -315,24 +317,39 @@ impl StopHook<LifetimeMetrics> for LifetimeObserver {
 #[tokio::test]
 async fn stop_hook_reclaims_abandoned_context_accounting_on_the_next_call() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let middleware = StopHookMiddleware::<LifetimeMetrics>::new("model", vec![
-        Arc::new(LifetimeObserver(seen.clone())),
-    ]);
+    let middleware = StopHookMiddleware::<LifetimeMetrics>::new(
+        "model",
+        vec![Arc::new(LifetimeObserver(seen.clone()))],
+    );
     let mut first = run();
-    middleware.after_model(&mut first, &(), &mut ModelResponse::assistant("first")).await.unwrap();
+    middleware
+        .after_model(&mut first, &(), &mut ModelResponse::assistant("first"))
+        .await
+        .unwrap();
     drop(first);
     let mut next = run();
-    middleware.after_model(&mut next, &(), &mut ModelResponse::assistant("next")).await.unwrap();
+    middleware
+        .after_model(&mut next, &(), &mut ModelResponse::assistant("next"))
+        .await
+        .unwrap();
     let seen = seen.lock().unwrap();
-    assert!(seen[0].upgrade().is_none(), "abandoned accounting is retired");
-    assert!(seen[1].upgrade().is_some(), "the current run keeps its tally");
+    assert!(
+        seen[0].upgrade().is_none(),
+        "abandoned accounting is retired"
+    );
+    assert!(
+        seen[1].upgrade().is_some(),
+        "the current run keeps its tally"
+    );
 }
 
 struct CapObserver(Arc<Mutex<Vec<u32>>>);
 
 #[async_trait]
 impl StopHook for CapObserver {
-    fn name(&self) -> &str { "cap" }
+    fn name(&self) -> &str {
+        "cap"
+    }
     async fn check(&self, state: &TurnState<'_>) -> StopDecision {
         self.0.lock().unwrap().push(state.max_iterations);
         StopDecision::Continue
@@ -343,11 +360,15 @@ impl StopHook for CapObserver {
 #[tokio::test]
 async fn stop_hook_reports_the_live_model_call_cap_after_policy_narrowing() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let middleware = StopHookMiddleware::<()>::new("model", vec![Arc::new(CapObserver(seen.clone()))]);
+    let middleware =
+        StopHookMiddleware::<()>::new("model", vec![Arc::new(CapObserver(seen.clone()))]);
     let mut context = run();
     context.limits = crate::limits::LimitTracker::new(
         crate::limits::RunLimits::default().with_max_model_calls(2),
     );
-    middleware.after_model(&mut context, &(), &mut ModelResponse::assistant("done")).await.unwrap();
+    middleware
+        .after_model(&mut context, &(), &mut ModelResponse::assistant("done"))
+        .await
+        .unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![2]);
 }

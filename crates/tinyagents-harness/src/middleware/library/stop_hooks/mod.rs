@@ -88,10 +88,18 @@ where
     async fn before_agent(&self, context: &mut RunContext<Ctx>, _state: &State) -> Result<()> {
         if !self.hooks.is_empty() {
             self.steering(context)?;
-            self.runs
+            let mut runs = self
+                .runs
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(context.instance_id(), HookRunState::default());
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            runs.retain(|_, run| run.lifecycle.strong_count() > 0);
+            runs.insert(
+                context.instance_id(),
+                HookRunState {
+                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    ..HookRunState::default()
+                },
+            );
         }
         Ok(())
     }
@@ -111,7 +119,17 @@ where
                 .runs
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let run = runs.entry(context.instance_id()).or_default();
+            // A dropped context may bypass terminal hooks. Reclaim its tally
+            // when admitting a new context without scanning on every call.
+            if !runs.contains_key(&context.instance_id()) {
+                runs.retain(|_, run| run.lifecycle.strong_count() > 0);
+            }
+            let run = runs
+                .entry(context.instance_id())
+                .or_insert_with(|| HookRunState {
+                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    ..HookRunState::default()
+                });
             if run.stopped {
                 return Ok(());
             }
