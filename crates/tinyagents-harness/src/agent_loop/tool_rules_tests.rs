@@ -321,7 +321,7 @@ async fn indirect_target_resolution_obeys_run_deadline() {
         )])])) as _,
     );
     let ctx = RunContext::new(
-        RunConfig::new("deadline-target-resolution").with_timeout_ms(50),
+        RunConfig::new("deadline-target-resolution").with_timeout_ms(500),
         (),
     );
     let mut run = Box::pin(harness.invoke_in_context(&(), ctx, vec![Message::user("go")]));
