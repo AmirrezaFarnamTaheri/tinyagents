@@ -13,9 +13,11 @@
 //!
 //! # Isolation
 //!
-//! [`SessionStoreProvider::for_agent`] is the only way to obtain stores, and
-//! the handles it returns are bound to that one agent. A provider that serves
-//! several users from one backend must make it impossible for one agent's
+//! [`SessionStoreProvider`] provides handles bound to one agent. With the
+//! `storage-drivers` feature, hosts that must propagate store-opening or
+//! recovery errors should use `try_for_agent`; the legacy `for_agent` accessor
+//! can return refusing handles instead. A provider that serves several users
+//! from one backend must make it impossible for one agent's
 //! handles to read or write another's data; [`InMemorySessionStores`] does,
 //! and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
