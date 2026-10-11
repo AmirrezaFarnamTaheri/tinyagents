@@ -23,8 +23,8 @@ Implement the metrics trait on the host accounting type, then implement
 `StopHook<ThatType>` for budget and goal policies. Pass the hooks to
 `StopHookMiddleware::new(model_label, hooks)` and install it on the harness.
 Attach a run-specific steering handle permitting `Pause` to each run context
-when the hook list is nonempty. Missing steering fails explicitly before
-policies observe a call.
+when the hook list is nonempty. Missing steering or a policy that forbids pause
+fails explicitly before policies observe a call.
 
 ## Execution and lifetime
 

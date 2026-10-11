@@ -8,7 +8,7 @@ pub use types::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::middleware::{AgentRun, Middleware};
-use crate::steering::{SteeringCommand, SteeringHandle};
+use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -58,11 +58,17 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
 
     /// Refuse silent policy bypass when no pause queue was installed.
     fn steering<Ctx>(&self, context: &RunContext<Ctx>) -> Result<SteeringHandle> {
-        context.steering.clone().ok_or_else(|| {
+        let handle = context.steering.clone().ok_or_else(|| {
             TinyAgentsError::Middleware(
                 "stop hooks require a steering handle on the run context".into(),
             )
-        })
+        })?;
+        if !handle.policy().is_allowed(SteeringCommandKind::Pause) {
+            return Err(TinyAgentsError::Middleware(
+                "stop hooks require a steering policy that permits pause".into(),
+            ));
+        }
+        Ok(handle)
     }
 
     /// Retire a terminal run's accounting and stop latch.
