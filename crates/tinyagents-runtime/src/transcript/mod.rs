@@ -7,14 +7,15 @@ use tinyagents_session::transcript::{
     TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall,
 };
 use tinyinference_llm::message::{
-    AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, SystemMessage, ToolMessage,
-    UserMessage,
+    AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, MessageOrigin, SystemMessage,
+    ToolMessage, UserMessage,
 };
 use tinyinference_llm::tool::ToolCall as TaToolCall;
 
 /// Conventional provider reasoning field carried by durable assistant rows.
 pub const REASONING_EXT_KEY: &str = "reasoning_content";
 const REASONING_BLOCKS_EXT_KEY: &str = "reasoning_blocks";
+const ORIGIN_EXT_KEY: &str = "message_origin";
 
 /// Preserve a nonblank reasoning span verbatim for execution replay.
 pub fn reasoning_content_block(reasoning: Option<&str>) -> Option<ContentBlock> {
@@ -79,8 +80,11 @@ pub fn reasoning_from_content(content: &[ContentBlock]) -> Option<String> {
 
 /// The `extra_metadata` an assistant [`TranscriptMessage`] should carry so
 /// `reasoning_content` replays on the next provider request.
-fn reasoning_extra_metadata(content: &[ContentBlock]) -> Option<serde_json::Value> {
-    let reasoning = reasoning_from_content(content)?;
+fn assistant_extra_metadata(
+    content: &[ContentBlock],
+    origin: Option<&MessageOrigin>,
+) -> Option<serde_json::Value> {
+    let reasoning = reasoning_from_content(content);
     let signed_thinking = content.iter().any(|block| {
         matches!(
             block,
@@ -90,24 +94,39 @@ fn reasoning_extra_metadata(content: &[ContentBlock]) -> Option<serde_json::Valu
             }
         )
     });
-    let mut metadata = serde_json::json!({ REASONING_EXT_KEY: reasoning });
-    if signed_thinking {
-        metadata[REASONING_BLOCKS_EXT_KEY] = serde_json::Value::Array(
-            content
-                .iter()
-                .filter_map(|block| match block {
-                    ContentBlock::Thinking { text, signature } if !text.trim().is_empty() => {
-                        Some(serde_json::json!({
-                            "text": text,
-                            "signature": signature,
-                        }))
-                    }
-                    _ => None,
-                })
-                .collect(),
+    let mut metadata = serde_json::Map::new();
+    if let Some(reasoning) = reasoning {
+        metadata.insert(
+            REASONING_EXT_KEY.into(),
+            serde_json::Value::String(reasoning),
         );
     }
-    Some(metadata)
+    if signed_thinking {
+        metadata.insert(
+            REASONING_BLOCKS_EXT_KEY.into(),
+            serde_json::Value::Array(
+                content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Thinking { text, signature } if !text.trim().is_empty() => {
+                            Some(serde_json::json!({
+                                "text": text,
+                                "signature": signature,
+                            }))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(origin) = origin {
+        metadata.insert(
+            ORIGIN_EXT_KEY.into(),
+            serde_json::to_value(origin).expect("message origin is serializable"),
+        );
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
 }
 
 /// Convert one transcript row into a harness [`Message`].
@@ -144,7 +163,7 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
                 .as_ref()
                 .and_then(|meta| meta.get(REASONING_EXT_KEY))
                 .and_then(serde_json::Value::as_str);
-            let mut content = vec![ContentBlock::Text(text)];
+            let mut content = Vec::new();
             if let Some(blocks) = msg
                 .extra_metadata
                 .as_ref()
@@ -160,15 +179,28 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
                             .map(str::to_string),
                     })
                 }));
-            } else {
+            }
+            if content.is_empty() {
                 content.extend(reasoning_content_block(reasoning));
             }
+            if !text.is_empty() {
+                content.push(ContentBlock::Text(text));
+            } else if content.is_empty() && !msg.tool_calls.is_empty() {
+                // Native tool rounds retain the empty assistant text block
+                // expected by the inference message contract.
+                content.push(ContentBlock::Text(text));
+            }
+            let origin = msg
+                .extra_metadata
+                .as_ref()
+                .and_then(|meta| meta.get(ORIGIN_EXT_KEY))
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
             Message::Assistant(AssistantMessage {
                 id: msg.id.clone(),
                 content,
                 tool_calls: msg.tool_calls.iter().map(row_call_to_ta_call).collect(),
                 usage: None,
-                origin: None,
+                origin,
             })
         }
         "tool" => Message::Tool(ToolMessage {
@@ -311,7 +343,7 @@ pub fn message_to_display_transcript(msg: &Message) -> Option<TranscriptMessage>
         Message::User(_) => TranscriptMessage::user(msg.text()),
         Message::Assistant(a) => {
             let mut cm = TranscriptMessage::assistant(msg.text());
-            cm.extra_metadata = reasoning_extra_metadata(&a.content);
+            cm.extra_metadata = assistant_extra_metadata(&a.content, a.origin.as_ref());
             cm
         }
         Message::Tool(t) => {
@@ -348,7 +380,7 @@ pub fn message_to_native_transcript(msg: &Message) -> Option<TranscriptMessage> 
                 msg.text(),
                 a.tool_calls.iter().map(ta_call_to_row_call).collect(),
             );
-            cm.extra_metadata = reasoning_extra_metadata(&a.content);
+            cm.extra_metadata = assistant_extra_metadata(&a.content, a.origin.as_ref());
             cm
         }
         Message::Tool(t) => {

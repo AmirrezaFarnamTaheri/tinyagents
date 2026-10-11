@@ -272,21 +272,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Resolves the effective host tool allow-list for `ctx`, or `Ok(None)`
     /// when nothing should be restricted.
     ///
-    /// Three cases:
-    /// - Not a hosted run at all (`host_invocation_binding` returns `None`):
-    ///   no host allow-list concept applies, so this returns `None` (allow
-    ///   every registered tool, same as an explicit-model run).
-    /// - Hosted, and the resolved [`crate::host::AgentDefinition`] declared a
-    ///   non-empty tool list: returns that set. Only those names are
-    ///   dispatchable, checked with plain set membership — no empty-set
-    ///   bypass (that bypass was I-9: an empty `HashSet` used to mean
-    ///   "unrestricted" instead of "nothing").
-    /// - Hosted, but the definition declared no tools at all (an empty or
-    ///   absent list): fails closed by default — returns `Some(HashSet::new())`,
-    ///   which allows nothing — unless
-    ///   [`crate::host::HostCapabilities::fail_closed_tool_allowlist`] was
-    ///   explicitly turned off on this host, in which case it returns `None`
-    ///   (legacy unrestricted behavior, opt-in only).
+    /// Explicit-model runs have no host allowlist. Named hosted scopes return
+    /// their exact names, including an empty deny-all set. A wildcard with
+    /// additions or exclusions stays dynamic; its exact exclusions are applied
+    /// by the shared gate. A bare hosted wildcard uses the host's fallback:
+    /// deny-all by default, unrestricted only with the legacy opt-in.
     pub(super) fn resolve_tool_allowlist(
         &self,
         ctx: &RunContext<Ctx>,
@@ -294,8 +284,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
             return Ok(None);
         };
+        // Explicit wildcard policy covers context-dependent toolsets; a bare
+        // wildcard continues to use the host's undeclared-tool fallback.
         Ok(match &binding.allowed_tools {
             Some(declared) => Some(declared.clone()),
+            None if binding.wildcard_tools => None,
             None if binding.host.fail_closed_tool_allowlist => {
                 Some(std::collections::HashSet::new())
             }
@@ -303,7 +296,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         })
     }
 
-    /// Resolves the run's [`ToolGate`]: the exact allowlist from
+    /// Resolves the run's [`ToolGate`]: the allowlist and exact exclusions from
     /// [`Self::resolve_tool_allowlist`], the harness policy's
     /// [`tool_rules`](crate::runtime::RunPolicy::tool_rules) and, on a hosted
     /// run, the resolved definition's own rules. Every listing and admission
@@ -313,11 +306,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let allowed = self.resolve_tool_allowlist(ctx)?;
         let binding = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?;
         let definition_rules = binding.as_ref().and_then(|b| b.tool_rules.as_ref());
-        Ok(ToolGate::new(
-            allowed,
-            &self.policy.tool_rules,
-            definition_rules,
-        ))
+        Ok(
+            ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
+                .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
+                .with_deferred_names(
+                    binding
+                        .iter()
+                        .flat_map(|b| b.deferred_tools.iter().cloned()),
+                ),
+        )
     }
 
     /// The tool rules' answer for a model call of `name` with `args`.
@@ -369,13 +366,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         let mut entries = self
             .tools
-            .deferred_schemas_with_families()
+            .names()
             .into_iter()
-            .filter(|(schema, _)| {
-                gate.lists(
-                    &schema.name,
-                    self.tools.get(&schema.name).as_deref(),
-                    tinytools::Surface::Search,
+            .filter_map(|name| self.tools.get(&name))
+            .filter(|tool| gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Deferred)
+            .filter(|tool| gate.lists(tool.name(), Some(tool.as_ref()), tinytools::Surface::Search))
+            .map(|tool| {
+                (
+                    crate::tool::provider_schema(tool.as_ref()),
+                    tool.family().map(str::to_owned),
                 )
             })
             .collect::<Vec<_>>();
@@ -836,7 +835,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 // declaration. Reported so an audit consumer can tell a
                 // deferred call from a direct one; admission is unchanged.
                 if self.policy.discovery.enabled
-                    && tool.exposure() == tinytools::ToolExposure::Deferred
+                    && gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Deferred
                 {
                     let record = ctx.emit(AgentEvent::DeferredToolCall {
                         call_id: CallId::new(call.id.clone()),

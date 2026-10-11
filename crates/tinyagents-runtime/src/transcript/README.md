@@ -6,9 +6,10 @@ markers, choose a provider dialect, or reconcile durable history.
 
 `transcript_to_message` keeps native assistant tool calls, tool-result correlation
 ids, ordered typed media references, and nonblank reasoning verbatim. Raw tool
-arguments are parsed only for execution; malformed JSON projects to null without
-mutating the source row. Untyped user content remains literal text. Unknown role
-strings are treated as user input.
+arguments are parsed only for execution; malformed JSON projects to an invalid
+tool call whose `arguments` is the original input string, without mutating the
+source row. Untyped user content remains literal text. Unknown role strings are
+treated as user input.
 
 `message_to_native_transcript` retains native tool-call structure and ordered
 media parts. `message_to_display_transcript` deliberately emits a flat text history,

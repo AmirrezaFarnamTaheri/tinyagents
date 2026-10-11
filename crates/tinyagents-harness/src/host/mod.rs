@@ -103,15 +103,11 @@ pub struct HostCapabilities<State: Send + Sync> {
     /// Procedural memory of how this agent has performed before. `None` means
     /// no experience is recorded or recalled.
     pub experience: Option<Arc<dyn ExperienceStore>>,
-    /// Whether a resolved [`tinyagents_definition::AgentDefinition`] that declares no tools (an
-    /// empty or absent `tools` list) denies every tool, instead of granting
-    /// the whole registered catalogue.
+    /// Whether an unresolved wildcard tool scope denies every tool.
     ///
-    /// Defaults to `true` (fail-closed): policy metadata that is missing is
-    /// treated as "nothing authorized", not as "unrestricted" (I-9). Set to
-    /// `false` only to restore the legacy behavior for a host that relied on
-    /// an empty list meaning unrestricted — new hosts should leave this on
-    /// and declare tools explicitly.
+    /// Defaults to `true`: hosts must explicitly authorize a named scope or
+    /// opt into the legacy wildcard fallback. An explicit empty named scope
+    /// always denies every tool, regardless of this setting.
     pub fail_closed_tool_allowlist: bool,
 }
 

@@ -423,3 +423,8 @@ and durable state when configured.
 Continues in [`runtime.md`](runtime.md) (tool registry, agent loop,
 middleware, host-owned state, and stores) and [`observability-overview.md`](observability-overview.md)
 (structured output, events/streaming, errors, testkit, milestones).
+
+## After-model stop policies
+
+The [stop-hook contract](stop-hooks.md) provides ordered policies over generic
+completed-call metrics, with per-context accounting and pause delivery.

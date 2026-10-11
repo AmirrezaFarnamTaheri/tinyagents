@@ -110,6 +110,13 @@ pub struct ModelResolveRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_pin: Option<String>,
 
+    /// Advisory router hint from the definition, not a concrete model id.
+    ///
+    /// The host interprets this vocabulary. Middleware-selected exact model
+    /// overrides suppress the hint before resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hint: Option<String>,
+
     /// Capabilities required by middleware for this provider call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required_capabilities: Option<CapabilitySet>,
@@ -123,6 +130,7 @@ impl ModelResolveRequest {
             role: None,
             is_team_lead: false,
             model_pin: None,
+            model_hint: None,
             required_capabilities: None,
         }
     }
@@ -139,6 +147,12 @@ impl ModelResolveRequest {
     /// Sets the exact model id the agent's definition pinned.
     pub fn with_model_pin(mut self, model: impl Into<String>) -> Self {
         self.model_pin = Some(model.into());
+        self
+    }
+
+    /// Supply an advisory routing hint without synthesizing a model id.
+    pub fn with_model_hint(mut self, hint: impl Into<String>) -> Self {
+        self.model_hint = Some(hint.into());
         self
     }
 

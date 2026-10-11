@@ -13,7 +13,7 @@ async fn catalogue_is_stable_first_wins_and_absence_is_not_an_error() {
             .await
             .unwrap()
             .unwrap()
-            .description,
+            .when_to_use,
         "first"
     );
     assert_eq!(registry.list().await.unwrap().len(), 2);

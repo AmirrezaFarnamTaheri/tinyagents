@@ -2,7 +2,7 @@ use super::*;
 use tinyagents_session::transcript::{
     TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall,
 };
-use tinyinference_llm::message::{ContentBlock, MediaRef, Message, UserMessage};
+use tinyinference_llm::message::{ContentBlock, MediaRef, Message, MessageOrigin, UserMessage};
 
 /// Native projection retains the assistant/tool pair and correlation fallback.
 #[test]
@@ -197,22 +197,44 @@ fn reasoning_replays_verbatim_and_retains_multiple_spans() {
 
 #[test]
 fn signed_thinking_blocks_survive_native_replay() {
+    let origin = MessageOrigin {
+        provider: "anthropic".into(),
+        api: "messages".into(),
+        model: "claude-sonnet".into(),
+    };
     let message = Message::Assistant(tinyinference_llm::message::AssistantMessage {
         id: None,
         content: vec![
-            ContentBlock::Text("answer".into()),
             ContentBlock::Thinking {
                 text: "plan".into(),
                 signature: Some("signed-by-provider".into()),
             },
+            ContentBlock::Text("answer".into()),
         ],
         tool_calls: Vec::new(),
         usage: None,
-        origin: None,
+        origin: Some(origin),
     });
     let row = message_to_native_transcript(&message).unwrap();
     let replay = transcript_to_message(&row);
     assert_eq!(replay, message);
+}
+
+#[test]
+fn reasoning_only_replay_does_not_add_an_empty_text_block() {
+    let mut row = TranscriptMessage::assistant("");
+    row.extra_metadata = Some(serde_json::json!({
+        "reasoning_content": "plan",
+        "reasoning_blocks": [{"text": "plan", "signature": "signed"}],
+    }));
+    let Message::Assistant(assistant) = transcript_to_message(&row) else {
+        panic!("assistant");
+    };
+    assert_eq!(assistant.content.len(), 1);
+    assert!(matches!(
+        assistant.content[0],
+        ContentBlock::Thinking { .. }
+    ));
 }
 
 /// Marker lifting is a host compatibility policy, not this typed conversion core.

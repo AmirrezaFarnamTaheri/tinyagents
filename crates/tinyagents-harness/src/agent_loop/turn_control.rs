@@ -70,27 +70,44 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         true
     }
 
-    /// The natural-finish queue boundary (A4): the model produced a final
-    /// answer, so pending `Steer` items (first) or, when there are none,
-    /// `Followup` items are appended and the loop runs another turn instead
-    /// of returning. Returns whether the loop should continue. Only reached
-    /// from the paths where the *model* finished — a middleware stop, a
-    /// limit stop, a pause, or a deferral is terminal and leaves the queue
-    /// untouched for the host.
-    pub(super) async fn continue_from_queue_at_finish(
+    /// Settle steering before a natural finish, then apply queued continuation.
+    /// A stop raised after the last model call has no next loop checkpoint.
+    /// Consume it here, before returning success or admitting a follow-up.
+    pub(super) async fn settle_natural_finish(
         &self,
         ctx: &mut RunContext<Ctx>,
         status: &mut HarnessRunStatus,
         messages: &mut Vec<Message>,
-    ) -> bool {
-        if ctx.run_queue.is_none() {
-            return false;
+    ) -> Result<TurnFlow> {
+        let before = messages.len();
+        match crate::steering::apply_pending_steering(ctx, messages)? {
+            crate::steering::SteeringOutcome::Cancel => return Err(TinyAgentsError::Cancelled),
+            crate::steering::SteeringOutcome::Pause => {
+                let pause = ctx
+                    .steering
+                    .as_ref()
+                    .and_then(|handle| handle.pause_state())
+                    .unwrap_or(crate::steering::PauseState {
+                        reason: None,
+                        paused_at_checkpoint: 0,
+                    });
+                return Ok(TurnFlow::Exit(LoopExit::Paused(pause)));
+            }
+            crate::steering::SteeringOutcome::Continue => {}
         }
-        self.apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Steer)
-            .await
+        // An injected message is a new turn even without a separate run queue.
+        if messages.len() != before
+            || self
+                .apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Steer)
+                .await
             || self
                 .apply_queued_lane(ctx, status, messages, crate::run_queue::QueueLane::Followup)
                 .await
+        {
+            Ok(TurnFlow::NextTurn)
+        } else {
+            Ok(TurnFlow::Exit(LoopExit::Finished))
+        }
     }
 
     /// Settles the calls a batch deferred (A2).
