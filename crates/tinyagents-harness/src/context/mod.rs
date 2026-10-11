@@ -37,7 +37,7 @@ mod depth;
 mod stats;
 mod types;
 
-pub use depth::{RunDepth, current_run_depth, with_run_depth};
+pub use depth::{current_run_depth, with_run_depth};
 pub use stats::*;
 pub use types::*;
 

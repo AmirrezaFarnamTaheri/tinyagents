@@ -26,6 +26,7 @@ impl Middleware<(), ()> for RecordDepth {
     }
 }
 
+/// Unary and streaming entry points override and restore ambient depth.
 #[tokio::test]
 async fn driver_scopes_the_real_configured_depth_for_unary_and_streaming_runs() {
     let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));

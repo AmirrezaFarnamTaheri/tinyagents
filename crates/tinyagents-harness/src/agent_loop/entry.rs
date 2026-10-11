@@ -420,119 +420,122 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             status = status.with_thread(thread);
         }
 
-        let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
-
-        let base = AgentLoopBase { harness: self };
         let depth = crate::context::RunDepth::from(&ctx.config);
-        match crate::context::with_run_depth(
-            depth,
-            self.middleware.run_wrapped_agent(
-                &mut ctx,
-                state,
-                input,
-                streaming,
-                &mut terminal.run,
-                &mut status,
-                &base,
-            ),
-        )
+        crate::context::with_run_depth(depth, async {
+            let mut terminal = TerminalRunGuard::new(ctx.terminal_observer.take());
+            let base = AgentLoopBase { harness: self };
+            match self
+                .middleware
+                .run_wrapped_agent(
+                    &mut ctx,
+                    state,
+                    input,
+                    streaming,
+                    &mut terminal.run,
+                    &mut status,
+                    &base,
+                )
+                .await
+            {
+                Ok(()) => {
+                    // A paused run is resumable, not finished: reporting it
+                    // `completed` is what made "paused for a human" look identical
+                    // to "the model produced an empty final answer".
+                    // A deferred run (A2) is resumable for the same reason.
+                    // The typed outcome is authoritative (middleware may have
+                    // replaced it after the loop set the legacy fields); fall back
+                    // to the legacy fields only when no outcome was recorded.
+                    let paused = match terminal.run.terminal.as_ref() {
+                        Some(outcome) => outcome.class == TerminalClass::Suspended,
+                        None => terminal.run.paused.is_some() || terminal.run.deferred.is_some(),
+                    };
+                    // Only `Success` is a completion and `Suspended` is handled by
+                    // `paused`; Failure, Timeout and Cancellation outcomes recorded
+                    // by middleware on an `Ok` return must not read as completed.
+                    let failed = terminal.run.terminal.as_ref().is_some_and(|outcome| {
+                        !matches!(
+                            outcome.class,
+                            TerminalClass::Success | TerminalClass::Suspended
+                        )
+                    });
+                    if paused {
+                        status.mark_interrupted();
+                    } else if failed {
+                        status.mark_failed(
+                            "run ended with a non-success terminal outcome".to_string(),
+                        );
+                    } else {
+                        status.mark_completed();
+                    }
+                    PartialRunOutcome {
+                        run: terminal.complete(
+                            !paused && !failed,
+                            paused.then(|| "hosted turn paused before completion".to_string()),
+                        ),
+                        status,
+                        error: None,
+                    }
+                }
+                Err(error) => {
+                    // Where the run stood when it failed decides the timeout phase
+                    // and `provider_started`: an unfinished model call leaves
+                    // `active_model_call` set, a completed one has bumped the
+                    // run's call counter.
+                    // A failure inside the model-call layer is `Provider` only if
+                    // the provider was actually dispatched; a wrap middleware that
+                    // rejected the call first never reached it.
+                    let in_model_call = ctx.active_model_call.is_some() || ctx.model_call_failed();
+                    let site = if in_model_call && ctx.call_provider_started() {
+                        TimeoutPhase::Provider
+                    } else if in_model_call {
+                        TimeoutPhase::BeforeProvider
+                    } else if terminal.run.model_calls > 0 {
+                        TimeoutPhase::AfterTurn
+                    } else {
+                        TimeoutPhase::BeforeProvider
+                    };
+                    let last_limit = matches!(error, TinyAgentsError::LimitExceeded(_))
+                        .then(|| ctx.take_last_limit())
+                        .flatten();
+                    let mut outcome =
+                        TerminalOutcome::from_error(&error, site).with_limit_kind(last_limit);
+                    if outcome.reason == crate::terminal::TerminalReason::Timeout
+                        && outcome.timeout_phase.is_none()
+                    {
+                        // A wall-clock kind filled in after classification.
+                        outcome = outcome.with_timeout_phase(site);
+                    }
+                    // `site` describes this failure; the run may still have reached
+                    // the provider on an earlier call.
+                    // A failed summarizer already received a provider response; keep the
+                    // match for summarizers that report usage but never marked dispatch
+                    // (host-defined `Summarizer` impls cannot call `mark_dispatched`).
+                    outcome.provider_started = ctx.provider_started()
+                        || matches!(&error, TinyAgentsError::SummarizationUsage { .. });
+                    terminal.run.terminal = Some(outcome.clone());
+                    let record = ctx.emit(AgentEvent::RunFailed {
+                        run_id,
+                        error: error.to_string(),
+                        outcome: Some(outcome),
+                    });
+                    status.set_last_event(record.id);
+                    status.mark_failed(error.to_string());
+                    // Surface the failure to every middleware. Inner errors are
+                    // ignored so the originating error is never masked. A failure
+                    // raised *inside* a lifecycle hook was already fanned out by the
+                    // stack before it propagated here, so skip it rather than
+                    // delivering the same failure twice.
+                    if !ctx.take_on_error_dispatched() {
+                        let _ = self.middleware.run_on_error(&mut ctx, &error).await;
+                    }
+                    PartialRunOutcome {
+                        run: terminal.complete(false, Some(error.to_string())),
+                        status,
+                        error: Some(error),
+                    }
+                }
+            }
+        })
         .await
-        {
-            Ok(()) => {
-                // A paused run is resumable, not finished: reporting it
-                // `completed` is what made "paused for a human" look identical
-                // to "the model produced an empty final answer".
-                // A deferred run (A2) is resumable for the same reason.
-                // The typed outcome is authoritative (middleware may have
-                // replaced it after the loop set the legacy fields); fall back
-                // to the legacy fields only when no outcome was recorded.
-                let paused = match terminal.run.terminal.as_ref() {
-                    Some(outcome) => outcome.class == TerminalClass::Suspended,
-                    None => terminal.run.paused.is_some() || terminal.run.deferred.is_some(),
-                };
-                // Only `Success` is a completion and `Suspended` is handled by
-                // `paused`; Failure, Timeout and Cancellation outcomes recorded
-                // by middleware on an `Ok` return must not read as completed.
-                let failed = terminal.run.terminal.as_ref().is_some_and(|outcome| {
-                    !matches!(
-                        outcome.class,
-                        TerminalClass::Success | TerminalClass::Suspended
-                    )
-                });
-                if paused {
-                    status.mark_interrupted();
-                } else if failed {
-                    status.mark_failed("run ended with a non-success terminal outcome".to_string());
-                } else {
-                    status.mark_completed();
-                }
-                PartialRunOutcome {
-                    run: terminal.complete(
-                        !paused && !failed,
-                        paused.then(|| "hosted turn paused before completion".to_string()),
-                    ),
-                    status,
-                    error: None,
-                }
-            }
-            Err(error) => {
-                // Where the run stood when it failed decides the timeout phase
-                // and `provider_started`: an unfinished model call leaves
-                // `active_model_call` set, a completed one has bumped the
-                // run's call counter.
-                // A failure inside the model-call layer is `Provider` only if
-                // the provider was actually dispatched; a wrap middleware that
-                // rejected the call first never reached it.
-                let in_model_call = ctx.active_model_call.is_some() || ctx.model_call_failed();
-                let site = if in_model_call && ctx.call_provider_started() {
-                    TimeoutPhase::Provider
-                } else if in_model_call {
-                    TimeoutPhase::BeforeProvider
-                } else if terminal.run.model_calls > 0 {
-                    TimeoutPhase::AfterTurn
-                } else {
-                    TimeoutPhase::BeforeProvider
-                };
-                let last_limit = matches!(error, TinyAgentsError::LimitExceeded(_))
-                    .then(|| ctx.take_last_limit())
-                    .flatten();
-                let mut outcome =
-                    TerminalOutcome::from_error(&error, site).with_limit_kind(last_limit);
-                if outcome.reason == crate::terminal::TerminalReason::Timeout
-                    && outcome.timeout_phase.is_none()
-                {
-                    // A wall-clock kind filled in after classification.
-                    outcome = outcome.with_timeout_phase(site);
-                }
-                // `site` describes this failure; the run may still have reached
-                // the provider on an earlier call.
-                // A failed summarizer already received a provider response; keep the
-                // match for summarizers that report usage but never marked dispatch
-                // (host-defined `Summarizer` impls cannot call `mark_dispatched`).
-                outcome.provider_started = ctx.provider_started()
-                    || matches!(&error, TinyAgentsError::SummarizationUsage { .. });
-                terminal.run.terminal = Some(outcome.clone());
-                let record = ctx.emit(AgentEvent::RunFailed {
-                    run_id,
-                    error: error.to_string(),
-                    outcome: Some(outcome),
-                });
-                status.set_last_event(record.id);
-                status.mark_failed(error.to_string());
-                // Surface the failure to every middleware. Inner errors are
-                // ignored so the originating error is never masked. A failure
-                // raised *inside* a lifecycle hook was already fanned out by the
-                // stack before it propagated here, so skip it rather than
-                // delivering the same failure twice.
-                if !ctx.take_on_error_dispatched() {
-                    let _ = self.middleware.run_on_error(&mut ctx, &error).await;
-                }
-                PartialRunOutcome {
-                    run: terminal.complete(false, Some(error.to_string())),
-                    status,
-                    error: Some(error),
-                }
-            }
-        }
     }
 }
