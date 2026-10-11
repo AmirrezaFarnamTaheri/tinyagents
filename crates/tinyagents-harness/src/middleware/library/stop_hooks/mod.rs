@@ -149,15 +149,15 @@ where
         };
         let mut first_stop = None;
         for hook in &self.hooks {
-            if let StopDecision::Stop { reason } = hook.check(&state).await {
-                if first_stop.is_none() {
-                    first_stop = Some(StopReport {
-                        hook: hook.name().to_owned(),
-                        reason,
-                        iteration,
-                        model: self.model.clone(),
-                    });
-                }
+            if let StopDecision::Stop { reason } = hook.check(&state).await
+                && first_stop.is_none()
+            {
+                first_stop = Some(StopReport {
+                    hook: hook.name().to_owned(),
+                    reason,
+                    iteration,
+                    model: self.model.clone(),
+                });
             }
         }
         if let Some(report) = first_stop {
