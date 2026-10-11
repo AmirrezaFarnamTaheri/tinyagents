@@ -79,17 +79,18 @@ impl DocumentStore for NoPostCommitReads {
         writes: Vec<WriteOp>,
     ) -> NativeResult<Vec<WriteResult>> {
         let changed = writes.iter().any(|write| matches!(write, WriteOp::Put { collection, .. } if collection == storage::AGENTS));
-        if changed && !self.raced.swap(true, Ordering::SeqCst) {
-            if let Some(value) = &self.telemetry_race {
-                self.inner
-                    .put(
-                        storage::TELEMETRY,
-                        &storage::key(&["run"]),
-                        value.clone(),
-                        Precondition::None,
-                    )
-                    .await?;
-            }
+        if changed
+            && !self.raced.swap(true, Ordering::SeqCst)
+            && let Some(value) = &self.telemetry_race
+        {
+            self.inner
+                .put(
+                    storage::TELEMETRY,
+                    &storage::key(&["run"]),
+                    value.clone(),
+                    Precondition::None,
+                )
+                .await?;
         }
         let result = self.inner.atomic_batch_checked(checks, writes).await?;
         if changed {

@@ -409,10 +409,10 @@ impl DriverRunLedger {
         {
             Ok(_) => Ok(report),
             Err(error) if error.kind() == ErrorKind::Conflict => {
-                if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await? {
-                    if receipt.doc.fingerprint == loaded.fingerprint {
-                        return Ok(receipt.doc.report);
-                    }
+                if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await?
+                    && receipt.doc.fingerprint == loaded.fingerprint
+                {
+                    return Ok(receipt.doc.report);
                 }
                 Err(error.into())
             }
