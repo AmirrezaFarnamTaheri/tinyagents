@@ -85,7 +85,8 @@ fn reasoning_extra_metadata(content: &[ContentBlock]) -> Option<serde_json::Valu
         matches!(
             block,
             ContentBlock::Thinking {
-                signature: Some(_), ..
+                signature: Some(_),
+                ..
             }
         )
     });
