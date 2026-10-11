@@ -73,6 +73,7 @@ mod policy_gate;
 mod repeat_progress;
 mod repeat_progress_state;
 mod resilience;
+mod stop_hooks;
 mod tool_policy;
 mod turn_clock;
 mod verify_before_finish;
@@ -108,6 +109,9 @@ pub use repeat_progress::{
 };
 pub use repeat_progress_state::{
     REPEAT_GUARD_BLOCKED, REPEAT_GUARD_HALTED, REPEAT_GUARD_METADATA_KEY, repeat_guard_marker,
+};
+pub use stop_hooks::{
+    StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
