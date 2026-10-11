@@ -50,8 +50,15 @@ impl DriverRunLedger {
         event: Option<RunEventAppend>) -> Result<RunTransition> {
         for _ in 0..CAS_ATTEMPTS {
             let Some(previous) = self.read::<AgentRun>(AGENTS, id).await? else { return Ok(RunTransition::NotFound); };
+            let (telemetry, check) = self.telemetry_dependency(id).await?;
             if expected.is_some_and(|expected| previous.doc.status != expected) {
-                return Ok(RunTransition::StatusChanged(self.agent_telemetry(previous.doc).await?));
+                let checks = vec![check, tinystoragedrivers_core::ReadCheck { collection: AGENTS.into(), id: key(&[id]),
+                    expected: tinystoragedrivers_core::ExpectedDocument::Version(previous.version) }];
+                match self.scoped.documents().atomic_batch_checked(checks, vec![]).await {
+                    Ok(_) => { let mut row = previous.doc; row.telemetry = telemetry; return Ok(RunTransition::StatusChanged(row)); },
+                    Err(error) if error.kind() == ErrorKind::Conflict => continue,
+                    Err(error) => return Err(error.into()),
+                }
             }
             let condition = Precondition::Version(previous.version);
             let mut row = previous.doc;
@@ -60,8 +67,8 @@ impl DriverRunLedger {
             let mut writes = vec![WriteOp::Put { collection: AGENTS.into(), id: key(&[id]),
                 doc: encode(&row)?, precondition: condition }];
             if let Some(input) = &event { writes.extend(self.event_commit(input).await?.writes); }
-            match self.scoped.documents().atomic_batch_checked(vec![], writes).await {
-                Ok(_) => return Ok(RunTransition::Applied(self.agent_telemetry(row).await?)),
+            match self.scoped.documents().atomic_batch_checked(vec![check], writes).await {
+                Ok(_) => { row.telemetry = telemetry; return Ok(RunTransition::Applied(row)); },
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => return Err(error.into()),
             }
