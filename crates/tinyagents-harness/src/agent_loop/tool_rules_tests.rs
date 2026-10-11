@@ -300,6 +300,49 @@ async fn indirect_target_resolution_obeys_run_cancellation() {
     );
 }
 
+#[tokio::test]
+async fn indirect_target_resolution_obeys_run_deadline() {
+    let tool = BlockingTargetTool::new();
+    let dropped = tool.dropped.clone();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(tool.clone());
+    harness.with_policy(RunPolicy {
+        tool_rules: ToolRulePolicy::new(rules(json!({ "rules": [
+            { "effect": "deny", "match": { "name": "resolved_target" } },
+        ] }))),
+        ..RunPolicy::default()
+    });
+    harness.register_model(
+        "scripted",
+        Arc::new(ScriptedModel::new(vec![calls(vec![(
+            "target",
+            "blocked_target",
+            json!({}),
+        )])])) as _,
+    );
+    let ctx = RunContext::new(
+        RunConfig::new("deadline-target-resolution").with_timeout_ms(50),
+        (),
+    );
+    let mut run = Box::pin(harness.invoke_in_context(&(), ctx, vec![Message::user("go")]));
+
+    tokio::select! {
+        _ = tool.started.notified() => {},
+        result = &mut run => panic!("run unexpectedly completed: {result:?}"),
+    }
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut run)
+        .await
+        .expect("run deadline should interrupt target resolution");
+    assert!(matches!(
+        result,
+        Err(crate::error::TinyAgentsError::Timeout(_))
+    ));
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "resolver future was not dropped"
+    );
+}
+
 // ── Calls ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]
