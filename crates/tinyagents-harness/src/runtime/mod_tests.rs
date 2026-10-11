@@ -2098,6 +2098,59 @@ async fn hosted_definition_with_no_declared_tools_denies_every_tool() {
 }
 
 #[tokio::test]
+async fn explicit_empty_tool_scope_denies_tools_with_legacy_host_fallback() {
+    let mut fabricated_call = ModelResponse::assistant("");
+    fabricated_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1",
+            "noop",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        fabricated_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    // Explicit empty scope must override the host legacy fallback.
+    let definition = AgentDefinition::new("helper", "Helper", "test helper").with_tools(Vec::<String>::new());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    ).with_legacy_unrestricted_tool_allowlist();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("empty-allowlist"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `noop`")),
+        "a registered tool the definition never declared must be rejected, not silently run"
+    );
+    // No tool schema at all is offered to the provider — the registered
+    // catalogue is not leaked to a definition that declared nothing.
+    assert!(model.requests()[0].tools.is_empty());
+}
+
+#[tokio::test]
 async fn hosted_structured_schema_rejects_hidden_registered_tool_collision() {
     // `answer` is registered globally but deliberately not allowed for this
     // hosted definition. It still cannot be used as a synthetic structured
