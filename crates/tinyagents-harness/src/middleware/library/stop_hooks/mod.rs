@@ -140,8 +140,9 @@ where
         let state = TurnState {
             iteration,
             max_iterations: context
-                .config
-                .effective_max_model_calls()
+                .limits
+                .limits()
+                .max_model_calls
                 .min(u32::MAX as usize) as u32,
             cost: &metrics,
             model: &self.model,
