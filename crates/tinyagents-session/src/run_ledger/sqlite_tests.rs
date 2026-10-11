@@ -578,3 +578,224 @@ async fn adapter_control_and_retention_preserve_existing_tables_and_sequences() 
         "classic retention does not delete agent run rows"
     );
 }
+
+/// Member lifecycle and read APIs preserve authoritative rows through the async handle.
+#[tokio::test(flavor = "current_thread")]
+async fn adapter_lists_and_member_lifecycle_use_the_bound_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    seed_agent(ledger.as_ref()).await;
+    assert_eq!(
+        ledger
+            .list_agent_runs(&AgentRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        1
+    );
+    assert!(
+        ledger
+            .transition_agent_run_status("agent", AgentRunStatus::Pending, Some("retry"), None)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(ledger.interrupt_orphaned_agent_runs().await.unwrap(), 1);
+    ledger
+        .upsert_workflow_run(workflow("workflow", WorkflowRunStatus::Running))
+        .await
+        .unwrap();
+    assert_eq!(
+        ledger
+            .get_workflow_run("workflow")
+            .await
+            .unwrap()
+            .unwrap()
+            .definition_id,
+        "definition"
+    );
+    assert_eq!(
+        ledger
+            .list_workflow_runs(&WorkflowRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        1
+    );
+    ledger
+        .upsert_agent_team(AgentTeamUpsert {
+            id: "team".into(),
+            parent_thread_id: None,
+            lead_agent_id: "lead".into(),
+            status: AgentTeamStatus::Active,
+            summary: None,
+            created_at: None,
+            closed_at: None,
+        })
+        .await
+        .unwrap();
+    assert!(ledger.get_agent_team("team").await.unwrap().is_some());
+    assert_eq!(
+        ledger
+            .list_agent_teams(&AgentTeamListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        1
+    );
+    ledger
+        .upsert_agent_team_member(AgentTeamMemberUpsert {
+            id: "member".into(),
+            team_id: "team".into(),
+            name: "Member".into(),
+            agent_id: None,
+            member_status: AgentTeamMemberStatus::Pending,
+            current_task_id: None,
+            worker_thread_id: None,
+            run_id: None,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ledger
+            .get_agent_team_member("member")
+            .await
+            .unwrap()
+            .unwrap()
+            .name,
+        "Member"
+    );
+    assert_eq!(
+        ledger.list_agent_team_members("team").await.unwrap().len(),
+        1
+    );
+    ledger
+        .upsert_agent_team_task(AgentTeamTaskUpsert {
+            id: "task".into(),
+            team_id: "team".into(),
+            title: "Task".into(),
+            objective: None,
+            status: AgentTeamTaskStatus::Todo,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    assert!(ledger.get_agent_team_task("task").await.unwrap().is_some());
+    ledger
+        .claim_agent_team_task("team", "task", "member", "claim")
+        .await
+        .unwrap();
+    let running = ledger
+        .mark_agent_team_member_running("team", "member", "task", "thread", "run")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(running.member_status, AgentTeamMemberStatus::Running);
+    let idle = ledger
+        .mark_agent_team_member_idle("team", "member")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(idle.member_status, AgentTeamMemberStatus::Idle);
+    let (closed, released) = ledger
+        .shutdown_agent_team_member("team", "member")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(closed.member_status, AgentTeamMemberStatus::Shutdown);
+    assert_eq!(released, vec!["task"]);
+}
+
+/// Tree navigation, effect settlement and classic retention companions retain their original scope.
+#[tokio::test]
+async fn adapter_tree_navigation_effect_settlement_and_retention_round_trip() {
+    use crate::entry_tree::{CustomEntry, ForkPosition, ForkScope};
+    let dir = tempfile::tempdir().unwrap();
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    let tip = ledger
+        .entry_append_to_head(
+            "tree",
+            EntryKind::Custom(CustomEntry {
+                kind: "note".into(),
+                payload: json!({}),
+                display: None,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ledger.entry_tips("tree").await.unwrap(), vec![tip.clone()]);
+    let label = ledger.entry_label("tree", &tip, "main").await.unwrap();
+    assert_eq!(
+        ledger.entry_branches("tree").await.unwrap()[0].tip_id,
+        label.clone()
+    );
+    assert_eq!(
+        ledger
+            .entry_fork(
+                "tree",
+                &label,
+                Fork {
+                    scope: ForkScope::Branch,
+                    position: ForkPosition::At
+                }
+            )
+            .await
+            .unwrap(),
+        label.clone()
+    );
+    ledger.entry_rebuild_index("tree").await.unwrap();
+    assert_eq!(
+        ledger
+            .entry_build_context("tree", &label)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    ledger
+        .record_tool_started(ToolEffectStart {
+            run_id: "run".into(),
+            call_id: "call".into(),
+            tool: "write".into(),
+            idempotency_key: None,
+            effect_summary: None,
+        })
+        .await
+        .unwrap();
+    let effect = ledger
+        .settle_tool_effect(ToolEffectSettle {
+            run_id: "run".into(),
+            call_id: "call".into(),
+            status: ToolEffectStatus::Completed,
+            effect_summary: Some("done".into()),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(effect.status, ToolEffectStatus::Completed);
+    let tail = vec![DanglingToolCall {
+        run_id: "run".into(),
+        call_id: "call".into(),
+        tool: "write".into(),
+    }];
+    let strict = ledger.classify_recovery(&tail, &[effect.clone()]);
+    assert_eq!(
+        strict,
+        ledger.classify_recovery_with(&tail, &[effect], MissingEffectRow::Uncertain)
+    );
+    let cutoff = chrono::Utc::now() + Duration::minutes(1);
+    assert_eq!(ledger.prune_sessions_before(cutoff).await.unwrap(), 0);
+    assert_eq!(ledger.trim_session_messages("missing", 1).await.unwrap(), 0);
+    assert_eq!(ledger.prune_tool_calls_before(cutoff).await.unwrap(), 0);
+    assert_eq!(ledger.prune_run_events_before(cutoff).await.unwrap(), 0);
+    assert_eq!(ledger.reindex_fts().await.unwrap(), 0);
+    assert!(ledger.entry_get("tree", &label).await.unwrap().is_some());
+}
