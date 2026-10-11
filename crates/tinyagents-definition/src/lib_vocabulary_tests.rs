@@ -417,3 +417,26 @@ fn model_hints_are_separate_from_exact_pins() {
     assert_eq!(ModelSpec::Inherit.pin(), None);
     assert_eq!(ModelSpec::Inherit.hint(), None);
 }
+
+#[test]
+fn loader_rejects_semantically_invalid_authored_definitions() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, authored) in [
+        ("blank-id", "id=' '\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\n"),
+        ("blank-purpose", "id='agent'\nwhen_to_use=' '\nsystem_prompt={inline='prompt'}\n"),
+        ("blank-tool", "id='agent'\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\n[tools]\nnamed=['']\n"),
+        ("duplicate-tool", "id='agent'\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\n[tools]\nnamed=['noop','noop']\n"),
+        ("blank-subagent", "id='agent'\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\nsubagents=['']\n"),
+        ("duplicate-subagent", "id='agent'\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\nsubagents=['worker','worker']\n"),
+    ] {
+        let path = dir.path().join(format!("{name}.toml"));
+        std::fs::write(&path, authored).unwrap();
+        assert!(load_file::<Extensions>(&path).is_err(), "{name} must be rejected");
+    }
+    let valid = dir.path().join("valid.toml");
+    std::fs::write(&valid, "id='valid'\nwhen_to_use='task'\nsystem_prompt={inline='prompt'}\n").unwrap();
+    let mut loaded: Vec<AgentDefinition> = Vec::new();
+    load_dir(dir.path(), &mut loaded).unwrap();
+    assert_eq!(loaded.iter().map(|definition| definition.id.as_str()).collect::<Vec<_>>(), ["valid"]);
+    assert_eq!(loaded[0].source, DefinitionSource::File(valid));
+}
