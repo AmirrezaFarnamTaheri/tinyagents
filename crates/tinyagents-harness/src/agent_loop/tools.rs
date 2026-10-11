@@ -106,6 +106,26 @@ use sha2::{Digest, Sha256};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
+/// Bind tool-produced authorization facts to both the caller's request and the
+/// validated arguments that will be executed. The host still owns the meaning
+/// of `facts`; this envelope only prevents facts from being replayed for a
+/// different call or argument shape.
+pub(super) fn bind_authorization_context(
+    tool_name: &str,
+    request_arguments: &serde_json::Value,
+    effective_arguments: &serde_json::Value,
+    facts: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    facts.map(|facts| {
+        serde_json::json!({
+            "tool_name": tool_name,
+            "request_arguments": request_arguments,
+            "effective_arguments": effective_arguments,
+            "tool_facts": facts,
+        })
+    })
+}
+
 /// How a single requested tool call was resolved during admission.
 enum ResolvedToolCall<State: Send + Sync, Ctx: Send + Sync> {
     /// A registered tool (possibly after an unknown-tool rewrite).
@@ -1058,13 +1078,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Tool-specific facts are prepared asynchronously before the host
             // decides whether the call may run. The runtime transports the
             // opaque value only; interpretation and policy remain host-owned.
-            let authorization_context = dispatch
-                .tool()
-                .prepare_authorization(&model_arguments)
-                .await
-                .map_err(|_| {
-                    TinyAgentsError::Tool("tool authorization preparation failed".to_string())
-                })?;
+            let effective_arguments = call.arguments.clone();
+            let authorization_facts = ctx
+                .bounded(
+                    self.call_budget(ctx),
+                    async {
+                        dispatch
+                            .tool()
+                            .prepare_authorization(&effective_arguments)
+                            .await
+                            .map_err(|_| {
+                                TinyAgentsError::Tool(
+                                    "tool authorization preparation failed".to_string(),
+                                )
+                            })
+                    },
+                    || {
+                        format!(
+                            "tool authorization preparation for run `{}` exceeded its remaining wall-clock budget",
+                            ctx.run_id()
+                        )
+                    },
+                )
+                .await?;
+            let authorization_context = super::tools::bind_authorization_context(
+                &call.name,
+                &model_arguments,
+                &effective_arguments,
+                authorization_facts,
+            );
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),
                 model_arguments,

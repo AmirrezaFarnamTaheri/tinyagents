@@ -946,6 +946,33 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
 
         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+            let effective_arguments = call.arguments.clone();
+            let authorization_facts = ctx
+                .bounded(
+                    self.call_budget(ctx),
+                    async {
+                        tool.prepare_authorization(&effective_arguments)
+                            .await
+                            .map_err(|_| {
+                                TinyAgentsError::Tool(
+                                    "tool authorization preparation failed".to_string(),
+                                )
+                            })
+                    },
+                    || {
+                        format!(
+                            "tool authorization preparation for run `{}` exceeded its remaining wall-clock budget",
+                            ctx.run_id()
+                        )
+                    },
+                )
+                .await?;
+            let authorization_context = super::tools::bind_authorization_context(
+                &name,
+                &model_arguments,
+                &effective_arguments,
+                authorization_facts,
+            );
             let request = crate::host::ToolCallRequest::new(
                 name.clone(),
                 model_arguments,
@@ -953,7 +980,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             )
             .with_call_id(CallId::new(call.id.clone()))
             .with_parent_call_id(parent.clone());
-            let authorization = binding.host.security.authorize_tool(&request);
+            let authorization = binding
+                .host
+                .security
+                .authorize_tool_with_context(&request, authorization_context.as_ref());
             let decision = ctx
                 .bounded(self.call_budget(ctx), authorization, || {
                     format!(
