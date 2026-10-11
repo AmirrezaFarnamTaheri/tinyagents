@@ -322,10 +322,18 @@ impl SessionStoreProvider for DriverSessionStores {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+        self.bind_actor_with_schema_admission(backend, self.schema_admission)
+    }
+
+    fn bind_actor_with_schema_admission(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+        admission: SchemaAdmission,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         let actor = Self::with_bridge_and_schema_admission(
             backend,
             self.bridge.clone(),
-            self.schema_admission,
+            admission,
         )
         .recover_on_open(self.recover_on_open);
         Ok(Some(Arc::new(actor)))
