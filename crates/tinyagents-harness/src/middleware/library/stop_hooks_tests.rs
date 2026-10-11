@@ -372,3 +372,26 @@ async fn stop_hook_reports_the_live_model_call_cap_after_policy_narrowing() {
         .unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![2]);
 }
+
+/// A steering queue that forbids pause cannot silently bypass a stop policy.
+#[tokio::test]
+async fn stop_hooks_reject_a_steering_policy_that_disallows_pause() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let middleware = StopHookMiddleware::<Metrics>::new(
+        "model",
+        vec![Arc::new(Hook {
+            name: "budget",
+            stop: true,
+            observations: observations.clone(),
+        })],
+    );
+    let mut context =
+        run().with_steering(SteeringHandle::new(crate::steering::SteeringPolicy::new()));
+    let result = middleware.before_agent(&mut context, &()).await;
+    assert!(matches!(result, Err(TinyAgentsError::Middleware(_))));
+    let result = middleware
+        .after_model(&mut context, &(), &mut ModelResponse::assistant("done"))
+        .await;
+    assert!(matches!(result, Err(TinyAgentsError::Middleware(_))));
+    assert!(observations.lock().unwrap().is_empty());
+}
