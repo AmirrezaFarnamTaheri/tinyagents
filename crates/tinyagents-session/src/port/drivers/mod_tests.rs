@@ -686,7 +686,7 @@ async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
     let bootstrap = backend.for_scope(&Scope::local()).unwrap();
     DriverSessionStores::prepare_schema(bootstrap.documents().as_ref()).await.unwrap();
     let restricted = backend.existing_schema().unwrap();
-    let actor = DriverSessionStores::new(restricted).unwrap().recover_on_open(true);
+    let actor = DriverSessionStores::new_with_schema_admission(restricted, SchemaAdmission::ValidateOnly).unwrap().recover_on_open(true);
     let opened = actor.try_for_agent("prepared-actor");
     assert!(opened.is_ok(), "prepared restricted actor recovery refused: {:?}", opened.err());
     session_store_conformance(&actor).await;

@@ -25,6 +25,7 @@ use tinystoragedrivers_core::{
 use tokio::sync::OnceCell;
 
 use super::super::TurnStates;
+use tinyagents_harness::store::SchemaAdmission;
 use super::super::memory::{
     COMPLETED_RETENTION, completed_newest_first, is_terminal, newest_first,
 };
@@ -53,15 +54,24 @@ pub struct DriverTurnStates {
 struct Inner {
     docs: Arc<dyn DocumentStore>,
     declared: OnceCell<()>,
+    schema_admission: SchemaAdmission,
 }
 
 impl DriverTurnStates {
     /// Turn states in `docs`, with synchronous calls run on `bridge`.
     pub fn new(docs: Arc<dyn DocumentStore>, bridge: Blocking) -> Self {
+        Self::new_with_schema_admission(docs, bridge, SchemaAdmission::Declare)
+    }
+
+    /// Turn states with an immutable schema policy and independent initialization.
+    pub fn new_with_schema_admission(
+        docs: Arc<dyn DocumentStore>, bridge: Blocking, schema_admission: SchemaAdmission,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 docs,
                 declared: OnceCell::new(),
+                schema_admission,
             }),
             bridge,
         }
@@ -152,7 +162,7 @@ impl Inner {
         self.declared
             .get_or_try_init(|| async {
                 let spec = collection_spec();
-                self.docs.ensure_collection(&spec).await
+                self.schema_admission.admit(self.docs.as_ref(), &spec).await
             })
             .await
             .map(|_| ())

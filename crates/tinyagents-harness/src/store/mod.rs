@@ -33,6 +33,8 @@
 pub mod conformance;
 #[cfg(feature = "storage-drivers")]
 mod drivers;
+#[cfg(feature = "storage-drivers")]
+mod schema_admission;
 pub mod namespaced;
 mod types;
 
@@ -47,6 +49,8 @@ pub use types::*;
 
 #[cfg(feature = "storage-drivers")]
 pub use drivers::{DriverAppendStore, DriverStore};
+#[cfg(feature = "storage-drivers")]
+pub use schema_admission::SchemaAdmission;
 
 use crate::error::{Result, TinyAgentsError};
 use crate::ids::now_ms;
