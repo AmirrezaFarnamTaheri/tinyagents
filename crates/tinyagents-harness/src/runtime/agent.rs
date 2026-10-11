@@ -1079,7 +1079,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         let progress = start_progress_dispatcher(host.progress.clone());
         // Wildcard keeps the host's undeclared-tool policy; named-empty is an
         // explicit empty set and therefore never widens through that fallback.
-        let allowed_tools = match definition.resolve_tool_scope(None) {
+        let registered = self.tools.names();
+        let allowed_tools = match definition.resolve_tool_scope(Some(&registered)) {
             tinyagents_definition::ToolScope::Wildcard => None,
             tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
         };

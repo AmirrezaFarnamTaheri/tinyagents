@@ -3713,7 +3713,7 @@ async fn hosted_wildcard_exclusions_preserve_other_registered_tools() {
         fabricated_call,
         ModelResponse::assistant("recovered"),
     ]));
-    // No `.with_tools(...)`: the definition declares nothing.
+    // Wildcard excludes answer while preserving the registered noop tool.
     let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
     definition.disallowed_tools = vec!["answer".into()];
     let host = crate::host::HostCapabilities::new(
@@ -3748,7 +3748,12 @@ async fn hosted_wildcard_exclusions_preserve_other_registered_tools() {
             .any(|message| message.text().contains("unknown tool `answer`")),
         "a registered tool the definition never declared must be rejected, not silently run"
     );
-    // No tool schema at all is offered to the provider — the registered
-    // catalogue is not leaked to a definition that declared nothing.
-    assert_eq!(model.requests()[0].tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["noop"]);
+    assert_eq!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["noop"]
+    );
 }
