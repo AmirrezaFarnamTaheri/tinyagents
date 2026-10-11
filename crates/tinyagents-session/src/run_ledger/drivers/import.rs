@@ -186,7 +186,108 @@ impl DriverRunLedger {
     ///
     /// # Errors
     /// Source authority, unsupported schema, or native transaction refusal.
-    pub async fn import_agent_family(&self, _source: &QuiescentSource, _operation_id: &str) -> Result<AgentImportReport> {
-        Err(unsupported("import_agent_family"))
+    pub async fn import_agent_family(&self, source: &QuiescentSource, operation_id: &str) -> Result<AgentImportReport> {
+        tinystoragedrivers_core::document::validate_id(operation_id)?;
+        let loaded = self.load_agent_import(source)?;
+        self.commit_agent_import(loaded, operation_id).await
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct ImportReceipt { fingerprint: String, report: AgentImportReport }
+struct LoadedAgentImport {
+    fingerprint: String,
+    runs: Vec<AgentRun>, events: Vec<RunEvent>, telemetry: Vec<RunTelemetry>,
+}
+
+impl DriverRunLedger {
+    fn load_agent_import(&self, source: &QuiescentSource) -> Result<LoadedAgentImport> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let snapshot = self.preflight_source(source)?;
+        // This slice imports only the agent family from its current known layout.
+        // Historical discovery never fabricates absent columns or rewrites rows.
+        for table in ["agent_runs", "run_events", "run_telemetry"] {
+            if !snapshot.tables.iter().any(|name| name == table) {
+                return Err(StorageError::invalid_input("agent import requires its declared source tables").into());
+            }
+        }
+        let runs = {
+            let mut statement = snapshot.connection.prepare("SELECT id,kind,parent_run_id,parent_thread_id,agent_id,status,prompt_ref,worker_thread_id,checkpoint_path,checkpoint_json,summary,error,metadata_json,started_at,updated_at,completed_at FROM agent_runs ORDER BY id").map_err(source_sql_error)?;
+            statement.query_map([], |row| {
+                let run = super::super::ops::map_agent_run_row(&snapshot.connection, row)?;
+                if row.get::<_, String>(1)? != run.kind.as_str() || row.get::<_, String>(5)? != run.status.as_str() {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                for index in [9,12] {
+                    if let Some(raw) = row.get::<_, Option<String>>(index)? {
+                        let _: serde_json::Value = serde_json::from_str(&raw).map_err(|error|
+                            rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(error)))?;
+                    }
+                }
+                Ok(run)
+            }).map_err(source_sql_error)?.collect::<std::result::Result<Vec<_>, _>>().map_err(source_sql_error)?
+        };
+        let events = {
+            let mut statement = snapshot.connection.prepare("SELECT run_id,sequence,event_type,payload_json,timestamp FROM run_events ORDER BY run_id,sequence").map_err(source_sql_error)?;
+            statement.query_map([], |row| {
+                if row.get::<_, i64>(1)? <= 0 { return Err(rusqlite::Error::InvalidQuery); }
+                let raw: String = row.get(3)?;
+                let _: serde_json::Value = serde_json::from_str(&raw).map_err(|error|
+                    rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error)))?;
+                super::super::ops::map_run_event_row(row)
+            }).map_err(source_sql_error)?.collect::<std::result::Result<Vec<_>, _>>().map_err(source_sql_error)?
+        };
+        let telemetry = {
+            let mut statement = snapshot.connection.prepare("SELECT run_id,input_tokens,output_tokens,cached_input_tokens,cost_usd,elapsed_ms,tool_count,model,provider,error,updated_at FROM run_telemetry ORDER BY run_id").map_err(source_sql_error)?;
+            statement.query_map([], |row| {
+                for index in [1,2,3,5,6] {
+                    if row.get::<_, Option<i64>>(index)?.is_some_and(|number| number < 0) { return Err(rusqlite::Error::InvalidQuery); }
+                }
+                super::super::ops::map_run_telemetry_row(row)
+            }).map_err(source_sql_error)?.collect::<std::result::Result<Vec<_>, _>>().map_err(source_sql_error)?
+        };
+        // A content digest identifies a receipt; only SourceOwner establishes tenancy.
+        let mut file = std::fs::File::open(&source.path).map_err(|error| StorageError::backend("read source digest").with_source(error))?;
+        let mut digest = Sha256::new(); let mut buffer = [0; 65536];
+        loop {
+            let read = file.read(&mut buffer).map_err(|error| StorageError::backend("read source digest").with_source(error))?;
+            if read == 0 { break; } digest.update(&buffer[..read]);
+        }
+        Ok(LoadedAgentImport { fingerprint: hex::encode(digest.finalize()), runs, events, telemetry })
+    }
+
+    async fn commit_agent_import(&self, loaded: LoadedAgentImport, operation_id: &str) -> Result<AgentImportReport> {
+        use super::storage::{AGENTS, TELEMETRY, EVENTS, EVENT_HEADS, IMPORTS, encode, key};
+        use tinystoragedrivers_core::{Precondition, WriteOp};
+        self.declare().await?;
+        if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await? {
+            if receipt.doc.fingerprint != loaded.fingerprint { return Err(StorageError::conflict("import operation source changed").into()); }
+            return Ok(receipt.doc.report);
+        }
+        let report = AgentImportReport { agent_runs: loaded.runs.len(), events: loaded.events.len(), telemetry: loaded.telemetry.len() };
+        let put = |collection: &str, id: String, doc| WriteOp::Put { collection: collection.into(), id, doc, precondition: Precondition::Absent };
+        let mut writes = Vec::new();
+        for mut run in loaded.runs { run.telemetry = None; writes.push(put(AGENTS, key(&[&run.id]), encode(&run)?)); }
+        for telemetry in loaded.telemetry { writes.push(put(TELEMETRY, key(&[&telemetry.run_id]), encode(&telemetry)?)); }
+        let mut heads = std::collections::BTreeMap::<String,u64>::new();
+        for event in loaded.events {
+            let next = event.sequence.checked_add(1).filter(|sequence| *sequence <= i64::MAX as u64)
+                .ok_or_else(|| StorageError::serialization("import event sequence exceeds classic range"))?;
+            heads.entry(event.run_id.clone()).and_modify(|current| *current = (*current).max(next)).or_insert(next);
+            writes.push(put(EVENTS, key(&[&event.run_id, &event.sequence.to_string()]), encode(&event)?));
+        }
+        for (run_id, next) in heads { writes.push(put(EVENT_HEADS, key(&[&run_id]), encode(&super::events::EventHead { next })?)); }
+        writes.push(put(IMPORTS, key(&[operation_id]), encode(&ImportReceipt { fingerprint: loaded.fingerprint.clone(), report: report.clone() })?));
+        match self.scoped.documents().atomic_batch_checked(vec![], writes).await {
+            Ok(_) => Ok(report),
+            Err(error) if error.kind() == ErrorKind::Conflict => {
+                if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await? {
+                    if receipt.doc.fingerprint == loaded.fingerprint { return Ok(receipt.doc.report); }
+                }
+                Err(error.into())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 }

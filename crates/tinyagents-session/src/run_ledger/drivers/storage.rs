@@ -16,6 +16,7 @@ pub(super) const AGENTS: &str = "run_ledger_agent_runs";
 pub(super) const TEAMS: &str = "run_ledger_teams";
 pub(super) const MEMBERS: &str = "run_ledger_members";
 pub(super) const EFFECTS: &str = "run_ledger_tool_effects";
+pub(super) const IMPORTS: &str = "run_ledger_agent_imports";
 pub(super) const EVENTS: &str = "run_ledger_event_outbox";
 pub(super) const EVENT_HEADS: &str = "run_ledger_event_heads";
 pub(super) const TASKS: &str = "run_ledger_tasks";
@@ -42,6 +43,7 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// Declare only portable indexes; expiry never deletes durable run metadata.
 pub(super) fn specs() -> Vec<CollectionSpec> {
     vec![
+        CollectionSpec::new(IMPORTS),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS).index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
         CollectionSpec::new(EFFECTS)

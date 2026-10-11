@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct EventHead { next: u64 }
+pub(super) struct EventHead { pub(super) next: u64 }
 
 struct EventCommit {
     event: RunEvent,

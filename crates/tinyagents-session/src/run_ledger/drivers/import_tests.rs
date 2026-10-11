@@ -127,7 +127,12 @@ async fn admitted_agent_import_preserves_source_and_retry_never_overwrites_nativ
     let original = crate::run_ledger::upsert_agent_run(root.path(), input).unwrap();
     crate::run_ledger::append_run_event(root.path(), RunEventAppend { run_id: "run".into(), event_type: "old".into(), payload: serde_json::json!({"source":true}) }).unwrap();
     crate::run_ledger::upsert_run_telemetry(root.path(), RunTelemetryUpsert { run_id: "run".into(), input_tokens: Some(7), ..Default::default() }).unwrap();
-    let path = crate::store::db_path(root.path());
+    let path = root.path().join("snapshot.db");
+    // Trusted fixture stops source calls and creates a consistent, closed snapshot;
+    // the importer must never checkpoint the cached classic connection itself.
+    let db = rusqlite::Connection::open(crate::store::db_path(root.path())).unwrap();
+    db.execute("VACUUM INTO ?1", [path.to_str().unwrap()]).unwrap();
+    drop(db);
     let bytes = std::fs::read(&path).unwrap();
     let source = QuiescentSource::asserted_by_trusted_host(&path, SourceOwner::asserted_by_trusted_host(ledger.scope().clone()));
     let report = ledger.import_agent_family(&source, "import-1").await.unwrap();
