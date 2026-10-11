@@ -395,3 +395,91 @@ async fn stop_hooks_reject_a_steering_policy_that_disallows_pause() {
     assert!(matches!(result, Err(TinyAgentsError::Middleware(_))));
     assert!(observations.lock().unwrap().is_empty());
 }
+
+/// A child stop targets its own steering lane and never leaks a pause to its parent.
+#[tokio::test]
+async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
+    let parent = run();
+    let parent_handle = parent.steering.clone().unwrap();
+    let child = parent
+        .child(RunConfig::new("child").with_max_model_calls(5), ())
+        .unwrap();
+    let child_handle = child.steering.clone().unwrap();
+    let model = Arc::new(tinyinference_llm::providers::MockModel::with_tool_call(
+        "read",
+        serde_json::json!({}),
+    ));
+    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    harness.register_model("model", model.clone());
+    harness.register_tool(Arc::new(ReadTool));
+    harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
+        "model",
+        vec![Arc::new(Hook {
+            name: "budget",
+            stop: true,
+            observations: Arc::new(Mutex::new(Vec::new())),
+        })],
+    )));
+    let outcome = harness
+        .invoke_in_context_with_status(&(), child, vec![Message::user("read and continue")])
+        .await
+        .unwrap();
+    assert_eq!(model.call_count(), 1);
+    assert_eq!(outcome.run.tool_calls, 1);
+    assert!(child_handle.is_paused());
+    assert!(!parent_handle.is_paused());
+    assert!(
+        parent_handle.is_empty(),
+        "no child stop command remains for the parent"
+    );
+}
+
+/// A stop on a text-only completion is consumed before natural finish and handle reuse.
+#[tokio::test]
+async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command() {
+    let context = run();
+    let handle = context.steering.clone().unwrap();
+    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    harness.register_model(
+        "model",
+        Arc::new(tinyinference_llm::providers::MockModel::constant("done")),
+    );
+    harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
+        "model",
+        vec![Arc::new(Hook {
+            name: "budget",
+            stop: true,
+            observations: Arc::new(Mutex::new(Vec::new())),
+        })],
+    )));
+    let outcome = harness
+        .invoke_in_context_with_status(&(), context, vec![Message::user("answer")])
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.run.terminal.as_ref().unwrap().reason,
+        crate::terminal::TerminalReason::Paused
+    );
+    assert!(handle.is_paused());
+    assert!(handle.is_empty());
+    handle.resume();
+    let mut next: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    next.register_model(
+        "model",
+        Arc::new(tinyinference_llm::providers::MockModel::constant("next")),
+    );
+    let outcome = next
+        .invoke_in_context_with_status(
+            &(),
+            run().with_steering(handle.clone()),
+            vec![Message::user("next")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.run.terminal.as_ref().unwrap().class,
+        crate::terminal::TerminalClass::Success
+    );
+    assert!(!handle.is_paused());
+    assert!(handle.is_empty());
+}
