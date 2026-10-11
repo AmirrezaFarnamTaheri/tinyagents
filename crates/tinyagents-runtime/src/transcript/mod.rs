@@ -14,6 +14,7 @@ use tinyinference_llm::tool::ToolCall as TaToolCall;
 
 /// Conventional provider reasoning field carried by durable assistant rows.
 pub const REASONING_EXT_KEY: &str = "reasoning_content";
+const REASONING_BLOCKS_EXT_KEY: &str = "reasoning_blocks";
 
 /// Preserve a nonblank reasoning span verbatim for execution replay.
 pub fn reasoning_content_block(reasoning: Option<&str>) -> Option<ContentBlock> {
@@ -79,8 +80,33 @@ pub fn reasoning_from_content(content: &[ContentBlock]) -> Option<String> {
 /// The `extra_metadata` an assistant [`TranscriptMessage`] should carry so
 /// `reasoning_content` replays on the next provider request.
 fn reasoning_extra_metadata(content: &[ContentBlock]) -> Option<serde_json::Value> {
-    reasoning_from_content(content)
-        .map(|reasoning| serde_json::json!({ REASONING_EXT_KEY: reasoning }))
+    let reasoning = reasoning_from_content(content)?;
+    let signed_thinking = content.iter().any(|block| {
+        matches!(
+            block,
+            ContentBlock::Thinking {
+                signature: Some(_), ..
+            }
+        )
+    });
+    let mut metadata = serde_json::json!({ REASONING_EXT_KEY: reasoning });
+    if signed_thinking {
+        metadata[REASONING_BLOCKS_EXT_KEY] = serde_json::Value::Array(
+            content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Thinking { text, signature } if !text.trim().is_empty() => {
+                        Some(serde_json::json!({
+                            "text": text,
+                            "signature": signature,
+                        }))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        );
+    }
+    Some(metadata)
 }
 
 /// Convert one transcript row into a harness [`Message`].
@@ -118,7 +144,24 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
                 .and_then(|meta| meta.get(REASONING_EXT_KEY))
                 .and_then(serde_json::Value::as_str);
             let mut content = vec![ContentBlock::Text(text)];
-            content.extend(reasoning_content_block(reasoning));
+            if let Some(blocks) = msg
+                .extra_metadata
+                .as_ref()
+                .and_then(|meta| meta.get(REASONING_BLOCKS_EXT_KEY))
+                .and_then(serde_json::Value::as_array)
+            {
+                content.extend(blocks.iter().filter_map(|block| {
+                    Some(ContentBlock::Thinking {
+                        text: block.get("text")?.as_str()?.to_string(),
+                        signature: block
+                            .get("signature")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    })
+                }));
+            } else {
+                content.extend(reasoning_content_block(reasoning));
+            }
             Message::Assistant(AssistantMessage {
                 id: msg.id.clone(),
                 content,
@@ -185,11 +228,18 @@ fn data_uri_mime(reference: &str) -> Option<String> {
 /// Rebuild a harness [`TaToolCall`] from a row's [`TranscriptToolCall`] (whose
 /// `arguments` is the serialized JSON string the provider emitted).
 fn row_call_to_ta_call(call: &TranscriptToolCall) -> TaToolCall {
-    TaToolCall {
-        id: call.id.clone(),
-        name: call.name.clone(),
-        arguments: serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null),
-        invalid: None,
+    let raw = call.arguments.trim();
+    if raw.is_empty() {
+        return TaToolCall::new(call.id.clone(), call.name.clone(), serde_json::json!({}));
+    }
+    match serde_json::from_str(raw) {
+        Ok(arguments) => TaToolCall::new(call.id.clone(), call.name.clone(), arguments),
+        Err(error) => TaToolCall::invalid(
+            call.id.clone(),
+            call.name.clone(),
+            call.arguments.clone(),
+            error.to_string(),
+        ),
     }
 }
 

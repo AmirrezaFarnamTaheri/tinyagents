@@ -33,9 +33,9 @@ fn native_tool_round_preserves_calls_and_tool_result_identity() {
     assert_eq!(native.id.as_deref(), Some("call-1"));
 }
 
-/// Execution parsing must not mutate the raw durable arguments it reads.
+/// Execution parsing marks malformed arguments without mutating the raw row.
 #[test]
-fn malformed_arguments_project_to_null_without_changing_the_source_row() {
+fn malformed_arguments_are_invalid_without_changing_the_source_row() {
     let row = TranscriptMessage::assistant_with_calls(
         "",
         vec![TranscriptToolCall {
@@ -48,12 +48,34 @@ fn malformed_arguments_project_to_null_without_changing_the_source_row() {
     let Message::Assistant(message) = transcript_to_message(&row) else {
         panic!("assistant");
     };
-    assert_eq!(message.tool_calls[0].arguments, serde_json::Value::Null);
+    assert!(message.tool_calls[0].is_invalid());
+    assert_eq!(
+        message.tool_calls[0].arguments,
+        serde_json::Value::String("{unfinished".into())
+    );
     assert_eq!(row.tool_calls[0].arguments, "{unfinished");
     assert_eq!(
         row.tool_calls[0].extra_content,
         Some(serde_json::json!({"provider": "raw"}))
     );
+}
+
+#[test]
+fn blank_arguments_project_to_an_empty_object() {
+    let row = TranscriptMessage::assistant_with_calls(
+        "",
+        vec![TranscriptToolCall {
+            id: "call".into(),
+            name: "read".into(),
+            arguments: "  \n".into(),
+            extra_content: None,
+        }],
+    );
+    let Message::Assistant(message) = transcript_to_message(&row) else {
+        panic!("assistant");
+    };
+    assert_eq!(message.tool_calls[0].arguments, serde_json::json!({}));
+    assert!(!message.tool_calls[0].is_invalid());
 }
 
 /// Typed media retain their original order and references without reading files.
@@ -171,6 +193,26 @@ fn reasoning_replays_verbatim_and_retains_multiple_spans() {
         Some("repeat\n\nrepeat")
     );
     assert!(reasoning_content_block(Some(" \n ")).is_none());
+}
+
+#[test]
+fn signed_thinking_blocks_survive_native_replay() {
+    let message = Message::Assistant(tinyinference_llm::message::AssistantMessage {
+        id: None,
+        content: vec![
+            ContentBlock::Text("answer".into()),
+            ContentBlock::Thinking {
+                text: "plan".into(),
+                signature: Some("signed-by-provider".into()),
+            },
+        ],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: None,
+    });
+    let row = message_to_native_transcript(&message).unwrap();
+    let replay = transcript_to_message(&row);
+    assert_eq!(replay, message);
 }
 
 /// Marker lifting is a host compatibility policy, not this typed conversion core.
