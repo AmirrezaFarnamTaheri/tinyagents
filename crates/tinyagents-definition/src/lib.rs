@@ -192,5 +192,5 @@ impl DefinitionRegistry for InMemoryDefinitionRegistry {
 mod tests;
 
 #[cfg(test)]
-#[path = "vocabulary_tests.rs"]
+#[path = "lib_vocabulary_tests.rs"]
 mod vocabulary_tests;

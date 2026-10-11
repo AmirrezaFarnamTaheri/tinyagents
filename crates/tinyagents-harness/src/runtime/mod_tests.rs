@@ -3697,3 +3697,58 @@ async fn hosted_error_run_terminal_outcome_message_is_sanitized() {
     let outcome = run.terminal.expect("typed outcome");
     assert!(!outcome.message.contains("secret"), "{}", outcome.message);
 }
+
+#[tokio::test]
+async fn hosted_wildcard_exclusions_preserve_other_registered_tools() {
+    let mut fabricated_call = ModelResponse::assistant("");
+    fabricated_call
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1",
+            "answer",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        fabricated_call,
+        ModelResponse::assistant("recovered"),
+    ]));
+    // No `.with_tools(...)`: the definition declares nothing.
+    let mut definition = AgentDefinition::new("helper", "Helper", "test helper");
+    definition.disallowed_tools = vec!["answer".into()];
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![definition])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(model.clone())),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(AnswerCollisionTool));
+
+    let run = harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("empty-allowlist"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("the model recovers after its denied call");
+
+    assert_eq!(run.text().as_deref(), Some("recovered"));
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("unknown tool `answer`")),
+        "a registered tool the definition never declared must be rejected, not silently run"
+    );
+    // No tool schema at all is offered to the provider — the registered
+    // catalogue is not leaked to a definition that declared nothing.
+    assert_eq!(model.requests()[0].tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["noop"]);
+}
