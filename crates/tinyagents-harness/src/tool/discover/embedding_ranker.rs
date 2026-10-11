@@ -43,13 +43,13 @@ pub trait EmbeddingCache: Send + Sync + std::fmt::Debug {
     ///
     /// Missing hashes are ordinary misses. The ranker rejects non-finite vectors
     /// and vectors whose dimensions differ from the embedding model.
-    async fn load(&self, signature: &str, keys: &[u64]) -> Result<HashMap<u64, Vec<f32>>, String>;
+    async fn load(&self, signature: &str, keys: &[u64]) -> crate::Result<HashMap<u64, Vec<f32>>>;
 
     /// Merge newly computed vectors into this signature's cache.
     ///
     /// Calls can repeat the same keys and must be idempotent. Implementations
     /// should coordinate concurrent writers so disjoint deltas are preserved.
-    async fn store(&self, signature: &str, values: &[(u64, Vec<f32>)]) -> Result<(), String>;
+    async fn store(&self, signature: &str, values: &[(u64, Vec<f32>)]) -> crate::Result<()>;
 }
 
 /// Ranks tools by cosine similarity between the intent and each tool's

@@ -13,7 +13,9 @@
 //!   bridge tool the agent loop advertises and answers.
 //! - [`EmbeddingToolRanker`] — a semantic [`tinytools::ToolRanker`] over any
 //!   [`tinyinference_embeddings::EmbeddingModel`], with an in-memory and
-//!   optional on-disk embedding cache.
+//!   optional host-supplied or on-disk embedding cache.
+//! - [EmbeddingCache] — async persistence for rebuildable catalogue vectors;
+//!   the host binds its namespace and the ranker keeps embedding spaces separate.
 //! - [`render_manifest`] — the budgeted listing inside `tool_search`'s
 //!   description.
 

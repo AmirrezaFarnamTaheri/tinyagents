@@ -196,9 +196,9 @@ struct MemoryCache {
 
 #[async_trait::async_trait]
 impl EmbeddingCache for MemoryCache {
-    async fn load(&self, signature: &str, keys: &[u64]) -> Result<HashMap<u64, Vec<f32>>, String> {
+    async fn load(&self, signature: &str, keys: &[u64]) -> crate::Result<HashMap<u64, Vec<f32>>> {
         if self.fail_load.load(Ordering::SeqCst) {
-            return Err("cache unavailable".into());
+            return Err(crate::TinyAgentsError::Storage("cache unavailable".into()));
         }
         let entries = self.entries.lock().unwrap();
         Ok(keys
@@ -211,9 +211,9 @@ impl EmbeddingCache for MemoryCache {
             .collect())
     }
 
-    async fn store(&self, signature: &str, values: &[(u64, Vec<f32>)]) -> Result<(), String> {
+    async fn store(&self, signature: &str, values: &[(u64, Vec<f32>)]) -> crate::Result<()> {
         if self.fail_store.load(Ordering::SeqCst) {
-            return Err("cache unavailable".into());
+            return Err(crate::TinyAgentsError::Storage("cache unavailable".into()));
         }
         let mut entries = self.entries.lock().unwrap();
         for (key, vector) in values {
