@@ -272,20 +272,22 @@ async fn indirect_target_resolution_obeys_run_cancellation() {
     let cancellation = crate::cancel::CancellationToken::new();
     let ctx = RunContext::new(RunConfig::new("cancel-target-resolution"), ())
         .with_cancellation(cancellation.clone());
-    let gate = harness.resolve_tool_gate(&ctx).unwrap();
-    let mut admission = Box::pin(harness.rule_admission(
-        &ctx,
-        &gate,
-        "blocked_target",
-        &json!({}),
-    ));
+    harness.register_model(
+        "scripted",
+        Arc::new(ScriptedModel::new(vec![calls(vec![(
+            "target",
+            "blocked_target",
+            json!({}),
+        )])])) as _,
+    );
+    let mut run = Box::pin(harness.invoke_in_context(&(), ctx, vec![Message::user("go")]));
 
     tokio::select! {
         _ = tool.started.notified() => {},
-        result = &mut admission => panic!("target resolution unexpectedly completed: {result:?}"),
+        result = &mut run => panic!("run unexpectedly completed: {result:?}"),
     }
     cancellation.cancel();
-    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut admission)
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut run)
         .await
         .expect("cancellation should interrupt target resolution");
     assert!(matches!(result, Err(crate::error::TinyAgentsError::Cancelled)));
