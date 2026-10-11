@@ -154,3 +154,14 @@ fn flat_metadata_projection_is_distinct_from_tier_aware_call_estimates() {
     assert!(entry.pricing.tiers.is_empty());
     approx(estimate_cost_usd("minimax-m3", 100_000, 0, 0), 0.03);
 }
+
+#[test]
+fn image_support_resolves_decorated_minimax_ids() {
+    assert!(model_accepts_image_input("minimax/minimax-m3-2026-07-01"));
+}
+
+#[test]
+fn approximate_cached_rates_do_not_advertise_prompt_caching() {
+    let mistral = flat_catalog_entry(lookup("mistral-large").unwrap(), "consumer");
+    assert!(!mistral.capabilities.prompt_caching);
+}
