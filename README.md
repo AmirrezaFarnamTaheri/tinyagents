@@ -264,3 +264,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 ## License
 
 TinyAgents is licensed under [GPL-3.0-only](LICENSE).
+
+Harness correction producers can use context-bound
+[`EphemeralInstructionQueue`](crates/tinyagents-harness/src/middleware/library/ephemeral_instructions/README.md)
+for one-shot model request instructions without persisting them in history.
