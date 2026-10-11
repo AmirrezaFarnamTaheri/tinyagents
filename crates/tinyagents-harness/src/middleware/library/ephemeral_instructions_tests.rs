@@ -137,3 +137,96 @@ async fn ephemeral_instructions_reclaim_abandoned_contexts_on_admission() {
         .unwrap();
     assert_eq!(queue.drain_all(), vec!["live"]);
 }
+
+struct NativeProducer(EphemeralInstructionQueue);
+#[async_trait::async_trait]
+impl Middleware<(), ()> for NativeProducer {
+    fn name(&self) -> &str {
+        "instruction_producer"
+    }
+    async fn after_tool(
+        &self,
+        context: &mut RunContext,
+        _: &(),
+        _: &crate::middleware::ToolInvocationIdentity,
+        _: &mut tinytools::ToolResult,
+    ) -> crate::error::Result<()> {
+        self.0.push(context, "bounded correction");
+        Ok(())
+    }
+}
+struct RequestCapture(std::sync::Arc<std::sync::Mutex<Vec<ModelRequest>>>);
+#[async_trait::async_trait]
+impl Middleware<(), ()> for RequestCapture {
+    fn name(&self) -> &str {
+        "request_capture"
+    }
+    async fn before_model(
+        &self,
+        _: &mut RunContext,
+        _: &(),
+        request: &mut ModelRequest,
+    ) -> crate::error::Result<()> {
+        self.0.lock().unwrap().push(request.clone());
+        Ok(())
+    }
+}
+struct ReadTool;
+#[async_trait::async_trait]
+impl tinytools::Tool for ReadTool {
+    fn name(&self) -> &str {
+        "read"
+    }
+    fn description(&self) -> &str {
+        "test read"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("read result"))
+    }
+}
+
+/// Native tool-to-model delivery remains absent from the durable run transcript.
+#[tokio::test]
+async fn native_tool_corrections_reach_the_next_request_without_entering_history() {
+    use std::sync::{Arc, Mutex};
+    use tinyinference_llm::{model::ModelResponse, providers::MockModel, tool::ToolCall};
+    let mut response = ModelResponse::assistant("");
+    response.message.content.clear();
+    response.message.tool_calls = vec![ToolCall::new("read-1", "read", serde_json::json!({}))];
+    response.finish_reason = Some("tool_calls".into());
+    let queue = EphemeralInstructionQueue::new();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            response,
+            ModelResponse::assistant("done"),
+        ])),
+    );
+    harness.register_tool(Arc::new(ReadTool));
+    harness.push_middleware(Arc::new(NativeProducer(queue.clone())));
+    harness.push_middleware(Arc::new(queue.middleware()));
+    harness.push_middleware(Arc::new(RequestCapture(captured.clone())));
+    let run = harness
+        .invoke_default(&(), vec![Message::user("read")])
+        .await
+        .unwrap();
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.text().contains("bounded correction"))
+    );
+    assert!(
+        run.messages
+            .iter()
+            .all(|message| !message.text().contains("bounded correction"))
+    );
+    assert!(queue.drain_all().is_empty());
+}
