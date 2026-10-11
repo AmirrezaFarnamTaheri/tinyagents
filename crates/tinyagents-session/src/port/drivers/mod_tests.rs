@@ -273,18 +273,20 @@ async fn an_unbindable_scope_fails_closed() {
 struct Flaky {
     storage: MemoryStorage,
     down: Arc<std::sync::atomic::AtomicBool>,
+    reject_declaration: bool,
 }
 
 #[derive(Debug)]
 struct FlakyDocs {
     inner: Arc<dyn tinystoragedrivers_core::DocumentStore>,
     down: Arc<std::sync::atomic::AtomicBool>,
+    reject_declaration: bool,
 }
 
 impl FlakyDocs {
     fn check(&self) -> Result<(), StorageError> {
         if self.down.load(std::sync::atomic::Ordering::SeqCst) {
-            Err(StorageError::unsupported("flaky backend is down").with_source(NativeFailure))
+            Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Documents, "flaky backend is down").with_source(NativeFailure))
         } else {
             Ok(())
         }
@@ -300,6 +302,7 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
         &self,
         spec: &tinystoragedrivers_core::CollectionSpec,
     ) -> Result<(), StorageError> {
+        if self.reject_declaration { self.check()?; }
         self.inner.ensure_collection(spec).await
     }
     async fn get(
@@ -380,6 +383,7 @@ impl StorageBackend for Flaky {
             Arc::new(FlakyDocs {
                 inner: Arc::clone(inner.documents()),
                 down: Arc::clone(&self.down),
+                reject_declaration: self.reject_declaration,
             }),
             Arc::clone(inner.streams()),
             Arc::clone(inner.blobs()),
@@ -396,6 +400,7 @@ fn a_failed_recovery_fails_closed_and_is_retried() {
     let provider = DriverSessionStores::new(Arc::new(Flaky {
         storage: MemoryStorage::new(),
         down: Arc::clone(&down),
+        reject_declaration: false,
     }))
     .unwrap()
     .recover_on_open(true);
@@ -451,7 +456,7 @@ impl StorageBackend for NativeRefusal {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
     }
     fn database(&self, _: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unsupported("database"))
+        Err(StorageError::unsupported(tinystoragedrivers_core::Capability::Documents, "database"))
     }
 }
 
@@ -476,10 +481,10 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     use std::error::Error;
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let provider = DriverSessionStores::new(Arc::new(Flaky {
-        storage: MemoryStorage::new(), down: down.clone(),
+        storage: MemoryStorage::new(), down: down.clone(), reject_declaration: false,
     })).unwrap().recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
-    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported);
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Documents));
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
     assert!(provider.recovered.lock().unwrap().is_empty());
@@ -487,4 +492,18 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     let opened = provider.try_for_agent("agent").unwrap();
     let cached = provider.try_for_agent("agent").unwrap();
     assert!(Arc::ptr_eq(&opened.turn_states, &cached.turn_states));
+}
+
+#[test]
+fn checked_open_preserves_native_recovery_declaration_refusal() {
+    use std::error::Error;
+    let provider = DriverSessionStores::new(Arc::new(Flaky {
+        storage: MemoryStorage::new(),
+        down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        reject_declaration: true,
+    })).unwrap().recover_on_open(true);
+    let error = provider.try_for_agent("agent").unwrap_err();
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Documents));
+    assert!(error.source().unwrap().is::<NativeFailure>());
+    assert!(provider.agents.lock().unwrap().is_empty());
 }
