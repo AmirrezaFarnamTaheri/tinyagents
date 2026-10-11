@@ -102,6 +102,14 @@ before the override, forwarding and typed recovery helper were added. Tests
 cover source identity, unusual key mapping, legacy file compatibility,
 successful cached handles, independent actor caches and recovery retry.
 
+Local validation on 2026-10-11 passed 559 feature-enabled tests and two
+doctests, 495 default-feature tests and two doctests, strict all-feature Clippy
+and rustdoc. The full instrumented suite passed serially with 83.76% overall
+line coverage; the changed provider modules had 100%, and the turn-state
+module 96.48%. An initial parallel instrumented run encountered a pre-existing
+transcript generation file-lock refusal; its failed log was retained and no
+test was skipped in the successful full rerun.
+
 ### Actor-owned providers
 
 With `storage-drivers`, `SessionStoreProvider::bind_actor(admitted_backend)`
