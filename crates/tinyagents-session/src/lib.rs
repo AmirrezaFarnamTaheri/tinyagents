@@ -123,6 +123,7 @@ pub use retention::{
 pub use run_ledger::command_center::{
     CommandCenterView, ControlError, ControlVerb, apply_control, build_view, list_agent_work,
 };
+pub use run_ledger::{RunLedgerStore, SqliteRunLedger};
 pub use store::{db_path, with_connection, with_transaction};
 pub use threads::{
     ConversationPurgeStats, ConversationStore, ConversationThread, CreateConversationThread,

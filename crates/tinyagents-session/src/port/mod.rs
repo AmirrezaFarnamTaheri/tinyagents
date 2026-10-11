@@ -106,6 +106,21 @@ pub trait SessionStoreProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Optional bound run ledger for this agent, independent of transcript storage.
+    ///
+    /// Defaults to absent so existing providers retain their behavior. Absence
+    /// is not permission to create a local database: hosts decide whether and
+    /// how to supply a classic `SqliteRunLedger` or another implementation.
+    /// Multi-tenant providers must resolve identity before returning the handle
+    /// and must not derive scope from ledger payloads. This seam alone neither
+    /// routes existing workspace-based callers nor migrates session tables.
+    fn run_ledger_for_agent(
+        &self,
+        _agent_id: &str,
+    ) -> Option<Arc<dyn crate::run_ledger::RunLedgerStore>> {
+        None
+    }
+
     /// Repairs state an unclean shutdown left behind, once, before any agent
     /// runs: turns that were in flight are marked interrupted, and so on.
     ///
@@ -298,6 +313,13 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
         (**self).bind_actor(backend)
+    }
+
+    fn run_ledger_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Option<Arc<dyn crate::run_ledger::RunLedgerStore>> {
+        (**self).run_ledger_for_agent(agent_id)
     }
 
     fn for_agent(&self, agent_id: &str) -> AgentStores {
