@@ -161,3 +161,21 @@ fn an_intrinsic_follows_the_rules_per_surface() {
         CallGate::Refuse(_)
     ));
 }
+
+#[test]
+fn exact_exclusions_apply_to_dynamic_wildcards_without_interpreting_patterns() {
+    let gate = ToolGate::new(None, &ToolRulePolicy::default(), None)
+        .with_denied_names(["blocked".to_string(), "literal*".to_string()]);
+    assert!(!gate.allows_name("blocked"));
+    assert!(!gate.allows_name("literal*"));
+    assert!(gate.allows_name("literal_suffix"));
+    assert!(gate.lists("live_tool", None, Surface::Catalog));
+    let restricted = ToolGate::new(
+        Some(["registered".to_string()].into()),
+        &ToolRulePolicy::default(),
+        None,
+    )
+    .with_denied_names(["registered".to_string()]);
+    assert!(!restricted.allows_name("registered"));
+    assert!(!restricted.allows_name("live_tool"));
+}

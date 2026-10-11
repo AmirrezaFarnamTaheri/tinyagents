@@ -1077,12 +1077,21 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
         messages.append(&mut preamble);
         messages.append(&mut request.messages);
         let progress = start_progress_dispatcher(host.progress.clone());
-        // Wildcard keeps the host's undeclared-tool policy; named-empty is an
-        // explicit empty set and therefore never widens through that fallback.
+        // Bare wildcard keeps the host fallback; explicit wildcard policy must
+        // also cover tools supplied by a live, context-dependent toolset.
         let registered = self.tools.names();
-        let allowed_tools = match definition.resolve_tool_scope(Some(&registered)) {
-            tinyagents_definition::ToolScope::Wildcard => None,
-            tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
+        let wildcard_tools = matches!(definition.tools, tinyagents_definition::ToolScope::Wildcard)
+            && (!definition.disallowed_tools.is_empty()
+                || !definition.extra_tools.is_empty()
+                || !definition.deferred_tools.is_empty());
+        let denied_tools = definition.disallowed_tools.iter().cloned().collect();
+        let allowed_tools = if wildcard_tools {
+            None
+        } else {
+            match definition.resolve_tool_scope(Some(&registered)) {
+                tinyagents_definition::ToolScope::Wildcard => None,
+                tinyagents_definition::ToolScope::Named(names) => Some(names.into_iter().collect()),
+            }
         };
         let tool_rules = definition.tool_rules;
         Ok(PreparedAgentTurn {
@@ -1093,6 +1102,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> AgentHarness<Stat
                 model_hint: definition.model.hint(),
                 role: definition.role,
                 allowed_tools,
+                wildcard_tools,
+                denied_tools,
                 tool_rules,
                 progress: progress.clone(),
                 runtime: None,

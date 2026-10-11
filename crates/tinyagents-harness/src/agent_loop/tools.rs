@@ -276,6 +276,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         };
         Ok(match &binding.allowed_tools {
             Some(declared) => Some(declared.clone()),
+            None if binding.wildcard_tools => None,
             None if binding.host.fail_closed_tool_allowlist => {
                 Some(std::collections::HashSet::new())
             }
@@ -293,11 +294,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let allowed = self.resolve_tool_allowlist(ctx)?;
         let binding = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?;
         let definition_rules = binding.as_ref().and_then(|b| b.tool_rules.as_ref());
-        Ok(ToolGate::new(
-            allowed,
-            &self.policy.tool_rules,
-            definition_rules,
-        ))
+        Ok(
+            ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
+                .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned())),
+        )
     }
 
     /// The tool rules' answer for a model call of `name` with `args`.

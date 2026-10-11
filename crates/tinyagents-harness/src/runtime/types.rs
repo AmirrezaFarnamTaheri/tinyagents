@@ -52,9 +52,13 @@ pub(crate) struct HostInvocationBinding<State: Send + Sync, Ctx: Send + Sync> {
     /// Canonical names the resolved definition authorizes for this exact run.
     ///
     /// A bare wildcard leaves the host's fallback policy in force via None.
-    /// Named and materialized wildcard scopes use Some(set); an empty set is
+    /// Named scopes use Some(set); an empty set is
     /// explicitly deny-all, including under the legacy unrestricted fallback.
     pub(crate) allowed_tools: Option<HashSet<String>>,
+    /// An explicit wildcard policy applies to live toolsets as well as registered tools.
+    pub(crate) wildcard_tools: bool,
+    /// Exact definition exclusions, checked against every live tool catalogue.
+    pub(crate) denied_tools: HashSet<String>,
     /// The resolved definition's pattern rules, stacked on the harness
     /// policy's by the loop's tool gate.
     pub(crate) tool_rules: Option<tinytools::ToolRules>,
@@ -73,6 +77,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> Clone for HostInvocationBinding<State
             model_hint: self.model_hint.clone(),
             role: self.role.clone(),
             allowed_tools: self.allowed_tools.clone(),
+            wildcard_tools: self.wildcard_tools,
+            denied_tools: self.denied_tools.clone(),
             tool_rules: self.tool_rules.clone(),
             progress: self.progress.clone(),
             runtime: self.runtime.clone(),

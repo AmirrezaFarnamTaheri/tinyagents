@@ -60,6 +60,7 @@ pub(crate) enum CallGate {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolGate {
     allowed: Option<HashSet<String>>,
+    denied: HashSet<String>,
     rules: Option<Arc<ToolRuleSet>>,
     context: RuleContext,
 }
@@ -83,16 +84,25 @@ impl ToolGate {
         };
         Self {
             allowed,
+            denied: HashSet::new(),
             rules,
             context: policy.context.clone(),
         }
     }
 
+    /// Adds exact exclusions without freezing a dynamic wildcard catalogue.
+    pub(crate) fn with_denied_names(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.denied.extend(names);
+        self
+    }
+
     /// Whether the exact allowlist admits `name`. Rules are not consulted.
     pub(crate) fn allows_name(&self, name: &str) -> bool {
-        self.allowed
-            .as_ref()
-            .is_none_or(|allowed| allowed.contains(name))
+        !self.denied.contains(name)
+            && self
+                .allowed
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(name))
     }
 
     /// Whether `name` may be listed on `surface` (catalogue or search).
