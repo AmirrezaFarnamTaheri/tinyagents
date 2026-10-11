@@ -63,7 +63,7 @@ impl RunLedgerStore for DriverRunLedger {
         &self,
         _id: &str,
         _owner: &str,
-        _lease_for: _chrono::Duration,
+        _lease_for: chrono::Duration,
     ) -> Result<WorkflowLeaseClaim> {
         Err(unsupported("try_claim_workflow_run"))
     }
@@ -74,7 +74,7 @@ impl RunLedgerStore for DriverRunLedger {
         _upsert: WorkflowRunUpsert,
         _expected_revision: u64,
         _owner: &str,
-        _lease_for: _chrono::Duration,
+        _lease_for: chrono::Duration,
     ) -> Result<Option<WorkflowRun>> {
         Err(unsupported("compare_and_swap_workflow_run"))
     }
@@ -84,7 +84,7 @@ impl RunLedgerStore for DriverRunLedger {
         &self,
         _id: &str,
         _owner: &str,
-        _lease_for: _chrono::Duration,
+        _lease_for: chrono::Duration,
     ) -> Result<bool> {
         Err(unsupported("renew_workflow_run_lease"))
     }
