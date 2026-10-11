@@ -83,7 +83,7 @@ fn registers_declarative_agents_without_an_executable_graph_adapter() {
 
     let definition = registry.agent("default").unwrap();
     assert_eq!(definition.id, "planner");
-    assert_eq!(definition.subagents, vec!["researcher"]);
+    assert_eq!(definition.allowed_subagent_ids(), vec!["researcher"]);
     assert_eq!(registry.names(ComponentKind::Agent), vec!["planner"]);
 }
 

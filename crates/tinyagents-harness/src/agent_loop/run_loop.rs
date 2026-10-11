@@ -1125,13 +1125,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 ctx.close_turn(self.policy.capture, messages);
                 // Natural finish (A4): queued steering or a follow-up turns
                 // "done" into "one more turn" instead of returning.
-                if self
-                    .continue_from_queue_at_finish(ctx, status, messages)
-                    .await
-                {
-                    continue;
+                match self.settle_natural_finish(ctx, status, messages).await? {
+                    TurnFlow::NextTurn => continue,
+                    TurnFlow::Exit(exit) => return Ok(exit),
                 }
-                return Ok(LoopExit::Finished);
             }
 
             // A tool-calling response is a resolved turn too: clear the

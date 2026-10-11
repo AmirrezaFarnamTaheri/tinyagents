@@ -600,3 +600,40 @@ pub struct RunContext<Ctx = ()> {
     /// [`crate::summarization::CompactionSink`]'s docs.
     pub compaction_sink: Option<std::sync::Arc<dyn crate::summarization::CompactionSink>>,
 }
+
+/// Depth and inclusive child-depth ceiling of the active run tree.
+///
+/// This data-only snapshot can cross a transport boundary without retaining
+/// run state, cancellation or stores. The receiving host must still validate
+/// untrusted input and apply its own policy ceiling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDepth {
+    /// Zero-based depth of the current run; a root run is zero.
+    pub depth: usize,
+    /// Inclusive maximum child depth permitted by the run's configuration.
+    pub max_depth: usize,
+}
+
+impl From<&RunConfig> for RunDepth {
+    fn from(config: &RunConfig) -> Self {
+        Self {
+            depth: config.depth(),
+            max_depth: config.max_depth(),
+        }
+    }
+}
+
+impl RunDepth {
+    /// Derives the next depth through the same guard as `RunConfig::child`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `TinyAgentsError::SubAgentDepth` when the next child would
+    /// exceed this tree's ceiling.
+    pub fn checked_child(self) -> crate::error::Result<Self> {
+        Ok(Self {
+            depth: RunConfig::checked_child_depth(self.depth, self.max_depth)?,
+            max_depth: self.max_depth,
+        })
+    }
+}

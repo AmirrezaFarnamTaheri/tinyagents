@@ -213,6 +213,26 @@ impl SteeringHandle {
         self.send_to(SteeringTarget::All, command);
     }
 
+    /// Removes one queued command when its exact target and payload match.
+    ///
+    /// This is used by producers that must retract work which was queued for
+    /// a run but could not be completed. Other commands, including commands
+    /// addressed to different runs, remain in FIFO order.
+    pub fn retract(&self, target: &SteeringTarget, command: &SteeringCommand) -> bool {
+        let mut queue = self
+            .inner
+            .queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(index) = queue.iter().position(|(queued_target, queued_command)| {
+            queued_target == target && queued_command == command
+        }) else {
+            return false;
+        };
+        queue.remove(index);
+        true
+    }
+
     /// Removes and returns the commands addressed to *this* handle's run (its
     /// own [`SteeringTarget::Run`], [`SteeringTarget::Root`] if this handle is
     /// the root, or [`SteeringTarget::All`]), leaving commands addressed to

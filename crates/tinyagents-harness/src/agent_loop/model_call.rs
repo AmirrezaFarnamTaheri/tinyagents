@@ -81,6 +81,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
         if let Some(pin) = request.model.clone().or(host_run.model_pin.clone()) {
             resolve = resolve.with_model_pin(pin);
+        } else if let Some(hint) = host_run.model_hint.clone() {
+            resolve = resolve.with_model_hint(hint);
         }
         if let Some(capabilities) = request.required_capabilities.clone() {
             resolve = resolve.with_required_capabilities(capabilities);

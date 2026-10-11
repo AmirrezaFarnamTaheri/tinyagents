@@ -268,3 +268,7 @@ TinyAgents is licensed under [GPL-3.0-only](LICENSE).
 Harness correction producers can use context-bound
 [`EphemeralInstructionQueue`](crates/tinyagents-harness/src/middleware/library/ephemeral_instructions/README.md)
 for one-shot model request instructions without persisting them in history.
+
+The harness provides [after-model stop hooks](docs/modules/harness/stop-hooks.md):
+hosts supply budget/goal policy and accounting; the library owns ordered
+observation, per-run state and pause delivery.

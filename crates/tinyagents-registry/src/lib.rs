@@ -29,6 +29,7 @@ pub mod capability;
 pub mod catalog;
 pub mod component;
 pub mod diagnostics;
+pub mod pricing;
 pub mod router;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};

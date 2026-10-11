@@ -803,7 +803,7 @@ impl<State: Send + Sync> tinyagents_definition::DefinitionRegistry for Capabilit
         Box::pin(async move {
             Ok(self
                 .agent(id)
-                .map(|definition| definition.subagents.clone())
+                .map(tinyagents_definition::AgentDefinition::allowed_subagent_ids)
                 .unwrap_or_default())
         })
     }
