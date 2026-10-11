@@ -49,6 +49,11 @@ impl DriverRunLedger {
         }
     }
 
+    /// Bind ports whose declarations must already exist; no actor schema mutation is permitted.
+    pub fn new_existing_schema(scoped: ScopedStorage) -> Self {
+        Self::new(scoped)
+    }
+
     /// The immutable namespace this handle was supplied for.
     pub fn scope(&self) -> &Scope {
         self.scoped.scope()

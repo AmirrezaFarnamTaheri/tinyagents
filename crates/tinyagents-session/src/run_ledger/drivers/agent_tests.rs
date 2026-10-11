@@ -202,3 +202,26 @@ async fn projection_refuses_an_existing_stream_that_disagrees_with_committed_rec
     assert!(matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref error)
         if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization));
 }
+
+#[tokio::test]
+async fn existing_schema_ledger_validates_native_declarations_without_ensure() {
+    let backend = MemoryStorage::new(); let scope = Scope::new("alice").unwrap();
+    let trusted = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    trusted.upsert_agent_run(run("run")).await.unwrap();
+    let restricted = backend.existing_schema().unwrap();
+    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
+    assert!(actor.get_agent_run("run").await.unwrap().is_some());
+    actor.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "actor".into(), payload: json!({}) }).await.unwrap();
+    assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_write() {
+    let backend = MemoryStorage::new(); let scope = Scope::new("alice").unwrap();
+    let restricted = backend.existing_schema().unwrap();
+    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
+    assert!(matches!(actor.upsert_agent_run(run("run")).await.unwrap_err(), super::super::LedgerError::Driver(ref error)
+        if error.kind() == tinystoragedrivers_core::ErrorKind::NotFound));
+    let inspect = backend.for_scope(&scope).unwrap();
+    assert!(inspect.documents().collections().await.unwrap().is_empty());
+}
