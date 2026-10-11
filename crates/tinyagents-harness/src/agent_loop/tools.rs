@@ -289,7 +289,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         Ok(
             ToolGate::new(allowed, &self.policy.tool_rules, definition_rules)
                 .with_denied_names(binding.iter().flat_map(|b| b.denied_tools.iter().cloned()))
-                .with_deferred_names(binding.iter().flat_map(|b| b.deferred_tools.iter().cloned())),
+                .with_deferred_names(
+                    binding
+                        .iter()
+                        .flat_map(|b| b.deferred_tools.iter().cloned()),
+                ),
         )
     }
 
@@ -326,7 +330,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .filter_map(|name| self.tools.get(&name))
             .filter(|tool| gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Deferred)
             .filter(|tool| gate.lists(tool.name(), Some(tool.as_ref()), tinytools::Surface::Search))
-            .map(|tool| (crate::tool::provider_schema(tool.as_ref()), tool.family().map(str::to_owned)))
+            .map(|tool| {
+                (
+                    crate::tool::provider_schema(tool.as_ref()),
+                    tool.family().map(str::to_owned),
+                )
+            })
             .collect::<Vec<_>>();
         if let Some(preparation) = &self.policy.tool_schemas {
             let families: Vec<Option<String>> =

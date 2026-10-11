@@ -34,8 +34,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .schemas()
             .into_iter()
             .filter(|schema| {
-                self.tools.get(&schema.name).is_some_and(|tool| gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Direct)
-                && gate.lists(
+                self.tools.get(&schema.name).is_some_and(|tool| {
+                    gate.exposure(tool.as_ref()) == tinytools::ToolExposure::Direct
+                }) && gate.lists(
                     &schema.name,
                     self.tools.get(&schema.name).as_deref(),
                     tinytools::Surface::Catalog,

@@ -3810,7 +3810,6 @@ async fn hosted_named_scope_admits_a_tool_listed_only_as_deferred() {
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(DeferredNoop));
-    harness.with_policy(RunPolicy { discovery: crate::tool::discover::DiscoveryConfig::enabled(), ..RunPolicy::default() });
     let run = harness
         .invoke_agent(
             AgentInvocation::new(
@@ -3830,7 +3829,12 @@ async fn hosted_named_scope_admits_a_tool_listed_only_as_deferred() {
             .iter()
             .any(|message| message.text().contains("deferred tool executed"))
     );
-    assert!(model.requests()[0].tools.iter().any(|tool| tool.name == "tool_search"));
+    assert!(
+        model.requests()[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "tool_search")
+    );
     assert!(
         model.requests()[0]
             .tools
