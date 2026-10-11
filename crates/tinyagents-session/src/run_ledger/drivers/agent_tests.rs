@@ -147,7 +147,7 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
     let (a, _) = super::tests::ledgers(); a.upsert_agent_run(run("run")).await.unwrap();
     let no_names = |_: &str| None;
     let view = a.list_agent_work(None, &no_names).await.unwrap();
-    assert_eq!(view.buckets.iter().map(|b| b.rows.len()).sum::<usize>(), 1);
+    assert_eq!(view.groups.iter().map(|b| b.rows.len()).sum::<usize>(), 1);
     a.apply_control("run", ControlVerb::Stop, None, Some("stop"), &no_names).await.unwrap();
     assert_eq!(a.get_agent_run("run").await.unwrap().unwrap().status, AgentRunStatus::Cancelled);
     a.apply_control("run", ControlVerb::Retry, None, None, &no_names).await.unwrap();
