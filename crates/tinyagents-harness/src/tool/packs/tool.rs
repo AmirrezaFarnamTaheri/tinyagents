@@ -96,8 +96,17 @@ impl Tool for PinnedPackCall {
     }
 
     fn policy(&self) -> tinytools::ToolPolicy {
-        self.selected()
-            .map_or_else(|| self.outer.policy(), Tool::policy)
+        let Some(selected) = self.selected() else {
+            return self.outer.policy();
+        };
+        let outer_policy = self.outer.policy();
+        let mut selected_policy = selected.policy();
+        // Dispatch-level wrappers such as ApprovalRequiredToolSet apply
+        // policy to the packed declaration. Keep those stricter admission
+        // constraints when projecting the selected implementation's policy.
+        selected_policy.classified |= outer_policy.classified;
+        selected_policy.access.approval_required |= outer_policy.access.approval_required;
+        selected_policy
     }
 
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {

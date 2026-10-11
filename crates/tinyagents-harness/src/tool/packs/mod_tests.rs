@@ -282,11 +282,8 @@ fn packed_binding_preserves_outer_policy_transform_approval() {
     handle.bind(Arc::downgrade(&inner));
 
     let outer = Arc::new(
-        crate::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(
-            handle,
-            CATALOG,
-        )))
-        .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
+        crate::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(handle, CATALOG)))
+            .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
     );
     let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
     registry.register(outer);
