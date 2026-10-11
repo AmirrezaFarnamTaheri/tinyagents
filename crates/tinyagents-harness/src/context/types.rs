@@ -521,6 +521,7 @@ pub struct RunContext<Ctx = ()> {
     /// still knows the failure surfaced inside the provider call after
     /// `active_model_call` was cleared.
     pub(crate) model_call_failed: bool,
+    pub(crate) model_base_called: bool,
     /// Whether the model call most recently dispatched by the agent loop used
     /// the streaming path. Set by the loop's innermost model call before the
     /// wrap middleware sees the result, so a middleware can tell that

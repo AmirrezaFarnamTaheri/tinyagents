@@ -332,6 +332,7 @@ impl<Ctx> RunContext<Ctx> {
             provider_started: false,
             call_provider_started: false,
             model_call_failed: false,
+            model_base_called: false,
             call_streamed: false,
             prefix_epoch: 0,
             discarded_usage: Vec::new(),
@@ -873,6 +874,15 @@ impl<Ctx> RunContext<Ctx> {
     pub fn begin_model_call(&mut self) {
         self.call_provider_started = false;
         self.model_call_failed = false;
+        self.model_base_called = false;
+    }
+
+    pub(crate) fn mark_model_base_called(&mut self) {
+        self.model_base_called = true;
+    }
+
+    pub(crate) fn model_base_called(&self) -> bool {
+        self.model_base_called
     }
 
     /// Whether the current (or most recent) model call reached the provider.

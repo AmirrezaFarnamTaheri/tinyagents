@@ -29,14 +29,34 @@ impl EphemeralInstructionQueue {
             .push(instruction);
     }
 
-    /// Consume this context's pending instructions in insertion order.
-    pub fn drain_for<Ctx>(&self, context: &RunContext<Ctx>) -> Vec<String> {
+    /// Peek at this context's pending instructions in insertion order.
+    pub(crate) fn peek_for<Ctx>(&self, context: &RunContext<Ctx>) -> Vec<String> {
         self.runs
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .remove(&context.instance_id())
-            .map(|p| p.instructions)
+            .get(&context.instance_id())
+            .map(|pending| pending.instructions.clone())
             .unwrap_or_default()
+    }
+
+    /// Consume the staged prefix that was inserted into a request.
+    pub(crate) fn commit_for<Ctx>(&self, context: &RunContext<Ctx>, count: usize) {
+        let mut runs = self.runs.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(pending) = runs.get_mut(&context.instance_id()) else {
+            return;
+        };
+        let remove = count.min(pending.instructions.len());
+        pending.instructions.drain(..remove);
+        if pending.instructions.is_empty() {
+            runs.remove(&context.instance_id());
+        }
+    }
+
+    /// Consume this context's pending instructions in insertion order.
+    pub fn drain_for<Ctx>(&self, context: &RunContext<Ctx>) -> Vec<String> {
+        let instructions = self.peek_for(context);
+        self.commit_for(context, instructions.len());
+        instructions
     }
 
     /// Drain all contexts for explicit shutdown or administrative inspection.
@@ -89,10 +109,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         _state: &State,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        for instruction in self.queue.drain_for(context) {
+        for instruction in self.queue.peek_for(context) {
             push_ephemeral_instruction(request, instruction, context.model_profile.as_ref());
         }
         Ok(())
+    }
+
+    /// Commit staged instructions only after the model-wrap onion reached its
+    /// base call. A short-circuiting wrap leaves them for the next request.
+    pub(crate) fn commit_after_base<Ctx>(&self, context: &RunContext<Ctx>, count: usize) {
+        self.queue.commit_for(context, count);
     }
 
     async fn after_agent(

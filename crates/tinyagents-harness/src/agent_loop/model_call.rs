@@ -1840,6 +1840,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelBaseCall<State, Ctx>
         request: ModelRequest,
     ) -> BoxModelFuture<'a> {
         Box::pin(async move {
+            // A wrap middleware may return without calling this method;
+            // staged request observers must remain queued in that case.
+            ctx.mark_model_base_called();
             let mut request = request;
             let binding = self.rebind(ctx, &request).await?;
             // Claim the switch only after the wrap onion has elected to call
