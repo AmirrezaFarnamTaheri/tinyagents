@@ -8,7 +8,7 @@ pub use types::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 use crate::context::RunContext;
 use crate::error::{Result, TinyAgentsError};
 use crate::middleware::{AgentRun, Middleware};
-use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle};
+use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -179,7 +179,10 @@ where
             if let Some(observer) = &self.observer {
                 observer(&report);
             }
-            steering.send(SteeringCommand::Pause);
+            steering.send_to(
+                SteeringTarget::Run(context.run_id().clone()),
+                SteeringCommand::Pause,
+            );
         }
         Ok(())
     }
