@@ -553,3 +553,18 @@ async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_wr
 
 #[path = "agent_fault_tests.rs"]
 mod fault_tests;
+
+#[tokio::test]
+async fn projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_event() {
+    let backend = MemoryStorage::new();
+    let native = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    let ledger = DriverRunLedger::new(native.clone());
+    ledger.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "first".into(), payload: json!({}) }).await.unwrap();
+    let second = ledger.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "second".into(), payload: json!({}) }).await.unwrap();
+    let stream = format!("run_events:{}", storage::key(&["run"]));
+    native.streams().append(&stream, serde_json::to_value(second).unwrap()).await.unwrap();
+    let error = ledger.reconcile_run_events("run").await.unwrap_err();
+    assert!(matches!(error, LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization));
+    assert_eq!(native.streams().len(&stream).await.unwrap(), 1);
+    assert_eq!(ledger.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 2);
+}
