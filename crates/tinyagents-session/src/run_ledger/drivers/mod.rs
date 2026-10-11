@@ -6,6 +6,7 @@
 
 use tinystoragedrivers_core::{Capability, Scope, ScopedStorage, StorageError};
 
+use super::LedgerResult as Result;
 use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
