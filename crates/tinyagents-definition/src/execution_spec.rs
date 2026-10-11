@@ -19,15 +19,7 @@ pub enum ModelSpec {
 }
 
 impl ModelSpec {
-    /// Resolve this spec into the model name string the provider expects.
-    /// `parent_model` is the model the parent agent is using right now.
-    ///
-    /// Hints are resolved to the `hint:{hint}` role alias (e.g. `"agentic"` →
-    /// `"hint:agentic"`), which the inference factory translates to the role's
-    /// configured route — the managed default model, or the BYOK/local model
-    /// routed to that workload. When a `RouterProvider` is present its route
-    /// table takes priority over this default.
-    /// A routing pin, or None when the caller should inherit its current model.
+    /// Routing pin, or `None` when the caller should inherit its model.
     pub fn pin(&self) -> Option<String> {
         match self {
             Self::Inherit => None,
@@ -35,6 +27,7 @@ impl ModelSpec {
             Self::Hint(hint) => Some(format!("hint:{hint}")),
         }
     }
+    /// Resolve inherited selection against a parent model; hints become `hint:` aliases.
     pub fn resolve(&self, parent_model: &str) -> String {
         match self {
             Self::Inherit => parent_model.to_string(),
@@ -53,7 +46,7 @@ pub enum ToolScope {
     #[default]
     Wildcard,
     /// An explicit allowlist of tool names. Names not present in the parent
-    /// registry at spawn time are silently dropped (logged at debug).
+    /// registry must be handled according to the host tool catalogue policy.
     Named(Vec<String>),
 }
 
@@ -68,7 +61,7 @@ pub enum SandboxMode {
     None,
     /// Read-only — write/execute tools are filtered out.
     ReadOnly,
-    /// Drop privileges, restrict filesystem (Landlock / Bubblewrap).
+    /// Request host-provided isolation.
     Sandboxed,
 }
 
