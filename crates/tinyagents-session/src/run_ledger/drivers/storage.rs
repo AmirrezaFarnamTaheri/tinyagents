@@ -40,7 +40,7 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 }
 
 /// Declare only portable indexes; expiry never deletes durable run metadata.
-fn specs() -> Vec<CollectionSpec> {
+pub(super) fn specs() -> Vec<CollectionSpec> {
     vec![
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS).index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
@@ -125,7 +125,11 @@ impl DriverRunLedger {
         self.declared
             .get_or_try_init(|| async {
                 for spec in specs() {
-                    self.scoped.documents().ensure_collection(&spec).await?;
+                    if self.validate_collections {
+                        self.scoped.documents().validate_collection_spec(&spec).await?;
+                    } else {
+                        self.scoped.documents().ensure_collection(&spec).await?;
+                    }
                 }
                 Ok::<(), StorageError>(())
             })

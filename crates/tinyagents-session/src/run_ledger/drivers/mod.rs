@@ -38,6 +38,7 @@ use crate::retention::RetentionReport;
 pub struct DriverRunLedger {
     scoped: ScopedStorage,
     declared: Arc<OnceCell<()>>,
+    validate_collections: bool,
 }
 
 impl DriverRunLedger {
@@ -46,12 +47,30 @@ impl DriverRunLedger {
         Self {
             scoped,
             declared: Arc::new(OnceCell::new()),
+            validate_collections: false,
         }
     }
 
-    /// Bind ports whose declarations must already exist; no actor schema mutation is permitted.
+    /// Validate existing declarations rather than lazily calling ensure_collection.
+    ///
+    /// The caller must supply native ExistingSchema ports to prohibit other
+    /// backend-internal schema initialization. This constructor controls only
+    /// this adapter's document declaration policy, not backend authority.
     pub fn new_existing_schema(scoped: ScopedStorage) -> Self {
-        Self::new(scoped)
+        Self { validate_collections: true, ..Self::new(scoped) }
+    }
+
+    /// Exact document declarations shared by bootstrap preparation and lazy admission.
+    pub fn collection_specs() -> Vec<tinystoragedrivers_core::CollectionSpec> { storage::specs() }
+
+    /// Prepare ledger declarations through an explicitly trusted document handle.
+    ///
+    /// # Errors
+    /// The first native declaration refusal, with no fallback or rollback claim
+    /// for earlier successful declarations. This does not prepare native internal schema.
+    pub async fn prepare_schema(documents: &dyn tinystoragedrivers_core::DocumentStore) -> std::result::Result<(), StorageError> {
+        for spec in Self::collection_specs() { documents.ensure_collection(&spec).await?; }
+        Ok(())
     }
 
     /// The immutable namespace this handle was supplied for.
