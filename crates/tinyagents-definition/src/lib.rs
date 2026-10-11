@@ -42,122 +42,21 @@ impl fmt::Display for DefinitionRegistryError {
 
 impl std::error::Error for DefinitionRegistryError {}
 
-/// What the runtime is permitted to know about an agent.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentDefinition {
-    /// Host-assigned opaque identifier.
-    pub id: String,
-    /// Human-readable name for prompts and display.
-    pub name: String,
-    /// Concise capability summary for a delegating parent.
-    pub description: String,
-    /// Host-defined routing role, when the host classifies this agent.
-    #[serde(default)]
-    pub role: Option<String>,
-    /// Preferred model identifier, if this agent pins one.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Agent ids this agent declares as eligible delegates.
-    #[serde(default)]
-    pub subagents: Vec<String>,
-    /// Canonical tool names this agent may use.
-    #[serde(default)]
-    pub tools: Vec<String>,
-    /// Pattern rules narrowing which tools this agent may see and call, on
-    /// top of [`Self::tools`]. Evaluated by the harness on the catalogue,
-    /// tool search and every call; see [`tinytools::ToolRules`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_rules: Option<tinytools::ToolRules>,
-}
+pub use definition::{AgentDefinition, Extensions, EXTENDED_MAX_TOOL_ITERATIONS, IterationPolicy};
+pub use execution_spec::{ModelSpec, SandboxMode, ToolScope};
+pub use prompt::PromptSource;
+pub use source::DefinitionSource;
+pub use subagents::{SkillsWildcard, SubagentEntry};
+pub use tier::{AgentTier, validate_tier_transition};
+pub use loader::{load_dir, load_file};
 
-impl AgentDefinition {
-    /// Creates a definition with the required host-owned fields.
-    #[must_use]
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        description: impl Into<String>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            description: description.into(),
-            role: None,
-            model: None,
-            subagents: Vec::new(),
-            tools: Vec::new(),
-            tool_rules: None,
-        }
-    }
-
-    /// Sets the preferred model identifier.
-    #[must_use]
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
-        self
-    }
-
-    /// Sets declared delegate ids.
-    #[must_use]
-    pub fn with_subagents<I, S>(mut self, subagents: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.subagents = subagents.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Sets permitted tool names.
-    #[must_use]
-    pub fn with_tools<I, S>(mut self, tools: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.tools = tools.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Sets the pattern rules narrowing this agent's tools.
-    #[must_use]
-    pub fn with_tool_rules(mut self, rules: tinytools::ToolRules) -> Self {
-        self.tool_rules = Some(rules);
-        self
-    }
-
-    /// Sets the host-defined routing role.
-    #[must_use]
-    pub fn with_role(mut self, role: impl Into<String>) -> Self {
-        self.role = Some(role.into());
-        self
-    }
-
-    /// Returns deterministic diagnostics for malformed or ambiguous data.
-    #[must_use]
-    pub fn diagnostics(&self) -> Vec<AgentDefinitionDiagnostic> {
-        let mut diagnostics = Vec::new();
-        required_field(&mut diagnostics, "id", &self.id);
-        required_field(&mut diagnostics, "name", &self.name);
-        required_field(&mut diagnostics, "description", &self.description);
-        duplicate_values(&mut diagnostics, "subagents", &self.subagents);
-        duplicate_values(&mut diagnostics, "tools", &self.tools);
-        for (field, values) in [("subagents", &self.subagents), ("tools", &self.tools)] {
-            for value in values {
-                if value.trim().is_empty() {
-                    diagnostics.push(AgentDefinitionDiagnostic::empty_entry(field));
-                }
-            }
-        }
-        diagnostics
-    }
-
-    /// Whether every required field and declared list entry is valid.
-    #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.diagnostics().is_empty()
-    }
-}
+mod definition;
+mod execution_spec;
+mod loader;
+mod prompt;
+mod source;
+mod subagents;
+mod tier;
 
 /// A deterministic, machine-readable definition validation finding.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,7 +182,7 @@ impl DefinitionRegistry for InMemoryDefinitionRegistry {
             .index
             .get(id)
             .and_then(|position| self.definitions.get(*position))
-            .map(|definition| definition.subagents.clone())
+            .map(AgentDefinition::allowed_subagent_ids)
             .unwrap_or_default())
     }
 }
@@ -291,3 +190,7 @@ impl DefinitionRegistry for InMemoryDefinitionRegistry {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "vocabulary_tests.rs"]
+mod vocabulary_tests;

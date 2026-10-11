@@ -1,0 +1,35 @@
+id = "morning_briefing"
+display_name = "Morning Briefing"
+when_to_use = "Proactive daily agent — runs at a scheduled time (default 7 AM) to review the user's upcoming day and deliver a concise morning summary covering tasks, calendar events, important emails, and relevant context from connected skills."
+temperature = 0.5
+max_iterations = 8
+sandbox_mode = "read_only"
+
+# The brief grounds itself in the compiled memory context injected at
+# session start (`omit_memory_context = false`) plus live integration
+# reads. It has no `memory` tool: the tool reports `Write` permission
+# without arguments, which the read-only sandbox cannot admit.
+# Identity/safety boilerplate stays off — the prompt carries its own voice.
+omit_identity = true
+omit_memory_context = false
+omit_safety_preamble = true
+
+[model]
+hint = "agentic"
+
+[tools]
+# Named, not wildcard: a wildcard belt here handed a cron-driven read-only
+# job every registered tool. The brief needs the user's
+# connected integrations (calendar, email, tasks — the composio meta-tools,
+# plus each connected action as a `Deferred` tool through `tool_search`), and
+# the clock. `sandbox_mode = "read_only"` keeps `composio_execute` to
+# Read-scoped actions.
+named = [
+    "composio_list_connections",
+    "composio_list_tools",
+    "composio_execute",
+    "tool_search",
+    "current_time",
+    "resolve_time",
+    "web_search_tool",
+]
