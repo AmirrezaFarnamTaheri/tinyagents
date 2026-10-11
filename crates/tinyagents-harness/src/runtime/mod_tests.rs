@@ -4004,5 +4004,5 @@ async fn hosted_wildcard_exclusions_preserve_context_toolset_tools() {
             .collect::<Vec<_>>(),
         ["noop"]
     );
-    assert!(run.messages.iter().any(|message| message.text() == "ok"));
+    assert!(run.messages.iter().any(|message| message.text() == "ok"), "{:?}", run.messages);
 }
