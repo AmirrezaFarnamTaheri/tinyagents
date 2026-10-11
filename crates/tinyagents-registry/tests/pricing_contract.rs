@@ -1,5 +1,5 @@
 use tinyagents_registry::pricing::{
-    catalog_entry, estimate_cost_usd, lookup, model_accepts_image_input,
+    estimate_cost_usd, flat_catalog_entry, lookup, model_accepts_image_input,
 };
 
 #[test]
@@ -10,7 +10,7 @@ fn pricing_contract_preserves_decorated_lookup_and_cached_rates() {
         estimate_cost_usd("claude-opus-4-8", 1_000_000, 0, 1_000_000),
         0.5
     );
-    let entry = catalog_entry(row, "consumer-catalog");
+    let entry = flat_catalog_entry(row, "consumer-catalog");
     assert_eq!(entry.source, "consumer-catalog");
     assert_eq!(entry.pricing.input_per_token, Some(5.0 / 1_000_000.0));
     assert!(model_accepts_image_input("minimax/minimax-m3"));

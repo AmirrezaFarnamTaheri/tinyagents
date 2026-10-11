@@ -145,3 +145,12 @@ fn short_ids_do_not_match_inside_unrelated_tokens() {
         "gpt-5.4-mini"
     );
 }
+
+#[test]
+fn flat_metadata_projection_is_distinct_from_tier_aware_call_estimates() {
+    let row = lookup("minimax-m3").unwrap();
+    let entry = flat_catalog_entry(row, "consumer");
+    assert_eq!(entry.pricing.input_per_token, Some(0.60 / 1_000_000.0));
+    assert!(entry.pricing.tiers.is_empty());
+    approx(estimate_cost_usd("minimax-m3", 100_000, 0, 0), 0.03);
+}

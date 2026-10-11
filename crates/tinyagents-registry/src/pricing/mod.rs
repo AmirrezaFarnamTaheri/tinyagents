@@ -36,6 +36,12 @@ fn normalize(model: &str) -> String {
 /// stripped → longest canonical id that is a substring of the normalised
 /// request (handles dated/suffixed ids). Returns `None` for unknown models —
 /// callers should fall back to a tier estimate.
+///
+/// The inherited substring fallback can also match unlisted hyphenated variants
+/// to a base model (for example `gpt-4.1-nano` to `gpt-4.1`). This compatibility
+/// behavior is preserved during migration and is not authoritative provider-id
+/// validation. The snapshot also retains historical cached-rate assumptions
+/// and models no long-context estimate tiers except MiniMax M3.
 pub fn lookup(model: &str) -> Option<&'static ModelPrice> {
     let norm = normalize(model);
     if norm.is_empty() {
@@ -128,13 +134,18 @@ pub fn model_accepts_image_input(model_id: &str) -> bool {
     VISION_INPUT_MODELS.contains(&normalized.as_str()) || VISION_INPUT_MODELS.contains(&bare)
 }
 
-/// Project one published catalog row into a TinyAgents model-catalog entry.
+/// Project one published catalog row as flat metadata (not a tier-aware estimate) into a TinyAgents model-catalog entry.
 ///
 /// This is intentionally a pricing/window projection only. Consumers still
 /// derives live runtime capability flags (tools, vision, streaming) from the
 /// provider adapter at construction time, because the static cost catalog does
 /// not yet encode those fields authoritatively for every provider/model.
-pub fn catalog_entry(price: &ModelPrice, source: &str) -> crate::ModelCatalogEntry {
+///
+/// This preserves the migrated flat metadata projection. For MiniMax M3,
+/// `estimate_cost_usd` applies a lower rate through 512K input tokens, while
+/// this projection uses the row rates and intentionally contains no tiers.
+/// Consumers must not treat these two paths as equivalent call estimates.
+pub fn flat_catalog_entry(price: &ModelPrice, source: &str) -> crate::ModelCatalogEntry {
     crate::ModelCatalogEntry {
         provider: price.provider.to_string(),
         model_id: price.model_id.to_string(),
