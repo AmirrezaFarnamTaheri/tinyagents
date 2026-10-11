@@ -431,7 +431,7 @@ async fn budget_middleware_does_not_double_record_usage() {
         .iter()
         .filter(|e| matches!(e, AgentEvent::UsageRecorded { .. }))
         .count();
-    assert_eq!(usage_events as u64, run.model_calls);
+    assert_eq!(usage_events, run.model_calls);
 }
 
 // ── Test 5: input-token reservation blocks an oversized call in a live run ─────
