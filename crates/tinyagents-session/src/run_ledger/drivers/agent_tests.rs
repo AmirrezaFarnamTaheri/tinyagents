@@ -141,3 +141,34 @@ async fn competing_handles_commit_exactly_one_status_and_event() {
     assert_eq!(results.iter().filter(|r| matches!(r, RunTransition::StatusChanged(_))).count(), 1);
     assert_eq!(a.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 1);
 }
+
+#[tokio::test]
+async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
+    let (a, _) = super::tests::ledgers(); a.upsert_agent_run(run("run")).await.unwrap();
+    let no_names = |_: &str| None;
+    let view = a.list_agent_work(None, &no_names).await.unwrap();
+    assert_eq!(view.buckets.iter().map(|b| b.rows.len()).sum::<usize>(), 1);
+    a.apply_control("run", ControlVerb::Stop, None, Some("stop"), &no_names).await.unwrap();
+    assert_eq!(a.get_agent_run("run").await.unwrap().unwrap().status, AgentRunStatus::Cancelled);
+    a.apply_control("run", ControlVerb::Retry, None, None, &no_names).await.unwrap();
+    let row = a.get_agent_run("run").await.unwrap().unwrap();
+    assert_eq!(row.status, AgentRunStatus::Pending); assert!(row.error.is_none()); assert!(row.completed_at.is_none());
+    assert_eq!(a.list_recent_run_events(&RunEventListRequest { run_id: "run".into(), ..Default::default() }).await.unwrap().count, 2);
+}
+
+#[tokio::test]
+async fn retired_generation_cannot_change_status_allocate_events_or_project_streams() {
+    use tinystoragedrivers_core::{PurgeMode, PurgeRequest, ScopeGeneration, ErrorKind};
+    let backend = MemoryStorage::new(); let scope = Scope::new("alice").unwrap();
+    let old = DriverRunLedger::new(backend.for_scope_generation(&scope, ScopeGeneration(0)).unwrap());
+    old.upsert_agent_run(run("run")).await.unwrap();
+    old.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "before".into(), payload: json!({}) }).await.unwrap();
+    let receipt = backend.for_scope(&scope).unwrap().purge(&PurgeRequest { operation_id: "reset".into(), mode: PurgeMode::Atomic }).await.unwrap();
+    let error = old.transition_agent_run_status("run", AgentRunStatus::Completed, None, None).await.unwrap_err();
+    assert!(matches!(error, super::super::LedgerError::Driver(ref native) if native.kind() == ErrorKind::Fenced));
+    assert!(old.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "stale".into(), payload: json!({}) }).await.is_err());
+    assert!(old.reconcile_run_events("run").await.is_err());
+    let fresh = DriverRunLedger::new(backend.for_scope_generation(&scope, receipt.generation).unwrap());
+    assert!(fresh.get_agent_run("run").await.unwrap().is_none());
+    fresh.upsert_agent_run(run("run")).await.unwrap();
+}
