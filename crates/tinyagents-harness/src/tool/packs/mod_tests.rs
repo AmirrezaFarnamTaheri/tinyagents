@@ -273,6 +273,34 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     assert!(result.text().contains("catalog is unavailable"));
 }
 
+#[test]
+fn packed_binding_preserves_outer_policy_transform_approval() {
+    let handle = PackRegistryHandle::default();
+    let mut inner: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("executed"))];
+    inner.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
+    let inner = Arc::new(inner);
+    handle.bind(Arc::downgrade(&inner));
+
+    let outer = Arc::new(
+        crate::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(
+            handle,
+            CATALOG,
+        )))
+        .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
+    );
+    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    registry.register(outer);
+    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
+
+    assert!(dispatch.tool().policy().access.approval_required);
+    let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+    assert!(
+        bound.tool().policy().access.approval_required,
+        "binding the concrete packed target must retain the outer approval policy"
+    );
+}
+
 #[tokio::test]
 async fn a_tool_from_another_skill_is_refused() {
     // Cross-skill dispatch would make `skill` decoration and let a harmless
