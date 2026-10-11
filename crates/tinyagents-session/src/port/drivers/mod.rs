@@ -227,6 +227,15 @@ impl DriverSessionStores {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
+    fn bind_actor(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+        let actor =
+            Self::with_bridge(backend, self.bridge.clone()).recover_on_open(self.recover_on_open);
+        Ok(Some(Arc::new(actor)))
+    }
+
     /// The stores of `agent_id`.
     ///
     /// Fails closed: when the backend cannot bind the agent's scope, or
@@ -275,3 +284,7 @@ impl SessionStoreProvider for DriverSessionStores {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "actor_tests.rs"]
+mod actor_tests;
