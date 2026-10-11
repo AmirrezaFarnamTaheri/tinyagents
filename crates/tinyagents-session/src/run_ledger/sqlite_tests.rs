@@ -854,21 +854,16 @@ async fn adapter_preserves_active_session_tables_and_retention_cascades() {
     )
     .unwrap();
     let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
-    assert!(
-        crate::ops::get_session(dir.path(), "active")
-            .unwrap()
-            .is_some()
+    assert_eq!(
+        crate::ops::get_session(dir.path(), "active").unwrap().id,
+        "active"
     );
     let report = ledger
         .apply_retention(chrono::Utc::now() + Duration::minutes(1))
         .await
         .unwrap();
     assert_eq!(report.sessions, 1);
-    assert!(
-        crate::ops::get_session(dir.path(), "finished")
-            .unwrap()
-            .is_none()
-    );
+    assert!(crate::ops::get_session(dir.path(), "finished").is_err());
     crate::store::with_connection(dir.path(), |conn| {
         for table in ["session_messages", "session_tool_calls"] {
             let finished: i64 = conn.query_row(
@@ -890,7 +885,6 @@ async fn adapter_preserves_active_session_tables_and_retention_cascades() {
     .unwrap();
     assert_eq!(
         crate::ops::get_session(dir.path(), "active")
-            .unwrap()
             .unwrap()
             .status,
         crate::types::SessionStatus::Running
