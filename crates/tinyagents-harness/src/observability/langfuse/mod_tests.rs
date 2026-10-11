@@ -691,5 +691,10 @@ async fn sends_otlp_json_to_the_trace_endpoint_with_basic_auth() {
 async fn reports_a_refused_otlp_request() {
     let (base, _rx) = serve_once(413);
     let client = LangfuseClient::proxy(base, "token").unwrap();
-    assert!(client.send_otlp(json!({"resourceSpans": []})).await.is_err());
+    assert!(
+        client
+            .send_otlp(json!({"resourceSpans": []}))
+            .await
+            .is_err()
+    );
 }

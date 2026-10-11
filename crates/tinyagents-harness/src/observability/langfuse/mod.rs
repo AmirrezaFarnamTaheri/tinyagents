@@ -100,6 +100,67 @@ impl LangfuseClient {
         &self.endpoint
     }
 
+    /// Returns the OTLP/HTTP trace endpoint beside the ingestion endpoint:
+    /// `/api/public/otel/v1/traces` on a Langfuse origin, or
+    /// `/telemetry/langfuse/otel/v1/traces` through the TinyHumans proxy.
+    ///
+    /// Langfuse's OTLP endpoint is the supported path for trace ingestion;
+    /// the legacy `/api/public/ingestion` batch API is sunset on Langfuse
+    /// Cloud on 2026-11-16 and unavailable on self-hosted v4 in its default
+    /// `events_only` mode. Scores may still use [`Self::send_batch`].
+    pub fn otlp_endpoint(&self) -> String {
+        for (legacy, otlp) in [
+            ("/api/public/ingestion", "/api/public/otel/v1/traces"),
+            (
+                "/telemetry/langfuse/ingestion",
+                "/telemetry/langfuse/otel/v1/traces",
+            ),
+        ] {
+            if let Some(origin) = self.endpoint.strip_suffix(legacy) {
+                return format!("{origin}{otlp}");
+            }
+        }
+        self.endpoint.clone()
+    }
+
+    /// Posts one OTLP/HTTP JSON trace request (`{"resourceSpans": [...]}`),
+    /// such as one built by `trace_export::otlp::otlp_requests`, to
+    /// [`Self::otlp_endpoint`] with this client's authentication.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request cannot be sent or Langfuse answers
+    /// with a non-success status.
+    pub async fn send_otlp(&self, body: Value) -> Result<Value> {
+        let req = self.authorized(self.client.post(self.otlp_endpoint()).json(&body));
+        let response = req
+            .send()
+            .await
+            .map_err(|e| TinyAgentsError::Model(format!("Langfuse OTLP request failed: {e}")))?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| {
+            TinyAgentsError::Model(format!("Langfuse OTLP response read failed: {e}"))
+        })?;
+        let parsed = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "message": text }));
+        if !status.is_success() {
+            return Err(TinyAgentsError::Model(format!(
+                "Langfuse OTLP ingestion returned {status}: {parsed}"
+            )));
+        }
+        Ok(parsed)
+    }
+
+    /// Attaches this client's credentials to `request`.
+    fn authorized(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.auth {
+            LangfuseAuth::Basic {
+                public_key,
+                secret_key,
+            } => request.basic_auth(public_key, Some(secret_key)),
+            LangfuseAuth::Bearer { token } => request.bearer_auth(token),
+        }
+    }
+
     /// Builds a Langfuse ingestion payload without sending it.
     pub fn build_ingestion_batch(
         &self,
@@ -225,14 +286,7 @@ impl LangfuseClient {
     /// endpoint normalization, and the Langfuse `207 Multi-Status` handling live
     /// in one place.
     pub async fn send_batch(&self, payload: Value) -> Result<Value> {
-        let mut req = self.client.post(&self.endpoint).json(&payload);
-        req = match &self.auth {
-            LangfuseAuth::Basic {
-                public_key,
-                secret_key,
-            } => req.basic_auth(public_key, Some(secret_key)),
-            LangfuseAuth::Bearer { token } => req.bearer_auth(token),
-        };
+        let req = self.authorized(self.client.post(&self.endpoint).json(&payload));
 
         let response = req
             .send()
