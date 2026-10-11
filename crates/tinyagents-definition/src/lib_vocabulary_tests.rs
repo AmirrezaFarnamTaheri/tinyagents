@@ -478,7 +478,7 @@ fn loader_rejects_blank_values_for_every_prompt_source() {
     for (name, prompt) in [
         ("blank-inline", "{inline=' ' }"),
         ("blank-file", "{file={path='   '}}"),
-        ("blank-verbatim", "{verbatim='\\n'}"),
+        ("blank-verbatim", "{verbatim='   '}"),
     ] {
         let path = dir.path().join(format!("{name}.toml"));
         std::fs::write(
