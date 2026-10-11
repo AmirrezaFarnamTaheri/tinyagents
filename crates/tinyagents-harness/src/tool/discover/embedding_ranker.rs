@@ -236,13 +236,13 @@ impl EmbeddingToolRanker {
                     cache.insert(*key, vector.clone());
                 }
             }
-            if let Some(persistent) = &self.persistent_cache {
-                if let Err(error) = persistent.store(&self.signature, &delta).await {
-                    tracing::warn!(
-                        error = %error,
-                        "[tool-search] could not persist embedding cache"
-                    );
-                }
+            if let Some(persistent) = &self.persistent_cache
+                && let Err(error) = persistent.store(&self.signature, &delta).await
+            {
+                tracing::warn!(
+                    error = %error,
+                    "[tool-search] could not persist embedding cache"
+                );
             }
         }
         self.persist();

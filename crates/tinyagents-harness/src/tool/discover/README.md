@@ -35,7 +35,7 @@ Invariants worth keeping:
 
 ## Persisting catalogue embeddings
 
-EmbeddingToolRanker::with_cache(Arc<dyn EmbeddingCache>) accepts a host's
+`EmbeddingToolRanker::with_cache(Arc<dyn EmbeddingCache>)` accepts a host's
 async cache handle. The ranker requests missing summary/family hashes under its
 embedding-space signature and stores only newly computed catalogue vectors.
 Hosts bind that handle to the tenant, credentials and backend; create a new
