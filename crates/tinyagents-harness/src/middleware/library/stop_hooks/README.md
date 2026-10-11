@@ -40,11 +40,12 @@ another model call rather than cancelling an admitted tool round.
 State is keyed by `RunContext::instance_id`, so equal durable run ids cannot
 share counters, metrics or pause latches. Success and error lifecycle hooks
 retire state. A later context admission reclaims accounting left by a dropped
-context that bypassed terminal hooks. Callbacks and asynchronous checks do not hold the accounting mutex.
+context that bypassed terminal hooks. Callbacks and asynchronous checks do not
+hold the accounting mutex.
 
 ## Verification
 
 `stop_hooks_tests.rs` covers ordered observation, first-reason selection,
 once-only delivery, context isolation, success/error cleanup, empty hook lists
-and missing steering, live cap narrowing and abandoned-context cleanup. A native-loop test confirms a stopping hook prevents a
-second provider call while retaining the completed call's pending tool round.
+and missing steering, live cap narrowing and abandoned-context cleanup. A
+native-loop test confirms a stopping hook prevents a second provider call while retaining the completed call's pending tool round.
