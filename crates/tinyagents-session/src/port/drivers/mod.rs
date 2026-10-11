@@ -286,5 +286,5 @@ impl SessionStoreProvider for DriverSessionStores {
 mod tests;
 
 #[cfg(test)]
-#[path = "actor_tests.rs"]
+#[path = "mod_actor_tests.rs"]
 mod actor_tests;
