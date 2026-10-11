@@ -152,6 +152,9 @@ impl Tool for TaggedDispatcher {
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success("ok"))
     }
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(Some(serde_json::json!({"inner": args})))
+    }
 }
 
 /// A renamed or prefixed tool is the same tool to the host's tool rules.
@@ -164,5 +167,16 @@ fn an_override_keeps_what_tool_rules_read() {
     assert_eq!(
         tool.indirect_target(&serde_json::json!({ "action": "GMAIL_DELETE_EMAIL" })),
         Some(tinytools::ToolSubject::named("GMAIL_DELETE_EMAIL").into())
+    );
+}
+
+#[tokio::test]
+async fn an_override_forwards_authorization_preparation() {
+    let tool = OverrideTool::new(Arc::new(TaggedDispatcher)).with_name("connector_execute");
+    assert_eq!(
+        tool.prepare_authorization(&serde_json::json!({"action": "GMAIL_SEND_EMAIL"}))
+            .await
+            .unwrap(),
+        Some(serde_json::json!({"inner": {"action": "GMAIL_SEND_EMAIL"}}))
     );
 }

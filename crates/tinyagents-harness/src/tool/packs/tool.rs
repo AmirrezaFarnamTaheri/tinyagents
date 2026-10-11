@@ -138,6 +138,14 @@ impl Tool for UseSkillTool {
             .await
     }
 
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        let Some((tools, idx)) = self.resolve(args) else {
+            return Ok(None);
+        };
+        let inner_args = args.get("args").cloned().unwrap_or_else(|| json!({}));
+        tools[idx].prepare_authorization(&inner_args).await
+    }
+
     fn supports_markdown(&self) -> bool {
         // The inner result is forwarded verbatim, markdown rendering included,
         // so advertise the capability rather than suppressing a real saving.

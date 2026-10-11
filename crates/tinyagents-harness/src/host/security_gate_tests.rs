@@ -15,6 +15,17 @@ async fn allow_all_gate_authorizes_every_call() {
 }
 
 #[tokio::test]
+async fn default_context_authorization_preserves_existing_gate_behavior() {
+    let gate = AllowAllSecurityGate;
+    let facts = json!({"opaque": "host-generated"});
+    let decision = gate
+        .authorize_tool_with_context(&sample_request(), Some(&facts))
+        .await
+        .unwrap();
+    assert_eq!(decision, GateDecision::Allow);
+}
+
+#[tokio::test]
 async fn allow_all_gate_authorizes_a_destructive_looking_call_too() {
     // Pinning the "no checks whatsoever" contract: nothing about the tool
     // name or arguments changes the answer.

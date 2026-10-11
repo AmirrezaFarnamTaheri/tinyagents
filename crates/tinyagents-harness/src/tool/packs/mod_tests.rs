@@ -35,6 +35,7 @@ struct FakeTool {
     level: PermissionLevel,
     external: bool,
     timeout: ToolTimeout,
+    prepares_authorization: bool,
 }
 
 impl FakeTool {
@@ -44,6 +45,7 @@ impl FakeTool {
             level: PermissionLevel::ReadOnly,
             external: false,
             timeout: ToolTimeout::Inherit,
+            prepares_authorization: false,
         }
     }
 }
@@ -61,6 +63,11 @@ impl Tool for FakeTool {
     }
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success(format!("{}:{}", self.name, args)))
+    }
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(self
+            .prepares_authorization
+            .then(|| json!({"inner_args": args})))
     }
     fn permission_level(&self) -> PermissionLevel {
         self.level
@@ -166,6 +173,26 @@ async fn dispatch_forwards_args_to_the_packed_tool() {
         .unwrap();
     assert!(!result.is_error);
     assert_eq!(result.text(), r#"a_one:{"marker":"x"}"#);
+}
+
+#[tokio::test]
+async fn authorization_preparation_forwards_inner_tool_arguments() {
+    let tools = bound(vec![FakeTool {
+        prepares_authorization: true,
+        ..FakeTool::plain("a_one")
+    }]);
+    let context = find(&tools, USE_SKILL)
+        .prepare_authorization(&json!({
+            "skill": "alpha",
+            "tool": "a_one",
+            "args": {"command": "printf safe"}
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        context,
+        Some(json!({"inner_args": {"command": "printf safe"}}))
+    );
 }
 
 #[tokio::test]

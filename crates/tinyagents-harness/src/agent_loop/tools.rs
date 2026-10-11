@@ -1055,13 +1055,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // run is identified from its explicit RunContext binding; the
         // lower-level SDK path has no implicit host policy.
         if let Some(binding) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? {
+            // Tool-specific facts are prepared asynchronously before the host
+            // decides whether the call may run. The runtime transports the
+            // opaque value only; interpretation and policy remain host-owned.
+            let authorization_context = dispatch
+                .tool()
+                .prepare_authorization(&model_arguments)
+                .await
+                .map_err(|_| {
+                    TinyAgentsError::Tool("tool authorization preparation failed".to_string())
+                })?;
             let request = crate::host::ToolCallRequest::new(
                 call.name.clone(),
                 model_arguments,
                 binding.agent_id.clone(),
             )
             .with_call_id(CallId::new(call.id.clone()));
-            let authorization = binding.host.security.authorize_tool(&request);
+            let authorization = binding
+                .host
+                .security
+                .authorize_tool_with_context(&request, authorization_context.as_ref());
             let decision = ctx
                 .bounded(self.call_budget(ctx), authorization, || {
                     format!(
