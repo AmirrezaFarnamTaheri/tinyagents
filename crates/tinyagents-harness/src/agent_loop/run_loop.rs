@@ -447,6 +447,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
             status.mark_running(HarnessPhase::Middleware);
             ctx.model_profile = patch_profile;
+            // Stage ephemeral request content before BudgetMiddleware's
+            // admission estimate. The queue commits it only if the model
+            // wrap onion reaches its base call.
+            self.middleware
+                .run_before_model_dispatch(ctx, state, &mut request)
+                .await?;
             let profile_cache = resolution_cache.clone();
             self.middleware
                 .run_before_model_with_profile(
@@ -755,10 +761,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // already ran above; the wrap onion runs here; lifecycle
             // `after_model` runs below — so ordering is:
             // before_model -> wrap onion (outer..inner..base) -> after_model.
-            self.middleware
-                .run_before_model_dispatch(ctx, state, &mut request)
-                .await?;
-
             let base = ModelCallBase {
                 harness: self,
                 call_id: call_id.clone(),
@@ -792,6 +794,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             {
                 Ok(outcome) => outcome.into_response_with_control(),
                 Err(error) => {
+                    self.middleware
+                        .run_after_model_dispatch(ctx, state, ctx.model_base_called())
+                        .await?;
                     status.active_model_call = None;
                     ctx.active_model_call = None;
                     ctx.mark_model_call_failed();
@@ -812,6 +817,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     return Err(error);
                 }
             };
+            self.middleware
+                .run_after_model_dispatch(ctx, state, ctx.model_base_called())
+                .await?;
             // A `ModelMiddleware::wrap_model` that short-circuited with
             // `MiddlewareModelOutcome::Command` carries no real response (see
             // that variant's docs); queue its control the same way a
