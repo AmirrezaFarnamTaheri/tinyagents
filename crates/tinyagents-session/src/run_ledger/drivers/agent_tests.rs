@@ -225,3 +225,6 @@ async fn existing_schema_ledger_missing_declaration_refuses_before_any_record_wr
     let inspect = backend.for_scope(&scope).unwrap();
     assert!(inspect.documents().collections("").await.unwrap().is_empty());
 }
+
+#[path = "agent_fault_tests.rs"]
+mod fault_tests;
