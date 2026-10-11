@@ -161,3 +161,6 @@ mod test;
 #[cfg(test)]
 #[path = "wrap_up_tests.rs"]
 mod wrap_up_test;
+
+mod ephemeral_instructions;
+pub use ephemeral_instructions::{EphemeralInstructionMiddleware, EphemeralInstructionQueue};
