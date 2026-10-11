@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tinytools::{Tool, ToolResult};
 
-use super::{catalog::PackCatalog, handle::ToolVec};
+use super::{catalog::PackCatalog, handle::ToolVec, render::render_pack};
 
 /// Compatibility name for the erased `use_skill` host extension.
 ///
@@ -50,7 +50,7 @@ pub(super) fn resolve_call(
     };
 
     let Some(name) = super::named_tool(args) else {
-        return ResolvedPackCall::Answer(match super::render_pack(catalog, skill, handle) {
+        return ResolvedPackCall::Answer(match render_pack(catalog, skill, handle) {
             Ok(text) => ToolResult::success(text),
             Err(message) => ToolResult::error(message),
         });

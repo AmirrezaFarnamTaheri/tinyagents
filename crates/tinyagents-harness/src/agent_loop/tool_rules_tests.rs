@@ -16,7 +16,6 @@ use crate::runtime::{AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::testkit::ScriptedModel;
 use crate::tool::ToolRulePolicy;
 use crate::tool::packs::{PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool};
-use crate::tool::packs::{PackCatalog, PackRegistryHandle, ToolPack, USE_SKILL, UseSkillTool};
 use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::model::ModelResponse;
 use tinytools::{
@@ -283,66 +282,6 @@ async fn an_indirect_target_is_checked_against_the_rules() {
     assert_eq!(execute.calls(), 1, "only the allowed action ran");
     assert!(tool_text(&run.messages, "c1").contains("rule 'no-delete'"));
     assert_eq!(tool_text(&run.messages, "c2"), "execute ran");
-}
-
-struct PackedRuleTool(Arc<Mutex<Vec<Value>>>);
-
-#[async_trait]
-impl Tool for PackedRuleTool {
-    fn name(&self) -> &str {
-        "packed_delete"
-    }
-    fn description(&self) -> &str {
-        "packed rule fixture"
-    }
-    fn parameters_schema(&self) -> Value {
-        json!({"type": "object"})
-    }
-    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        self.0.lock().unwrap().push(args);
-        Ok(ToolResult::success("ran"))
-    }
-}
-
-static PACKED_RULES: &[ToolPack] = &[ToolPack {
-    id: "packed",
-    summary: "packed rule fixture",
-    tools: &["packed_delete"],
-    owners: &[],
-    guide: "",
-}];
-
-#[tokio::test]
-async fn packed_target_rules_apply_to_effective_arguments_before_execution() {
-    let model = Arc::new(ScriptedModel::new(vec![
-        calls(vec![(
-            "c1",
-            USE_SKILL,
-            json!({
-                "skill": "packed",
-                "tool": "packed_delete",
-                "args": {"resource": "protected"}
-            }),
-        )]),
-        ModelResponse::assistant("done"),
-    ]));
-    let policy = ToolRulePolicy::new(rules(json!({ "rules": [
-        { "id": "deny-packed-delete", "effect": "deny", "match": { "name": "packed_delete" } },
-    ] })));
-    let calls_seen = Arc::new(Mutex::new(Vec::new()));
-    let handle = PackRegistryHandle::default();
-    let catalog = PackCatalog::new(PACKED_RULES, "[missing]");
-    let mut packed = vec![Box::new(PackedRuleTool(calls_seen.clone())) as Box<dyn Tool>];
-    packed.push(Box::new(UseSkillTool::new(handle.clone(), catalog)));
-    let packed = Arc::new(packed);
-    handle.bind(Arc::downgrade(&packed));
-
-    let mut harness = harness_with(model, policy);
-    harness.register_tool(Arc::new(UseSkillTool::new(handle, catalog)));
-    let run = run(&harness, "packed-rule").await;
-
-    assert!(calls_seen.lock().unwrap().is_empty());
-    assert!(tool_text(&run.messages, "c1").contains("deny-packed-delete"));
 }
 
 struct PackedRuleTool(Arc<Mutex<Vec<Value>>>);
