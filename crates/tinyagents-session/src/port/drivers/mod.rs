@@ -39,7 +39,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use sha2::{Digest, Sha256};
 use tinyagents_harness::store::{DriverAppendStore, DriverStore};
-use tinystoragedrivers_core::{Blocking, Scope, ScopedStorage, StorageBackend, StorageError};
+use tinystoragedrivers_core::{
+    Blocking, CollectionSpec, DocumentStore, Scope, ScopedStorage, StorageBackend, StorageError,
+};
 
 use super::{AgentStores, SessionStoreProvider};
 
@@ -112,6 +114,38 @@ impl DriverSessionStores {
     pub fn recover_on_open(mut self, enabled: bool) -> Self {
         self.recover_on_open = enabled;
         self
+    }
+
+    /// All document declarations required by this provider.
+    ///
+    /// Includes transcript entries and index, turn states, and key-value
+    /// records. The journal uses streams and has no document declaration.
+    /// These are also used by each store's lazy initialization. Returning
+    /// declarations does not initialize or authorize an actor.
+    pub fn collection_specs() -> Vec<CollectionSpec> {
+        let mut specs = transcripts::collection_specs().to_vec();
+        specs.push(turn_states::collection_spec());
+        specs.push(DriverStore::collection_spec(KV_COLLECTION));
+        specs
+    }
+
+    /// Declare all provider collections using trusted bootstrap `documents`.
+    ///
+    /// Run against each addressed logical database before issuing actors.
+    /// This does not prepare native internal schema, issue a lease, disable
+    /// lazy initialization, or bind a provider to an actor. Declarations are
+    /// idempotent. Earlier declarations may persist if a later one fails;
+    /// this is not an atomic migration.
+    ///
+    /// # Errors
+    ///
+    /// The first native declaration failure, preserving its kind and cause.
+    /// Handles without schema authority refuse this operation.
+    pub async fn prepare_schema(documents: &dyn DocumentStore) -> Result<(), StorageError> {
+        for spec in Self::collection_specs() {
+            documents.ensure_collection(&spec).await?;
+        }
+        Ok(())
     }
 
     /// The scope agent `agent_id` is stored under.

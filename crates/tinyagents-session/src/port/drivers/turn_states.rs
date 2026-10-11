@@ -34,6 +34,11 @@ use crate::turn_state::{TurnLifecycle, TurnState};
 /// The collection turn snapshots live in.
 pub(super) const COLLECTION: &str = "session_turn_states";
 
+/// The declaration shared by bootstrap and lazy turn-state initialization.
+pub(super) fn collection_spec() -> CollectionSpec {
+    CollectionSpec::new(COLLECTION).index(IndexSpec::new("by_thread", ["thread_id"]))
+}
+
 /// Compare-and-swap attempts before a contended update gives up.
 const CAS_ATTEMPTS: usize = 64;
 
@@ -115,8 +120,7 @@ impl Inner {
     async fn declared(&self) -> Result<(), StorageError> {
         self.declared
             .get_or_try_init(|| async {
-                let spec = CollectionSpec::new(COLLECTION)
-                    .index(IndexSpec::new("by_thread", ["thread_id"]));
+                let spec = collection_spec();
                 self.docs.ensure_collection(&spec).await
             })
             .await

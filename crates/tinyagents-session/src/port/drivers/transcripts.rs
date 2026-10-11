@@ -208,6 +208,19 @@ fn normalized(rows: Vec<TranscriptMessage>) -> Vec<TranscriptMessage> {
         .collect()
 }
 
+/// The declarations shared by bootstrap and lazy locator initialization.
+pub(super) fn collection_specs() -> [CollectionSpec; 2] {
+    [
+        CollectionSpec::new(ENTRIES)
+            .index(IndexSpec::new("by_stem", ["stem", "seq"]))
+            .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
+        CollectionSpec::new(INDEX)
+            .index(IndexSpec::new("by_thread", ["thread_id", "created_at"]))
+            .index(IndexSpec::new("by_agent_name", ["agent_name", "created_at"]))
+            .index(IndexSpec::new("by_agent_id", ["agent_id", "created_at"])),
+    ]
+}
+
 /// Declares both collections, once per locator.
 #[derive(Debug, Default)]
 struct Declared(OnceCell<()>);
@@ -216,22 +229,10 @@ impl Declared {
     async fn ensure(&self, docs: &Arc<dyn DocumentStore>) -> Result<(), StorageError> {
         self.0
             .get_or_try_init(|| async {
-                docs.ensure_collection(
-                    &CollectionSpec::new(ENTRIES)
-                        .index(IndexSpec::new("by_stem", ["stem", "seq"]))
-                        .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
-                )
-                .await?;
-                docs.ensure_collection(
-                    &CollectionSpec::new(INDEX)
-                        .index(IndexSpec::new("by_thread", ["thread_id", "created_at"]))
-                        .index(IndexSpec::new(
-                            "by_agent_name",
-                            ["agent_name", "created_at"],
-                        ))
-                        .index(IndexSpec::new("by_agent_id", ["agent_id", "created_at"])),
-                )
-                .await
+                for spec in collection_specs() {
+                    docs.ensure_collection(&spec).await?;
+                }
+                Ok(())
             })
             .await
             .map(|_| ())
