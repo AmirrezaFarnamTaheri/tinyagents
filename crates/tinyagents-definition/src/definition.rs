@@ -183,10 +183,17 @@ impl<X> AgentDefinition<X> {
     /// Named scopes include extra and deferred tools before deny filtering
     /// and deduplication; registration still determines tool exposure.
     /// A wildcard with a denylist fails closed when no catalogue is supplied;
-    /// a bare wildcard stays explicit, and a named-empty scope stays empty.
+    /// a wildcard without additions stays explicit, and a named-empty scope
+    /// stays empty. Wildcards with additions materialize the known catalogue.
     pub fn resolve_tool_scope(&self, registered: Option<&[String]>) -> ToolScope {
         let mut names = match &self.tools {
-            ToolScope::Wildcard if self.disallowed_tools.is_empty() => return ToolScope::Wildcard,
+            ToolScope::Wildcard
+                if self.disallowed_tools.is_empty()
+                    && self.extra_tools.is_empty()
+                    && self.deferred_tools.is_empty() =>
+            {
+                return ToolScope::Wildcard;
+            }
             ToolScope::Wildcard => match registered {
                 Some(names) => names.to_vec(),
                 None => return ToolScope::Named(vec![]),

@@ -384,3 +384,20 @@ fn deferred_names_join_named_scope_before_denials_and_deduplication() {
         ToolScope::Named(vec!["read".into(), "extra".into(), "deferred".into()])
     );
 }
+
+#[test]
+fn wildcard_additions_materialize_known_catalogues_and_remain_fail_closed_without_one() {
+    for deferred in [false, true] {
+        let mut def = make_def("agent");
+        if deferred {
+            def.deferred_tools = vec!["added".into()];
+        } else {
+            def.extra_tools = vec!["added".into()];
+        }
+        assert_eq!(
+            def.resolve_tool_scope(Some(&["read".into()])),
+            ToolScope::Named(vec!["read".into(), "added".into()])
+        );
+        assert_eq!(def.resolve_tool_scope(None), ToolScope::Named(vec![]));
+    }
+}
