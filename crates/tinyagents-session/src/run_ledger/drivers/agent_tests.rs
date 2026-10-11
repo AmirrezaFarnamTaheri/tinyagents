@@ -192,3 +192,13 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
     let classic: i64 = sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs','run_events','sessions')", [], |row| row.get(0)).unwrap();
     assert_eq!(classic, 0);
 }
+
+#[tokio::test]
+async fn projection_refuses_an_existing_stream_that_disagrees_with_committed_receipts() {
+    let backend = MemoryStorage::new(); let scope = Scope::new("alice").unwrap();
+    let scoped = backend.for_scope(&scope).unwrap(); let a = DriverRunLedger::new(scoped.clone());
+    a.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "real".into(), payload: json!({}) }).await.unwrap();
+    scoped.streams().append(&format!("run_events:{}", storage::key(&["run"])), json!({"foreign":true})).await.unwrap();
+    assert!(matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref error)
+        if error.kind() == tinystoragedrivers_core::ErrorKind::Serialization));
+}
