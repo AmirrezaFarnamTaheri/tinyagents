@@ -1,7 +1,11 @@
 //! Mechanical bridge between harness dispatch policy and TinyTools dialects.
+//!
+//! Consumers import the original format contract from
+//! [tinytools_agent::dialect::ToolCallFormat], alongside this module's policy
+//! conversion functions.
 
 use crate::config::ToolDispatcher;
-pub use tinytools_agent::dialect::ToolCallFormat;
+use tinytools_agent::dialect::ToolCallFormat;
 
 /// Resolve the harness policy using the shared dialect selection rule.
 ///
@@ -28,6 +32,15 @@ pub fn resolve_tool_format(
 /// Native format uses automatic dispatch so a provider reporting unsupported
 /// native calls can still fall back. Other formats explicitly select their
 /// matching text grammar.
+///
+/// ```
+/// use tinyagents_harness::config::ToolDispatcher;
+/// use tinyagents_harness::dialect::dispatcher_for_format;
+/// use tinytools_agent::dialect::ToolCallFormat;
+///
+/// assert_eq!(dispatcher_for_format(ToolCallFormat::Native), ToolDispatcher::Auto);
+/// assert_eq!(dispatcher_for_format(ToolCallFormat::Json), ToolDispatcher::Xml);
+/// ```
 #[must_use]
 pub fn dispatcher_for_format(format: ToolCallFormat) -> ToolDispatcher {
     match format {

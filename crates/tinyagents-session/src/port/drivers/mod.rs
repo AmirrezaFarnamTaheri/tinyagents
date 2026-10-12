@@ -38,14 +38,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use sha2::{Digest, Sha256};
-use tinyagents_harness::store::{DriverAppendStore, DriverStore};
+use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, Scope, ScopedStorage, StorageBackend, StorageError,
 };
 
 use super::{AgentStores, SessionStoreProvider};
 
-pub use tinyagents_harness::store::SchemaAdmission;
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
 

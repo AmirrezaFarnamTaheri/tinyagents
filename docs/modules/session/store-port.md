@@ -86,6 +86,9 @@ Existing constructors keep declaring schema lazily. A trusted host can instead
 prepare `DriverSessionStores::collection_specs()` through `prepare_schema`,
 then create an actor provider with
 `new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)`.
+Import the original admission policy from
+`tinyagents_harness::store::SchemaAdmission`; the session driver constructors
+consume that type directly.
 The schema policy is fixed at construction. Checked opening validates all four
 original declarations before creating handles or recovering turns. Transcript,
 turn-state and KV handles use that same policy for their first operation;
