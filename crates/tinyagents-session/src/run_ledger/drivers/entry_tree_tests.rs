@@ -269,7 +269,7 @@ async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
             .map(|_| ()),
     ] {
         assert!(
-            matches!(result.unwrap_err(), super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+            matches!(result.unwrap_err(), super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::ScopeGenerationRejected)
         );
     }
     assert_eq!(fresh.entry_head("s").await.unwrap(), Some(head));

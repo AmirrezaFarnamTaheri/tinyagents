@@ -324,7 +324,7 @@ async fn retired_generation_cannot_prune_fresh_telemetry() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::ScopeGenerationRejected)
     );
     assert!(
         fresh
