@@ -451,7 +451,15 @@ async fn fenced_phases(backend: &dyn StorageBackend) {
         assert_eq!(store.get_messages("same").await.unwrap().len(), index);
         // An independently admitted fresh writer may reconcile the accepted
         // pending attempt. The stale original never publishes it itself.
-        store
+        let fresh_fence = Fence::epoch(cluster.clone(), "leases", "alice", "epoch", epoch + 1);
+        let fresh = DriverConversationStore::new_validate_only(
+            backend
+                .existing_schema()
+                .unwrap()
+                .for_scope_fenced(&Scope::new("alice").unwrap(), &fresh_fence)
+                .unwrap(),
+        );
+        fresh
             .append_message("same", message(&format!("agent:{index}"), "fresh"))
             .await
             .unwrap();
