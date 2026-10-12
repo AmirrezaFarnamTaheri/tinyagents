@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use tinystoragedrivers_core::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
@@ -557,4 +557,24 @@ async fn noncanonical_pending_record_refuses_without_appending_or_publishing_pre
             .doc,
         envelope
     );
+}
+
+#[tokio::test]
+async fn competing_same_id_reservations_force_cas_conflict_then_restart_original_dedup() {
+    use std::sync::atomic::Ordering;
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::Barrier);
+    let a = faulted(&store, fault.clone());
+    let b = a.clone();
+    let (a_result, b_result) = tokio::join!(
+        a.append_message("same", message("agent:same", "A")),
+        b.append_message("same", message("agent:same", "B")),
+    );
+    let a_result = a_result.unwrap();
+    assert_eq!(b_result.unwrap(), a_result);
+    assert!(
+        fault.conflicts.load(Ordering::SeqCst) > 0,
+        "real native checked-batch CAS conflict must have occurred"
+    );
+    assert_eq!(store.get_messages("same").await.unwrap(), vec![a_result]);
 }

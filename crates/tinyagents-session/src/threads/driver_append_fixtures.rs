@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tinystoragedrivers_core::{
     Capabilities, Page, Query, ReadCheck, Sort, StreamEntry, Version, WriteOp, WriteResult,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Phase {
@@ -19,12 +19,15 @@ pub(super) enum Action {
     LoseAck,
     FailBefore,
     Unsupported,
+    Barrier,
 }
 #[derive(Debug)]
 pub(super) struct Fault {
     phase: Phase,
     action: Action,
     hits: AtomicUsize,
+    pub conflicts: AtomicUsize,
+    barrier: Barrier,
     pub reached: Notify,
     pub release: Notify,
 }
@@ -34,16 +37,22 @@ impl Fault {
             phase,
             action,
             hits: AtomicUsize::new(0),
+            conflicts: AtomicUsize::new(0),
+            barrier: Barrier::new(2),
             reached: Notify::new(),
             release: Notify::new(),
         })
     }
     fn take(&self, phase: Phase) -> bool {
-        self.phase == phase
-            && self
-                .hits
-                .fetch_add(usize::from(self.phase == phase), Ordering::SeqCst)
-                == 0
+        if self.phase != phase {
+            return false;
+        }
+        self.hits.fetch_add(1, Ordering::SeqCst)
+            < if matches!(self.action, Action::Barrier) {
+                2
+            } else {
+                1
+            }
     }
     async fn after(&self, active: bool) -> tinystoragedrivers_core::Result<()> {
         if !active {
@@ -150,7 +159,14 @@ impl DocumentStore for Documents {
         if active && matches!(self.fault.action, Action::FailBefore) {
             return Err(Fault::failure());
         }
-        let result = self.inner.atomic_batch_checked(checks, ops).await?;
+        if active && matches!(self.fault.action, Action::Barrier) {
+            self.fault.barrier.wait().await;
+        }
+        let result = self.inner.atomic_batch_checked(checks, ops).await;
+        if matches!(&result, Err(error) if error.kind() == ErrorKind::Conflict) {
+            self.fault.conflicts.fetch_add(1, Ordering::SeqCst);
+        }
+        let result = result?;
         self.fault.after(active).await?;
         Ok(result)
     }
