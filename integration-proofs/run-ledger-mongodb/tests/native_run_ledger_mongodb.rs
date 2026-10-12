@@ -1,5 +1,6 @@
-//! Opt-in actual Mongo replica-set proof. Default CI compiles and ignores these
-//! cases; an ignored result is not native Mongo acceptance evidence.
+//! Opt-in actual Mongo replica-set proof in an excluded standalone workspace.
+//! Ordinary standalone runs ignore these cases; ignored results are not native
+//! Mongo acceptance evidence. The root CI graph excludes this workspace.
 //!
 //! Set TINYAGENTS_TEST_MONGO_URL to an unauthenticated literal-loopback URI with
 //! an explicit port, then enable mongodb-storage-tests and run this target with
