@@ -183,17 +183,9 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
         .unwrap();
     let fence = Fence::epoch(owners, "leases", "alice", "epoch", 1);
     let restricted = backend.existing_schema().unwrap();
-    let admitted = restricted.for_scope_fenced(&scope, &fence);
-    let admitted = match admitted {
-        Ok(scoped) => scoped,
-        Err(error) if matches!(error.kind(), ErrorKind::Unsupported(_)) => {
-            eprintln!(
-                "Native fencing unavailable: typed Unsupported verified; actor positive proof not executed"
-            );
-            return;
-        }
-        Err(error) => panic!("native admission failed: {error}"),
-    };
+    let admitted = restricted
+        .for_scope_fenced(&scope, &fence)
+        .expect("native fenced admission is required for positive actor proof");
     let actor = DriverRunLedger::new_existing_schema(admitted);
     let first = actor
         .entry_append_to_head("session", text("first"))

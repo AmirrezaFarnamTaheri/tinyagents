@@ -18,31 +18,45 @@ non-loopback hosts and credentials are rejected before connecting.
 Use an owned Mongo 7 replica-set container; Mongo 8 is incompatible with the
 kernel on the development host used for this proof.
 
-```sh
-docker run -d --rm --name tinyagents-ledger-mongo-7423 \
-  --ulimit nofile=65536:65536 -p 127.0.0.1::27017 mongo:7.0 \
-  mongod --replSet tinyagents-ledger --bind_ip_all
-docker port tinyagents-ledger-mongo-7423 27017
-docker exec tinyagents-ledger-mongo-7423 mongosh --quiet --eval \
-  'rs.initiate({_id:"tinyagents-ledger",members:[{_id:0,host:"127.0.0.1:27017"}]})'
-docker exec tinyagents-ledger-mongo-7423 mongosh --quiet --eval \
-  'db.hello().isWritablePrimary'
-```
-
-Wait for the last command to return true, substitute the published loopback
-port below, and use the repository's cancellation-aware runner when available:
+Run the entire procedure in one shell. The subshell installs an exit trap
+using the ID of the container it just created, so failures also stop it.
 
 ```sh
-TINYAGENTS_TEST_MONGO_URL='mongodb://127.0.0.1:<published-port>/?directConnection=true' \
-  cargo test --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml \
-  --features mongodb-storage-tests \
-  --test native_run_ledger_mongodb -- --ignored --nocapture
-docker stop tinyagents-ledger-mongo-7423
+(
+  set -eu
+  mongo_container=$(docker run -d --rm \
+    --ulimit nofile=65536:65536 -p 127.0.0.1::27017 mongo:7.0 \
+    mongod --replSet tinyagents-ledger --bind_ip_all)
+  trap 'docker stop "$mongo_container" >/dev/null' EXIT
+  mongo_port=$(docker port "$mongo_container" 27017/tcp)
+  mongo_port=${mongo_port##*:}
+  for attempt in $(seq 1 30); do
+    if docker exec "$mongo_container" mongosh --quiet --eval 'db.hello()' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  docker exec "$mongo_container" mongosh --quiet --eval \
+    'rs.initiate({_id:"tinyagents-ledger",members:[{_id:0,host:"127.0.0.1:27017"}]})'
+  for attempt in $(seq 1 30); do
+    if [ "$(docker exec "$mongo_container" mongosh --quiet --eval \
+      'db.hello().isWritablePrimary')" = true ]; then
+      break
+    fi
+    sleep 1
+  done
+  test "$(docker exec "$mongo_container" mongosh --quiet --eval \
+    'db.hello().isWritablePrimary')" = true
+  TINYAGENTS_TEST_MONGO_URL="mongodb://127.0.0.1:$mongo_port/?directConnection=true" \
+    cargo test --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml \
+    --features mongodb-storage-tests \
+    --test native_run_ledger_mongodb -- --ignored --nocapture
+)
 ```
 
-Stop only the container created for this run, including after a failing run.
-No host filesystem mounts or external credentials are needed. The removed
-container also removes the isolated test databases.
+The trap stops only the container created by this procedure, including after
+a failing run. No host filesystem mounts or external credentials are needed.
+The removed container also removes the isolated test databases.
 
 ## What the cases prove
 
@@ -57,10 +71,10 @@ container also removes the isolated test databases.
   separate. Replacing the lease epoch causes retained actor reads and writes to
   return typed Fenced, while the sibling remains usable.
 
-If native fencing is unsupported, the actor case reports typed Unsupported and
-explicitly states that positive actor proof was not executed. That output must
-not be counted as actor acceptance. The development replica-set run completed
-the positive actor proof and printed its completion marker.
+The actor acceptance case fails if native fenced admission is unsupported;
+success requires all reopened-actor and stale-epoch assertions to execute.
+The development replica-set run completed the positive actor proof and printed
+its completion marker.
 
 This fixture does not prove ScopePurge generation admission, a live host
 provider's schema mode, ProfileHost composition, retention, telemetry, import
