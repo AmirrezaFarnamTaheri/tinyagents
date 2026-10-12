@@ -209,7 +209,7 @@ typed sources. Agent writes validate the captured telemetry version in the same
 document batch and return the committed body without a fallible postcommit read.
 
 Dependency-aware team claims/completion, bulk member shutdown, entry trees and
-retention still return typed Unsupported before writing. The orphan sweep is
+retention across sessions/messages/events still return typed Unsupported before writing. The orphan sweep is
 explicitly for an exclusive owner; it is not a shared-process lease reaper.
 Existing host callers are not routed to this adapter automatically.
 
@@ -258,6 +258,24 @@ from legacy event ordinals. Projection refusal preserves the successful
 document commit and returns a typed error only from the explicit reconciliation
 call. Reconstructed handles can replay outstanding receipts. Neither receipts
 nor projection currently implement retention.
+
+### Explicit telemetry retention
+
+`prune_run_telemetry_before` removes only telemetry whose non-null updated instant
+is strictly before the supplied cutoff. It enumerates the bound scope, then
+conditionally deletes all eligible observed versions in one validated native
+batch. A concurrent update conflicts and triggers re-enumeration; an update
+that refreshes the timestamp survives. New rows after enumeration belong to a
+later pass. The operation does not promise a collection-wide snapshot or invoke
+retention automatically. Timestamp comparison uses instants, avoiding variable
+RFC3339 precision changing eligibility.
+
+Empty passes still require native batch/fence admission. Typed refusal changes
+no candidate records; a retained retired-generation handle cannot prune records
+in a newly issued generation. Schema admission stays the supplied handle’s
+policy. Session/message/tool-call/event retention and whole-ledger retention are
+still unsupported; no event receipts, streams, import receipts, or run records
+are removed by telemetry pruning.
 
 ### Schema preparation and validation
 
