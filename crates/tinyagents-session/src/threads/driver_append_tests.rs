@@ -672,3 +672,6 @@ async fn mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire
     );
     assert_eq!(store.streams.len(&stream).await.unwrap(), 1);
 }
+
+#[path = "driver_append_corruption_tests.rs"]
+mod corruption_tests;
