@@ -11,6 +11,7 @@ pub(super) enum Phase {
     Reserve,
     Append,
     Finalize,
+    ReadWindow,
 }
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
@@ -26,6 +27,7 @@ pub(super) struct Fault {
     phase: Phase,
     action: Action,
     hits: AtomicUsize,
+    skip: usize,
     pub conflicts: AtomicUsize,
     barrier: Barrier,
     pub reached: Notify,
@@ -33,10 +35,14 @@ pub(super) struct Fault {
 }
 impl Fault {
     pub fn new(phase: Phase, action: Action) -> Arc<Self> {
+        Self::new_after(phase, action, 0)
+    }
+    pub fn new_after(phase: Phase, action: Action, skip: usize) -> Arc<Self> {
         Arc::new(Self {
             phase,
             action,
             hits: AtomicUsize::new(0),
+            skip,
             conflicts: AtomicUsize::new(0),
             barrier: Barrier::new(2),
             reached: Notify::new(),
@@ -47,12 +53,14 @@ impl Fault {
         if self.phase != phase {
             return false;
         }
-        self.hits.fetch_add(1, Ordering::SeqCst)
-            < if matches!(self.action, Action::Barrier) {
-                2
-            } else {
-                1
-            }
+        let hit = self.hits.fetch_add(1, Ordering::SeqCst);
+        hit >= self.skip
+            && hit - self.skip
+                < if matches!(self.action, Action::Barrier) {
+                    2
+                } else {
+                    1
+                }
     }
     async fn after(&self, active: bool) -> tinystoragedrivers_core::Result<()> {
         if !active {
@@ -215,7 +223,13 @@ impl StreamStore for Streams {
         o: u64,
         n: usize,
     ) -> tinystoragedrivers_core::Result<Vec<StreamEntry>> {
-        self.inner.read_window(s, o, n).await
+        let active = self.fault.take(Phase::ReadWindow);
+        if active && matches!(self.fault.action, Action::FailBefore) {
+            return Err(Fault::failure());
+        }
+        let result = self.inner.read_window(s, o, n).await?;
+        self.fault.after(active).await?;
+        Ok(result)
     }
     async fn len(&self, s: &str) -> tinystoragedrivers_core::Result<u64> {
         self.inner.len(s).await

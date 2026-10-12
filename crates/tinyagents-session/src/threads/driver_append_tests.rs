@@ -683,3 +683,6 @@ async fn mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire
 
 #[path = "driver_append_corruption_tests.rs"]
 mod corruption_tests;
+
+#[path = "driver_append_review_tests.rs"]
+mod review_tests;
