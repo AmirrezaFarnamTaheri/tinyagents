@@ -359,10 +359,10 @@ impl DocumentStore for TreeBoundary {
                 return Err(StorageError::fenced("tree commit refused")
                     .with_source(std::io::Error::other("native tree source")));
             }
-            if let Some(barrier) = &self.barrier {
-                if self.calls.fetch_add(1, Ordering::SeqCst) < 2 {
-                    barrier.wait().await;
-                }
+            if let Some(barrier) = &self.barrier
+                && self.calls.fetch_add(1, Ordering::SeqCst) < 2
+            {
+                barrier.wait().await;
             }
         }
         let result = self.inner.atomic_batch_checked(checks, writes).await?;
@@ -545,7 +545,7 @@ async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_ent
         ts: "2025-01-01T00:00:00Z".into(),
     };
     native
-        .entry_import_legacy("cycle-session", &[cycle.clone()])
+        .entry_import_legacy("cycle-session", std::slice::from_ref(&cycle))
         .await
         .unwrap();
     assert!(
@@ -559,7 +559,7 @@ async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_ent
         ts: cycle.ts,
     };
     native
-        .entry_import_legacy("full", &[last.clone()])
+        .entry_import_legacy("full", std::slice::from_ref(&last))
         .await
         .unwrap();
     assert!(
@@ -612,7 +612,7 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         ts: "2025-01-01T00:00:00Z".into(),
     };
     native
-        .entry_import_legacy("import", &[imported.clone()])
+        .entry_import_legacy("import", std::slice::from_ref(&imported))
         .await
         .unwrap();
     for session in ["append", "import"] {
