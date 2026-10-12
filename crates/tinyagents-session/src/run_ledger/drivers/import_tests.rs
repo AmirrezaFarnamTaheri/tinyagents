@@ -333,3 +333,31 @@ async fn imported_event_counter_can_allocate_the_last_classic_signed_sequence() 
         matches!(ledger.append_run_event(input()).await.unwrap_err(), super::super::super::LedgerError::Driver(ref error) if error.kind() == ErrorKind::Serialization)
     );
 }
+
+#[tokio::test]
+async fn imported_last_signed_sequence_persists_bson_representable_terminal_head() {
+    use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
+    let backend = MemoryStorage::new();
+    let scope = Scope::local();
+    let native = backend.for_scope(&scope).unwrap();
+    let ledger = super::super::event_bson_tests::wrap(native);
+    let root = tempfile::tempdir().unwrap();
+    let source = complete_source(&ledger, &root);
+    let before = {
+        let db = rusqlite::Connection::open(source.path()).unwrap();
+        db.execute("DELETE FROM run_events WHERE sequence != 3", [])
+            .unwrap();
+        db.execute("UPDATE run_events SET sequence = ?1", [i64::MAX])
+            .unwrap();
+        drop(db);
+        std::fs::read(source.path()).unwrap()
+    };
+    ledger
+        .import_agent_family(&source, "terminal-import")
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(source.path()).unwrap(), before);
+    assert!(
+        matches!(ledger.append_run_event(RunEventAppend { run_id: "run".into(), event_type: "overflow".into(), payload: serde_json::json!({}) }).await.unwrap_err(), super::super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Serialization)
+    );
+}

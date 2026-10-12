@@ -884,3 +884,7 @@ mod agent_tests;
 #[cfg(test)]
 #[path = "retention_tests.rs"]
 mod retention_tests;
+
+#[cfg(test)]
+#[path = "event_bson_tests.rs"]
+mod event_bson_tests;

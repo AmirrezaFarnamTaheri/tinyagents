@@ -9,7 +9,8 @@ use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct EventHead {
-    pub(super) next: u64,
+    /// Null marks exhaustion without an unsigned BSON-overflow sentinel.
+    pub(super) next: Option<u64>,
 }
 
 struct EventCommit {
@@ -20,13 +21,20 @@ struct EventCommit {
 impl DriverRunLedger {
     async fn event_commit(&self, input: &RunEventAppend) -> Result<EventCommit> {
         let head = self.read::<EventHead>(EVENT_HEADS, &input.run_id).await?;
-        let sequence = head.as_ref().map_or(1, |head| head.doc.next);
+        let sequence = match &head {
+            None => 1,
+            Some(head) => head
+                .doc
+                .next
+                .ok_or_else(|| StorageError::serialization("event sequence exhausted"))?,
+        };
         if sequence == 0 || sequence > i64::MAX as u64 {
             return Err(StorageError::serialization("event sequence exceeds classic range").into());
         }
-        // The head may hold MAX + 1 as an exhausted sentinel; the event itself
-        // retains the full positive signed SQLite range.
-        let next = sequence + 1;
+        // Keep every persisted integer within BSON’s signed range, while still
+        // allowing the final legal event. Existing numeric heads deserialize
+        // as Some; the portable terminal representation is JSON null.
+        let next = (sequence < i64::MAX as u64).then_some(sequence + 1);
         let event = RunEvent {
             run_id: input.run_id.clone(),
             sequence,
