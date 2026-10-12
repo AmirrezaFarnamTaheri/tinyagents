@@ -71,6 +71,18 @@ impl AppendIntent {
             StorageError::serialization("invalid conversation append envelope").with_source(error)
         })?;
         let record = intent.record()?;
+        // New intents must round-trip exactly through the unchanged schema1
+        // record. Old committed readers remain deliberately compatible, but a
+        // pending writer must not publish fields its typed result silently drops.
+        let canonical = serde_json::to_value(&record).map_err(|error| {
+            StorageError::serialization("encode canonical conversation append record")
+                .with_source(error)
+        })?;
+        if canonical != intent.record_value()? {
+            return Err(
+                StorageError::serialization("noncanonical conversation append record").into(),
+            );
+        }
         let offset = intent.offset()?;
         if intent.schema != "1"
             || uuid::Uuid::parse_str(&intent.token).is_err()
