@@ -85,6 +85,7 @@ impl DocumentStore for BoundedQueries {
     }
 }
 
+#[derive(Debug)]
 struct ArrivingReceipts {
     inner: Arc<dyn tinystoragedrivers_core::StreamStore>,
     ledger: DriverRunLedger,
@@ -125,7 +126,7 @@ impl tinystoragedrivers_core::StreamStore for ArrivingReceipts {
                 .append_run_event(event())
                 .await
                 .map_err(|error| match error {
-                    super::super::LedgerError::Driver(error) => error,
+                    super::super::LedgerError::Driver(error) => *error,
                     other => panic!("native fixture error: {other:?}"),
                 })?;
         }
@@ -185,7 +186,7 @@ async fn event_pages_follow_native_cursors_with_the_requested_limit() {
         scoped.blobs().clone(),
     ));
     let page = actor
-        .list_run_events(&RunEventListRequest {
+        .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
             after_sequence: None,
             limit: Some(3),
@@ -218,7 +219,7 @@ async fn zero_limit_event_reads_still_require_native_admission() {
         scoped.blobs().clone(),
     ));
     let error = actor
-        .list_run_events(&RunEventListRequest {
+        .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
             after_sequence: None,
             limit: Some(0),
