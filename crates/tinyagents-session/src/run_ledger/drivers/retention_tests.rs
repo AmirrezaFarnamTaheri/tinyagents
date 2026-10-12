@@ -11,7 +11,7 @@ async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
         })
         .await
         .unwrap();
-    row.updated_at = at;
+    row.updated_at = Some(at);
     ledger
         .scoped
         .documents()
@@ -37,17 +37,34 @@ async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
     seed(&a, "new", cutoff + Duration::seconds(1)).await;
     seed(&sibling, "old", cutoff - Duration::seconds(1)).await;
     assert_eq!(a.prune_run_telemetry_before(cutoff).await.unwrap(), 1);
-    assert!(peer.get_run_telemetry("old").await.unwrap().is_none());
+    assert!(
+        peer.read::<RunTelemetry>(TELEMETRY, "old")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        peer.get_run_telemetry("boundary")
+        peer.read::<RunTelemetry>(TELEMETRY, "boundary")
             .await
             .unwrap()
             .unwrap()
+            .doc
             .input_tokens,
         17
     );
-    assert!(peer.get_run_telemetry("new").await.unwrap().is_some());
-    assert!(sibling.get_run_telemetry("old").await.unwrap().is_some());
+    assert!(
+        peer.read::<RunTelemetry>(TELEMETRY, "new")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        sibling
+            .read::<RunTelemetry>(TELEMETRY, "old")
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(peer.prune_run_telemetry_before(cutoff).await.unwrap(), 0);
 }
 
