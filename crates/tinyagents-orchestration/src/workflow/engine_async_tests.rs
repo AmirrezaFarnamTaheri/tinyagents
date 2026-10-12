@@ -401,3 +401,127 @@ async fn authoritative_placeholder_callbacks_cannot_supply_legacy_fallback() {
     );
     WorkflowExecutor::cancel_children(&marker, &[]).await;
 }
+
+struct PendingRegistration {
+    inner: LedgerWorkflowStore,
+    started: tokio::sync::Notify,
+    pending: std::sync::atomic::AtomicBool,
+    refuse_renewal: bool,
+}
+#[async_trait]
+impl AsyncWorkflowStore for PendingRegistration {
+    async fn load(&self, id: &str) -> WorkflowPersistenceResult<Option<WorkflowRun>> {
+        self.inner.load(id).await
+    }
+    async fn upsert(&self, row: WorkflowRunUpsert) -> WorkflowPersistenceResult<WorkflowRun> {
+        self.inner.upsert(row).await
+    }
+    async fn claim(
+        &self,
+        id: &str,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<WorkflowLeaseClaim> {
+        self.inner.claim(id, owner, lease).await
+    }
+    async fn renew(
+        &self,
+        id: &str,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<bool> {
+        if self.refuse_renewal && self.pending.load(Ordering::SeqCst) {
+            return Err(refusal());
+        }
+        self.inner.renew(id, owner, lease).await
+    }
+    async fn compare_and_swap(
+        &self,
+        row: WorkflowRunUpsert,
+        rev: u64,
+        owner: &str,
+        lease: Duration,
+    ) -> WorkflowPersistenceResult<Option<WorkflowRun>> {
+        if !row.child_run_ids.is_empty() {
+            self.pending.store(true, Ordering::SeqCst);
+            self.started.notify_one();
+            return std::future::pending().await;
+        }
+        self.inner.compare_and_swap(row, rev, owner, lease).await
+    }
+}
+#[derive(Default)]
+struct PendingChild {
+    cancelled: parking_lot::Mutex<Vec<String>>,
+}
+#[async_trait]
+impl AsyncWorkflowExecutor for PendingChild {
+    async fn execute_async(
+        &self,
+        _: WorkflowChildRequest,
+        _: CancellationToken,
+        registration: Arc<dyn AsyncWorkflowChildRegistration>,
+    ) -> WorkflowPersistenceResult<WorkflowChildResult> {
+        registration.register_async("pending-child".into()).await?;
+        unreachable!("registration remains pending")
+    }
+    async fn cancel_children(&self, ids: &[String]) {
+        self.cancelled.lock().extend_from_slice(ids);
+    }
+}
+async fn pending_child_case(renewal: bool) {
+    let workspace = tempfile::tempdir().unwrap();
+    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
+    let store = Arc::new(PendingRegistration {
+        inner: LedgerWorkflowStore::new(ledger.clone()),
+        started: tokio::sync::Notify::new(),
+        pending: std::sync::atomic::AtomicBool::new(false),
+        refuse_renewal: renewal,
+    });
+    let executor = Arc::new(PendingChild::default());
+    let engine = WorkflowEngine::new_async(store.clone(), executor.clone())
+        .with_lease_duration(Duration::from_millis(30));
+    let mut definition = tests::definition();
+    definition.phases.truncate(1);
+    definition.phases[0].agent_ids.truncate(1);
+    engine
+        .initialise_async("run".into(), &definition, json!({}), None)
+        .await
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let control = async {
+        store.started.notified().await;
+        if !renewal {
+            cancel.cancel();
+        }
+    };
+    let drive = engine.drive_async("run", &definition, cancel.clone());
+    let (result, _) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(drive, control)
+    })
+    .await
+    .unwrap();
+    if renewal {
+        assert!(matches!(
+            innermost(&result.unwrap_err()),
+            WorkflowPersistenceError::Ledger(_)
+        ));
+    } else {
+        result.unwrap();
+        let run = ledger.get_workflow_run("run").await.unwrap().unwrap();
+        assert_eq!(run.status, WorkflowRunStatus::Interrupted);
+        assert!(
+            run.child_run_ids.is_empty(),
+            "uncommitted ids are cancellation targets, not persisted children"
+        );
+    }
+    assert_eq!(*executor.cancelled.lock(), vec!["pending-child"]);
+}
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn heartbeat_loss_cancels_a_child_with_pending_registration() {
+    pending_child_case(true).await;
+}
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn host_cancellation_cancels_a_child_with_pending_registration() {
+    pending_child_case(false).await;
+}
