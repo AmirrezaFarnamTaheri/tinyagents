@@ -123,12 +123,13 @@ impl DriverConversationStore {
     // an acknowledged successful batch. Row equality alone cannot prove an
     // unobserved ordinary-ID reservation belonged to this attempt.
     async fn committed(&self, intent: &AppendIntent) -> ConversationResult<bool> {
+        let offset = intent.offset()?;
         let Some(row) = self.load(&intent.thread_id).await? else {
             return Ok(false);
         };
         if row.doc.deleted
             || row.doc.incarnation != intent.incarnation
-            || row.doc.visible_end <= intent.offset()?
+            || row.doc.visible_end <= offset
         {
             return Ok(false);
         }
@@ -137,10 +138,11 @@ impl DriverConversationStore {
                 StorageError::serialization("missing committed conversation append").into(),
             );
         }
-        Ok(self
-            .load(&intent.thread_id)
-            .await?
-            .is_some_and(|next| next.version == row.version))
+        Ok(self.load(&intent.thread_id).await?.is_some_and(|next| {
+            !next.doc.deleted
+                && next.doc.incarnation == intent.incarnation
+                && next.doc.visible_end > offset
+        }))
     }
 
     async fn finish_append(&self, intent: &AppendIntent) -> ConversationResult<ThreadMessage> {
@@ -262,7 +264,12 @@ impl DriverConversationStore {
                     return match self.committed(intent).await {
                         Ok(true) => Ok(intent.record()?.message),
                         Ok(false) => Err(error.into()),
-                        Err(_) => Err(Self::uncertain(error)),
+                        Err(ConversationError::Driver(read))
+                            if Self::acknowledgment_may_be_lost(&read) =>
+                        {
+                            Err(Self::uncertain(error))
+                        }
+                        Err(other) => Err(other),
                     };
                 }
                 Err(error) => return Err(error.into()),
@@ -284,7 +291,15 @@ impl DriverConversationStore {
             let current = self.load(thread_id).await?;
             let thread = Self::live(current.as_ref().map(|row| &row.doc))?;
             if let Some(pending) = self.pending(thread_id, &thread.incarnation).await? {
-                self.finish_append(&pending.doc).await?;
+                match self.finish_append(&pending.doc).await {
+                    Ok(_) => {}
+                    // This caller has not reserved its own message. Only the
+                    // helped writer has an uncertain accepted attempt.
+                    Err(ConversationError::Uncertain { source, .. }) => {
+                        return Err(ConversationError::Driver(source));
+                    }
+                    Err(error) => return Err(error),
+                }
                 continue;
             }
             if let Some(existing) = self.duplicate(thread_id, &message).await? {
