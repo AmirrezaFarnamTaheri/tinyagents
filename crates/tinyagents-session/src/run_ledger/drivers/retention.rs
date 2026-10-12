@@ -11,8 +11,9 @@ impl DriverRunLedger {
     ///
     /// A concurrent update that refreshes a candidate is re-read before retry.
     /// New rows arriving after enumeration belong to a later retention pass.
-    /// An empty batch still obtains native fence/capability admission. Neither
-    /// this operation nor a native refusal changes schema or chooses another scope.
+    /// An empty batch still obtains native fence/capability admission. Schema
+    /// initialization follows the handle’s declaring or validation policy; a
+    /// refusal never authorizes another scope or a local fallback.
     pub(super) async fn prune_telemetry(
         &self,
         older_than: DateTime<Utc>,
