@@ -2,6 +2,7 @@
 use super::*;
 impl DriverConversationStore {
     pub(super) async fn live_rows(&self) -> ConversationResult<Vec<Versioned<ThreadDoc>>> {
+        self.admit().await?;
         let mut query = Query::filter(Filter::eq("deleted", false)).limit(PAGE_SIZE);
         let mut rows = Vec::new();
         loop {

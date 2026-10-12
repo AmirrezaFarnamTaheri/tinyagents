@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinystoragedrivers_core::{
-    DocumentStore, ErrorKind, Filter, Precondition, Query, ScopedStorage, StorageError,
-    StreamStore, Versioned,
+    CollectionSpec, DocumentStore, ErrorKind, Filter, Precondition, Query, ScopedStorage,
+    StorageError, StreamStore, Versioned,
 };
 mod reader;
 
@@ -43,6 +43,7 @@ struct MessageRecord {
 pub struct DriverConversationStore {
     docs: Arc<dyn DocumentStore>,
     streams: Arc<dyn StreamStore>,
+    validate_only: bool,
 }
 impl DriverConversationStore {
     /// Consume explicit trusted scoped ports; no ambient fallback is possible.
@@ -50,11 +51,54 @@ impl DriverConversationStore {
         Self {
             docs: scoped.documents().clone(),
             streams: scoped.streams().clone(),
+            validate_only: false,
         }
     }
-    /// Explicit validation-only admission; behavioral baseline delegates unchanged.
+    /// Consume admitted ports with immutable read-only schema validation.
+    ///
+    /// Every implemented operation validates persisted required features anew;
+    /// no successful validation is cached. Compatible native declaration
+    /// supersets are accepted. This neither restricts the supplied backend's
+    /// implicit initialization nor establishes actor/scope authority: the host
+    /// must supply native existing-schema handles and its original fence.
     pub fn new_validate_only(scoped: ScopedStorage) -> Self {
-        Self::new(scoped)
+        Self {
+            validate_only: true,
+            ..Self::new(scoped)
+        }
+    }
+
+    /// Existing metadata declaration; streams retain their schema1 layout.
+    ///
+    /// There are no required secondary indexes, TTL or full-text fields.
+    /// Native validation accepts compatible supersets, not exact equality.
+    pub fn collection_specs() -> Vec<CollectionSpec> {
+        vec![CollectionSpec::new(COLLECTION)]
+    }
+
+    /// Declare application metadata under explicitly trusted bootstrap authority.
+    ///
+    /// This does not prepare native internal schemas, bind an actor, migrate
+    /// data or enable message writes. Restricted actor handles must refuse.
+    ///
+    /// # Errors
+    /// The native declaration error, preserving its kind and original cause.
+    pub async fn prepare_schema(
+        documents: &dyn DocumentStore,
+    ) -> tinystoragedrivers_core::Result<()> {
+        for spec in Self::collection_specs() {
+            documents.ensure_collection(&spec).await?;
+        }
+        Ok(())
+    }
+
+    async fn admit(&self) -> ConversationResult<()> {
+        if self.validate_only {
+            for spec in Self::collection_specs() {
+                self.docs.validate_collection_spec(&spec).await?;
+            }
+        }
+        Ok(())
     }
 
     fn key(id: &str) -> ConversationResult<String> {
@@ -93,6 +137,7 @@ impl DriverConversationStore {
         })
     }
     async fn load(&self, id: &str) -> ConversationResult<Option<Versioned<ThreadDoc>>> {
+        self.admit().await?;
         let key = Self::key(id)?;
         self.docs
             .get(COLLECTION, &key)
@@ -180,10 +225,12 @@ impl ConversationPersistence for DriverConversationStore {
         &self,
         request: CreateConversationThread,
     ) -> ConversationResult<ConversationThread> {
+        self.admit().await?;
         self.change(&request.id, |current| Ok(Self::ensure(current, &request)))
             .await
     }
     async fn get_thread(&self, thread_id: &str) -> ConversationResult<Option<ConversationThread>> {
+        self.admit().await?;
         Ok(self
             .load(thread_id)
             .await?
@@ -191,6 +238,7 @@ impl ConversationPersistence for DriverConversationStore {
             .map(|row| row.doc.thread))
     }
     async fn list_threads(&self) -> ConversationResult<Vec<ConversationThread>> {
+        self.admit().await?;
         let mut rows: Vec<_> = self
             .live_rows()
             .await?
@@ -205,6 +253,7 @@ impl ConversationPersistence for DriverConversationStore {
         Ok(rows)
     }
     async fn get_messages(&self, thread_id: &str) -> ConversationResult<Vec<ThreadMessage>> {
+        self.admit().await?;
         self.messages(thread_id).await
     }
     async fn update_thread_title(
@@ -213,6 +262,7 @@ impl ConversationPersistence for DriverConversationStore {
         title: &str,
         _updated_at: &str,
     ) -> ConversationResult<ConversationThread> {
+        self.admit().await?;
         self.change(thread_id, |current| {
             let mut doc = Self::live(current)?;
             doc.thread.title = title.into();
@@ -226,6 +276,7 @@ impl ConversationPersistence for DriverConversationStore {
         labels: Vec<String>,
         _updated_at: &str,
     ) -> ConversationResult<ConversationThread> {
+        self.admit().await?;
         self.change(thread_id, |current| {
             let mut doc = Self::live(current)?;
             doc.thread.labels = store::normalize_labels(labels.clone());
@@ -239,6 +290,7 @@ impl ConversationPersistence for DriverConversationStore {
         working_dir: Option<String>,
         _updated_at: &str,
     ) -> ConversationResult<ConversationThread> {
+        self.admit().await?;
         self.change(thread_id, |current| {
             let mut doc = Self::live(current)?;
             doc.thread.working_dir = working_dir
@@ -250,6 +302,7 @@ impl ConversationPersistence for DriverConversationStore {
         .await
     }
     async fn delete_thread(&self, thread_id: &str, _deleted_at: &str) -> ConversationResult<bool> {
+        self.admit().await?;
         let key = Self::key(thread_id)?;
         for _ in 0..RETRIES {
             let Some(mut row) = self.load(thread_id).await? else {
@@ -275,6 +328,7 @@ impl ConversationPersistence for DriverConversationStore {
         limit: usize,
         exclude_thread_id: Option<&str>,
     ) -> ConversationResult<Vec<CrossThreadHit>> {
+        self.admit().await?;
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -294,6 +348,7 @@ impl ConversationPersistence for DriverConversationStore {
         _thread_id: &str,
         _message: ThreadMessage,
     ) -> ConversationResult<ThreadMessage> {
+        self.admit().await?;
         Err(ConversationError::Unsupported {
             operation: "append_message",
         })
@@ -304,6 +359,7 @@ impl ConversationPersistence for DriverConversationStore {
         _message_id: &str,
         _patch: ThreadMessagePatch,
     ) -> ConversationResult<ThreadMessage> {
+        self.admit().await?;
         Err(ConversationError::Unsupported {
             operation: "update_message",
         })
@@ -313,11 +369,13 @@ impl ConversationPersistence for DriverConversationStore {
         _thread_id: &str,
         _message_id: &str,
     ) -> ConversationResult<Option<usize>> {
+        self.admit().await?;
         Err(ConversationError::Unsupported {
             operation: "delete_messages_from",
         })
     }
     async fn purge_threads(&self) -> ConversationResult<ConversationPurgeStats> {
+        self.admit().await?;
         Err(ConversationError::Unsupported {
             operation: "purge_threads",
         })
