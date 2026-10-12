@@ -46,7 +46,12 @@ pub struct DriverConversationStore {
     validate_only: bool,
 }
 impl DriverConversationStore {
-    /// Consume explicit trusted scoped ports; no ambient fallback is possible.
+    /// Consume explicit trusted scoped ports with unchanged legacy schema behavior.
+    ///
+    /// This constructor neither declares nor validates application schema and
+    /// does not establish actor schema safety. Use explicit trusted preparation
+    /// and [`Self::new_validate_only`] for restricted actor admission. No ambient
+    /// backend or file fallback is possible.
     pub fn new(scoped: ScopedStorage) -> Self {
         Self {
             docs: scoped.documents().clone(),

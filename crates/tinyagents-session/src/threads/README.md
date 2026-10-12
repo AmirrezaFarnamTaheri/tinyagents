@@ -81,6 +81,28 @@ revalidate metadata before returning. Search rebuilds a temporary owning index
 from exhaustive live backend reads, preserving local substring/CJK ranking.
 It does not use capped FullText or an authoritative process cache.
 
+### Explicit schema preparation and actor admission
+
+`DriverConversationStore::collection_specs()` publishes the existing bare
+`conversation_threads_v1` declaration. Trusted bootstrap calls
+`DriverConversationStore::prepare_schema(documents)` on its raw native document
+port. Native internal stream/database preparation remains a separate host step.
+Restricted native handles refuse this declaration helper.
+
+`new_validate_only(scoped)` captures immutable validation-only behavior and
+validates required persisted features on every implemented operation, including
+reads and empty searches. Validation success is not cached. Native compatible
+supersets are accepted: this is required-feature validation, not exact schema
+equality. Native failure kind and original source are retained. The caller must
+supply existing-schema native handles with its original actor fence; selecting
+this constructor alone does not restrict backend lazy initialization or grant
+scope authority. Default turn-claim refusals perform no native operation.
+
+The existing `new(scoped)` remains deliberately compatible and does not declare
+or validate schema. It must not be advertised as actor schema safety. Neither
+constructor selects a provider automatically, opens host files or enables message
+writers/imports. No metadata/stream encoding has changed.
+
 The driver exposes no append/update/cut/purge or lease implementation; those
 operations return Unsupported. Metadata/stream format schema1 is an independent
 read prerequisite, not a target-import or cross-port writing protocol. No automatic
