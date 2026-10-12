@@ -194,3 +194,39 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
     };
     assert!(default.run_ledger_for_agent("allowed").unwrap().is_none());
 }
+
+#[cfg(feature = "storage-drivers")]
+#[test]
+fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
+    use tinyagents_harness::store::SchemaAdmission;
+    struct LegacyFactory;
+    impl SessionStoreProvider for LegacyFactory {
+        fn for_agent(&self, id: &str) -> AgentStores {
+            InMemorySessionStores::default().for_agent(id)
+        }
+        fn bind_actor(
+            &self,
+            _: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError>
+        {
+            Err(tinystoragedrivers_core::StorageError::fenced(
+                "legacy declaration factory",
+            ))
+        }
+    }
+    let provider: Arc<dyn SessionStoreProvider> = Arc::new(LegacyFactory);
+    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> =
+        Arc::new(tinystoragedrivers_core::MemoryStorage::new());
+    assert!(
+        provider
+            .bind_actor_with_schema_admission(backend.clone(), SchemaAdmission::ValidateOnly)
+            .unwrap()
+            .is_none()
+    );
+    let error = provider
+        .bind_actor_with_schema_admission(backend, SchemaAdmission::Declare)
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    assert!(error.to_string().contains("legacy declaration factory"));
+}

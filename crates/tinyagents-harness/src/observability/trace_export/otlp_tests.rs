@@ -95,8 +95,9 @@ fn otlp_has_one_root_with_readable_io_and_call_only_usage() {
         Some("managed.openrouter/test")
     );
     assert_eq!(
-        attr(call, "langfuse.observation.usage_details"),
-        Some("{\"cache_read_input_tokens\":8,\"input\":12,\"output\":5,\"total\":25}")
+        serde_json::from_str::<Value>(attr(call, "langfuse.observation.usage_details").unwrap())
+            .unwrap(),
+        json!({"cache_read_input_tokens":8,"input":12,"output":5,"total":25})
     );
 }
 

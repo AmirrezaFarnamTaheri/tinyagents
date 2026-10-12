@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tinyagents_harness::store::SchemaAdmission;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
     Precondition, Query, Sort, StorageError, Version,
@@ -224,16 +225,19 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
     ]
 }
 
-/// Declares both collections, once per locator.
+/// Admits both collections, once per locator.
 #[derive(Debug, Default)]
-struct Declared(OnceCell<()>);
+struct Declared {
+    admitted: OnceCell<()>,
+    schema_admission: SchemaAdmission,
+}
 
 impl Declared {
     async fn ensure(&self, docs: &Arc<dyn DocumentStore>) -> Result<(), StorageError> {
-        self.0
+        self.admitted
             .get_or_try_init(|| async {
                 for spec in collection_specs() {
-                    docs.ensure_collection(&spec).await?;
+                    self.schema_admission.admit(docs.as_ref(), &spec).await?;
                 }
                 Ok(())
             })
@@ -796,11 +800,24 @@ impl DriverTranscriptLocator {
     /// and the prefix of every handle's path, so two locators should share a
     /// label only when they address the same data.
     pub fn new(docs: Arc<dyn DocumentStore>, bridge: Blocking, label: impl Into<String>) -> Self {
+        Self::new_with_schema_admission(docs, bridge, label, SchemaAdmission::Declare)
+    }
+
+    /// Transcripts with an immutable schema policy shared by their history handles.
+    pub fn new_with_schema_admission(
+        docs: Arc<dyn DocumentStore>,
+        bridge: Blocking,
+        label: impl Into<String>,
+        schema_admission: SchemaAdmission,
+    ) -> Self {
         Self {
             docs,
             bridge,
             label: label.into(),
-            declared: Arc::new(Declared::default()),
+            declared: Arc::new(Declared {
+                admitted: OnceCell::new(),
+                schema_admission,
+            }),
         }
     }
 

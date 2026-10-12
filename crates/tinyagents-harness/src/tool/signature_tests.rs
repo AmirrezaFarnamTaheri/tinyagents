@@ -98,3 +98,12 @@ fn handles_degenerate_schemas() {
     assert_eq!(type_signature(&json!({})), "unknown");
     assert!(argument_notes(&json!({"type": "object"})).is_empty());
 }
+
+#[test]
+fn nested_signature_and_notes_are_independent_of_object_insertion_order() {
+    let first: Value = serde_json::from_str(r#"{"type":"object","properties":{"z":{"type":"object","properties":{"b":{"type":"string"},"a":{"const":{"b":2,"a":1}}},"description":"Z notes."},"a":{"type":"integer","description":"A notes."}}}"#).unwrap();
+    let second: Value = serde_json::from_str(r#"{"properties":{"a":{"description":"A notes.","type":"integer"},"z":{"description":"Z notes.","properties":{"a":{"const":{"a":1,"b":2}},"b":{"type":"string"}},"type":"object"}},"type":"object"}"#).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(type_signature(&first), type_signature(&second));
+    assert_eq!(argument_notes(&first), argument_notes(&second));
+}

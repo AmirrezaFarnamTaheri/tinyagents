@@ -10,7 +10,7 @@
 //! Either way it names at most a few close matches, so a near-miss typo still
 //! resolves in one step.
 //!
-//! The message keeps its `unknown tool \`<name>\`` prefix: hosts classify
+//! The message keeps its ``unknown tool `<name>` `` prefix: hosts classify
 //! the result by it.
 
 use crate::tool::discover::TOOL_SEARCH_NAME;

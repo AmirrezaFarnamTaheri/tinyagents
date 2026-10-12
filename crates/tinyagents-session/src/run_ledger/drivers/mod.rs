@@ -895,9 +895,9 @@ mod agent_tests;
 mod entry_tree_tests;
 
 #[cfg(test)]
-#[path = "event_bson_tests.rs"]
+#[path = "events_bson_tests.rs"]
 mod event_bson_tests;
 
 #[cfg(test)]
-#[path = "event_query_tests.rs"]
+#[path = "events_query_tests.rs"]
 mod event_query_tests;

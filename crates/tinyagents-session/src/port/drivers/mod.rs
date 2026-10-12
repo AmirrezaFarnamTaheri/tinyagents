@@ -45,6 +45,7 @@ use tinystoragedrivers_core::{
 
 use super::{AgentStores, SessionStoreProvider};
 
+pub use tinyagents_harness::store::SchemaAdmission;
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
 
@@ -65,6 +66,7 @@ pub struct DriverSessionStores {
     agents: Mutex<HashMap<String, AgentStores>>,
     recover_on_open: bool,
     ledgers: Mutex<HashMap<String, Arc<dyn crate::run_ledger::RunLedgerStore>>>,
+    schema_admission: SchemaAdmission,
     recovered: Mutex<HashSet<String>>,
     /// Names this provider in destination keys and handle paths.
     id: uuid::Uuid,
@@ -94,12 +96,40 @@ impl DriverSessionStores {
     /// A provider over `backend` that runs its synchronous seams on `bridge`,
     /// so several providers (or other sync adapters) can share one thread.
     pub fn with_bridge(backend: Arc<dyn StorageBackend>, bridge: Blocking) -> Self {
+        Self::with_bridge_and_schema_admission(backend, bridge, SchemaAdmission::Declare)
+    }
+
+    /// Create a provider with an immutable document schema policy.
+    ///
+    /// Validation-only actors also need restricted native backend handles; this
+    /// policy does not grant a lease or prevent native internal lazy initialization.
+    ///
+    /// # Errors
+    /// Failure to start the blocking bridge.
+    pub fn new_with_schema_admission(
+        backend: Arc<dyn StorageBackend>,
+        schema_admission: SchemaAdmission,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::with_bridge_and_schema_admission(
+            backend,
+            Blocking::new()?,
+            schema_admission,
+        ))
+    }
+
+    /// Share a bridge while keeping schema policy, caches and recovery independent.
+    pub fn with_bridge_and_schema_admission(
+        backend: Arc<dyn StorageBackend>,
+        bridge: Blocking,
+        schema_admission: SchemaAdmission,
+    ) -> Self {
         Self {
             backend,
             bridge,
             agents: Mutex::new(HashMap::new()),
             recover_on_open: false,
             ledgers: Mutex::new(HashMap::new()),
+            schema_admission,
             recovered: Mutex::new(HashSet::new()),
             id: uuid::Uuid::new_v4(),
         }
@@ -180,6 +210,17 @@ impl DriverSessionStores {
             return Ok(stores.clone());
         }
         let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        if self.schema_admission == SchemaAdmission::ValidateOnly {
+            let documents = Arc::clone(scoped.documents());
+            self.bridge.run(async move {
+                for spec in Self::collection_specs() {
+                    SchemaAdmission::ValidateOnly
+                        .admit(documents.as_ref(), &spec)
+                        .await?;
+                }
+                Ok::<_, StorageError>(())
+            })??;
+        }
         let (stores, turn_states) = self.build(&scoped);
         if self.recover_on_open {
             // Fail closed: stores whose recovery did not run must not start
@@ -248,18 +289,24 @@ impl DriverSessionStores {
         // scope from claiming one destination; unlike an address, it is
         // never reused.
         let label = format!("{}://{}/{}", scoped.driver(), self.id, scoped.scope());
-        let turn_states = Arc::new(DriverTurnStates::new(
+        let turn_states = Arc::new(DriverTurnStates::new_with_schema_admission(
             Arc::clone(&docs),
             self.bridge.clone(),
+            self.schema_admission,
         ));
         let stores = AgentStores {
-            transcripts: Arc::new(DriverTranscriptLocator::new(
+            transcripts: Arc::new(DriverTranscriptLocator::new_with_schema_admission(
                 Arc::clone(&docs),
                 self.bridge.clone(),
                 label,
+                self.schema_admission,
             )),
             turn_states: turn_states.clone(),
-            kv: Arc::new(DriverStore::with_collection(docs, KV_COLLECTION)),
+            kv: Arc::new(DriverStore::with_collection_and_schema_admission(
+                docs,
+                KV_COLLECTION,
+                self.schema_admission,
+            )),
             journal: Arc::new(DriverAppendStore::with_prefix(
                 Arc::clone(scoped.streams()),
                 JOURNAL_PREFIX,
@@ -280,7 +327,12 @@ impl SessionStoreProvider for DriverSessionStores {
         }
         let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
         let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
-            Arc::new(crate::run_ledger::DriverRunLedger::new(scoped));
+            Arc::new(match self.schema_admission {
+                SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
+                SchemaAdmission::ValidateOnly => {
+                    crate::run_ledger::DriverRunLedger::new_existing_schema(scoped)
+                }
+            });
         ledgers.insert(agent_id.to_owned(), ledger.clone());
         Ok(Some(ledger))
     }
@@ -294,8 +346,16 @@ impl SessionStoreProvider for DriverSessionStores {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        let actor =
-            Self::with_bridge(backend, self.bridge.clone()).recover_on_open(self.recover_on_open);
+        self.bind_actor_with_schema_admission(backend, self.schema_admission)
+    }
+
+    fn bind_actor_with_schema_admission(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+        admission: SchemaAdmission,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+        let actor = Self::with_bridge_and_schema_admission(backend, self.bridge.clone(), admission)
+            .recover_on_open(self.recover_on_open);
         Ok(Some(Arc::new(actor)))
     }
 
@@ -351,3 +411,7 @@ mod tests;
 #[cfg(test)]
 #[path = "mod_actor_tests.rs"]
 mod actor_tests;
+
+#[cfg(test)]
+#[path = "schema_admission_tests.rs"]
+mod schema_admission_tests;

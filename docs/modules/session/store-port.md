@@ -80,6 +80,30 @@ or that starts with the reserved `sha256:` prefix, maps to `sha256:<hex>` of
 itself, so no raw id can name a hashed scope, and the driver enforces scopes, so the
 provider claims isolation and passes `session_store_isolation_conformance`.
 
+### Prepared actor schemas
+
+Existing constructors keep declaring schema lazily. A trusted host can instead
+prepare `DriverSessionStores::collection_specs()` through `prepare_schema`,
+then create an actor provider with
+`new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)`.
+The schema policy is fixed at construction. Checked opening validates all four
+original declarations before creating handles or recovering turns. Transcript,
+turn-state and KV handles use that same policy for their first operation;
+validation never calls `ensure_collection` or repairs missing indexes.
+
+Through an erased `SessionStoreProvider`, use
+`bind_actor_with_schema_admission(backend, SchemaAdmission::ValidateOnly)`.
+The driver implementation retains its bridge and recovery setting but creates
+independent admission caches. Legacy providers return `Ok(None)` for this
+policy unless they explicitly support it. `Declare` delegates to their existing
+factory. Neither absence nor a native error authorizes a fallback.
+
+The host still supplies an actor-authorized backend and handles lease,
+generation and tenant admission. A schema mode does not grant that authority.
+Checked opening preserves native missing, incompatible, unsupported and fenced
+errors, including their sources. The older synchronous transcript/turn interfaces
+and harness error conversion retain their existing string error representations.
+
 ### Checked opening
 
 With `storage-drivers`, call `SessionStoreProvider::try_for_agent(agent_id)`
