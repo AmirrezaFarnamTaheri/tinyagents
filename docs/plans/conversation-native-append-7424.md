@@ -208,3 +208,40 @@ production source changed after this tested checkpoint; subsequent evidence
 updates are documentation only. Ready upstream publication still requires the
 final independent review. No module release, host consumption, native turn
 claims, import, or complete conversation migration is asserted.
+
+## Hosted review correction checkpoint
+
+PR416's three review findings were verified against the protocol and reproduced
+without modifying production. Regression snapshot `03c8cb26` ran via command
+`69288`: successful 9.53s build, 0 passed, 3 failed, 0 ignored, 701 filtered.
+The complete `.validation/pr416-review-red.log` shows genuine behavior failures:
+
+- Lost finalization acknowledgment plus a real title CAS between committed
+  verification reads returned a failure despite the exact published row.
+- An actually finalized row then removed from the native stream was reported
+  as `Uncertain`, hiding definitive `Serialization` corruption.
+- A helper reported a foreign pending writer's uncertainty as uncertainty
+  about its own message, before reserving that message.
+
+Source `894f7b52` corrects only those boundaries: committed verification
+rechecks live incarnation and prefix after the exact row, rather than rejecting
+unrelated metadata revisions; definitive reconciliation errors remain typed;
+foreign-intent uncertainty returns its underlying native error because the
+caller's own message is still unreserved. Native error sources are retained.
+
+Fresh command `84087` terminated 0 after a 10.98s build: all 23 append tests
+passed, including the unchanged three failure assertions. Then command
+`28038` reran the complete owning sequence and terminated 0: formatting,
+session tests (704 unit plus 2 doctests), both strict Clippy graphs, all-targets
+all-feature build (2m21s), default tests (4,811 passed, 36 ignored), all-feature
+tests (5,229 passed, 36 ignored), canonical rustdoc lint, Rust 1.88 build
+(2m19s), diff check and canonical coverage. Each feature graph is counted
+separately, and nested subprocess repetitions are excluded.
+
+The complete fresh coverage output has 6,453 lines with no failing results or
+errors: 5,179 instrumented tests passed, 29 ignored. Noncompiling JSON export
+`3208` confirms 67,779/76,744 lines covered (**88.3183%**, canonical floor 80%).
+`append.rs` is 254/310 (81.9355%); `pending.rs` remains 61/94 (64.8936%). No
+per-file floor is claimed. All fresh logs and the JSON export are preserved as
+`.validation/pr416-*` outside build output. The source was frozen throughout;
+subsequent chronology/contract wording changes are documentation only.
