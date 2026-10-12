@@ -143,9 +143,9 @@ pub async fn answer_tool_search(
             })
         })
         .collect();
-    let rendered = crate::canonical_json::to_string_pretty(&Value::Array(payload.clone()))
-        .unwrap_or_else(|_| "[]".to_string());
     let matched = payload.len();
+    let rendered = crate::canonical_json::to_string_pretty(&Value::Array(payload))
+        .unwrap_or_else(|_| "[]".to_string());
     SearchAnswer {
         result: ToolResult::success(format!(
             "{matched} match(es). Call one directly by its own name, using the parameters \

@@ -525,8 +525,8 @@ fn catalog_lookups_honour_owners() {
     assert_eq!(CATALOG.callable_pack_ids(&|n| n == "a_two"), ["alpha"]);
 }
 
-#[tokio::test]
-async fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
+#[test]
+fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
     struct OrderedTool(Value);
     #[async_trait]
     impl Tool for OrderedTool {
