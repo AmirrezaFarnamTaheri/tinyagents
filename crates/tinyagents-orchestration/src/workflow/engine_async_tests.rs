@@ -403,7 +403,7 @@ async fn authoritative_placeholder_callbacks_cannot_supply_legacy_fallback() {
 }
 
 struct PendingRegistration {
-    inner: LedgerWorkflowStore,
+    inner: tests::MemoryStore,
     started: tokio::sync::Notify,
     pending: std::sync::atomic::AtomicBool,
     refuse_renewal: bool,
@@ -411,10 +411,10 @@ struct PendingRegistration {
 #[async_trait]
 impl AsyncWorkflowStore for PendingRegistration {
     async fn load(&self, id: &str) -> WorkflowPersistenceResult<Option<WorkflowRun>> {
-        self.inner.load(id).await
+        Ok(self.inner.load(id)?)
     }
     async fn upsert(&self, row: WorkflowRunUpsert) -> WorkflowPersistenceResult<WorkflowRun> {
-        self.inner.upsert(row).await
+        Ok(self.inner.upsert(row)?)
     }
     async fn claim(
         &self,
@@ -422,7 +422,7 @@ impl AsyncWorkflowStore for PendingRegistration {
         owner: &str,
         lease: Duration,
     ) -> WorkflowPersistenceResult<WorkflowLeaseClaim> {
-        self.inner.claim(id, owner, lease).await
+        Ok(self.inner.claim(id, owner, lease)?)
     }
     async fn renew(
         &self,
@@ -433,7 +433,7 @@ impl AsyncWorkflowStore for PendingRegistration {
         if self.refuse_renewal && self.pending.load(Ordering::SeqCst) {
             return Err(refusal());
         }
-        self.inner.renew(id, owner, lease).await
+        Ok(self.inner.renew(id, owner, lease)?)
     }
     async fn compare_and_swap(
         &self,
@@ -447,7 +447,7 @@ impl AsyncWorkflowStore for PendingRegistration {
             self.started.notify_one();
             return std::future::pending().await;
         }
-        self.inner.compare_and_swap(row, rev, owner, lease).await
+        Ok(self.inner.compare_and_swap(row, rev, owner, lease)?)
     }
 }
 #[derive(Default)]
@@ -470,10 +470,8 @@ impl AsyncWorkflowExecutor for PendingChild {
     }
 }
 async fn pending_child_case(renewal: bool) {
-    let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
     let store = Arc::new(PendingRegistration {
-        inner: LedgerWorkflowStore::new(ledger.clone()),
+        inner: tests::MemoryStore::default(),
         started: tokio::sync::Notify::new(),
         pending: std::sync::atomic::AtomicBool::new(false),
         refuse_renewal: renewal,
@@ -508,7 +506,7 @@ async fn pending_child_case(renewal: bool) {
         ));
     } else {
         result.unwrap();
-        let run = ledger.get_workflow_run("run").await.unwrap().unwrap();
+        let run = store.inner.load("run").unwrap().unwrap();
         assert_eq!(run.status, WorkflowRunStatus::Interrupted);
         assert!(
             run.child_run_ids.is_empty(),
