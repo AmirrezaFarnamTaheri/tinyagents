@@ -70,3 +70,22 @@ with zero ignored cases; both terminal event completion markers and the native
 actor completion marker were printed. Earlier fixture builds failed to compile
 because of test API mismatches; those were not behavioral regression evidence.
 The container was owned by this task and stopped after the run.
+
+## Workspace feature-unification blocker
+
+The first full all-features workspace run exposed six harness failures
+(2,682 harness tests passed). The actual dependency graph shows Mongo's
+bson 2.15 dependency enables serde_json/preserve_order globally. Existing
+tool presentation assertions and the pinned prompt fingerprint assume sorted
+JSON object keys. The fingerprint actually changes under that feature;
+it is a production serialization contract issue rather than an ignored-test
+or external-service failure. An OTLP usage assertion also compares a JSON
+string in sorted order.
+
+The first failed gate is retained at
+target/mongodb-workspace-all-features.log. The isolated native Mongo target
+passed all three actual cases. Those results do not establish full workspace
+compatibility. This fixture must not be promoted as ready until the owning
+serialization contract is fixed and the complete affected graph passes, or
+a separately verified dependency-isolation design prevents that unification.
+No expected fingerprint or behavior assertion was changed to hide the failure.
