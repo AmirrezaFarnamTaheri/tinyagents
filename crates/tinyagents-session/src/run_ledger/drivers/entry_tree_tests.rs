@@ -468,3 +468,31 @@ async fn successful_tree_commit_never_performs_fallible_postcommit_reads() {
     let reader = DriverRunLedger::new(native);
     assert_eq!(reader.entry_head("s").await.unwrap(), Some(id));
 }
+
+#[tokio::test]
+async fn native_import_preserves_duplicate_ordinal_sqlite_insertion_order() {
+    let ws = tempfile::tempdir().unwrap();
+    let classic = EntryTree::new(ws.path(), "s");
+    let backend = MemoryStorage::new();
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let entries: Vec<_> = ["z-first", "a-last"]
+        .into_iter()
+        .map(|id| Entry {
+            id: EntryId::from(id),
+            parent_id: None,
+            ordinal: 7,
+            kind: kind(id),
+            ts: "2025-01-01T00:00:00Z".into(),
+        })
+        .collect();
+    classic.import_legacy(&entries).unwrap();
+    native.entry_import_legacy("s", &entries).await.unwrap();
+    assert_eq!(
+        native.entry_head("s").await.unwrap(),
+        classic.head().unwrap()
+    );
+    assert_eq!(
+        native.entry_tips("s").await.unwrap(),
+        classic.tips().unwrap()
+    );
+}
