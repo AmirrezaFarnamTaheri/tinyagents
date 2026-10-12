@@ -880,3 +880,7 @@ mod tests;
 #[cfg(test)]
 #[path = "agent_tests.rs"]
 mod agent_tests;
+
+#[cfg(test)]
+#[path = "entry_tree_tests.rs"]
+mod entry_tree_tests;
