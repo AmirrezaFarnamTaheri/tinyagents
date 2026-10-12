@@ -45,10 +45,18 @@ records and does not claim indexed append performance.
 
 ## Evidence and gates
 
-Begin with Memory and SQLite classic/native parity regressions failing at the
-currently unsupported entry operation. Extend coverage for competing handles,
+Memory and SQLite classic/native parity regressions initially failed at the
+unsupported entry operation. A duplicate-ordinal import regression also failed
+before private insertion ranks preserved SQLite ordering. Extend coverage for competing handles,
 explicit parents/multiple roots, copy and branch forks, labels, import retries,
 scope/session isolation, compaction/pinned context, native refusal and retired
 generations. Run enabled/disabled session suites, strict Clippy, docs and owning
 coverage. Publication remains a dependency draft until PR404 is canonical and
 fresh workspace acceptance passes. No self-merge or host consumption.
+
+Final merged graph: 638 enabled session tests, 509 disabled tests, and full
+workspace enabled/disabled suites pass. New native entry coverage is 90.85%;
+workspace production coverage is 88.41%. Strict Clippy, build, public
+documentation link lint, formatting and diff checks pass. Existing private-link
+and HTML documentation warnings remain. These gates do not prove OpenHuman
+ProfileHost composition or complete the remaining run-ledger migration.
