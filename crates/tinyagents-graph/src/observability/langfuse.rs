@@ -46,6 +46,9 @@ type StartQueue = VecDeque<(usize, u64)>;
 /// the exporter's built-in coordinate keys, so a host can also override them.
 pub type SpanMetadataFn = dyn Fn(&GraphObservation) -> Option<Map<String, Value>> + Send + Sync;
 
+mod batch;
+pub use batch::build_graph_langfuse_batch;
+
 /// Async Langfuse exporter for durable graph observations.
 ///
 /// Wraps a shared [`LangfuseClient`] for transport (auth, endpoint
@@ -118,41 +121,7 @@ impl GraphLangfuseExporter {
         trace: LangfuseTraceConfig,
         observations: &[GraphObservation],
     ) -> Result<Value> {
-        if observations.is_empty() {
-            return Err(TinyAgentsError::Validation(
-                "at least one observation is required".to_string(),
-            ));
-        }
-        let trace_id = resolve_trace_id(&trace, observations);
-        let first = &observations[0];
-        let trace_ts = iso_ms(first.ts_ms);
-        let health = GraphHealthSummary::from_observations(observations);
-
-        let mut batch = Vec::with_capacity(observations.len() + 2);
-        batch.push(trace_create(&trace_id, &trace_ts, &trace, first, &health));
-
-        // A structural span for the graph run itself, sitting directly under the
-        // trace. Every step, subgraph, and point event nests under it, and — key
-        // for a unified trace — its id follows the same `{trace}:run:{run_id}`
-        // scheme the harness exporter parents its run spans to. A sub-agent that
-        // a graph node spawns carries `parent_run_id == graph run id`, so its
-        // harness-exported run span nests directly under this graph-run span
-        // rather than floating at the trace root.
-        let run_parent = run_span_id(&trace_id, first.root_run_id.as_str());
-        batch.push(graph_run_span(&trace_id, &run_parent, observations, first));
-
-        let mut consumed = vec![false; observations.len()];
-        push_span_events(
-            &trace_id,
-            &run_parent,
-            observations,
-            &mut consumed,
-            &mut batch,
-            self.span_metadata_fn.as_deref(),
-        );
-        push_point_events(&trace_id, &run_parent, observations, &consumed, &mut batch);
-
-        Ok(json!({ "batch": batch }))
+        build_graph_langfuse_batch(trace, observations, self.span_metadata_fn.as_deref())
     }
 
     /// Sends `observations` as one Langfuse ingestion batch.
