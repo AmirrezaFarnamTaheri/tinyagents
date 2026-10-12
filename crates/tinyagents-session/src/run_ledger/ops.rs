@@ -1690,7 +1690,10 @@ fn get_optional_run_telemetry(
         .optional()
 }
 
-fn map_agent_run_row(conn: &Connection, row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRun> {
+pub(super) fn map_agent_run_row(
+    conn: &Connection,
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<AgentRun> {
     let id: String = row.get(0)?;
     let checkpoint_json: Option<String> = row.get(9)?;
     let metadata_json: String = row.get(12)?;
@@ -1734,7 +1737,7 @@ fn map_workflow_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRun
     })
 }
 
-fn map_run_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunEvent> {
+pub(super) fn map_run_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunEvent> {
     Ok(RunEvent {
         run_id: row.get(0)?,
         sequence: row.get::<_, i64>(1)? as u64,
@@ -1744,7 +1747,7 @@ fn map_run_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunEvent> {
     })
 }
 
-fn map_run_telemetry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunTelemetry> {
+pub(super) fn map_run_telemetry_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunTelemetry> {
     Ok(RunTelemetry {
         run_id: row.get(0)?,
         input_tokens: row.get::<_, i64>(1)? as u64,

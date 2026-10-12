@@ -4,7 +4,9 @@
 //! turn-state snapshots, its key-value records and its event journal — is
 //! reached through one [`SessionStoreProvider`]. The host installs a provider
 //! once; the runtime asks it for each agent's [`AgentStores`] and never names
-//! a file, a database or a directory itself.
+//! a file, a database or a directory itself. The provider may additionally return
+//! an optional bound [`crate::run_ledger::RunLedgerStore`] independently of this
+//! bundle, through [`SessionStoreProvider::run_ledger_for_agent`].
 //!
 //! That is what lets one process serve many users from a shared database: a
 //! cloud host implements the provider over its own store (MongoDB, Postgres,
@@ -22,7 +24,9 @@
 //! and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
 //! checks it. A single-user host (the desktop app) may legitimately share one
-//! store between its agents, and simply does not claim isolation.
+//! store between its agents, and simply does not claim isolation. The optional
+//! [`SessionStoreProvider::run_ledger_for_agent`] handle follows the same identity
+//! boundary; selecting it is independent of transcript-store selection.
 //!
 //! # Sync and async
 //!
@@ -103,6 +107,24 @@ pub trait SessionStoreProvider: Send + Sync {
         &self,
         _backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        Ok(None)
+    }
+
+    /// Optional bound run ledger for this agent, independent of transcript storage.
+    ///
+    /// Defaults to absent so existing providers retain their behavior. Absence
+    /// is not permission to create a local database: hosts decide whether and
+    /// how to supply a classic `SqliteRunLedger` or another implementation.
+    /// Multi-tenant providers must resolve identity before returning the handle
+    /// and must not derive scope from ledger payloads. This seam alone neither
+    /// routes existing workspace-based callers nor migrates session tables.
+    ///
+    /// Scope/admission or backend errors must be returned as errors, distinct
+    /// from an unsupported ledger (`Ok(None)`), so callers can fail closed.
+    fn run_ledger_for_agent(
+        &self,
+        _agent_id: &str,
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         Ok(None)
     }
 
@@ -320,6 +342,13 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
         (**self).bind_actor(backend)
+    }
+
+    fn run_ledger_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+        (**self).run_ledger_for_agent(agent_id)
     }
 
     #[cfg(feature = "storage-drivers")]
