@@ -242,13 +242,18 @@ Unknown envelope schemas fail as typed serialization errors.
 A native checked document batch commits agent status, event allocation and its
 durable receipt together. Failed status CAS writes no event. Receipts are the
 authoritative event history; list cursors retain the classic signed event
-ordinals, including gaps imported after legacy pruning.
+ordinals, including gaps imported after legacy pruning. Native queries request
+only the remaining result limit and follow driver cursors; zero-limit calls
+still obtain native read admission.
 
 Document and stream ports have no combined transaction.
 DriverRunLedger::reconcile_run_events explicitly projects receipts into the
 per-run stream using conditional append. It verifies the existing prefix
 against committed receipts, refuses corruption, and retries competing appends
-without duplicates. Stream offsets count projected entries; they are distinct
+without duplicates. Successful batches extend the already-validated prefix;
+conflicting appends revalidate it. Only consecutive native conflicts consume
+the contention budget, so successful progress can project arbitrarily many
+batches. Stream offsets count projected entries; they are distinct
 from legacy event ordinals. Projection refusal preserves the successful
 document commit and returns a typed error only from the explicit reconciliation
 call. Reconstructed handles can replay outstanding receipts. Neither receipts
