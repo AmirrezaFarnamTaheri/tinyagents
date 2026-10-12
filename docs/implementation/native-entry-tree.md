@@ -39,8 +39,9 @@ handle cannot read or mutate a replacement generation.
 Extract the existing pure entry-chain projection mechanically and invoke it from
 both SQLite and native paths. Preserve newest compaction, summary placement,
 pinned entry handling, custom records, and the existing legacy message mapping.
-The index may accelerate chain lookup but cannot choose a different chain from
-immutable parent pointers.
+Indexes are verified against the live chain and cannot choose a different chain
+from immutable parent pointers. This first implementation enumerates session
+records and does not claim indexed append performance.
 
 ## Evidence and gates
 
