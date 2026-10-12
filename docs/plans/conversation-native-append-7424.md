@@ -118,3 +118,25 @@ unsupported until the first prepared Memory/SQLite append tests fail at runtime.
 
 Only run Cargo after the coordinated owner window is handed back. Preserve
 baseline failure logs and checkpoint tests separately from production changes.
+
+## Execution checkpoint
+
+The pre-implementation baseline was actually executed with:
+
+```sh
+cargo test --locked -p tinyagents-session --features storage-drivers threads::driver::append_tests -- --nocapture
+```
+
+The cancel-aware command handle `49018` terminated with exit 101 after a
+successful build (1m19s). Its fresh executable was
+`target/debug/deps/tinyagents_session-8ac47fd04c9e906b`. Both prepared native
+Memory and SQLite tests failed on their first append with
+`ConversationError::Unsupported { operation: "append_message" }`:
+0 passed, 2 failed, 0 ignored, 681 filtered. The full output was read at that
+terminal checkpoint; there was no compiler or setup failure.
+
+The original log was `target/debug-logs/conversation-append-baseline-red.log`.
+That disposable artifact is no longer present on a later filesystem check.
+This checkpoint preserves the observed tool exit and results, rather than
+claiming the missing artifact was freshly reread. The new 18-case phase suite
+has been authored but has not yet executed; no candidate GREEN is claimed.
