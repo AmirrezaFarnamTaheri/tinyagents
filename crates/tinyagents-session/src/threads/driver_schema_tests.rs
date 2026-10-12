@@ -205,7 +205,10 @@ async fn schema_preparation_is_explicit_and_restricted_native_handles_refuse_it(
     let error = DriverConversationStore::prepare_schema(actor.documents().as_ref())
         .await
         .unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ExistingSchema)
+    );
     actor
         .documents()
         .validate_collection_spec(&CollectionSpec::new(COLLECTION))
