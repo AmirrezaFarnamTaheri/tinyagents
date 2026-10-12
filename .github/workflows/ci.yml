@@ -132,6 +132,12 @@ jobs:
       - name: Test
         run: cargo test --workspace ${{ matrix.features }}
 
+      - name: Test stable JSON ordering with downstream insertion-order feature
+        if: matrix.name == 'all-features'
+        run: >-
+          cargo test -p tinyagents-harness --all-features
+          --features serde_json/preserve_order --lib
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

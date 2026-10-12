@@ -987,10 +987,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     async {
                         tool.prepare_authorization(&effective_arguments)
                             .await
-                            .map_err(|_| {
-                                TinyAgentsError::Tool(
-                                    "tool authorization preparation failed".to_string(),
-                                )
+                            .map_err(|error| {
+                                TinyAgentsError::ToolFailed(format!(
+                                    "nested call '{name}' refused: {}",
+                                    super::tools::preparation_failure_message(&error)
+                                ))
                             })
                     },
                     || {

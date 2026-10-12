@@ -106,6 +106,17 @@ use sha2::{Digest, Sha256};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
+/// The per-call error text for a tool whose authorization facts could not be
+/// prepared.
+///
+/// Keeps the tool's own top-level reason (for example "command analysis is
+/// unavailable") so the model can adjust, but not the error's source chain:
+/// a tool attaches lower-level diagnostics as context it never meant for the
+/// transcript.
+pub(super) fn preparation_failure_message(error: &anyhow::Error) -> String {
+    format!("tool authorization preparation failed: {error}")
+}
+
 /// Bind tool-produced authorization facts to both the caller's request and the
 /// validated arguments that will be executed. The host still owns the meaning
 /// of `facts`; this envelope only prevents facts from being replayed for a
@@ -1165,19 +1176,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // decides whether the call may run. The runtime transports the
             // opaque value only; interpretation and policy remain host-owned.
             let effective_arguments = call.arguments.clone();
-            let authorization_facts = ctx
+            let prepared = ctx
                 .bounded(
                     self.call_budget(ctx),
                     async {
-                        dispatch
-                            .tool()
-                            .prepare_authorization(&effective_arguments)
-                            .await
-                            .map_err(|_| {
-                                TinyAgentsError::Tool(
-                                    "tool authorization preparation failed".to_string(),
-                                )
-                            })
+                        Ok::<_, TinyAgentsError>(
+                            dispatch
+                                .tool()
+                                .prepare_authorization(&effective_arguments)
+                                .await,
+                        )
                     },
                     || {
                         format!(
@@ -1187,6 +1195,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     },
                 )
                 .await?;
+            // A call whose facts cannot be prepared is refused before the
+            // host gate, like a denial: the model gets a per-call error it
+            // can recover from, never a failed run.
+            let authorization_facts = match prepared {
+                Ok(facts) => facts,
+                Err(error) => {
+                    ctx.limits.rollback_tool_calls(1);
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                        preparation_failure_message(&error),
+                    )));
+                }
+            };
             let authorization_context = super::tools::bind_authorization_context(
                 &call.name,
                 &model_arguments,
