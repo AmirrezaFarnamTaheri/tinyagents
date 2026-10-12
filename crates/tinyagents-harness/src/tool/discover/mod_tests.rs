@@ -491,3 +491,17 @@ async fn answer_tool_search_with_no_query_shows_an_example_call() {
         assert!(text.len() < 200, "{text}");
     }
 }
+
+#[tokio::test]
+async fn search_schema_text_is_independent_of_nested_json_object_insertion_order() {
+    let first = serde_json::from_str(r#"{"type":"object","properties":{"z":{"type":"object","properties":{"b":{"type":"string"},"a":{"type":"integer"}}},"a":{"type":"string"}}}"#).unwrap();
+    let second = serde_json::from_str(r#"{"properties":{"a":{"type":"string"},"z":{"properties":{"a":{"type":"integer"},"b":{"type":"string"}},"type":"object"}},"type":"object"}"#).unwrap();
+    let a = DeferredCatalog::build(vec![ToolSchema::new("inspect", "Inspect things", first)]);
+    let b = DeferredCatalog::build(vec![ToolSchema::new("inspect", "Inspect things", second)]);
+    let policy = ToolDiscoveryPolicy::default();
+    let args = json!({"query":"inspect"});
+    assert_eq!(
+        answer_tool_search(&a, &policy, &args).await.result.text(),
+        answer_tool_search(&b, &policy, &args).await.result.text(),
+    );
+}
