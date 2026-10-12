@@ -21,8 +21,8 @@ type Result<T> = std::result::Result<T, StorageError>;
 #[serde(rename_all = "camelCase")]
 pub(super) struct Head {
     session_id: String,
-    next_ordinal: u64,
-    next_insertion: u64,
+    next_ordinal: Option<u64>,
+    next_insertion: Option<u64>,
     pub(super) tip: Option<EntryId>,
 }
 #[derive(Serialize, Deserialize)]
@@ -65,12 +65,10 @@ impl Tree {
         parent_id: Option<EntryId>,
         kind: EntryKind,
     ) -> Result<EntryId> {
-        if self.head.next_ordinal > i64::MAX as u64 {
-            return Err(StorageError::invalid_input(
-                "entry ordinal exceeds native signed integer range",
-            ));
-        }
-        let ordinal = self.head.next_ordinal;
+        let ordinal = self
+            .head
+            .next_ordinal
+            .ok_or_else(|| StorageError::invalid_input("entry ordinal exhausted"))?;
         let id = EntryId::derive(&self.head.session_id, ordinal);
         if self.entries.contains_key(&id) {
             return Err(StorageError::conflict(
@@ -84,7 +82,7 @@ impl Tree {
             kind,
             ts: chrono::Utc::now().to_rfc3339(),
         };
-        self.head.next_ordinal += 1;
+        self.head.next_ordinal = (ordinal < i64::MAX as u64).then_some(ordinal + 1);
         self.head.tip = Some(id.clone());
         self.remember_insertion(&id)?;
         self.entries.insert(id.clone(), entry.clone());
@@ -203,8 +201,14 @@ impl Tree {
                     "imported ordinal exceeds native signed integer range",
                 ));
             }
-            if entry.ordinal + 1 >= self.head.next_ordinal {
-                self.head.next_ordinal = entry.ordinal + 1;
+            if self
+                .head
+                .next_ordinal
+                .is_some_and(|next| entry.ordinal + 1 >= next)
+                || (self.head.next_ordinal.is_none() && entry.ordinal == i64::MAX as u64)
+            {
+                self.head.next_ordinal =
+                    (entry.ordinal < i64::MAX as u64).then_some(entry.ordinal + 1);
                 self.head.tip = Some(entry.id.clone());
             }
             self.remember_insertion(&entry.id)?;
@@ -326,8 +330,8 @@ impl DriverRunLedger {
                 Some(row) => storage::decode::<Head>(row.doc)?,
                 None => Head {
                     session_id: session.into(),
-                    next_ordinal: 0,
-                    next_insertion: 0,
+                    next_ordinal: Some(0),
+                    next_insertion: Some(0),
                     tip: None,
                 },
             };
