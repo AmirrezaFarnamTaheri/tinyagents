@@ -2,11 +2,13 @@
 
 These integration tests exercise the native Mongo driver, including its BSON
 conversion and transaction-based lease admission. They add no production
-dependency and change no host adapter. The private integration-test package
+dependency and change no host adapter. The standalone workspace at `integration-proofs/run-ledger-mongodb`
 enables Mongo only with `mongodb-storage-tests`; its default graph omits Mongo.
+The root workspace explicitly excludes it, so ordinary workspace features
+cannot unify Mongo into the harness graph.
 
-The tests are ignored by default, including in the ordinary all-features
-matrix. An ignored result proves compilation only. Actual acceptance requires
+The standalone tests are ignored by default, including its own all-features
+run. The root matrix does not build this excluded fixture. An ignored result proves compilation only. Actual acceptance requires
 an explicit unauthenticated, literal-loopback Mongo URL with an explicit port
 and `--ignored`. Each test selects its own UUID database. SRV endpoints,
 non-loopback hosts and credentials are rejected before connecting.
@@ -32,7 +34,8 @@ port below, and use the repository's cancellation-aware runner when available:
 
 ```sh
 TINYAGENTS_TEST_MONGO_URL='mongodb://127.0.0.1:<published-port>/?directConnection=true' \
-  cargo test -p tinyagents-integration-tests --features mongodb-storage-tests \
+  cargo test --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml \
+  --features mongodb-storage-tests \
   --test native_run_ledger_mongodb -- --ignored --nocapture
 docker stop tinyagents-ledger-mongo-7423
 ```
@@ -85,13 +88,15 @@ string in sorted order.
 The first failed gate is retained at
 target/mongodb-workspace-all-features.log. The isolated native Mongo target
 passed all three actual cases. Those results do not establish full workspace
-compatibility. This fixture must not be promoted as ready until the owning
-serialization contract is fixed and the complete affected graph passes, or
-a separately verified dependency-isolation design prevents that unification.
+compatibility. The final fixture instead uses an explicitly excluded standalone workspace.
+This isolates that dependency unification from ordinary gates; it does not
+establish safe production Mongo/harness feature composition. The ordering
+and enum-size findings remain owning follow-up evidence.
 No expected fingerprint or behavior assertion was changed to hide the failure.
 
 Strict all-features workspace Clippy independently failed at
 MiddlewareToolOutcome and DeferredCallResult: insertion-ordered JSON enlarges
 ToolResult and crosses the large-enum-variant threshold. This branch adds
 neither public variant boxing nor lint exceptions. The default workspace gate
-is run separately, so a failed all-features command cannot skip that evidence.
+was run separately and passed 4,792 unit/integration/doc tests (36 ignored).
+Fresh gates after isolation must also verify the ordinary all-features graph.
