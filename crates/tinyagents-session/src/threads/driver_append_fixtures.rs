@@ -1,0 +1,243 @@
+use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tinystoragedrivers_core::{
+    Capabilities, Page, Query, ReadCheck, Sort, StreamEntry, Version, WriteOp, WriteResult,
+};
+use tokio::sync::Notify;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Phase {
+    Probe,
+    Reserve,
+    Append,
+    Finalize,
+}
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Action {
+    Pause,
+    LoseAck,
+    FailBefore,
+    Unsupported,
+}
+#[derive(Debug)]
+pub(super) struct Fault {
+    phase: Phase,
+    action: Action,
+    hits: AtomicUsize,
+    pub reached: Notify,
+    pub release: Notify,
+}
+impl Fault {
+    pub fn new(phase: Phase, action: Action) -> Arc<Self> {
+        Arc::new(Self {
+            phase,
+            action,
+            hits: AtomicUsize::new(0),
+            reached: Notify::new(),
+            release: Notify::new(),
+        })
+    }
+    fn take(&self, phase: Phase) -> bool {
+        self.phase == phase
+            && self
+                .hits
+                .fetch_add(usize::from(self.phase == phase), Ordering::SeqCst)
+                == 0
+    }
+    async fn after(&self, active: bool) -> tinystoragedrivers_core::Result<()> {
+        if !active {
+            return Ok(());
+        }
+        match self.action {
+            Action::Pause => {
+                self.reached.notify_one();
+                self.release.notified().await;
+                Ok(())
+            }
+            Action::LoseAck => Err(Self::failure()),
+            _ => Ok(()),
+        }
+    }
+    fn failure() -> StorageError {
+        StorageError::unavailable("injected native acknowledgment loss")
+            .with_source(std::io::Error::other("original native cause"))
+    }
+}
+#[derive(Debug)]
+struct Documents {
+    inner: Arc<dyn DocumentStore>,
+    fault: Arc<Fault>,
+}
+#[async_trait]
+impl DocumentStore for Documents {
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+        panic!("actor attempted DDL")
+    }
+    async fn validate_collection_spec(
+        &self,
+        spec: &CollectionSpec,
+    ) -> tinystoragedrivers_core::Result<()> {
+        self.inner.validate_collection_spec(spec).await
+    }
+    async fn get(
+        &self,
+        c: &str,
+        id: &str,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.inner.get(c, id).await
+    }
+    async fn put(
+        &self,
+        c: &str,
+        id: &str,
+        v: Value,
+        p: Precondition,
+    ) -> tinystoragedrivers_core::Result<Version> {
+        self.inner.put(c, id, v, p).await
+    }
+    async fn delete(
+        &self,
+        c: &str,
+        id: &str,
+        p: Precondition,
+    ) -> tinystoragedrivers_core::Result<bool> {
+        self.inner.delete(c, id, p).await
+    }
+    async fn query(
+        &self,
+        c: &str,
+        q: &Query,
+    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+        self.inner.query(c, q).await
+    }
+    async fn count(&self, c: &str, f: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.count(c, f).await
+    }
+    async fn delete_where(&self, c: &str, f: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.delete_where(c, f).await
+    }
+    async fn claim(
+        &self,
+        c: &str,
+        f: &Filter,
+        s: &[Sort],
+        p: &Value,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.inner.claim(c, f, s, p).await
+    }
+    async fn drop_collection(&self, c: &str) -> tinystoragedrivers_core::Result<()> {
+        self.inner.drop_collection(c).await
+    }
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<ReadCheck>,
+        ops: Vec<WriteOp>,
+    ) -> tinystoragedrivers_core::Result<Vec<WriteResult>> {
+        let phase = if ops.len() == 1 {
+            Phase::Reserve
+        } else {
+            Phase::Finalize
+        };
+        let active = self.fault.take(phase);
+        if active && matches!(self.fault.action, Action::FailBefore) {
+            return Err(Fault::failure());
+        }
+        let result = self.inner.atomic_batch_checked(checks, ops).await?;
+        self.fault.after(active).await?;
+        Ok(result)
+    }
+}
+#[derive(Debug)]
+struct Streams {
+    inner: Arc<dyn StreamStore>,
+    fault: Arc<Fault>,
+}
+#[async_trait]
+impl StreamStore for Streams {
+    async fn append(&self, s: &str, v: Value) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.append(s, v).await
+    }
+    async fn append_batch(&self, s: &str, v: Vec<Value>) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.append_batch(s, v).await
+    }
+    async fn append_batch_if_offset(
+        &self,
+        s: &str,
+        o: u64,
+        v: Vec<Value>,
+    ) -> tinystoragedrivers_core::Result<u64> {
+        let phase = if v.is_empty() {
+            Phase::Probe
+        } else {
+            Phase::Append
+        };
+        let active = self.fault.take(phase);
+        if active && matches!(self.fault.action, Action::Unsupported) {
+            return Err(StorageError::unsupported(
+                tinystoragedrivers_core::Capability::ConditionalStreamAppend,
+                "paired stream refuses actual probe",
+            ));
+        }
+        if active && matches!(self.fault.action, Action::FailBefore) {
+            return Err(Fault::failure());
+        }
+        let result = self.inner.append_batch_if_offset(s, o, v).await?;
+        self.fault.after(active).await?;
+        Ok(result)
+    }
+    async fn read_window(
+        &self,
+        s: &str,
+        o: u64,
+        n: usize,
+    ) -> tinystoragedrivers_core::Result<Vec<StreamEntry>> {
+        self.inner.read_window(s, o, n).await
+    }
+    async fn len(&self, s: &str) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.len(s).await
+    }
+    async fn truncate_before(&self, s: &str, o: u64) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.truncate_before(s, o).await
+    }
+    async fn delete_stream(&self, s: &str) -> tinystoragedrivers_core::Result<bool> {
+        self.inner.delete_stream(s).await
+    }
+    async fn streams(&self, p: &str) -> tinystoragedrivers_core::Result<Vec<String>> {
+        self.inner.streams(p).await
+    }
+}
+pub(super) fn faulted(
+    store: &DriverConversationStore,
+    fault: Arc<Fault>,
+) -> DriverConversationStore {
+    DriverConversationStore {
+        docs: Arc::new(Documents {
+            inner: store.docs.clone(),
+            fault: fault.clone(),
+        }),
+        streams: Arc::new(Streams {
+            inner: store.streams.clone(),
+            fault,
+        }),
+        validate_only: true,
+    }
+}
+pub(super) async fn actor(backend: &dyn StorageBackend) -> DriverConversationStore {
+    backend.prepare_schema().await.unwrap();
+    let raw = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
+        .await
+        .unwrap();
+    let store = DriverConversationStore::new_validate_only(
+        backend
+            .existing_schema()
+            .unwrap()
+            .for_scope(&Scope::new("alice").unwrap())
+            .unwrap(),
+    );
+    store.ensure_thread(request("same")).await.unwrap();
+    store
+}
