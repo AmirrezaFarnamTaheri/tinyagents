@@ -1,7 +1,7 @@
 //! Admitted scoped conversation metadata and immutable committed-prefix readers.
 //!
 //! No host paths/backend lookup, FullText shortcut, or persistent process cache.
-//! Message writers and distributed leases remain explicitly unsupported.
+//! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
 
 use super::persistence::*;
 use super::*;
@@ -13,6 +13,8 @@ use tinystoragedrivers_core::{
     CollectionSpec, DocumentStore, ErrorKind, Filter, Precondition, Query, ScopedStorage,
     StorageError, StreamStore, Versioned,
 };
+mod append;
+mod pending;
 mod reader;
 
 const COLLECTION: &str = "conversation_threads_v1";
@@ -36,9 +38,10 @@ struct MessageRecord {
 
 /// Conversation handle whose scope/native admission has already been bound.
 ///
-/// Schema1 metadata commits only one document per operation. Committed messages
+/// Schema1 metadata edits commit one document; append atomically publishes its
+/// metadata and retires a companion intent. Committed messages
 /// live in an immutable per-incarnation prefix. This adapter exposes no message
-/// writer/importer; callers must not treat a prefix seed as a safe write protocol.
+/// importer or claimed commit; plain append requires its own prepared intent collection.
 #[derive(Clone)]
 pub struct DriverConversationStore {
     docs: Arc<dyn DocumentStore>,
@@ -350,13 +353,10 @@ impl ConversationPersistence for DriverConversationStore {
     }
     async fn append_message(
         &self,
-        _thread_id: &str,
-        _message: ThreadMessage,
+        thread_id: &str,
+        message: ThreadMessage,
     ) -> ConversationResult<ThreadMessage> {
-        self.admit().await?;
-        Err(ConversationError::Unsupported {
-            operation: "append_message",
-        })
+        self.append_native(thread_id, message).await
     }
     async fn update_message(
         &self,
@@ -398,3 +398,7 @@ mod tests;
 #[cfg(test)]
 #[path = "driver_schema_tests.rs"]
 mod schema_tests;
+
+#[cfg(test)]
+#[path = "driver_append_tests.rs"]
+mod append_tests;

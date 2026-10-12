@@ -6,7 +6,9 @@ the messages it renders inside each one. It also keeps an in-memory inverted
 index for substring search across every thread, and a small subscriber that
 mirrors channel turns (Slack, Telegram, ...) into the same store.
 
-It is plain files plus `serde`: no SQLite, no network, no memory engine.
+The classic store is plain files plus `serde`. The optional `storage-drivers`
+feature additionally exposes explicitly admitted native scoped ports; neither
+path implements a memory engine.
 
 ## Where it came from
 
@@ -100,15 +102,42 @@ scope authority. Default turn-claim refusals perform no native operation.
 
 The existing `new(scoped)` remains deliberately compatible and does not declare
 or validate schema. It must not be advertised as actor schema safety. Neither
-constructor selects a provider automatically, opens host files or enables message
-writers/imports. No metadata/stream encoding has changed.
+constructor selects a provider automatically, opens host files or enables imports.
+Plain append requires the additional preparation below; metadata/stream encoding
+remains schema1.
 
-The driver exposes no append/update/cut/purge or lease implementation; those
-operations return Unsupported. Metadata/stream format schema1 is an independent
-read prerequisite, not a target-import or cross-port writing protocol. No automatic
-host selection, import, generation purge or cross-port mutation protocol is
-introduced. Active turn writers and import receipts still need native authority
-validation before full cloud conversation execution can be enabled.
+### Native plain append and recovery
+
+`append_collection_specs()` adds `conversation_appends_v1` to the existing
+metadata declaration. Explicit trusted `prepare_append_schema(documents)`
+prepares both; metadata-only readers retain their previous schema requirements.
+Every append validates both declarations without actor DDL. It requires native
+checked document batches and conditional stream append. An actual empty
+conditional append probes the paired stream before reserving any intent: it
+adds no message, but may affect native internal stream bookkeeping. A refusal
+never selects file persistence.
+
+Reservation atomically checks the observed thread revision and absent pending
+intent. The intent holds an immutable attempt token, incarnation, expected
+stream offset and complete serialized message. All envelope fields are strings;
+compatible numeric TTL declarations cannot expire these fields. Writer-only
+recovery appends or verifies the exact row, then atomically publishes the next
+committed prefix and removes that exact intent version. Readers never recover
+pending work or expose an uncommitted row. Metadata count/last activity follow
+classic semantics, and concurrent unrelated title changes are retained.
+
+Cancellation may leave accepted pending work for a later admitted writer.
+An unknown acknowledgment is resolved only through durable ownership evidence:
+matching row bytes alone cannot attribute an unobserved ordinary-ID reservation.
+`ConversationError::Uncertain` preserves the original native error and source
+when ownership remains unresolved; callers must not silently retry such ordinary
+UUID appends. Deterministic `agent:` IDs or channel metadata retain classic
+existing-ID deduplication and return the original stored message. Ordinary IDs
+still append on each separate invocation; this is not a generic exactly-once API.
+
+Message edits, tail cuts, purge and distributed turn claims remain Unsupported.
+Plain message append does not authorize distributed agent execution. No importer,
+provider selection, host opt-in or legacy source-ownership grant is added.
 
 ## File layout
 
@@ -215,11 +244,21 @@ an in-memory inverted index over message content:
 - **Deterministic ids:** `DETERMINISTIC_MESSAGE_ID_PREFIX`,
   `run_reply_message_id`, `is_deterministic_message_id`, `reply_run_id`.
 
+A transient failure while helping another writer's pending intent returns the
+original native driver error: the caller's own message has not yet been reserved
+and can be retried. `Uncertain` describes only the caller's own accepted-attempt
+ambiguity. Definitive reconciliation corruption/fencing errors remain typed;
+unrelated title or label revisions do not undo an already published append.
+
 ## Files
 
 | File | Role |
 | --- | --- |
 | `mod.rs` | module docs and re-exports |
+| `persistence.rs` | explicit async port, typed failures and unsupported turn claims |
+| `driver.rs` | admitted native metadata CAS, schema policies and committed-prefix readers |
+| `driver/append.rs` | writer-only conditional append and checked publication |
+| `driver/pending.rs` | all-string attempt intent and strict pending-record validation |
 | `types.rs` | wire types and deterministic message ids |
 | `tokenize.rs` | normalization and n-gram tokenizer |
 | `inverted_index.rs` | in-memory search index |

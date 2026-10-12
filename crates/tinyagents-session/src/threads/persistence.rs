@@ -31,6 +31,19 @@ pub enum ConversationError {
     #[cfg(feature = "storage-drivers")]
     #[error("{0}")]
     Driver(#[source] Box<tinystoragedrivers_core::StorageError>),
+    /// A native write acknowledgment could not be resolved to this exact attempt.
+    ///
+    /// The original native failure remains the source. Ordinary-ID append is
+    /// not silently retried, since repeated UUID calls preserve classic semantics.
+    #[cfg(feature = "storage-drivers")]
+    #[error("conversation operation {operation} has an unresolved acknowledgment")]
+    Uncertain {
+        /// The operation whose exact outcome could not be established.
+        operation: &'static str,
+        /// The original native write failure, retained without textual flattening.
+        #[source]
+        source: Box<tinystoragedrivers_core::StorageError>,
+    },
 }
 
 #[cfg(feature = "storage-drivers")]

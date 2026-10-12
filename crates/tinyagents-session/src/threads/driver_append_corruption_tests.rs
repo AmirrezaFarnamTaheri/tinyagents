@@ -1,0 +1,82 @@
+use super::*;
+
+async fn refuses_corruption(change: impl FnOnce(&mut Value)) {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let mut writer =
+        Box::pin(interrupted.append_message("same", message("agent:corrupt", "reserved")));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("reservation never paused: {result:?}"),
+    }
+    drop(writer);
+    let current = store.load("same").await.unwrap().unwrap();
+    let key = pending::AppendIntent::key(&current.id, &current.doc.incarnation);
+    let row = store
+        .docs
+        .get(PENDING_COLLECTION, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut body = row.doc.clone();
+    change(&mut body);
+    let version = store
+        .docs
+        .put(PENDING_COLLECTION, &key, body.clone(), row.unchanged())
+        .await
+        .unwrap();
+    let error = store
+        .append_message("same", message("agent:next", "next"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ConversationError::Driver(ref error) if error.kind() == ErrorKind::Serialization)
+    );
+    assert!(store.get_messages("same").await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .get_thread("same")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
+        0
+    );
+    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
+    assert_eq!(store.streams.len(&stream).await.unwrap(), 0);
+    let retained = store
+        .docs
+        .get(PENDING_COLLECTION, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.version, version);
+    assert_eq!(retained.doc, body);
+}
+
+#[tokio::test]
+async fn foreign_or_malformed_pending_identity_cannot_append_or_publish() {
+    for (field, value) in [
+        ("thread_id", "foreign-thread"),
+        ("incarnation", "foreign-incarnation"),
+        ("token", "not-an-attempt-uuid"),
+        ("schema", "2"),
+        ("offset", "00"),
+    ] {
+        refuses_corruption(|body| body[field] = json!(value)).await;
+    }
+}
+
+#[tokio::test]
+async fn pending_record_cannot_silently_normalize_missing_message_metadata() {
+    refuses_corruption(|body| {
+        let mut record: Value = serde_json::from_str(body["record"].as_str().unwrap()).unwrap();
+        record["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("extraMetadata");
+        body["record"] = json!(serde_json::to_string(&record).unwrap());
+    })
+    .await;
+}
