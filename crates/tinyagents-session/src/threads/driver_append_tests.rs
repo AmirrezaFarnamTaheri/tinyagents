@@ -578,3 +578,89 @@ async fn competing_same_id_reservations_force_cas_conflict_then_restart_original
     );
     assert_eq!(store.get_messages("same").await.unwrap(), vec![a_result]);
 }
+
+#[tokio::test]
+async fn cancellation_after_finalization_does_not_hide_committed_prefix_or_repeat_deterministic_message()
+ {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Finalize, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let original = message("agent:finalized", "committed before cancellation");
+    let mut writer = Box::pin(interrupted.append_message("same", original.clone()));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("finalization never paused: {result:?}"),
+    }
+    assert_eq!(
+        store.get_messages("same").await.unwrap(),
+        vec![original.clone()]
+    );
+    drop(writer);
+    assert_eq!(
+        store
+            .append_message("same", message("agent:finalized", "changed retry"))
+            .await
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        store
+            .get_thread("same")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
+        1
+    );
+    assert_eq!(
+        store
+            .docs
+            .count(PENDING_COLLECTION, &Filter::All)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire_pending() {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let mut writer =
+        Box::pin(interrupted.append_message("same", message("agent:reserved", "expected")));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("reservation never paused: {result:?}"),
+    }
+    drop(writer);
+    let current = store.load("same").await.unwrap().unwrap();
+    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
+    store.streams.append_batch_if_offset(&stream, 0, vec![json!({"schema":1,"incarnation":current.doc.incarnation,"message":message("agent:foreign", "wrong row")})]).await.unwrap();
+    let error = store
+        .append_message("same", message("agent:next", "next"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ConversationError::Driver(ref e) if e.kind() == ErrorKind::Serialization)
+    );
+    assert!(store.get_messages("same").await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .get_thread("same")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
+        0
+    );
+    assert_eq!(
+        store
+            .docs
+            .count(PENDING_COLLECTION, &Filter::All)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(store.streams.len(&stream).await.unwrap(), 1);
+}
