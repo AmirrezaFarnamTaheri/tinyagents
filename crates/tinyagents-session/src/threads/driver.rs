@@ -38,7 +38,8 @@ struct MessageRecord {
 
 /// Conversation handle whose scope/native admission has already been bound.
 ///
-/// Schema1 metadata commits only one document per operation. Committed messages
+/// Schema1 metadata edits commit one document; append atomically publishes its
+/// metadata and retires a companion intent. Committed messages
 /// live in an immutable per-incarnation prefix. This adapter exposes no message
 /// importer or claimed commit; plain append requires its own prepared intent collection.
 #[derive(Clone)]

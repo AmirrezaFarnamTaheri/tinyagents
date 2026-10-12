@@ -59,10 +59,13 @@ async fn unsupported_writes_never_approximate_committed_messages() {
         sender: "assistant".into(),
         created_at: "now".into(),
     };
-    assert!(matches!(
-        store.append_message("one", message).await,
-        Err(ConversationError::Unsupported { .. })
-    ));
+    assert!(
+        matches!(
+            store.append_message("one", message).await,
+            Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::NotFound
+        ),
+        "plain append requires its own trusted schema preparation"
+    );
     assert!(matches!(
         store.purge_threads().await,
         Err(ConversationError::Unsupported { .. })
