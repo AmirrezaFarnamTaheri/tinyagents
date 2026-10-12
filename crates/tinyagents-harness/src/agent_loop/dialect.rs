@@ -56,12 +56,8 @@ impl RunDialect {
         match crate::dialect::resolve_tool_format(dispatcher, native_tool_calling) {
             ToolCallFormat::Native => Self::Native,
             ToolCallFormat::Json => Self::Xml,
-            ToolCallFormat::PFormat => {
-                Self::PFormat(Arc::new(registry_from(tools)))
-            }
-            ToolCallFormat::Python => {
-                Self::Code(CodeStyle::Python, Arc::new(registry_from(tools)))
-            }
+            ToolCallFormat::PFormat => Self::PFormat(Arc::new(registry_from(tools))),
+            ToolCallFormat::Python => Self::Code(CodeStyle::Python, Arc::new(registry_from(tools))),
             ToolCallFormat::TypeScript => {
                 Self::Code(CodeStyle::TypeScript, Arc::new(registry_from(tools)))
             }
