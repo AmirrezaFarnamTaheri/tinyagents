@@ -46,7 +46,9 @@ Extra uniqueness/search declarations may still refuse with their native error.
    accepted a message and returns the native error.
 5. Reserve using a checked document batch: exact live thread version and absent
    companion pending document; put the immutable intent with `Absent`. Do not
-   change thread metadata or advertise the future row. Retain the same attempt
+   change thread metadata or advertise the future row. Reservation Conflict
+   restarts the full observation and deterministic/channel dedup path; it does
+   not jump directly to another reserve. Retain the same attempt
    token and original offset across uncertain acknowledgment.
 6. Conditional-append the exact stored record at the stored offset. If it
    conflicts or acknowledgment is lost, inspect that exact stream offset.
@@ -54,7 +56,9 @@ Extra uniqueness/search declarations may still refuse with their native error.
    never treat another row as a successful append or silently skip an orphan.
 7. Reload metadata. Finalize with one checked document batch checking current
    thread version plus exact pending version, putting merged metadata and
-   deleting that pending document. Preserve unrelated title/labels/creation
+   deleting that pending document. While pending remains present, require
+   `visible_end == pending.expected_offset`; publish exactly that offset plus
+   one, refusing inconsistent later prefixes. Preserve unrelated title/labels/creation
    fields. Advance `visible_end` and message count by one; set last-message time
    to this appended message's timestamp, not the maximum timestamp.
 8. On cancellation or unresolvable native error, retain pending intent. A later
