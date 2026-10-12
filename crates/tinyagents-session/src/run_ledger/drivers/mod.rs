@@ -6,6 +6,7 @@
 
 mod agents;
 mod effects;
+mod entry_tree;
 mod events;
 mod import;
 mod storage;
@@ -734,69 +735,77 @@ impl RunLedgerStore for DriverRunLedger {
         .await
     }
 
-    /// Implement [`RunLedgerStore::entry_append`] without a weaker fallback.
     async fn entry_append(
         &self,
-        _session_id: &str,
-        _parent_id: Option<&EntryId>,
-        _kind: EntryKind,
+        session_id: &str,
+        parent_id: Option<&EntryId>,
+        kind: EntryKind,
     ) -> Result<EntryId> {
-        Err(unsupported("entry_append"))
+        self.tree_mutate(session_id, |tree| {
+            tree.append(parent_id.cloned(), kind.clone())
+        })
+        .await
+        .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_append_to_head`] without a weaker fallback.
-    async fn entry_append_to_head(&self, _session_id: &str, _kind: EntryKind) -> Result<EntryId> {
-        Err(unsupported("entry_append_to_head"))
+    async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId> {
+        self.tree_mutate(session_id, |tree| {
+            tree.append(tree.head.tip.clone(), kind.clone())
+        })
+        .await
+        .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_head`] without a weaker fallback.
-    async fn entry_head(&self, _session_id: &str) -> Result<Option<EntryId>> {
-        Err(unsupported("entry_head"))
+    async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>> {
+        Ok(self.tree_snapshot(session_id).await?.head.tip)
     }
-
-    /// Implement [`RunLedgerStore::entry_get`] without a weaker fallback.
-    async fn entry_get(&self, _session_id: &str, _id: &EntryId) -> Result<Option<Entry>> {
-        Err(unsupported("entry_get"))
+    async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>> {
+        Ok(self
+            .tree_snapshot(session_id)
+            .await?
+            .entries
+            .get(id)
+            .cloned())
     }
-
-    /// Implement [`RunLedgerStore::entry_ancestor_chain`] without a weaker fallback.
-    async fn entry_ancestor_chain(&self, _session_id: &str, _tip: &EntryId) -> Result<Vec<Entry>> {
-        Err(unsupported("entry_ancestor_chain"))
+    async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>> {
+        self.tree_snapshot(session_id)
+            .await?
+            .chain(tip)
+            .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_tips`] without a weaker fallback.
-    async fn entry_tips(&self, _session_id: &str) -> Result<Vec<EntryId>> {
-        Err(unsupported("entry_tips"))
+    async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>> {
+        Ok(self.tree_snapshot(session_id).await?.tips())
     }
-
-    /// Implement [`RunLedgerStore::entry_branches`] without a weaker fallback.
-    async fn entry_branches(&self, _session_id: &str) -> Result<Vec<Branch>> {
-        Err(unsupported("entry_branches"))
+    async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>> {
+        Ok(self
+            .tree_snapshot(session_id)
+            .await?
+            .labels
+            .into_iter()
+            .map(|(name, tip_id)| Branch { name, tip_id })
+            .collect())
     }
-
-    /// Implement [`RunLedgerStore::entry_label`] without a weaker fallback.
-    async fn entry_label(&self, _session_id: &str, _tip: &EntryId, _name: &str) -> Result<EntryId> {
-        Err(unsupported("entry_label"))
+    async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId> {
+        self.tree_mutate(session_id, |tree| tree.label(tip, name))
+            .await
+            .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_fork`] without a weaker fallback.
-    async fn entry_fork(&self, _session_id: &str, _tip: &EntryId, _fork: Fork) -> Result<EntryId> {
-        Err(unsupported("entry_fork"))
+    async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId> {
+        self.tree_mutate(session_id, |tree| tree.fork(tip, fork))
+            .await
+            .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_rebuild_index`] without a weaker fallback.
-    async fn entry_rebuild_index(&self, _session_id: &str) -> Result<()> {
-        Err(unsupported("entry_rebuild_index"))
+    async fn entry_rebuild_index(&self, session_id: &str) -> Result<()> {
+        self.tree_mutate(session_id, |tree| tree.rebuild_index())
+            .await
+            .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_import_legacy`] without a weaker fallback.
-    async fn entry_import_legacy(&self, _session_id: &str, _entries: &[Entry]) -> Result<()> {
-        Err(unsupported("entry_import_legacy"))
+    async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()> {
+        self.tree_mutate(session_id, |tree| tree.import(entries))
+            .await
+            .map_err(Into::into)
     }
-
-    /// Implement [`RunLedgerStore::entry_build_context`] without a weaker fallback.
-    async fn entry_build_context(&self, _session_id: &str, _tip: &EntryId) -> Result<Vec<Message>> {
-        Err(unsupported("entry_build_context"))
+    async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>> {
+        let tree = self.tree_snapshot(session_id).await?;
+        Ok(crate::entry_tree::project_chain(&tree.context_chain(tip)?))
     }
 
     /// Implement [`RunLedgerStore::prune_sessions_before`] without a weaker fallback.

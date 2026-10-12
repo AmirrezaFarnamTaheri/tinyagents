@@ -269,57 +269,61 @@ impl<'a> EntryTree<'a> {
             }
         })?;
 
-        let compaction =
-            chain
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(idx, entry)| match &entry.kind {
-                    EntryKind::Compaction(c) => Some((idx, c.clone())),
-                    _ => None,
-                });
-
-        let mut messages = Vec::new();
-        let start_idx = match compaction {
-            Some((idx, compaction)) => {
-                messages.push(match compaction.placement {
-                    tinyagents_harness::summarization::SummaryPlacement::User => {
-                        Message::user(compaction.summary.clone())
-                    }
-                    tinyagents_harness::summarization::SummaryPlacement::System => {
-                        Message::System(SystemMessage {
-                            content: vec![ContentBlock::Text(compaction.summary.clone())],
-                            ..SystemMessage::default()
-                        })
-                    }
-                });
-                let start_idx = chain
-                    .iter()
-                    .position(|e| e.id == compaction.first_kept_entry_id)
-                    .unwrap_or(idx + 1);
-                // A user message the compaction pinned lies inside the folded
-                // range but was kept verbatim: it follows the summary.
-                if let Some(pinned) = compaction
-                    .details
-                    .get(compaction_sink::PINNED_ENTRY_ID)
-                    .and_then(|id| serde_json::from_value::<EntryId>(id.clone()).ok())
-                    .and_then(|id| chain[..start_idx].iter().find(|e| e.id == id))
-                    .and_then(|entry| entry_to_message(&entry.kind))
-                {
-                    messages.push(pinned);
-                }
-                start_idx
-            }
-            None => 0,
-        };
-
-        for entry in &chain[start_idx..] {
-            if let Some(message) = entry_to_message(&entry.kind) {
-                messages.push(message);
-            }
-        }
-        Ok(messages)
+        Ok(project_chain(&chain))
     }
+}
+
+/// Shared pure projection; storage admission and chain lookup belong to callers.
+pub(crate) fn project_chain(chain: &[Entry]) -> Vec<Message> {
+    let compaction = chain
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, entry)| match &entry.kind {
+            EntryKind::Compaction(c) => Some((idx, c.clone())),
+            _ => None,
+        });
+
+    let mut messages = Vec::new();
+    let start_idx = match compaction {
+        Some((idx, compaction)) => {
+            messages.push(match compaction.placement {
+                tinyagents_harness::summarization::SummaryPlacement::User => {
+                    Message::user(compaction.summary.clone())
+                }
+                tinyagents_harness::summarization::SummaryPlacement::System => {
+                    Message::System(SystemMessage {
+                        content: vec![ContentBlock::Text(compaction.summary.clone())],
+                        ..SystemMessage::default()
+                    })
+                }
+            });
+            let start_idx = chain
+                .iter()
+                .position(|e| e.id == compaction.first_kept_entry_id)
+                .unwrap_or(idx + 1);
+            // A user message the compaction pinned lies inside the folded
+            // range but was kept verbatim: it follows the summary.
+            if let Some(pinned) = compaction
+                .details
+                .get(compaction_sink::PINNED_ENTRY_ID)
+                .and_then(|id| serde_json::from_value::<EntryId>(id.clone()).ok())
+                .and_then(|id| chain[..start_idx].iter().find(|e| e.id == id))
+                .and_then(|entry| entry_to_message(&entry.kind))
+            {
+                messages.push(pinned);
+            }
+            start_idx
+        }
+        None => 0,
+    };
+
+    for entry in &chain[start_idx..] {
+        if let Some(message) = entry_to_message(&entry.kind) {
+            messages.push(message);
+        }
+    }
+    messages
 }
 
 /// Converts one entry's kind to a context message, or `None` for kinds that

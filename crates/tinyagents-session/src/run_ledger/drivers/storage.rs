@@ -43,6 +43,20 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
 /// Declare only portable indexes; expiry never deletes durable run metadata.
 pub(super) fn specs() -> Vec<CollectionSpec> {
     vec![
+        CollectionSpec::new(super::entry_tree::HEADS),
+        CollectionSpec::new(super::entry_tree::ENTRIES)
+            .index(IndexSpec::new(
+                "session_ordinal",
+                ["record.sessionId", "record.entry.ordinal"],
+            ))
+            .index(IndexSpec::new(
+                "session_parent",
+                ["record.sessionId", "record.entry.parent_id"],
+            )),
+        CollectionSpec::new(super::entry_tree::LABELS)
+            .index(IndexSpec::new("session", ["record.sessionId"])),
+        CollectionSpec::new(super::entry_tree::INDEXES)
+            .index(IndexSpec::new("session", ["record.sessionId"])),
         CollectionSpec::new(IMPORTS),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS)
