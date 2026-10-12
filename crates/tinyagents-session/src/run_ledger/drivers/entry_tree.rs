@@ -91,13 +91,12 @@ impl Tree {
     }
 
     fn remember_insertion(&mut self, id: &EntryId) -> Result<()> {
-        if self.head.next_insertion > i64::MAX as u64 {
-            return Err(StorageError::invalid_input(
-                "entry insertion sequence exhausted",
-            ));
-        }
-        self.insertion.insert(id.clone(), self.head.next_insertion);
-        self.head.next_insertion += 1;
+        let insertion = self
+            .head
+            .next_insertion
+            .ok_or_else(|| StorageError::invalid_input("entry insertion sequence exhausted"))?;
+        self.insertion.insert(id.clone(), insertion);
+        self.head.next_insertion = (insertion < i64::MAX as u64).then_some(insertion + 1);
         Ok(())
     }
 
@@ -335,6 +334,15 @@ impl DriverRunLedger {
                     tip: None,
                 },
             };
+            if head.next_ordinal.is_some_and(|next| next > i64::MAX as u64)
+                || head
+                    .next_insertion
+                    .is_some_and(|next| next > i64::MAX as u64)
+            {
+                return Err(StorageError::serialization(
+                    "entry head exceeds native signed integer range",
+                ));
+            }
             if head.session_id != session {
                 return Err(StorageError::serialization("entry head session mismatch"));
             }
