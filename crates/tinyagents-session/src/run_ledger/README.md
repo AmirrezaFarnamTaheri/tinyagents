@@ -284,7 +284,7 @@ session’s entry records for coherent operations; it does not claim indexed
 append performance. Cyclic imported chains refuse rather than loop indefinitely.
 No legacy files are opened by entry_import_legacy: its caller supplies admitted
 Entry values and owns source provenance/quiescence. Whole-tree lifecycle and
-retention policy remain host responsibilities.
+retention are separate from this record API.
 
 ### Schema preparation and validation
 
