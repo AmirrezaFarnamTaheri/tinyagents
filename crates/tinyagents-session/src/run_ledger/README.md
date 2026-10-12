@@ -208,9 +208,10 @@ are retried. Native fencing, generation and capability refusals retain their
 typed sources. Agent writes validate the captured telemetry version in the same
 document batch and return the committed body without a fallible postcommit read.
 
-Dependency-aware team claims/completion, bulk member shutdown, entry trees and
-retention across sessions/messages/events still return typed Unsupported before writing. The orphan sweep is
-explicitly for an exclusive owner; it is not a shared-process lease reaper.
+Dependency-aware team claims/completion, bulk member shutdown and retention
+across sessions/messages/events still return typed Unsupported before writing.
+The orphan sweep is explicitly for an exclusive owner; it is not a shared-process
+lease reaper.
 Existing host callers are not routed to this adapter automatically.
 
 DriverSessionStores caches one optional native ledger handle per logical agent.
@@ -258,6 +259,33 @@ from legacy event ordinals. Projection refusal preserves the successful
 document commit and returns a typed error only from the explicit reconciliation
 call. Reconstructed handles can replay outstanding receipts. Neither receipts
 nor projection currently implement retention.
+
+### Native entry trees
+
+The existing entry methods bind immutable entries, a session head/allocator,
+named labels and rebuildable chain indexes within the supplied scope. Public
+EntryId values and ordinals remain the classic values. A private insertion
+sequence preserves SQLite’s head/tip ordering for accepted duplicate imported
+ordinals. Null or missing parents and additional roots remain accepted on write;
+a dangling chain refuses on read. Repeated import skips an existing id without
+rewriting its body, matching the classic transaction.
+
+Append, relabel, copied forks, imports and index rebuilds commit in one checked
+native document batch. Head revision CAS serializes independent writers, and
+snapshot reads validate that revision after enumeration. Empty operations still
+require native admission. Native refusal changes none of the staged data; no
+postcommit read can turn success into a reported failure. Retired-generation
+handles cannot access a replacement tree. Native signed integer exhaustion is
+represented with a null allocator counter rather than an unsigned BSON sentinel.
+
+Context projection shares the classic pure projector, including summary role,
+newest compaction and pinned records. Indexes are checked against the live parent
+chain and are never authoritative. The first implementation enumerates the
+session’s entry records for coherent operations; it does not claim indexed
+append performance. Cyclic imported chains refuse rather than loop indefinitely.
+No legacy files are opened by entry_import_legacy: its caller supplies admitted
+Entry values and owns source provenance/quiescence. Whole-tree lifecycle and
+retention are separate from this record API.
 
 ### Explicit telemetry retention
 
@@ -312,6 +340,6 @@ maximum.
 
 Hosts must still arrange source ownership, quiescence, snapshots and the
 migration checkpoint. Older incomplete layouts can be inspected but are not
-silently upgraded. Workflow/team/effect/tree/session import, automatic host
+silently upgraded. Workflow/team/effect/session import, automatic host
 migration, shared-owner recovery and generation-aware retention remain separate
 work.

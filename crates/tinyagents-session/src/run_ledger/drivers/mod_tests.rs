@@ -668,8 +668,8 @@ async fn scoped_unavailable_atomic_families_report_unsupported_without_writes() 
             .await,
     );
     unsupported(ledger.shutdown_agent_team_member("team", "member").await);
-    unsupported(ledger.entry_import_legacy("session", &[]).await);
-    unsupported(ledger.entry_rebuild_index("session").await);
+    ledger.entry_import_legacy("session", &[]).await.unwrap();
+    ledger.entry_rebuild_index("session").await.unwrap();
     unsupported(ledger.apply_retention(Utc::now()).await);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
