@@ -2382,9 +2382,23 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tinyinference-core",
+ "tinyinference-providers",
  "tinytools-agent",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "tinyinference-providers"
+version = "0.3.1"
+dependencies = [
+ "base64 0.23.1",
+ "rand 0.10.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "url",
 ]
 
 [[package]]
