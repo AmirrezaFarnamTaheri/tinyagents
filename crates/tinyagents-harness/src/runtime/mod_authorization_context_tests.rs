@@ -332,7 +332,8 @@ async fn preparation_failure_answers_the_call_with_its_reason_and_skips_the_host
     assert!(gate.0.lock().expect("gate lock").is_empty());
     let transcript = serde_json::to_string(&run.messages).expect("transcript serializes");
     assert!(
-        transcript.contains("tool authorization preparation failed: command analysis is unavailable"),
+        transcript
+            .contains("tool authorization preparation failed: command analysis is unavailable"),
         "{transcript}"
     );
     assert!(!transcript.contains("private provider diagnostic"));
