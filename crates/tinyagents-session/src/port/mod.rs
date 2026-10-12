@@ -106,6 +106,28 @@ pub trait SessionStoreProvider: Send + Sync {
         Ok(None)
     }
 
+    /// Rebinds an actor with an explicit immutable document-schema policy.
+    ///
+    /// `Declare` delegates to the legacy factory. `ValidateOnly` is unsupported
+    /// by default: a provider must explicitly implement read-only schema
+    /// admission. `Ok(None)` never authorizes a backend or file fallback.
+    /// This selects schema behavior only; the host must supply actor authority.
+    ///
+    /// # Errors
+    ///
+    /// Native actor admission errors, retaining their sources.
+    #[cfg(feature = "storage-drivers")]
+    fn bind_actor_with_schema_admission(
+        &self,
+        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        admission: tinyagents_harness::store::SchemaAdmission,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        match admission {
+            tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(backend),
+            tinyagents_harness::store::SchemaAdmission::ValidateOnly => Ok(None),
+        }
+    }
+
     /// Repairs state an unclean shutdown left behind, once, before any agent
     /// runs: turns that were in flight are marked interrupted, and so on.
     ///
@@ -298,6 +320,15 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
         (**self).bind_actor(backend)
+    }
+
+    #[cfg(feature = "storage-drivers")]
+    fn bind_actor_with_schema_admission(
+        &self,
+        backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
+        admission: tinyagents_harness::store::SchemaAdmission,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_core::StorageError> {
+        (**self).bind_actor_with_schema_admission(backend, admission)
     }
 
     fn for_agent(&self, agent_id: &str) -> AgentStores {

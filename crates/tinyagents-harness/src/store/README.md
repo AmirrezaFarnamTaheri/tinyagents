@@ -98,3 +98,13 @@ let journal = DriverAppendStore::with_prefix(scoped.streams().clone(), "journal/
   `AppendStore` contract.
 - Driver `InvalidInput` errors surface as `TinyAgentsError::Validation`. Every
   other driver error surfaces as `TinyAgentsError::Storage`.
+
+## Prepared document schemas
+
+With `storage-drivers`, `SchemaAdmission::Declare` keeps native collection
+creation as the default. `DriverStore::with_collection_and_schema_admission`
+can instead select `ValidateOnly` at construction. Both policies use the exact
+`DriverStore::collection_spec`; validation calls the native persisted-schema
+validator and never falls back to declaration or repair. Missing, incompatible,
+unsupported or retired native handles refuse the operation. This policy does
+not grant tenant or lease authority, which remains the host's responsibility.
