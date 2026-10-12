@@ -269,3 +269,42 @@ async fn empty_retention_still_requires_native_admission() {
     );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn retired_generation_cannot_prune_fresh_telemetry() {
+    use tinystoragedrivers_core::{PurgeMode, PurgeRequest};
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("a").unwrap();
+    let native = backend.for_scope(&scope).unwrap();
+    let retained = DriverRunLedger::new(native.clone());
+    let cutoff = Utc::now();
+    seed(&retained, "old", cutoff - Duration::days(1)).await;
+    let receipt = native
+        .purge(&PurgeRequest {
+            operation_id: "reset-telemetry".into(),
+            mode: PurgeMode::Atomic,
+        })
+        .await
+        .unwrap();
+    let fresh = DriverRunLedger::new(
+        backend
+            .for_scope_generation(&scope, receipt.generation)
+            .unwrap(),
+    );
+    seed(&fresh, "fresh", cutoff - Duration::days(1)).await;
+    let error = retained
+        .prune_run_telemetry_before(cutoff)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    );
+    assert!(
+        fresh
+            .read::<RunTelemetry>(TELEMETRY, "fresh")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(fresh.prune_run_telemetry_before(cutoff).await.unwrap(), 1);
+}
