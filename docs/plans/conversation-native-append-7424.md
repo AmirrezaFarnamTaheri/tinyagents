@@ -140,3 +140,21 @@ That disposable artifact is no longer present on a later filesystem check.
 This checkpoint preserves the observed tool exit and results, rather than
 claiming the missing artifact was freshly reread. The new 18-case phase suite
 has been authored but has not yet executed; no candidate GREEN is claimed.
+
+At source checkpoint `16d05342`, phase command `42353` successfully built and
+executed 18 tests: 17 passed, 1 failed, 0 ignored. The single genuine failure was
+`noncanonical_pending_record_refuses_without_appending_or_publishing_prefix`:
+recovery accepted a pending record's unknown field and returned a successful
+next append. The complete terminal output was read from
+`target/debug-logs/conversation-append-phase-baseline.log`.
+
+Commit `068254d0` adds exact serde Value roundtrip validation for **new pending
+records only**; old committed-stream reader compatibility remains unchanged.
+Fresh command `43414` (`cargo test --locked -j 1 -p tinyagents-session --features
+storage-drivers threads::driver::append_tests -- --nocapture`) terminated 0:
+18 passed, 0 failed, 0 ignored, 681 filtered. Its successful build took 16.05s,
+and the full output was read from
+`target/debug-logs/conversation-append-phase-green.log`. This proves the two
+original prepared native append failures and the later corruption failure are
+fixed, alongside phase/CAS/TTL/fence/uncertainty controls. Broad workspace,
+coverage, strict lint, documentation and MSRV gates remain pending.
