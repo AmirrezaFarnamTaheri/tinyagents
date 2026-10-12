@@ -83,7 +83,10 @@ async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Page, ReadCheck, Version, Versioned, WriteOp, WriteResult, ErrorKind};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, ErrorKind, Page, ReadCheck, Version, Versioned, WriteOp,
+    WriteResult,
+};
 type NativeResult<T> = std::result::Result<T, StorageError>;
 
 #[derive(Debug)]
@@ -152,20 +155,43 @@ impl DocumentStore for RetentionBoundary {
         self.calls.fetch_add(1, Ordering::SeqCst);
         if let Some(value) = &self.refresh {
             if !self.raced.swap(true, Ordering::SeqCst) {
-                self.inner.put(TELEMETRY, &storage::key(&["old"]), value.clone(), Precondition::None).await?;
+                self.inner
+                    .put(
+                        TELEMETRY,
+                        &storage::key(&["old"]),
+                        value.clone(),
+                        Precondition::None,
+                    )
+                    .await?;
             }
         }
         if self.refuse {
-            return Err(StorageError::fenced("retention admission expired").with_source(std::io::Error::other("retained native source")));
+            return Err(StorageError::fenced("retention admission expired")
+                .with_source(std::io::Error::other("retained native source")));
         }
         self.inner.atomic_batch_checked(checks, writes).await
-
     }
 }
 
-fn wrap(native: &ScopedStorage, refresh: Option<Value>, refuse: bool) -> (DriverRunLedger, Arc<RetentionBoundary>) {
-    let boundary = Arc::new(RetentionBoundary { inner: native.documents().clone(), refresh, raced: AtomicBool::new(false), refuse, calls: AtomicUsize::new(0) });
-    let scoped = ScopedStorage::new(native.scope().clone(), "memory", boundary.clone(), native.streams().clone(), native.blobs().clone());
+fn wrap(
+    native: &ScopedStorage,
+    refresh: Option<Value>,
+    refuse: bool,
+) -> (DriverRunLedger, Arc<RetentionBoundary>) {
+    let boundary = Arc::new(RetentionBoundary {
+        inner: native.documents().clone(),
+        refresh,
+        raced: AtomicBool::new(false),
+        refuse,
+        calls: AtomicUsize::new(0),
+    });
+    let scoped = ScopedStorage::new(
+        native.scope().clone(),
+        "memory",
+        boundary.clone(),
+        native.streams().clone(),
+        native.blobs().clone(),
+    );
     (DriverRunLedger::new(scoped), boundary)
 }
 
@@ -177,14 +203,31 @@ async fn concurrent_telemetry_refresh_survives_retention_retry() {
     let cutoff = Utc::now();
     seed(&peer, "old", cutoff - Duration::days(1)).await;
     seed(&peer, "other", cutoff - Duration::days(1)).await;
-    let mut refreshed = peer.read::<RunTelemetry>(TELEMETRY, "old").await.unwrap().unwrap().doc;
+    let mut refreshed = peer
+        .read::<RunTelemetry>(TELEMETRY, "old")
+        .await
+        .unwrap()
+        .unwrap()
+        .doc;
     refreshed.updated_at = Some(cutoff);
     refreshed.input_tokens = 91;
     let (ledger, boundary) = wrap(&native, Some(storage::encode(&refreshed).unwrap()), false);
     assert_eq!(ledger.prune_run_telemetry_before(cutoff).await.unwrap(), 1);
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(peer.read::<RunTelemetry>(TELEMETRY, "old").await.unwrap().unwrap().doc, refreshed);
-    assert!(peer.read::<RunTelemetry>(TELEMETRY, "other").await.unwrap().is_none());
+    assert_eq!(
+        peer.read::<RunTelemetry>(TELEMETRY, "old")
+            .await
+            .unwrap()
+            .unwrap()
+            .doc,
+        refreshed
+    );
+    assert!(
+        peer.read::<RunTelemetry>(TELEMETRY, "other")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -193,12 +236,23 @@ async fn native_retention_refusal_preserves_all_candidates_and_source() {
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let peer = DriverRunLedger::new(native.clone());
     let cutoff = Utc::now();
-    for id in ["old", "other"] { seed(&peer, id, cutoff - Duration::days(1)).await; }
+    for id in ["old", "other"] {
+        seed(&peer, id, cutoff - Duration::days(1)).await;
+    }
     let (ledger, _) = wrap(&native, None, true);
     let error = ledger.prune_run_telemetry_before(cutoff).await.unwrap_err();
-    assert!(matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced));
+    assert!(
+        matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    );
     assert!(std::error::Error::source(&error).is_some());
-    for id in ["old", "other"] { assert!(peer.read::<RunTelemetry>(TELEMETRY, id).await.unwrap().is_some()); }
+    for id in ["old", "other"] {
+        assert!(
+            peer.read::<RunTelemetry>(TELEMETRY, id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 }
 
 #[tokio::test]
@@ -206,7 +260,12 @@ async fn empty_retention_still_requires_native_admission() {
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let (ledger, boundary) = wrap(&native, None, true);
-    let error = ledger.prune_run_telemetry_before(Utc::now()).await.unwrap_err();
-    assert!(matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced));
+    let error = ledger
+        .prune_run_telemetry_before(Utc::now())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+    );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
 }
