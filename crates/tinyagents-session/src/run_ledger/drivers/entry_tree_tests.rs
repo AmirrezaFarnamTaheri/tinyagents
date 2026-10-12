@@ -224,13 +224,16 @@ async fn native_compaction_and_pinned_context_matches_classic_projection() {
             first_kept_entry_id: ids[2].clone(),
             tokens_before: 99,
             usage: None,
-            details: serde_json::json!({"pinnedEntryId": ids[1]}),
+            details: serde_json::json!({"pinned_entry_id": ids[1]}),
         });
         let tip = classic.append_to_head(entry.clone()).unwrap();
         assert_eq!(native.entry_append_to_head("s", entry).await.unwrap(), tip);
+        let expected = classic.build_context(&tip).unwrap();
+        assert_eq!(expected.len(), 3);
+        assert_eq!(expected[1], Message::user("pinned"));
         assert_eq!(
             native.entry_build_context("s", &tip).await.unwrap(),
-            classic.build_context(&tip).unwrap()
+            expected
         );
     }
 }
@@ -270,4 +273,198 @@ async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
         );
     }
     assert_eq!(fresh.entry_head("s").await.unwrap(), Some(head));
+}
+
+use serde_json::Value;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
+    WriteResult,
+};
+type NativeResult<T> = std::result::Result<T, StorageError>;
+
+#[derive(Debug)]
+struct TreeBoundary {
+    inner: Arc<dyn DocumentStore>,
+    barrier: Option<tokio::sync::Barrier>,
+    calls: AtomicUsize,
+    refuse: bool,
+    reject_post_commit_reads: bool,
+    committed: AtomicBool,
+}
+#[async_trait::async_trait]
+impl DocumentStore for TreeBoundary {
+    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+        self.inner.capabilities()
+    }
+    async fn ensure_collection(&self, spec: &CollectionSpec) -> NativeResult<()> {
+        self.inner.ensure_collection(spec).await
+    }
+    async fn get(&self, collection: &str, id: &str) -> NativeResult<Option<Versioned<Value>>> {
+        if self.reject_post_commit_reads && self.committed.load(Ordering::SeqCst) {
+            return Err(StorageError::fenced("postcommit read refused"));
+        }
+        self.inner.get(collection, id).await
+    }
+    async fn put(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: Value,
+        precondition: Precondition,
+    ) -> NativeResult<Version> {
+        self.inner.put(collection, id, doc, precondition).await
+    }
+
+    async fn delete(
+        &self,
+        collection: &str,
+        id: &str,
+        precondition: Precondition,
+    ) -> NativeResult<bool> {
+        self.inner.delete(collection, id, precondition).await
+    }
+    async fn query(&self, collection: &str, query: &Query) -> NativeResult<Page<Versioned<Value>>> {
+        if self.reject_post_commit_reads && self.committed.load(Ordering::SeqCst) {
+            return Err(StorageError::fenced("postcommit query refused"));
+        }
+        self.inner.query(collection, query).await
+    }
+    async fn count(&self, collection: &str, filter: &Filter) -> NativeResult<u64> {
+        self.inner.count(collection, filter).await
+    }
+    async fn delete_where(&self, collection: &str, filter: &Filter) -> NativeResult<u64> {
+        self.inner.delete_where(collection, filter).await
+    }
+    async fn claim(
+        &self,
+        collection: &str,
+        filter: &Filter,
+        sort: &[Sort],
+        patch: &Value,
+    ) -> NativeResult<Option<Versioned<Value>>> {
+        self.inner.claim(collection, filter, sort, patch).await
+    }
+    async fn drop_collection(&self, collection: &str) -> NativeResult<()> {
+        self.inner.drop_collection(collection).await
+    }
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<ReadCheck>,
+        writes: Vec<WriteOp>,
+    ) -> NativeResult<Vec<WriteResult>> {
+        let changes = writes.iter().any(|write| matches!(write, WriteOp::Put { collection, .. } if collection == entry_tree::HEADS));
+        if changes {
+            if self.refuse {
+                return Err(StorageError::fenced("tree commit refused")
+                    .with_source(std::io::Error::other("native tree source")));
+            }
+            if let Some(barrier) = &self.barrier {
+                if self.calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                    barrier.wait().await;
+                }
+            }
+        }
+        let result = self.inner.atomic_batch_checked(checks, writes).await?;
+        if changes {
+            self.committed.store(true, Ordering::SeqCst);
+        }
+        Ok(result)
+    }
+}
+
+fn boundary(
+    native: &ScopedStorage,
+    barrier: bool,
+    refuse: bool,
+    reject_post_commit_reads: bool,
+) -> ScopedStorage {
+    ScopedStorage::new(
+        native.scope().clone(),
+        "memory",
+        Arc::new(TreeBoundary {
+            inner: native.documents().clone(),
+            barrier: barrier.then(|| tokio::sync::Barrier::new(2)),
+            calls: AtomicUsize::new(0),
+            refuse,
+            reject_post_commit_reads,
+            committed: AtomicBool::new(false),
+        }),
+        native.streams().clone(),
+        native.blobs().clone(),
+    )
+}
+
+#[tokio::test]
+async fn competing_entry_allocators_retry_without_losing_parent_or_ordinal() {
+    let backend = MemoryStorage::new();
+    let native = backend.for_scope(&Scope::local()).unwrap();
+    let wrapped = boundary(&native, true, false, false);
+    let a = DriverRunLedger::new(wrapped.clone());
+    let b = DriverRunLedger::new(wrapped);
+    a.declare().await.unwrap();
+    b.declare().await.unwrap();
+    let (a, b) = tokio::join!(
+        a.entry_append_to_head("s", kind("a")),
+        b.entry_append_to_head("s", kind("b"))
+    );
+    let mut ids = vec![a.unwrap(), b.unwrap()];
+    ids.sort();
+    assert_eq!(ids, vec![EntryId::derive("s", 0), EntryId::derive("s", 1)]);
+    let reader = DriverRunLedger::new(native);
+    let head = reader.entry_head("s").await.unwrap().unwrap();
+    let chain = reader.entry_ancestor_chain("s", &head).await.unwrap();
+    assert_eq!(chain.len(), 2);
+    assert_eq!(chain[1].parent_id, Some(chain[0].id.clone()));
+}
+
+#[tokio::test]
+async fn tree_batch_refusal_preserves_entries_labels_head_and_native_source() {
+    use tinystoragedrivers_core::ErrorKind;
+    let backend = MemoryStorage::new();
+    let native = backend.for_scope(&Scope::local()).unwrap();
+    let reader = DriverRunLedger::new(native.clone());
+    let root = reader
+        .entry_append_to_head("s", kind("root"))
+        .await
+        .unwrap();
+    let denied = DriverRunLedger::new(boundary(&native, false, true, false));
+    for result in [
+        denied.entry_label("s", &root, "label").await,
+        denied
+            .entry_fork(
+                "s",
+                &root,
+                Fork {
+                    scope: ForkScope::Tree,
+                    position: ForkPosition::At,
+                },
+            )
+            .await,
+    ] {
+        let error = result.unwrap_err();
+        assert!(
+            matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        );
+        assert_eq!(
+            std::error::Error::source(&error).unwrap().to_string(),
+            "native tree source"
+        );
+    }
+    assert_eq!(reader.entry_head("s").await.unwrap(), Some(root.clone()));
+    assert_eq!(reader.entry_tips("s").await.unwrap(), vec![root]);
+    assert!(reader.entry_branches("s").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn successful_tree_commit_never_performs_fallible_postcommit_reads() {
+    let backend = MemoryStorage::new();
+    let native = backend.for_scope(&Scope::local()).unwrap();
+    let bound = DriverRunLedger::new(boundary(&native, false, false, true));
+    let id = bound
+        .entry_append_to_head("s", kind("committed"))
+        .await
+        .unwrap();
+    let reader = DriverRunLedger::new(native);
+    assert_eq!(reader.entry_head("s").await.unwrap(), Some(id));
 }
