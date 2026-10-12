@@ -18,6 +18,7 @@ use tinyagents_session::{
     },
     transcript::TranscriptMessage,
 };
+use tinyinference_llm::message::Message;
 use tinystoragedrivers_core::{
     CollectionSpec, ErrorKind, Fence, Precondition, Scope, StorageBackend,
 };
@@ -209,10 +210,7 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
     assert_eq!(peer.entry_head("session").await.unwrap(), Some(label));
     assert_eq!(
         peer.entry_build_context("session", &last).await.unwrap(),
-        vec![
-            TranscriptMessage::new("user", "first"),
-            TranscriptMessage::new("user", "last")
-        ]
+        vec![Message::user("first"), Message::user("last")]
     );
     let copied = peer
         .entry_fork(
