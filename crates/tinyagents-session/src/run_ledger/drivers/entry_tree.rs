@@ -22,12 +22,14 @@ type Result<T> = std::result::Result<T, StorageError>;
 pub(super) struct Head {
     session_id: String,
     next_ordinal: u64,
+    next_insertion: u64,
     pub(super) tip: Option<EntryId>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Node {
     session_id: String,
+    insertion: u64,
     entry: Entry,
 }
 #[derive(Serialize, Deserialize)]
@@ -48,6 +50,7 @@ pub(super) struct Tree {
     pub(super) head: Head,
     version: Option<Version>,
     pub(super) entries: BTreeMap<EntryId, Entry>,
+    insertion: BTreeMap<EntryId, u64>,
     pub(super) labels: BTreeMap<String, EntryId>,
     indexes: BTreeMap<EntryId, Vec<EntryId>>,
     added: Vec<Entry>,
@@ -83,9 +86,21 @@ impl Tree {
         };
         self.head.next_ordinal += 1;
         self.head.tip = Some(id.clone());
+        self.remember_insertion(&id)?;
         self.entries.insert(id.clone(), entry.clone());
         self.added.push(entry);
         Ok(id)
+    }
+
+    fn remember_insertion(&mut self, id: &EntryId) -> Result<()> {
+        if self.head.next_insertion > i64::MAX as u64 {
+            return Err(StorageError::invalid_input(
+                "entry insertion sequence exhausted",
+            ));
+        }
+        self.insertion.insert(id.clone(), self.head.next_insertion);
+        self.head.next_insertion += 1;
+        Ok(())
     }
 
     pub(super) fn chain(&self, tip: &EntryId) -> Result<Vec<Entry>> {
@@ -134,7 +149,11 @@ impl Tree {
             .values()
             .filter(|entry| !parents.contains(&entry.id))
             .collect();
-        tips.sort_by(|a, b| a.ordinal.cmp(&b.ordinal).then(a.id.cmp(&b.id)));
+        tips.sort_by(|a, b| {
+            a.ordinal
+                .cmp(&b.ordinal)
+                .then(self.insertion[&a.id].cmp(&self.insertion[&b.id]))
+        });
         tips.into_iter().map(|entry| entry.id.clone()).collect()
     }
 
@@ -184,10 +203,11 @@ impl Tree {
                     "imported ordinal exceeds native signed integer range",
                 ));
             }
-            if entry.ordinal >= self.head.next_ordinal {
+            if entry.ordinal + 1 >= self.head.next_ordinal {
                 self.head.next_ordinal = entry.ordinal + 1;
                 self.head.tip = Some(entry.id.clone());
             }
+            self.remember_insertion(&entry.id)?;
             self.entries.insert(entry.id.clone(), entry.clone());
             self.added.push(entry.clone());
         }
@@ -306,6 +326,7 @@ impl DriverRunLedger {
                 None => Head {
                     session_id: session.into(),
                     next_ordinal: 0,
+                    next_insertion: 0,
                     tip: None,
                 },
             };
@@ -314,8 +335,10 @@ impl DriverRunLedger {
             }
             let query = Query::filter(Filter::eq("record.sessionId", session));
             let mut entries = BTreeMap::new();
+            let mut insertion = BTreeMap::new();
             for row in self.scoped.documents().query_all(ENTRIES, &query).await? {
                 let node: Node = storage::decode(row.doc)?;
+                insertion.insert(node.entry.id.clone(), node.insertion);
                 entries.insert(node.entry.id.clone(), node.entry);
             }
             let mut labels = BTreeMap::new();
@@ -333,6 +356,7 @@ impl DriverRunLedger {
                 head,
                 version,
                 entries,
+                insertion,
                 labels,
                 indexes,
                 added: Vec::new(),
