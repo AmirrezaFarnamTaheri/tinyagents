@@ -10,12 +10,23 @@
 //! a run and the session that produced it are queryable together.
 
 pub mod command_center;
+#[cfg(feature = "storage-drivers")]
+pub mod drivers;
+pub mod error;
 pub mod ops;
+pub mod port;
 pub mod recovery;
+pub mod sqlite;
 mod status_map;
 pub mod store;
 pub mod tool_effects;
 pub mod types;
+
+#[cfg(feature = "storage-drivers")]
+pub use drivers::DriverRunLedger;
+pub use error::{LedgerError, LedgerResult};
+pub use port::RunLedgerStore;
+pub use sqlite::SqliteRunLedger;
 
 pub use ops::{
     RunTransition, append_run_event, claim_agent_team_task, compare_and_swap_workflow_run,
