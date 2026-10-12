@@ -263,3 +263,200 @@ async fn counterfeit_document_capabilities_do_not_reserve_when_actual_stream_pro
         0
     );
 }
+
+#[tokio::test]
+async fn cold_helpers_publish_once_and_preserve_concurrent_title_and_duplicate_original() {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let original = message("agent:race", "original");
+    let mut writer = Box::pin(interrupted.append_message("same", original.clone()));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("reservation never paused: {result:?}"),
+    }
+    store
+        .update_thread_title("same", "Concurrent title", "later")
+        .await
+        .unwrap();
+    let b = store.clone();
+    let c = store.clone();
+    let (b_result, c_result) = tokio::join!(
+        b.append_message("same", message("agent:race", "different retry B")),
+        c.append_message("same", message("agent:race", "different retry C")),
+    );
+    assert_eq!(b_result.unwrap(), original);
+    assert_eq!(c_result.unwrap(), original);
+    fault.release.notify_one();
+    assert_eq!(writer.await.unwrap(), original);
+    assert_eq!(store.get_messages("same").await.unwrap(), vec![original]);
+    assert_eq!(
+        store.get_thread("same").await.unwrap().unwrap().title,
+        "Concurrent title"
+    );
+}
+
+#[tokio::test]
+async fn pending_old_incarnation_cannot_publish_after_delete_and_recreate() {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Append, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let mut writer =
+        Box::pin(interrupted.append_message("same", message("agent:old", "old hidden row")));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("append never paused: {result:?}"),
+    }
+    assert!(store.delete_thread("same", "now").await.unwrap());
+    store.ensure_thread(request("same")).await.unwrap();
+    fault.release.notify_one();
+    assert!(
+        matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind() == ErrorKind::Conflict)
+    );
+    assert!(store.get_messages("same").await.unwrap().is_empty());
+    let fresh = message("agent:new", "new incarnation");
+    store.append_message("same", fresh.clone()).await.unwrap();
+    assert_eq!(store.get_messages("same").await.unwrap(), vec![fresh]);
+}
+
+async fn ttl_intent(backend: &dyn StorageBackend, field: &str) {
+    backend.prepare_schema().await.unwrap();
+    let raw = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    raw.documents()
+        .ensure_collection(&CollectionSpec::new(PENDING_COLLECTION).ttl(field))
+        .await
+        .unwrap();
+    let store = actor(backend).await;
+    let fault = Fault::new(Phase::Reserve, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let mut writer = Box::pin(interrupted.append_message("same", message("agent:ttl", "accepted")));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("reservation never paused: {result:?}"),
+    }
+    drop(writer);
+    assert_eq!(
+        store
+            .docs
+            .count(PENDING_COLLECTION, &Filter::All)
+            .await
+            .unwrap(),
+        1,
+        "compatible numeric TTL on {field} must not expire an all-string intent"
+    );
+    store
+        .append_message("same", message("agent:next", "next"))
+        .await
+        .unwrap();
+    assert_eq!(store.get_messages("same").await.unwrap().len(), 2);
+}
+#[tokio::test]
+async fn memory_compatible_ttl_fields_cannot_expire_durable_append_intent() {
+    for field in [
+        "schema",
+        "token",
+        "thread_id",
+        "incarnation",
+        "offset",
+        "record",
+        "record.message.created_at",
+        "record.schema",
+    ] {
+        ttl_intent(&MemoryStorage::new(), field).await;
+    }
+}
+#[tokio::test]
+async fn sqlite_compatible_ttl_fields_cannot_expire_durable_append_intent() {
+    for field in [
+        "schema",
+        "token",
+        "thread_id",
+        "incarnation",
+        "offset",
+        "record",
+        "record.message.created_at",
+        "record.schema",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let backend =
+            tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ttl.db")).unwrap();
+        ttl_intent(&backend, field).await;
+    }
+}
+
+async fn fenced_phases(backend: &dyn StorageBackend) {
+    use tinystoragedrivers_core::Fence;
+    let store = actor(backend).await;
+    let cluster = Scope::new("cluster").unwrap();
+    let owner = backend.for_scope(&cluster).unwrap();
+    owner
+        .documents()
+        .ensure_collection(&CollectionSpec::new("leases"))
+        .await
+        .unwrap();
+    for (index, phase) in [Phase::Probe, Phase::Reserve, Phase::Append]
+        .into_iter()
+        .enumerate()
+    {
+        let epoch = (index * 2 + 1) as u64;
+        owner
+            .documents()
+            .put(
+                "leases",
+                "alice",
+                json!({"epoch":epoch}),
+                Precondition::None,
+            )
+            .await
+            .unwrap();
+        let fence = Fence::epoch(cluster.clone(), "leases", "alice", "epoch", epoch);
+        let bound = DriverConversationStore::new_validate_only(
+            backend
+                .existing_schema()
+                .unwrap()
+                .for_scope_fenced(&Scope::new("alice").unwrap(), &fence)
+                .unwrap(),
+        );
+        let fault = Fault::new(phase, Action::Pause);
+        let interrupted = faulted(&bound, fault.clone());
+        let mut writer = Box::pin(
+            interrupted.append_message("same", message(&format!("agent:{index}"), "late")),
+        );
+        tokio::select! {
+            _ = fault.reached.notified() => {},
+            result = &mut writer => panic!("phase never paused: {result:?}"),
+        }
+        owner
+            .documents()
+            .put(
+                "leases",
+                "alice",
+                json!({"epoch":epoch+1}),
+                Precondition::None,
+            )
+            .await
+            .unwrap();
+        fault.release.notify_one();
+        assert!(
+            matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind()==ErrorKind::Fenced)
+        );
+        assert_eq!(store.get_messages("same").await.unwrap().len(), index);
+        // An independently admitted fresh writer may reconcile the accepted
+        // pending attempt. The stale original never publishes it itself.
+        store
+            .append_message("same", message(&format!("agent:{index}"), "fresh"))
+            .await
+            .unwrap();
+    }
+}
+#[tokio::test]
+async fn memory_original_native_fence_refuses_each_append_commit_after_takeover() {
+    fenced_phases(&MemoryStorage::new()).await;
+}
+#[tokio::test]
+async fn sqlite_original_native_fence_refuses_each_append_commit_after_takeover() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend =
+        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("fence.db")).unwrap();
+    fenced_phases(&backend).await;
+}
