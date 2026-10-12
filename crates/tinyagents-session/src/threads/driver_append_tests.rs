@@ -151,7 +151,7 @@ async fn canceled(backend: &dyn StorageBackend, phase: Phase) {
         0
     );
     drop(future);
-    let resumed = DriverConversationStore { ..store.clone() };
+    let resumed = store.clone();
     resumed
         .append_message("same", message("agent:second", "next"))
         .await
