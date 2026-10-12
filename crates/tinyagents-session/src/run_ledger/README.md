@@ -208,9 +208,10 @@ are retried. Native fencing, generation and capability refusals retain their
 typed sources. Agent writes validate the captured telemetry version in the same
 document batch and return the committed body without a fallible postcommit read.
 
-Dependency-aware team claims/completion, bulk member shutdown and
-retention still return typed Unsupported before writing. The orphan sweep is
-explicitly for an exclusive owner; it is not a shared-process lease reaper.
+Dependency-aware team claims/completion, bulk member shutdown and retention
+across sessions/messages/events still return typed Unsupported before writing.
+The orphan sweep is explicitly for an exclusive owner; it is not a shared-process
+lease reaper.
 Existing host callers are not routed to this adapter automatically.
 
 DriverSessionStores caches one optional native ledger handle per logical agent.
@@ -285,6 +286,24 @@ append performance. Cyclic imported chains refuse rather than loop indefinitely.
 No legacy files are opened by entry_import_legacy: its caller supplies admitted
 Entry values and owns source provenance/quiescence. Whole-tree lifecycle and
 retention are separate from this record API.
+
+### Explicit telemetry retention
+
+`prune_run_telemetry_before` removes only telemetry whose non-null updated instant
+is strictly before the supplied cutoff. It enumerates the bound scope, then
+conditionally deletes all eligible observed versions in one validated native
+batch. A concurrent update conflicts and triggers re-enumeration; an update
+that refreshes the timestamp survives. New rows after enumeration belong to a
+later pass. The operation does not promise a collection-wide snapshot or invoke
+retention automatically. Timestamp comparison uses instants, avoiding variable
+RFC3339 precision changing eligibility.
+
+Empty passes still require native batch/fence admission. Typed refusal changes
+no candidate records; a retained retired-generation handle cannot prune records
+in a newly issued generation. Schema admission stays the supplied handle’s
+policy. Session/message/tool-call/event retention and whole-ledger retention are
+still unsupported; no event receipts, streams, import receipts, or run records
+are removed by telemetry pruning.
 
 ### Schema preparation and validation
 
