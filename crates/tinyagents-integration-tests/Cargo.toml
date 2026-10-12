@@ -29,19 +29,8 @@ tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinfer
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
-# Opt-in local backend proof only; normal library dependency graphs omit Mongo.
-tinystoragedrivers-core = { workspace = true, optional = true }
-tinystoragedrivers-mongodb = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
-
 [features]
 default = []
-mongodb-storage-tests = [
-    "dep:tinystoragedrivers-core",
-    "dep:tinystoragedrivers-mongodb",
-    "dep:uuid",
-    "tinyagents-session/storage-drivers",
-]
 sqlite = ["tinyagents-graph/sqlite", "tinyagents-harness/sqlite"]
 # `tools` is kept as the forwarded feature name for backward compatibility
 # (see `tinyagents-harness`'s deprecated `tools` alias for `builtin-tools`).
