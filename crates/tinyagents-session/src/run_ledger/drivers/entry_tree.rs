@@ -221,7 +221,10 @@ impl Tree {
         ReadCheck {
             collection: HEADS.into(),
             id: storage::key(&[&self.head.session_id]),
-            expected: self.condition(),
+            expected: self
+                .version
+                .map(tinystoragedrivers_core::ExpectedDocument::Version)
+                .unwrap_or(tinystoragedrivers_core::ExpectedDocument::Absent),
         }
     }
 
