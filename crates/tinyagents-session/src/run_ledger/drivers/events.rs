@@ -159,13 +159,28 @@ impl DriverRunLedger {
         let after = request.after_sequence.unwrap_or(0);
         let filter = Filter::eq("record.runId", request.run_id.clone())
             .and(Filter::gt("record.sequence", after));
-        let mut events: Vec<RunEvent> = self
-            .records(
-                EVENTS,
-                Query::filter(filter).sort(Sort::asc("record.sequence")),
-            )
-            .await?;
-        events.truncate(limit);
+        self.declare().await?;
+        let mut events = Vec::with_capacity(limit);
+        let mut query = Query::filter(filter)
+            .sort(Sort::asc("record.sequence"))
+            .limit(limit.max(1));
+        loop {
+            // Even an empty result request obtains native read admission.
+            let page = self.scoped.documents().query(EVENTS, &query).await?;
+            for row in page.items {
+                if events.len() == limit {
+                    break;
+                }
+                events.push(super::storage::decode(row.doc)?);
+            }
+            match page.next {
+                Some(cursor) if events.len() < limit => {
+                    query.cursor = Some(cursor);
+                    query.limit = Some(limit - events.len());
+                }
+                _ => break,
+            }
+        }
         Ok(RunEventListResponse {
             count: events.len(),
             events,
@@ -232,9 +247,10 @@ impl DriverRunLedger {
     pub async fn reconcile_run_events(&self, run_id: &str) -> Result<u64> {
         self.declare().await?;
         let stream = format!("run_events:{}", key(&[run_id]));
-        for _ in 0..CAS_ATTEMPTS {
-            let next = self.scoped.streams().len(&stream).await?;
-            let after = self.validate_projection(run_id, &stream, next).await?;
+        let mut next = self.scoped.streams().len(&stream).await?;
+        let mut after = self.validate_projection(run_id, &stream, next).await?;
+        let mut conflicts = 0;
+        loop {
             let records = self
                 .events(&RunEventListRequest {
                     run_id: run_id.into(),
@@ -246,6 +262,8 @@ impl DriverRunLedger {
             if records.is_empty() {
                 return Ok(next);
             }
+            let last_sequence = records.last().expect("nonempty projection batch").sequence;
+            let count = records.len() as u64;
             let values = records
                 .into_iter()
                 .map(serde_json::to_value)
@@ -257,12 +275,27 @@ impl DriverRunLedger {
                 .append_batch_if_offset(&stream, next, values)
                 .await
             {
-                Ok(_) => continue,
-                Err(error) if error.kind() == ErrorKind::Conflict => continue,
+                Ok(_) => {
+                    // Our conditional append extends the prefix already validated.
+                    // Progress is not contention and does not spend a retry.
+                    next += count;
+                    after = last_sequence;
+                    conflicts = 0;
+                }
+                Err(error) if error.kind() == ErrorKind::Conflict => {
+                    conflicts += 1;
+                    if conflicts == CAS_ATTEMPTS {
+                        return Err(StorageError::conflict(
+                            "event projection contention budget exhausted",
+                        )
+                        .into());
+                    }
+                    next = self.scoped.streams().len(&stream).await?;
+                    after = self.validate_projection(run_id, &stream, next).await?;
+                }
                 Err(error) => return Err(error.into()),
             }
         }
-        Err(StorageError::conflict("event projection contention budget exhausted").into())
     }
 }
 
