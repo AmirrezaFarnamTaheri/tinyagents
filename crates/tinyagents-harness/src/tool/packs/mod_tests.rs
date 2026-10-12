@@ -524,3 +524,32 @@ fn catalog_lookups_honour_owners() {
     );
     assert_eq!(CATALOG.callable_pack_ids(&|n| n == "a_two"), ["alpha"]);
 }
+
+#[tokio::test]
+async fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
+    struct OrderedTool(Value);
+    #[async_trait]
+    impl Tool for OrderedTool {
+        fn name(&self) -> &str {
+            "a_one"
+        }
+        fn description(&self) -> &str {
+            "ordered schema"
+        }
+        fn parameters_schema(&self) -> Value {
+            self.0.clone()
+        }
+        async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+            unreachable!("disclosure must not execute a tool")
+        }
+    }
+    let first = serde_json::from_str(r#"{"type":"object","properties":{"z":{"type":"object","properties":{"b":{"type":"string"},"a":{"type":"integer"}}},"a":{"type":"string"}}}"#).unwrap();
+    let second = serde_json::from_str(r#"{"properties":{"a":{"type":"string"},"z":{"properties":{"a":{"type":"integer"},"b":{"type":"string"}},"type":"object"}},"type":"object"}"#).unwrap();
+    let render = |parameters| {
+        let tools: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(OrderedTool(parameters))]);
+        let handle = PackRegistryHandle::default();
+        handle.bind(Arc::downgrade(&tools));
+        render_pack_filtered(&CATALOG, "alpha", &handle, &|_| true, "").unwrap()
+    };
+    assert_eq!(render(first), render(second));
+}

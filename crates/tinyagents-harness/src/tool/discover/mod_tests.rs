@@ -501,7 +501,7 @@ async fn search_schema_text_is_independent_of_nested_json_object_insertion_order
     let policy = ToolDiscoveryPolicy::default();
     let args = json!({"query":"inspect"});
     assert_eq!(
-        answer_tool_search(&a, &policy, &args).await.result,
-        answer_tool_search(&b, &policy, &args).await.result,
+        answer_tool_search(&a, &policy, &args).await.result.text(),
+        answer_tool_search(&b, &policy, &args).await.result.text(),
     );
 }
