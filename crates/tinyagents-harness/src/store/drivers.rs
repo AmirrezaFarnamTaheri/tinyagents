@@ -30,7 +30,7 @@ use tinystoragedrivers_core::{
 };
 use tokio::sync::OnceCell;
 
-use super::{AppendStore, Store};
+use super::{AppendStore, SchemaAdmission, Store};
 use crate::error::{Result, TinyAgentsError};
 
 /// Map a storage driver failure onto the harness error type. Invalid input
@@ -49,6 +49,7 @@ pub struct DriverStore {
     docs: Arc<dyn DocumentStore>,
     collection: String,
     declared: Arc<OnceCell<()>>,
+    schema_admission: SchemaAdmission,
 }
 
 impl DriverStore {
@@ -63,10 +64,20 @@ impl DriverStore {
     /// Store harness namespaces in `collection`, so several independent
     /// harness stores can share one backend.
     pub fn with_collection(docs: Arc<dyn DocumentStore>, collection: impl Into<String>) -> Self {
+        Self::with_collection_and_schema_admission(docs, collection, SchemaAdmission::Declare)
+    }
+
+    /// Store namespaces with an immutable schema policy and a fresh admission cache.
+    pub fn with_collection_and_schema_admission(
+        docs: Arc<dyn DocumentStore>,
+        collection: impl Into<String>,
+        schema_admission: SchemaAdmission,
+    ) -> Self {
         Self {
             docs,
             collection: collection.into(),
             declared: Arc::new(OnceCell::new()),
+            schema_admission,
         }
     }
 
@@ -89,7 +100,10 @@ impl DriverStore {
         self.declared
             .get_or_try_init(|| async {
                 let spec = Self::collection_spec(self.collection.clone());
-                self.docs.ensure_collection(&spec).await.map_err(map_error)
+                self.schema_admission
+                    .admit(self.docs.as_ref(), &spec)
+                    .await
+                    .map_err(map_error)
             })
             .await
             .map(|_| ())

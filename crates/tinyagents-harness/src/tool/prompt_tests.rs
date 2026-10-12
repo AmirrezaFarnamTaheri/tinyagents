@@ -683,3 +683,18 @@ fn bare_object_recovery_also_mints_unique_ids() {
     let second_id = &second.message.tool_calls[0].id;
     assert_ne!(first_id, second_id);
 }
+
+#[test]
+fn prompt_replay_is_independent_of_nested_json_object_insertion_order() {
+    let first = serde_json::from_str(r#"{"z":[{"b":4,"a":3},5],"a":{"b":2,"a":1}}"#).unwrap();
+    let second = serde_json::from_str(r#"{"a":{"a":1,"b":2},"z":[{"a":3,"b":4},5]}"#).unwrap();
+    let render = |arguments| {
+        let mut message = Message::assistant("calling");
+        let Message::Assistant(assistant) = &mut message else {
+            unreachable!()
+        };
+        assistant.tool_calls = vec![ToolCall::new("id", "tool", arguments)];
+        coalesce_prompt_tool_results(&[message])[0].text()
+    };
+    assert_eq!(render(first), render(second));
+}

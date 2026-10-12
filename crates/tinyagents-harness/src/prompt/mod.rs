@@ -496,13 +496,15 @@ impl PromptBuilder {
             "tools": self.tools,
         });
 
+        // Recursively sort object keys independently of serde_json features;
+        // array order and the default fingerprint bytes stay unchanged.
         // Serialize the canonical JSON, then feed it to the digest via
         // `Digest::update` (digest 0.11 dropped the `io::Write` impl the previous
         // `to_writer` path relied on). Serializing an already-materialized
         // `Value` does not fail in practice; on the impossible error we hash empty
         // data for a stable result.
         let mut hasher = Sha256::new();
-        if let Ok(bytes) = serde_json::to_vec(&payload) {
+        if let Ok(bytes) = crate::canonical_json::to_vec(&payload) {
             hasher.update(&bytes);
         }
         let digest = hasher.finalize();

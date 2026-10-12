@@ -147,7 +147,8 @@ pub fn coalesce_prompt_tool_results(messages: &[Message]) -> Vec<Message> {
                         "name": &call.name,
                         "arguments": &call.arguments,
                     });
-                    let body = serde_json::to_string(&body).unwrap_or_else(|_| "{}".to_string());
+                    let body = crate::canonical_json::to_string(&body)
+                        .unwrap_or_else(|_| "{}".to_string());
                     let _ = writeln!(rendered, "{OPEN_TAG}{body}{CLOSE_TAG}");
                 }
                 assistant.content.push(ContentBlock::Text(rendered));
