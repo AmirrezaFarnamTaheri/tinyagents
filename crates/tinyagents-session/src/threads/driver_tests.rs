@@ -391,6 +391,7 @@ async fn prefix_reader_bounds_every_window_and_revalidates_recreated_thread() {
     seed(&store, "one", &vec!["old"; PAGE_SIZE * 2 + 3]).await;
     let streams = instrumented_streams(&store, false);
     let reader = DriverConversationStore {
+        validate_only: false,
         docs: store.docs.clone(),
         streams: streams.clone(),
     };
@@ -402,6 +403,7 @@ async fn prefix_reader_bounds_every_window_and_revalidates_recreated_thread() {
     assert_eq!(streams.max_limit.load(Ordering::SeqCst), PAGE_SIZE);
     let paused = instrumented_streams(&store, true);
     let reader = DriverConversationStore {
+        validate_only: false,
         docs: store.docs.clone(),
         streams: paused.clone(),
     };
