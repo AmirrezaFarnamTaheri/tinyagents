@@ -301,3 +301,7 @@ impl<X> AgentDefinition<X> {
         self.diagnostics().is_empty()
     }
 }
+
+#[cfg(test)]
+#[path = "definition_serialization_tests.rs"]
+mod serialization_tests;
