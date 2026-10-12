@@ -5,6 +5,7 @@ use crate::{
     SubagentEntry, ToolScope,
 };
 use serde::{Deserialize, Serialize};
+use tinytools::glob_matches;
 
 /// Unknown host fields retained verbatim by the default definition payload.
 pub type Extensions = std::collections::BTreeMap<String, serde_json::Value>;
@@ -39,7 +40,7 @@ pub struct AgentDefinition<X = Extensions> {
     #[serde(default, alias = "name")]
     pub display_name: Option<String>,
     /// Host-defined routing role; independent of the spawn tier.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Portable prompt source; built-ins may inject it after parsing.
     #[serde(default)]
@@ -157,6 +158,28 @@ impl AgentDefinition {
         }
     }
 }
+/// Controls materialization without introducing a host's tool-discovery policy.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolScopeResolution {
+    /// Replace an unrestricted wildcard with the supplied concrete catalogue.
+    /// A missing catalogue fails closed when materialization is requested.
+    pub materialize_wildcard: bool,
+    /// Include explicitly authored extra names in the resolved scope.
+    pub include_extra: bool,
+    /// Include the definition's authored deferred tools in its resolved scope.
+    pub include_deferred: bool,
+}
+
+impl Default for ToolScopeResolution {
+    fn default() -> Self {
+        Self {
+            materialize_wildcard: false,
+            include_extra: true,
+            include_deferred: true,
+        }
+    }
+}
+
 impl<X> AgentDefinition<X> {
     /// Display name or stable identity when no display name was authored.
     pub fn display_name(&self) -> &str {
@@ -186,11 +209,23 @@ impl<X> AgentDefinition<X> {
     /// a wildcard without additions stays explicit, and a named-empty scope
     /// stays empty. Wildcards with additions materialize the known catalogue.
     pub fn resolve_tool_scope(&self, registered: Option<&[String]>) -> ToolScope {
+        self.resolve_tool_scope_with(registered, ToolScopeResolution::default())
+    }
+
+    /// Resolve original tool vocabulary with explicit materialization options.
+    /// Hosts choose discovery and companion additions before calling this;
+    /// original shared glob matching and stable deduplication remain here.
+    pub fn resolve_tool_scope_with(
+        &self,
+        registered: Option<&[String]>,
+        options: ToolScopeResolution,
+    ) -> ToolScope {
         let mut names = match &self.tools {
             ToolScope::Wildcard
-                if self.disallowed_tools.is_empty()
-                    && self.extra_tools.is_empty()
-                    && self.deferred_tools.is_empty() =>
+                if !options.materialize_wildcard
+                    && self.disallowed_tools.is_empty()
+                    && (!options.include_extra || self.extra_tools.is_empty())
+                    && (!options.include_deferred || self.deferred_tools.is_empty()) =>
             {
                 return ToolScope::Wildcard;
             }
@@ -200,9 +235,18 @@ impl<X> AgentDefinition<X> {
             },
             ToolScope::Named(names) => names.clone(),
         };
-        names.extend(self.extra_tools.iter().cloned());
-        names.extend(self.deferred_tools.iter().cloned());
-        names.retain(|name| !self.disallowed_tools.contains(name));
+        if options.include_extra {
+            names.extend(self.extra_tools.iter().cloned());
+        }
+        if options.include_deferred {
+            names.extend(self.deferred_tools.iter().cloned());
+        }
+        names.retain(|name| {
+            !self
+                .disallowed_tools
+                .iter()
+                .any(|pattern| glob_matches(pattern, name))
+        });
         let mut seen = std::collections::HashSet::new();
         names.retain(|name| seen.insert(name.clone()));
         ToolScope::Named(names)
@@ -301,3 +345,7 @@ impl<X> AgentDefinition<X> {
         self.diagnostics().is_empty()
     }
 }
+
+#[cfg(test)]
+#[path = "definition_serialization_tests.rs"]
+mod serialization_tests;

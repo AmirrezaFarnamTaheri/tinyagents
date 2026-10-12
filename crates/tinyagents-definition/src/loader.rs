@@ -4,10 +4,28 @@ use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 use std::{fs, path::Path};
 
-/// Read one custom TOML definition and stamp its source path.
-/// Built-ins without prompts should be parsed directly and receive their prompt
-/// separately; a custom file must supply an inline, file or verbatim prompt.
+/// Semantic checks performed after deserializing a definition.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum DefinitionValidation {
+    /// Require a nonblank prompt and all generic definition diagnostics.
+    #[default]
+    Diagnostics,
+    /// Require an explicitly nonempty inline prompt. File and verbatim sources
+    /// retain their authored contents, including empty strings. This policy
+    /// supports hosts whose existing custom definitions predate diagnostics.
+    NonemptyInlinePrompt,
+}
+
+/// Read and stamp a custom TOML definition with strict prompt and vocabulary checks.
 pub fn load_file<X: DeserializeOwned + Default>(path: &Path) -> Result<AgentDefinition<X>> {
+    load_file_with_validation(path, DefinitionValidation::default())
+}
+
+/// Read and stamp a custom definition using the selected validation policy.
+pub fn load_file_with_validation<X: DeserializeOwned + Default>(
+    path: &Path,
+    validation: DefinitionValidation,
+) -> Result<AgentDefinition<X>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let mut definition: AgentDefinition<X> = toml::from_str(&content)
@@ -15,15 +33,22 @@ pub fn load_file<X: DeserializeOwned + Default>(path: &Path) -> Result<AgentDefi
     let prompt_is_blank = match &definition.system_prompt {
         PromptSource::Inline(body) | PromptSource::Verbatim(body) => body.trim().is_empty(),
         PromptSource::File { path } => path.trim().is_empty(),
+        PromptSource::Dynamic(()) => true,
     };
-    if prompt_is_blank {
+    let rejected_prompt = match validation {
+        DefinitionValidation::Diagnostics => prompt_is_blank,
+        DefinitionValidation::NonemptyInlinePrompt => {
+            matches!(&definition.system_prompt, PromptSource::Inline(body) if body.is_empty())
+        }
+    };
+    if rejected_prompt {
         bail!(
             "{}: missing `system_prompt` — custom definitions must set an inline string or a file path",
             path.display()
         );
     }
     let diagnostics = definition.diagnostics();
-    if !diagnostics.is_empty() {
+    if matches!(validation, DefinitionValidation::Diagnostics) && !diagnostics.is_empty() {
         bail!(
             "{}: invalid definition: {}",
             path.display(),
@@ -44,6 +69,15 @@ pub fn load_dir<X: DeserializeOwned + Default>(
     dir: &Path,
     out: &mut Vec<AgentDefinition<X>>,
 ) -> Result<()> {
+    load_dir_with_validation(dir, out, DefinitionValidation::default())
+}
+
+/// Load a directory with the same validation policy for every file.
+pub fn load_dir_with_validation<X: DeserializeOwned + Default>(
+    dir: &Path,
+    out: &mut Vec<AgentDefinition<X>>,
+    validation: DefinitionValidation,
+) -> Result<()> {
     for entry in
         fs::read_dir(dir).with_context(|| format!("reading agents dir {}", dir.display()))?
     {
@@ -58,7 +92,7 @@ pub fn load_dir<X: DeserializeOwned + Default>(
         if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
-        match load_file(&path) {
+        match load_file_with_validation(&path, validation) {
             Ok(definition) => out.push(definition),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "failed to load custom definition; skipping")
@@ -67,3 +101,7 @@ pub fn load_dir<X: DeserializeOwned + Default>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "loader_policy_tests.rs"]
+mod policy_tests;

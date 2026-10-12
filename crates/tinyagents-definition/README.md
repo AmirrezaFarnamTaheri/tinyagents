@@ -11,7 +11,12 @@ host fields. A host may supply a typed serde extension and skip runtime-only
 fields, then use `with_extensions` to project into another extension type.
 
 `load_file` reads a TOML definition and stamps its source path. `load_dir` reads
-only direct `.toml` children and skips invalid files with diagnostics. Neither
+only direct `.toml` children and skips invalid files with diagnostics. These
+default entry points retain strict semantic validation. The explicit
+`load_file_with_validation` and `load_dir_with_validation` entry points accept
+`DefinitionValidation::NonemptyInlinePrompt` for hosts that must preserve older
+authored prompt admission: omitted or empty inline prompts are rejected, while
+inline whitespace and file/verbatim contents are preserved. Neither
 chooses host directories nor maintains a global catalogue. `DefinitionRegistry`
 and `InMemoryDefinitionRegistry` retain their async read-only lookup contract.
 
@@ -22,11 +27,18 @@ as input aliases. Source provenance remains runtime-only metadata. This Rust
 API change requires consumers to replace direct string/list access with the
 model and tool scope types.
 
-`resolve_tool_scope` materializes extra tools and denials. An explicit empty
-named scope denies every tool. The pure scope-resolution helper needs a catalogue to expand wildcard
-exclusions and fails closed without one. Hosted invocations retain explicit
-wildcard policy dynamically and check exact exclusions against live toolsets. Plain wildcards retain the
-host policy for undeclared tools. Skill selectors never add delegate ids.
+`resolve_tool_scope` includes authored extra and deferred tools, then applies
+the shared case-insensitive deny globs and stable deduplication. The explicit
+`resolve_tool_scope_with` entry point lets hosts choose whether to include those
+additions and whether to materialize a bare wildcard. Materialization needs a
+catalogue and fails closed without one. An empty named scope with no admitted
+additions stays empty. Skill selectors never add delegate ids.
+
+An absent routing `role` stays absent in serialized payloads. Hosts can mark a
+runtime-built prompt with `PromptSource::Dynamic(())`; its serialized inert
+marker contains no callback and cannot be authored through deserialization.
+The executable builder stays in the host's typed extension. `with_extensions`
+preserves every generic definition field when replacing that extension.
 
 `validate_tier_transition` rejects worker parents and same-tier coordinator
 edges. It permits reasoning-to-chat handoffs. Orchestration maps both

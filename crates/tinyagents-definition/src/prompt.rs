@@ -11,6 +11,10 @@ pub enum PromptSource {
     File { path: String },
     /// Entire prompt without composed identity, safety, tools or memory sections.
     Verbatim(String),
+    /// Inert marker for a host-built prompt; the executable builder belongs
+    /// in the typed definition extension. This cannot be authored in TOML.
+    #[serde(skip_deserializing)]
+    Dynamic(()),
 }
 impl Default for PromptSource {
     fn default() -> Self {
