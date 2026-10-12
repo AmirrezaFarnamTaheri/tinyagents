@@ -41,7 +41,8 @@ impl Tool for PreparedTool {
     async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
         self.prepared.fetch_add(1, Ordering::SeqCst);
         if self.fail_preparation {
-            anyhow::bail!("private provider diagnostic");
+            return Err(anyhow::anyhow!("private provider diagnostic")
+                .context("command analysis is unavailable"));
         }
         Ok(Some(json!({"command": args["command"], "class": "write"})))
     }
@@ -276,7 +277,7 @@ async fn prepared_facts_reach_the_host_gate_before_tool_execution() {
 }
 
 #[tokio::test]
-async fn preparation_failure_blocks_before_host_gate_and_hides_provider_error() {
+async fn preparation_failure_answers_the_call_with_its_reason_and_skips_the_host_gate() {
     let mut response = ModelResponse::assistant("");
     response
         .message
@@ -286,7 +287,10 @@ async fn preparation_failure_blocks_before_host_gate_and_hides_provider_error() 
             "prepared",
             json!({"command": "echo ok"}),
         ));
-    let model = Arc::new(ScriptedModel::new(vec![response]));
+    let model = Arc::new(ScriptedModel::new(vec![
+        response,
+        ModelResponse::assistant("recovered"),
+    ]));
     let gate = Arc::new(RecordingGate::default());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
@@ -305,7 +309,9 @@ async fn preparation_failure_blocks_before_host_gate_and_hides_provider_error() 
         fail_preparation: true,
     }));
 
-    let error = harness
+    // A failed preparation used to abort the whole run with a fatal
+    // `Tool("tool authorization preparation failed")`.
+    let run = harness
         .invoke_agent(
             AgentInvocation::new(
                 host,
@@ -318,12 +324,100 @@ async fn preparation_failure_blocks_before_host_gate_and_hides_provider_error() 
             &(),
         )
         .await
-        .expect_err("preparation failure must abort admission");
+        .expect("a preparation failure is a per-call error, not a failed run");
 
     assert_eq!(prepared.load(Ordering::SeqCst), 1);
     assert_eq!(executed.load(Ordering::SeqCst), 0);
+    assert!(run.executed_tools.is_empty());
     assert!(gate.0.lock().expect("gate lock").is_empty());
-    assert!(!error.to_string().contains("private provider diagnostic"));
+    let transcript = serde_json::to_string(&run.messages).expect("transcript serializes");
+    assert!(
+        transcript.contains("tool authorization preparation failed: command analysis is unavailable"),
+        "{transcript}"
+    );
+    assert!(!transcript.contains("private provider diagnostic"));
+    assert_eq!(
+        run.final_response.map(|response| response.message.text()),
+        Some("recovered".to_string())
+    );
+}
+
+#[tokio::test]
+async fn nested_preparation_failure_refuses_the_child_with_its_reason() {
+    let mut response = ModelResponse::assistant("");
+    response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "call-1",
+            "nested_caller",
+            json!({}),
+        ));
+    let model = Arc::new(ScriptedModel::new(vec![
+        response,
+        ModelResponse::assistant("done"),
+    ]));
+    let gate = Arc::new(RecordingGate::default());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper")
+                .with_tools(["nested_caller", "prepared"]),
+        ])),
+        gate.clone(),
+        Arc::new(FixedModelResolver::new(model)),
+    );
+    let prepared = Arc::new(AtomicUsize::new(0));
+    let executed = Arc::new(AtomicUsize::new(0));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_policy(RunPolicy {
+        limits: crate::limits::RunLimits::default().with_max_nested_depth(1),
+        ..RunPolicy::default()
+    });
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    harness.register_tool(Arc::new(NestedCaller {
+        failures: failures.clone(),
+    }));
+    harness.register_tool(Arc::new(PreparedTool {
+        prepared: prepared.clone(),
+        executed: executed.clone(),
+        fail_preparation: true,
+    }));
+
+    harness
+        .invoke_agent(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("go")],
+                ),
+                RunContext::new(RunConfig::new("authorization-context-nested-failure"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("a nested preparation failure does not fail the run");
+
+    assert_eq!(prepared.load(Ordering::SeqCst), 1);
+    assert_eq!(executed.load(Ordering::SeqCst), 0);
+    assert!(
+        !gate
+            .0
+            .lock()
+            .expect("gate lock")
+            .iter()
+            .any(|(request, _)| request.tool_name == "prepared")
+    );
+    let failures = failures.lock().expect("nested failure lock");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains(
+            "nested call 'prepared' refused: tool authorization preparation failed: command analysis is unavailable"
+        ),
+        "{failures:?}"
+    );
+    assert!(!failures[0].contains("private provider diagnostic"));
 }
 
 #[tokio::test]
