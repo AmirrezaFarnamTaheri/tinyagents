@@ -1,0 +1,40 @@
+[package]
+name = "tinyagents-native-run-ledger-mongodb-proof"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+# Separate graph: BSON enables serde_json/preserve_order, which must not
+# change the ordinary TinyAgents workspace's feature composition.
+[workspace]
+resolver = "3"
+
+[features]
+default = []
+mongodb-storage-tests = [
+    "dep:tinystoragedrivers-core",
+    "dep:tinystoragedrivers-mongodb",
+    "dep:tinyagents-session",
+    "dep:tinyinference-llm",
+]
+
+[dependencies]
+chrono = "0.4"
+reqwest = { version = "0.12", default-features = false }
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
+tinystoragedrivers-core = { path = "../../vendor/tinystoragedrivers/crates/tinystoragedrivers-core", optional = true }
+tinystoragedrivers-mongodb = { path = "../../vendor/tinystoragedrivers/crates/tinystoragedrivers-mongodb", optional = true }
+tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers"], optional = true }
+tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", optional = true }
+
+[patch."https://github.com/tinyhumansai/tinytools"]
+tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent" }
+tinytools = { path = "../../vendor/tinytools/crates/tinytools" }
+
+[lints.rust]
+unsafe_code = "deny"

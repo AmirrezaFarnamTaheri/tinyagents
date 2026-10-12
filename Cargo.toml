@@ -10,7 +10,7 @@ default-members = [
     "crates/tinyagents-orchestration",
     "crates/tinyagents-live",
 ]
-exclude = ["vendor", "worktrees"]
+exclude = ["vendor", "worktrees", "integration-proofs/run-ledger-mongodb"]
 resolver = "3"
 
 [workspace.package]
