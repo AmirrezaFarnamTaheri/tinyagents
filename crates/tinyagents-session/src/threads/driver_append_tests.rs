@@ -279,14 +279,22 @@ async fn cold_helpers_publish_once_and_preserve_concurrent_title_and_duplicate_o
         .update_thread_title("same", "Concurrent title", "later")
         .await
         .unwrap();
-    let b = store.clone();
-    let c = store.clone();
+    let finalization = Fault::new(Phase::Finalize, Action::Barrier);
+    let b = faulted(&store, finalization.clone());
+    let c = b.clone();
     let (b_result, c_result) = tokio::join!(
         b.append_message("same", message("agent:race", "different retry B")),
         c.append_message("same", message("agent:race", "different retry C")),
     );
     assert_eq!(b_result.unwrap(), original);
     assert_eq!(c_result.unwrap(), original);
+    assert!(
+        finalization
+            .conflicts
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0,
+        "two cold helpers must actually race the native finalization CAS"
+    );
     fault.release.notify_one();
     assert_eq!(writer.await.unwrap(), original);
     assert_eq!(store.get_messages("same").await.unwrap(), vec![original]);
