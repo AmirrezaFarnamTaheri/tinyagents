@@ -221,7 +221,7 @@ impl Tree {
         ReadCheck {
             collection: HEADS.into(),
             id: storage::key(&[&self.head.session_id]),
-            precondition: self.condition(),
+            expected: self.condition(),
         }
     }
 
