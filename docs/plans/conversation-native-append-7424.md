@@ -167,3 +167,44 @@ This adds an actual two-helper finalization CAS barrier with observed native
 conflict, malformed/foreign pending identities and missing-field normalization,
 and native fresh-epoch bound recovery after each original writer is fenced.
 The previous 18-case results remain separate chronological checkpoints.
+
+## Final owning gate checkpoint
+
+At frozen source `223c6bee461b55a7422a125805822d11cb27e002`, the
+cancel-aware sequential command `25725` terminated 0. Every step in
+`.validation/gates-progress.log` finished successfully: formatting, session
+storage-driver tests, strict default and all-feature workspace Clippy,
+all-targets/all-feature workspace build, default and all-feature workspace
+tests, canonical rustdoc broken-link lint, Rust 1.88 all-targets/all-feature
+build, and diff check. Session results were 701 unit tests plus 2 doctests.
+Default workspace results were 4,811 passed, 0 failed, 36 ignored; all-feature
+results were 5,226 passed, 0 failed, 36 ignored, including doctests. These are
+separate feature graphs, not summed unique tests; nested child repetitions are
+excluded. Full outputs were read. The MSRV build finished in 6m49s. Rustdoc
+retains existing private and redundant link warnings outside this change;
+its canonical `-D rustdoc::broken_intra_doc_links` gate passed.
+
+Canonical coverage command `65988` also terminated 0 after a successful
+instrumented build (4m15s): 5,176 passed, 0 failed, 29 ignored, excluding the
+nested child repetition. The exact owning CI selection was:
+
+```sh
+cargo llvm-cov --locked -j 1 --all-features --workspace \
+  --ignore-filename-regex '(^|/)(tests?|examples)/|/test(_.*)?\.rs$' \
+  --fail-under-lines 80
+```
+
+The complete 6,674-line output was read and checked for failing results and
+errors. Noncompiling JSON export confirmed 67,758 of 76,729 executable lines
+covered: **88.3082%**, above the canonical whole-workspace 80% threshold.
+There is no per-file floor claim: new `append.rs` is 240/301 (79.7342%) and
+`pending.rs` is 61/94 (64.8936%). This instrumented result differs from regular
+all-feature/doctest counts and must not be conflated with them. The final
+coverage run includes all 20 append phase controls.
+
+The final broad and coverage logs, JSON export, and copied later phase logs
+are retained outside disposable build output under `.validation/`. No
+production source changed after this tested checkpoint; subsequent evidence
+updates are documentation only. Ready upstream publication still requires the
+final independent review. No module release, host consumption, native turn
+claims, import, or complete conversation migration is asserted.
