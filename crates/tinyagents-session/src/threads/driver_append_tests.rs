@@ -251,7 +251,7 @@ async fn counterfeit_document_capabilities_do_not_reserve_when_actual_stream_pro
         .await
         .unwrap_err();
     assert!(
-        matches!(error, ConversationError::Driver(ref e) if e.kind() == ErrorKind::Unsupported)
+        matches!(error, ConversationError::Driver(ref e) if matches!(e.kind(), ErrorKind::Unsupported(tinystoragedrivers_core::Capability::ConditionalStreamAppend)))
     );
     assert!(store.get_messages("same").await.unwrap().is_empty());
     assert_eq!(
