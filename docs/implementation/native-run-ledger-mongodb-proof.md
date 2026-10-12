@@ -115,3 +115,26 @@ The pinned fingerprint changed from
 to 13ceff0b2049a85fe023ffef086bebc8bcc0d884d37fdef3a3563bd21565403c.
 These findings establish a feature-composition incompatibility; the isolated
 fixture intentionally does not claim to repair or validate that composition.
+
+## Final isolated graph gates
+
+After a normal merge of canonical main 6c1962a5, the root workspace
+all-features suite passed 5,153 unit/integration/doc tests (36 ignored), and
+strict all-targets/all-features Clippy passed. A final standalone Clippy run
+also passed; ordinary standalone execution reported three ignored backend
+cases, and its disabled feature discovered zero cases.
+
+One initial default run failed in the unchanged canonical Claude CLI fixture
+with Text file busy (OS error 26). The original failure is preserved at
+target/mongodb-final-default.log. The entire harness source matched current
+canonical main. Exact diagnostic passed one case, and serial diagnostic
+passed all 2,522 harness cases. A fresh normal parallel default workspace run
+then passed 4,793 unit/integration/doc tests (36 ignored). This records
+both the failure and subsequent evidence; it does not establish the cause or
+claim the transient fixture failure was fixed.
+
+The actual Mongo replica-set proof was repeated after moving into the isolated
+workspace: three cases passed, including positive native actor completion.
+No runtime source or dependency changes to that standalone graph followed
+that proof; the canonical merge touched only harness code, outside its graph.
+Both owned containers used for these runs were stopped and removed.
