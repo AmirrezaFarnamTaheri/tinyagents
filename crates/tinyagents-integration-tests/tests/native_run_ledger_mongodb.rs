@@ -10,12 +10,13 @@
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_session::{
-    entry_tree::{EntryKind, Fork, ForkPosition, ForkScope, TranscriptEntry},
+    entry_tree::{EntryKind, Fork, ForkPosition, ForkScope},
     run_ledger::{
         AgentRunKind, AgentRunStatus, AgentRunUpsert, DriverRunLedger, LedgerError, RunEventAppend,
         RunEventListRequest, RunLedgerStore,
         drivers::{QuiescentSource, SourceOwner},
     },
+    transcript::TranscriptMessage,
 };
 use tinystoragedrivers_core::{
     CollectionSpec, ErrorKind, Fence, Precondition, Scope, StorageBackend,
@@ -78,7 +79,7 @@ fn source(ledger: &DriverRunLedger, root: &tempfile::TempDir, sequence: i64) -> 
     )
     .unwrap();
     tinyagents_session::run_ledger::append_run_event(root.path(), event()).unwrap();
-    let db = rusqlite::Connection::open(tinyagents_session::store::db_path(root.path())).unwrap();
+    let db = rusqlite::Connection::open(tinyagents_session::db_path(root.path())).unwrap();
     db.execute("UPDATE run_events SET sequence = ?1", [sequence])
         .unwrap();
     let snapshot = root.path().join("immutable-source.db");
@@ -153,9 +154,7 @@ async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
     assert_eq!(std::fs::read(source.path()).unwrap(), bytes);
 }
 fn text(value: &str) -> EntryKind {
-    EntryKind::Transcript(TranscriptEntry::Message(tinyagents_harness::Message::user(
-        value,
-    )))
+    EntryKind::Message(TranscriptMessage::new("user", value))
 }
 #[tokio::test]
 #[ignore = "local Mongo replica set: explicit loopback URL and --ignored required"]
@@ -183,7 +182,7 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
     let admitted = restricted.for_scope_fenced(&scope, &fence);
     let admitted = match admitted {
         Ok(scoped) => scoped,
-        Err(error) if error.kind() == ErrorKind::Unsupported => {
+        Err(error) if matches!(error.kind(), ErrorKind::Unsupported(_)) => {
             eprintln!(
                 "Native fencing unavailable: typed Unsupported verified; actor positive proof not executed"
             );
@@ -211,8 +210,8 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
     assert_eq!(
         peer.entry_build_context("session", &last).await.unwrap(),
         vec![
-            tinyagents_harness::Message::user("first"),
-            tinyagents_harness::Message::user("last")
+            TranscriptMessage::new("user", "first"),
+            TranscriptMessage::new("user", "last")
         ]
     );
     let copied = peer
