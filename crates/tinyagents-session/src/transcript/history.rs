@@ -890,7 +890,7 @@ fn begin_file_generation_with_baseline(
     lock_paths.dedup();
     let mut locks = Vec::with_capacity(lock_paths.len());
     for lock_path in &lock_paths {
-        let lock = generation_lock(lock_path)?;
+        let mut lock = generation_lock(lock_path)?;
         lock.lock_exclusive()?;
         locks.push((lock_path.clone(), lock));
     }
@@ -1013,11 +1013,44 @@ pub struct FileTranscriptHistory {
 }
 
 struct GenerationReservation {
-    _successor: File,
+    _successor: GenerationLock,
+}
+
+/// Releases a successfully acquired advisory lock before closing its descriptor.
+///
+/// Closing alone leaves flock held when a concurrent fork inherited the open
+/// file description. Explicit unlock makes the writer/reservation lifetime
+/// authoritative even while that inherited descriptor survives until exec.
+struct GenerationLock {
+    file: File,
+    held: bool,
+}
+
+impl GenerationLock {
+    fn lock_exclusive(&mut self) -> std::io::Result<()> {
+        FileExt::lock_exclusive(&self.file)?;
+        self.held = true;
+        Ok(())
+    }
+
+    fn try_lock_exclusive(&mut self) -> std::io::Result<()> {
+        FileExt::try_lock_exclusive(&self.file)?;
+        self.held = true;
+        Ok(())
+    }
+}
+
+impl Drop for GenerationLock {
+    fn drop(&mut self) {
+        if self.held {
+            // Closing remains the final release if the OS refuses explicit unlock.
+            let _ = FileExt::unlock(&self.file);
+        }
+    }
 }
 
 impl FileTranscriptHistory {
-    fn acquire_write_lock(&self) -> anyhow::Result<Option<(File, File)>> {
+    fn acquire_write_lock(&self) -> anyhow::Result<Option<(GenerationLock, GenerationLock)>> {
         if self.generation_reservation.lock().unwrap().is_some() {
             return Ok(None);
         }
@@ -1042,7 +1075,7 @@ impl FileTranscriptHistory {
         let paths = vec![self.path.clone(), successor.clone()];
         let mut locks = Vec::with_capacity(paths.len());
         for lock_path in paths {
-            let lock = generation_lock(&lock_path)?;
+            let mut lock = generation_lock(&lock_path)?;
             if lock_path == successor && !path_entry_exists(&successor)? {
                 // An absent successor with a held lock is reserved by a
                 // generation creator, which needs its first write to release
@@ -1168,7 +1201,7 @@ impl FileTranscriptHistory {
 /// Opens the stable advisory-lock file associated with a transcript path.
 /// The file is intentionally retained after unlock; deleting lock files can
 /// split waiters across different inodes and invalidate mutual exclusion.
-fn generation_lock(path: &Path) -> anyhow::Result<File> {
+fn generation_lock(path: &Path) -> anyhow::Result<GenerationLock> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let lock_root = parent.parent().unwrap_or(parent).join(".transcript-locks");
     let lock_dir = lock_root.join(parent.file_name().unwrap_or_default());
@@ -1181,6 +1214,7 @@ fn generation_lock(path: &Path) -> anyhow::Result<File> {
         .read(true)
         .write(true)
         .open(lock_path)
+        .map(|file| GenerationLock { file, held: false })
         .map_err(Into::into)
 }
 
