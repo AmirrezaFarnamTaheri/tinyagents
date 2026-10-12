@@ -460,3 +460,101 @@ async fn sqlite_original_native_fence_refuses_each_append_commit_after_takeover(
         tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("fence.db")).unwrap();
     fenced_phases(&backend).await;
 }
+
+#[tokio::test]
+async fn byte_identical_ordinary_competitor_cannot_prove_unobserved_reservation_ownership() {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::PauseLoseAck);
+    let interrupted = faulted(&store, fault.clone());
+    let identical = message("ordinary", "identical bytes from two callers");
+    let mut first = Box::pin(interrupted.append_message("same", identical.clone()));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut first => panic!("reserve never paused: {result:?}"),
+    }
+    assert_eq!(
+        store
+            .append_message("same", identical.clone())
+            .await
+            .unwrap(),
+        identical
+    );
+    fault.release.notify_one();
+    assert!(
+        matches!(first.await, Err(ConversationError::Uncertain { ref source, .. }) if source.kind() == ErrorKind::Unavailable)
+    );
+    assert_eq!(
+        store.get_messages("same").await.unwrap(),
+        vec![identical.clone(), identical]
+    );
+    assert_eq!(
+        store
+            .get_thread("same")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
+        2,
+        "uncertain caller must not silently reserve another UUID append"
+    );
+}
+
+#[tokio::test]
+async fn noncanonical_pending_record_refuses_without_appending_or_publishing_prefix() {
+    let store = actor(&MemoryStorage::new()).await;
+    let fault = Fault::new(Phase::Reserve, Action::Pause);
+    let interrupted = faulted(&store, fault.clone());
+    let mut writer =
+        Box::pin(interrupted.append_message("same", message("agent:corrupt", "accepted")));
+    tokio::select! {
+        _ = fault.reached.notified() => {},
+        result = &mut writer => panic!("reserve never paused: {result:?}"),
+    }
+    drop(writer);
+    let current = store.load("same").await.unwrap().unwrap();
+    let key = pending::AppendIntent::key(&current.id, &current.doc.incarnation);
+    let row = store
+        .docs
+        .get(PENDING_COLLECTION, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut envelope = row.doc.clone();
+    let mut record: Value = serde_json::from_str(envelope["record"].as_str().unwrap()).unwrap();
+    record["unexpected"] = json!("must not disappear silently");
+    envelope["record"] = json!(serde_json::to_string(&record).unwrap());
+    store
+        .docs
+        .put(PENDING_COLLECTION, &key, envelope.clone(), row.unchanged())
+        .await
+        .unwrap();
+    let error = store
+        .append_message("same", message("agent:next", "next"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ConversationError::Driver(ref e) if e.kind()==ErrorKind::Serialization)
+    );
+    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
+    assert_eq!(store.streams.len(&stream).await.unwrap(), 0);
+    assert!(store.get_messages("same").await.unwrap().is_empty());
+    assert_eq!(
+        store
+            .get_thread("same")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
+        0
+    );
+    assert_eq!(
+        store
+            .docs
+            .get(PENDING_COLLECTION, &key)
+            .await
+            .unwrap()
+            .unwrap()
+            .doc,
+        envelope
+    );
+}

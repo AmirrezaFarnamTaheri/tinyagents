@@ -15,6 +15,7 @@ pub(super) enum Phase {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Action {
     Pause,
+    PauseLoseAck,
     LoseAck,
     FailBefore,
     Unsupported,
@@ -49,10 +50,14 @@ impl Fault {
             return Ok(());
         }
         match self.action {
-            Action::Pause => {
+            Action::Pause | Action::PauseLoseAck => {
                 self.reached.notify_one();
                 self.release.notified().await;
-                Ok(())
+                if matches!(self.action, Action::PauseLoseAck) {
+                    Err(Self::failure())
+                } else {
+                    Ok(())
+                }
             }
             Action::LoseAck => Err(Self::failure()),
             _ => Ok(()),
