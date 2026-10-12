@@ -36,6 +36,24 @@ async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
     seed(&a, "boundary", cutoff).await;
     seed(&a, "new", cutoff + Duration::milliseconds(1)).await;
     seed(&sibling, "old", cutoff - Duration::seconds(1)).await;
+    seed(&a, "undated", cutoff - Duration::days(1)).await;
+    let mut undated = a
+        .read::<RunTelemetry>(TELEMETRY, "undated")
+        .await
+        .unwrap()
+        .unwrap()
+        .doc;
+    undated.updated_at = None;
+    a.scoped
+        .documents()
+        .put(
+            TELEMETRY,
+            &storage::key(&["undated"]),
+            storage::encode(&undated).unwrap(),
+            Precondition::None,
+        )
+        .await
+        .unwrap();
     assert_eq!(a.prune_run_telemetry_before(cutoff).await.unwrap(), 1);
     assert!(
         peer.read::<RunTelemetry>(TELEMETRY, "old")
@@ -61,6 +79,12 @@ async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
     assert!(
         sibling
             .read::<RunTelemetry>(TELEMETRY, "old")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        peer.read::<RunTelemetry>(TELEMETRY, "undated")
             .await
             .unwrap()
             .is_some()
@@ -153,17 +177,17 @@ impl DocumentStore for RetentionBoundary {
         writes: Vec<WriteOp>,
     ) -> NativeResult<Vec<WriteResult>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(value) = &self.refresh {
-            if !self.raced.swap(true, Ordering::SeqCst) {
-                self.inner
-                    .put(
-                        TELEMETRY,
-                        &storage::key(&["old"]),
-                        value.clone(),
-                        Precondition::None,
-                    )
-                    .await?;
-            }
+        if let Some(value) = &self.refresh
+            && !self.raced.swap(true, Ordering::SeqCst)
+        {
+            self.inner
+                .put(
+                    TELEMETRY,
+                    &storage::key(&["old"]),
+                    value.clone(),
+                    Precondition::None,
+                )
+                .await?;
         }
         if self.refuse {
             return Err(StorageError::fenced("retention admission expired")
@@ -244,7 +268,10 @@ async fn native_retention_refusal_preserves_all_candidates_and_source() {
     assert!(
         matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
     );
-    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(
+        std::error::Error::source(&error).unwrap().to_string(),
+        "retained native source"
+    );
     for id in ["old", "other"] {
         assert!(
             peer.read::<RunTelemetry>(TELEMETRY, id)
