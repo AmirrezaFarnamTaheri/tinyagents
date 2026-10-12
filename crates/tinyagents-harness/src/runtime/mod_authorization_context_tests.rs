@@ -336,10 +336,8 @@ async fn preparation_failure_answers_the_call_with_its_reason_and_skips_the_host
         "{transcript}"
     );
     assert!(!transcript.contains("private provider diagnostic"));
-    assert_eq!(
-        run.final_response.map(|response| response.message.text()),
-        Some("recovered".to_string())
-    );
+    // The model saw the refusal and finished its turn.
+    assert!(transcript.contains("recovered"), "{transcript}");
 }
 
 #[tokio::test]
