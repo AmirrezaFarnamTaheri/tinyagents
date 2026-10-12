@@ -52,6 +52,11 @@ impl DriverConversationStore {
             streams: scoped.streams().clone(),
         }
     }
+    /// Explicit validation-only admission; behavioral baseline delegates unchanged.
+    pub fn new_validate_only(scoped: ScopedStorage) -> Self {
+        Self::new(scoped)
+    }
+
     fn key(id: &str) -> ConversationResult<String> {
         if id.is_empty() || id.contains('\0') || id.len() > 1024 * 1024 {
             return Err(StorageError::invalid_input(
@@ -326,3 +331,7 @@ fn timestamp(value: &str) -> i64 {
 #[cfg(test)]
 #[path = "driver_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "driver_schema_tests.rs"]
+mod schema_tests;
