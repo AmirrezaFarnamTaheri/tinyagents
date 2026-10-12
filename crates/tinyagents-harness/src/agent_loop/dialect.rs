@@ -20,7 +20,7 @@ use tinyinference_llm::model::{
 };
 use tinyinference_llm::prompt_tools::replace_text_blocks;
 use tinyinference_llm::tool::{ToolCall, ToolSchema};
-use tinytools_agent::dialect::{CodeDialect, CodeStyle, PFormatDialect};
+use tinytools_agent::dialect::{CodeDialect, CodeStyle, PFormatDialect, ToolCallFormat};
 use tinytools_agent::types::{ParseDiagnostic, ParseOptions, ParsedToolCall};
 use tinytools_agent::{PFormatRegistry, StreamScrubber};
 
@@ -54,15 +54,15 @@ impl RunDialect {
         native_tool_calling: Option<bool>,
     ) -> Self {
         match crate::dialect::resolve_tool_format(dispatcher, native_tool_calling) {
-            crate::dialect::ToolCallFormat::Native => Self::Native,
-            crate::dialect::ToolCallFormat::Json => Self::Xml,
-            crate::dialect::ToolCallFormat::PFormat => {
+            ToolCallFormat::Native => Self::Native,
+            ToolCallFormat::Json => Self::Xml,
+            ToolCallFormat::PFormat => {
                 Self::PFormat(Arc::new(registry_from(tools)))
             }
-            crate::dialect::ToolCallFormat::Python => {
+            ToolCallFormat::Python => {
                 Self::Code(CodeStyle::Python, Arc::new(registry_from(tools)))
             }
-            crate::dialect::ToolCallFormat::TypeScript => {
+            ToolCallFormat::TypeScript => {
                 Self::Code(CodeStyle::TypeScript, Arc::new(registry_from(tools)))
             }
         }
