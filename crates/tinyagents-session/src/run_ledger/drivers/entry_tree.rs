@@ -257,6 +257,7 @@ impl Tree {
                 id: storage::key(&[session, entry.id.as_str()]),
                 doc: storage::encode(&Node {
                     session_id: session.clone(),
+                    insertion: self.insertion[&entry.id],
                     entry: entry.clone(),
                 })?,
                 precondition: Precondition::Absent,
