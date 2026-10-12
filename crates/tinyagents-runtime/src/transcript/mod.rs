@@ -194,9 +194,10 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
             }
             if !text.is_empty() && !text_pushed {
                 content.push(ContentBlock::Text(text));
-            } else if content.is_empty() && !msg.tool_calls.is_empty() {
-                // Native tool rounds retain the empty assistant text block
-                // expected by the inference message contract.
+            } else if content.is_empty() {
+                // Preserve empty assistant rows as explicit text blocks. Legacy
+                // XML tool rounds and native tool rounds both rely on this
+                // provider-visible shape when their persisted content is empty.
                 content.push(ContentBlock::Text(text));
             }
             let origin = msg

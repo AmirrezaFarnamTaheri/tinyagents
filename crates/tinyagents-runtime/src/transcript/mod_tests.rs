@@ -217,6 +217,16 @@ fn legacy_reasoning_replays_after_assistant_text() {
 }
 
 #[test]
+fn legacy_empty_assistant_rows_keep_the_empty_text_block() {
+    let row = TranscriptMessage::assistant("");
+
+    let Message::Assistant(assistant) = transcript_to_message(&row) else {
+        panic!("assistant");
+    };
+    assert_eq!(assistant.content, vec![ContentBlock::Text(String::new())]);
+}
+
+#[test]
 fn signed_thinking_blocks_survive_native_replay() {
     let origin = MessageOrigin {
         provider: "anthropic".into(),
