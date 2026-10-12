@@ -81,8 +81,8 @@ pub fn render_pack_filtered(
             tool.name(),
             tool.description()
         ));
-        // Minified, matching what the provider receives for a natively
-        // advertised tool. Pretty-printing costs roughly a third more tokens
+        // Minified JSON with stable object-key order. Pretty-printing costs
+        // roughly a third more tokens
         // for indentation and newlines the model gains nothing from, and this
         // text is charged to the context window exactly like a native schema.
         out.push_str("```json\n");
