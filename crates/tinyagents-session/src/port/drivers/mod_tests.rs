@@ -680,6 +680,50 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     ));
 }
 
+#[tokio::test]
+async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently() {
+    let backend = Arc::new(tinystoragedrivers_core::MemoryStorage::new());
+    let provider = DriverSessionStores::new(backend).unwrap();
+    let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
+    let same = provider.run_ledger_for_agent("alice").unwrap().unwrap();
+    assert!(Arc::ptr_eq(&one, &same));
+    one.append_run_event(crate::run_ledger::RunEventAppend {
+        run_id: "run".into(),
+        event_type: "one".into(),
+        payload: serde_json::json!({}),
+    })
+    .await
+    .unwrap();
+    let bob = provider.run_ledger_for_agent("bob").unwrap().unwrap();
+    assert_eq!(
+        bob.list_recent_run_events(&crate::run_ledger::RunEventListRequest {
+            run_id: "run".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .count,
+        0
+    );
+    let actor = provider
+        .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
+        .unwrap()
+        .unwrap();
+    let rebound = actor.run_ledger_for_agent("alice").unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&one, &rebound));
+    assert_eq!(
+        rebound
+            .list_recent_run_events(&crate::run_ledger::RunEventListRequest {
+                run_id: "run".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .count,
+        0
+    );
+}
+
 async fn prepared_restricted_actor_contract(backend: Arc<dyn StorageBackend>) {
     backend.prepare_schema().await.unwrap();
     let bootstrap = backend.for_scope(&Scope::local()).unwrap();

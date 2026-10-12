@@ -90,3 +90,32 @@ collects results, and manages state transitions durably.
    tasks, collects results, and persists state.
 4. On interruption, retry `engine.run()`: running phases reset to Pending;
    completed phases remain done.
+
+## Asynchronous authoritative persistence
+
+AsyncWorkflowStore and LedgerWorkflowStore retain a caller-supplied
+RunLedgerStore handle. The adapter awaits load, upsert, claim, compare-and-swap
+and lease renewal without choosing a workspace or falling back to SQLite.
+WorkflowPersistenceError retains LedgerError, including native driver kinds.
+
+AsyncWorkflowChildRegistration requires the executor to await registration;
+its synchronous entrypoint refuses. LegacyWorkflowRegistration explicitly
+adapts existing desktop callbacks.
+
+WorkflowEngine::new keeps the synchronous desktop contracts compatible.
+WorkflowEngine::new_async selects only the supplied AsyncWorkflowStore and
+AsyncWorkflowExecutor. Its initialise_async and drive_async entrypoints await
+persistence, child registration and heartbeat renewal, preserving typed sources.
+Legacy initialise/drive entrypoints refuse on an authoritative instance.
+
+An async executor must await register_async before waiting for a child. A
+refused registration interrupts the phase even if an executor ignores the
+error, cancels attempted children, and prevents later success. Results without
+a committed registration are rejected. Native fenced/backend failures remain
+typed and do not become a successful lifecycle hand-off or a SQLite fallback.
+
+This implements workflow-row persistence only. Child progress/status/events,
+host provider routing, generation-bound import and owner-aware recovery are
+separate prerequisites. Hosts must not advertise a complete cloud workflow
+migration or opt in before those owning contracts and dependencies are
+available upstream.

@@ -295,3 +295,36 @@ async fn legacy_actor_factory_inherits_validation_policy_without_declaring_schem
     assert!(rebound.try_for_agent("agent").is_ok());
     assert_eq!(observed.declarations.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn validation_only_provider_ledger_uses_prepared_schema_without_declaration() {
+    let storage: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    storage.prepare_schema().await.unwrap();
+    crate::run_ledger::DriverRunLedger::prepare_schema(
+        storage
+            .for_scope(&Scope::local())
+            .unwrap()
+            .documents()
+            .as_ref(),
+    )
+    .await
+    .unwrap();
+    let observed = Arc::new(Observations::default());
+    let backend = Arc::new(ProbeBackend {
+        inner: storage.existing_schema().unwrap(),
+        observed: observed.clone(),
+    });
+    let provider =
+        DriverSessionStores::new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
+            .unwrap();
+    let ledger = provider.run_ledger_for_agent("alice").unwrap().unwrap();
+    let result = ledger
+        .list_recent_run_events(&crate::run_ledger::RunEventListRequest {
+            run_id: "run".into(),
+            ..Default::default()
+        })
+        .await;
+    assert_eq!(observed.declarations.load(Ordering::SeqCst), 0);
+    assert_eq!(result.unwrap().count, 0);
+    assert!(!observed.validated.lock().unwrap().is_empty());
+}

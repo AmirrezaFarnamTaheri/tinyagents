@@ -65,6 +65,7 @@ pub struct DriverSessionStores {
     bridge: Blocking,
     agents: Mutex<HashMap<String, AgentStores>>,
     recover_on_open: bool,
+    ledgers: Mutex<HashMap<String, Arc<dyn crate::run_ledger::RunLedgerStore>>>,
     schema_admission: SchemaAdmission,
     recovered: Mutex<HashSet<String>>,
     /// Names this provider in destination keys and handle paths.
@@ -127,6 +128,7 @@ impl DriverSessionStores {
             bridge,
             agents: Mutex::new(HashMap::new()),
             recover_on_open: false,
+            ledgers: Mutex::new(HashMap::new()),
             schema_admission,
             recovered: Mutex::new(HashSet::new()),
             id: uuid::Uuid::new_v4(),
@@ -146,8 +148,10 @@ impl DriverSessionStores {
         self
     }
 
-    /// All document declarations required by this provider.
+    /// Core session declarations, excluding the optional run ledger.
     ///
+    /// Prepare optional ledger declarations separately with
+    /// [`crate::run_ledger::DriverRunLedger::prepare_schema`].
     /// Includes transcript entries and index, turn states, and key-value
     /// records. The journal uses streams and has no document declaration.
     /// These are also used by each store's lazy initialization. Returning
@@ -313,6 +317,26 @@ impl DriverSessionStores {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
+    fn run_ledger_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+        let mut ledgers = self.ledgers.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(ledger) = ledgers.get(agent_id) {
+            return Ok(Some(ledger.clone()));
+        }
+        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
+            Arc::new(match self.schema_admission {
+                SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
+                SchemaAdmission::ValidateOnly => {
+                    crate::run_ledger::DriverRunLedger::new_existing_schema(scoped)
+                }
+            });
+        ledgers.insert(agent_id.to_owned(), ledger.clone());
+        Ok(Some(ledger))
+    }
+
     /// Opens through the driver accessor without erasing native refusal errors.
     fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
         DriverSessionStores::try_for_agent(self, agent_id)
