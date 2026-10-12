@@ -463,3 +463,40 @@ fn push_system_messages_keeps_one_cacheable_segment_per_tier() {
     empty.push_system_messages(&[]);
     assert!(empty.build(vec![]).cache_segments.is_empty());
 }
+
+#[test]
+fn fingerprint_is_independent_of_nested_json_object_insertion_order() {
+    use tinyinference_llm::tool::ToolSchema;
+    let first: Value =
+        serde_json::from_str(r#"{"z":[{"b":4,"a":3},5],"a":{"b":2,"a":1}}"#).unwrap();
+    let second: Value =
+        serde_json::from_str(r#"{"a":{"a":1,"b":2},"z":[{"a":3,"b":4},5]}"#).unwrap();
+    assert_eq!(first, second);
+    let fingerprint = |parameters| {
+        let mut builder = PromptBuilder::new();
+        builder.push_system("sys", vec![Message::system("pinned prefix")]);
+        builder.push_tools_segment(
+            "tools",
+            vec![ToolSchema::new("tool", "description", parameters)],
+        );
+        builder.fingerprint()
+    };
+    assert_eq!(fingerprint(first), fingerprint(second));
+}
+
+#[test]
+fn fingerprint_keeps_nested_json_array_order_significant() {
+    use tinyinference_llm::tool::ToolSchema;
+    let fingerprint = |parameters| {
+        let mut builder = PromptBuilder::new();
+        builder.push_tools_segment(
+            "tools",
+            vec![ToolSchema::new("tool", "description", parameters)],
+        );
+        builder.fingerprint()
+    };
+    assert_ne!(
+        fingerprint(json!({"nested": [{"value": 1}, {"value": 2}]})),
+        fingerprint(json!({"nested": [{"value": 2}, {"value": 1}]})),
+    );
+}
