@@ -292,7 +292,7 @@ async fn empty_retention_still_requires_native_admission() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::ScopeGenerationRejected)
     );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
 }

@@ -422,7 +422,7 @@ async fn retired_generation_cannot_change_status_allocate_events_or_project_stre
         .await
         .unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(ref native) if native.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(ref native) if native.kind() == ErrorKind::ScopeGenerationRejected)
     );
     assert!(
         old.append_run_event(RunEventAppend {
