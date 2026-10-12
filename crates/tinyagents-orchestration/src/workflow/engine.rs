@@ -891,7 +891,8 @@ where
                     let renewed = self.renew(&run.id, owner, self.lease_for).await;
                     if !matches!(renewed, Ok(true)) {
                         cancel.cancel();
-                        let children = registration.current().child_run_ids;
+                        let mut children = registration.current().child_run_ids;
+                        children.extend(registration.attempted.lock().iter().cloned());
                         self.cancel_children(&children).await;
                         renewed?;
                         return Err(WorkflowPersistenceError::LeaseRenewalLost);
@@ -914,7 +915,9 @@ where
             Ok(outcomes) => outcomes,
             Err(tinyagents_harness::TinyAgentsError::Cancelled) => {
                 let children = registration.current().child_run_ids;
-                self.cancel_children(&children).await;
+                let mut to_cancel = children.clone();
+                to_cancel.extend(registration.attempted.lock().iter().cloned());
+                self.cancel_children(&to_cancel).await;
                 reset_running_phases(
                     &mut phase_states,
                     "workflow interrupted; phase will retry on resume",
@@ -975,7 +978,9 @@ where
         }
         if cancel.is_cancelled() {
             let children = registration.current().child_run_ids;
-            self.cancel_children(&children).await;
+            let mut to_cancel = children.clone();
+            to_cancel.extend(registration.attempted.lock().iter().cloned());
+            self.cancel_children(&to_cancel).await;
             reset_running_phases(
                 &mut phase_states,
                 "workflow interrupted; phase will retry on resume",
