@@ -6,7 +6,9 @@ the messages it renders inside each one. It also keeps an in-memory inverted
 index for substring search across every thread, and a small subscriber that
 mirrors channel turns (Slack, Telegram, ...) into the same store.
 
-It is plain files plus `serde`: no SQLite, no network, no memory engine.
+The classic store is plain files plus `serde`. The optional `storage-drivers`
+feature additionally exposes explicitly admitted native scoped ports; neither
+path implements a memory engine.
 
 ## Where it came from
 
@@ -247,6 +249,10 @@ an in-memory inverted index over message content:
 | File | Role |
 | --- | --- |
 | `mod.rs` | module docs and re-exports |
+| `persistence.rs` | explicit async port, typed failures and unsupported turn claims |
+| `driver.rs` | admitted native metadata CAS, schema policies and committed-prefix readers |
+| `driver/append.rs` | writer-only conditional append and checked publication |
+| `driver/pending.rs` | all-string attempt intent and strict pending-record validation |
 | `types.rs` | wire types and deterministic message ids |
 | `tokenize.rs` | normalization and n-gram tokenizer |
 | `inverted_index.rs` | in-memory search index |
