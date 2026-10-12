@@ -1,0 +1,116 @@
+# Native conversation append with a recoverable stream outbox
+
+Base: canonical TinyAgents `34b2c853`; preserve schema1 thread metadata and
+`MessageRecord` stream records. Scope: plain `append_message` only. Turn claims,
+proof-bearing agent execution, message edits, tail deletion, purge and legacy
+import remain unsupported. Existing committed-prefix readers stay read-only.
+
+## Native contracts and compatibility
+
+`DocumentStore::atomic_batch_checked` atomically validates document revisions and
+applies document writes. `StreamStore::append_batch_if_offset` atomically checks
+the persistent next offset and appends. Neither combines documents and streams.
+The protocol therefore reserves a durable intent before appending, and exposes
+a stream row only after verifying it and publishing metadata.
+
+Do not add pending fields to `ThreadDoc`: older schema1 metadata writers ignore
+unknown fields and would erase them during unrelated edits. Use a companion
+`conversation_appends_v1` collection, keyed by the thread digest and incarnation.
+Prepare it explicitly through raw trusted bootstrap. Existing
+`collection_specs`, `prepare_schema`, metadata operations and readers retain
+their current requirements. Add append-specific declaration/preparation APIs;
+append validates both declarations each time and never performs actor DDL.
+
+The pending document contains only strings: schema tag, immutable attempt token,
+thread identity, incarnation, decimal expected offset and the complete serialized
+schema1 `MessageRecord`. No nested message object or numeric field remains in the
+pending document. Native required-feature validation permits extra TTL fields;
+all-string encoding prevents numeric epoch TTL from expiring accepted intent.
+Extra uniqueness/search declarations may still refuse with their native error.
+
+## Operation protocol
+
+1. Validate input and append schema; require advertised `ValidatedBatch` and
+   `ConditionalStreamAppend`. `StreamStore` has no separate capability method.
+2. Load the live thread and its companion pending document. Help a valid pending
+   intent before reserving a new one. Never substitute the caller's body for
+   the durable pending body. Reject malformed/misbound intent with typed error.
+3. For deterministic `agent:` IDs OR `extraMetadata.scope == "channel"`, scan
+   the committed prefix and return the original matching message, even if the
+   retry body differs. Ordinary UUID repeated calls remain append operations.
+4. Probe the actual paired stream with an empty conditional append at the
+   observed `visible_end`. This appends no business records, but may touch native
+   internal stream metadata. Conflict restarts fresh thread/pending reads;
+   unsupported/refused probe leaves no pending intent. Do not claim the probe
+   replaces real append/fence validation. Unknown probe acknowledgment has not
+   accepted a message and returns the native error.
+5. Reserve using a checked document batch: exact live thread version and absent
+   companion pending document; put the immutable intent with `Absent`. Do not
+   change thread metadata or advertise the future row. Retain the same attempt
+   token and original offset across uncertain acknowledgment.
+6. Conditional-append the exact stored record at the stored offset. If it
+   conflicts or acknowledgment is lost, inspect that exact stream offset.
+   Only the exact record, incarnation and contiguous offset can be reconciled;
+   never treat another row as a successful append or silently skip an orphan.
+7. Reload metadata. Finalize with one checked document batch checking current
+   thread version plus exact pending version, putting merged metadata and
+   deleting that pending document. Preserve unrelated title/labels/creation
+   fields. Advance `visible_end` and message count by one; set last-message time
+   to this appended message's timestamp, not the maximum timestamp.
+8. On cancellation or unresolvable native error, retain pending intent. A later
+   admitted writer reconciles it; readers only expose the committed prefix.
+   A delete/recreate produces a new incarnation; no old helper publishes into it.
+   Old unreachable intent/stream cleanup is outside this slice.
+
+Successful reservation, or a durable reread of this exact attempt token, proves
+ownership of the offset. Then exact row equality under the same incarnation and
+committed prefix can resolve finalization after its pending document is gone.
+If reservation acknowledgment is lost, the token was never observed, pending is
+already gone, and an ordinary-ID row is byte-identical, ownership is ambiguous:
+return typed uncertainty/native cause. Do not claim success or invisibly rerun
+an ordinary UUID append. Deterministic/channel IDs can use their existing dedup
+semantics. No general exactly-once delivery promise is made.
+
+Every mutation uses captured native scoped/fenced ports. A stale original fence
+must refuse reservation, real append and finalization; read permission alone is
+not proof of current ownership. No ambient backend, local files or actor schema
+fallback is involved. Unsupported paired ports refuse before accepting intent.
+
+## RED-first execution
+
+Files: `threads/driver.rs` wiring/public append preparation only;
+`threads/driver/append.rs` protocol; sibling `driver_append_tests.rs` and focused
+`driver_append_fixtures.rs` for wrappers around real ports. Keep production
+unsupported until the first prepared Memory/SQLite append tests fail at runtime.
+
+1. Prepared existing-schema Memory and SQLite: two independent handles, same
+   scope reopen, different scope isolation; append visible row/count/timestamp,
+   deterministic and channel replay return original body, ordinary ID repeats
+   still append. No declaration through actor, no filesystem state.
+2. Validate missing append declaration, repeated validation after lifecycle,
+   preserved native error/source; document capability masks and counterfeit
+   paired stream whose actual conditional append is unsupported. Empty probe
+   cancellation leaves no pending or business row; existing stream cursor and
+   records remain unchanged.
+3. Deterministic native interleavings: two cold helpers race one pending intent;
+   concurrent unrelated title update is preserved; differing appends keep a
+   contiguous prefix. Verify conflict actually occurred, not only final values.
+4. Real native fault wrappers pause after reservation and after actual stream
+   commit, then drop owning future: old visible prefix stays coherent; next
+   writer finishes original exactly once and appends its own row. Inject lost
+   reservation, append and finalize acknowledgments separately. Keep immutable
+   token identity and distinguish a successor pending document.
+5. Byte-identical competing ordinary-ID write under lost reservation ack must
+   not produce falsely attributed success or hidden duplicate retry. Native
+   source cause remains accessible when durable rereads cannot resolve it.
+6. Delete/recreate while original writer is paused: new incarnation never shows
+   old rows. Exact pending/row corruption refuses; stale fences at each native
+   commit stage refuse and preserve current owner state. Preprovision numeric
+   TTL on each pending field and dotted payload path on real Memory/SQLite;
+   pending must not expire because the envelope contains only strings.
+7. Keep all existing metadata/reader/schema and classic conversation controls.
+   Update the old unsupported-writers test to keep edits/tail/purge/claims
+   unsupported; plain append alone becomes supported after its own schema.
+
+Only run Cargo after the coordinated owner window is handed back. Preserve
+baseline failure logs and checkpoint tests separately from production changes.
