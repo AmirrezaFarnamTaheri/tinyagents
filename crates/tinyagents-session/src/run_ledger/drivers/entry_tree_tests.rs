@@ -571,3 +571,65 @@ async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_ent
     );
     assert_eq!(native.entry_head("full").await.unwrap(), Some(last.id));
 }
+
+#[tokio::test]
+async fn terminal_entry_allocators_remain_representable_in_native_bson() {
+    let backend = MemoryStorage::new();
+    let native = super::event_bson_tests::wrap(backend.for_scope(&Scope::local()).unwrap());
+    native.declare().await.unwrap();
+    native
+        .scoped
+        .documents()
+        .put(
+            super::entry_tree::HEADS,
+            &super::storage::key(&["append"]),
+            serde_json::json!({"schemaVersion": 1, "record": {
+                "sessionId": "append", "nextOrdinal": i64::MAX,
+                "nextInsertion": 0, "tip": null
+            }}),
+            tinystoragedrivers_core::Precondition::Absent,
+        )
+        .await
+        .unwrap();
+    let last = native
+        .entry_append_to_head("append", kind("last"))
+        .await
+        .unwrap();
+    assert_eq!(
+        native
+            .entry_get("append", &last)
+            .await
+            .unwrap()
+            .unwrap()
+            .ordinal,
+        i64::MAX as u64
+    );
+    let imported = Entry {
+        id: EntryId::from("legacy-last"),
+        parent_id: None,
+        ordinal: i64::MAX as u64,
+        kind: kind("imported"),
+        ts: "2025-01-01T00:00:00Z".into(),
+    };
+    native
+        .entry_import_legacy("import", &[imported.clone()])
+        .await
+        .unwrap();
+    for session in ["append", "import"] {
+        let row = native
+            .scoped
+            .documents()
+            .get(super::entry_tree::HEADS, &super::storage::key(&[session]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(row.doc["record"]["nextOrdinal"].is_null());
+        assert!(
+            matches!(native.entry_append_to_head(session, kind("overflow")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput)
+        );
+    }
+    assert_eq!(
+        native.entry_get("import", &imported.id).await.unwrap(),
+        Some(imported)
+    );
+}
