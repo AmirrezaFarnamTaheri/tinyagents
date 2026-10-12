@@ -87,7 +87,8 @@ pub fn render_pack_filtered(
         // text is charged to the context window exactly like a native schema.
         out.push_str("```json\n");
         out.push_str(
-            &serde_json::to_string(&tool.parameters_schema()).unwrap_or_else(|_| "{}".to_string()),
+            &crate::canonical_json::to_string(&tool.parameters_schema())
+                .unwrap_or_else(|_| "{}".to_string()),
         );
         out.push_str("\n```\n\n");
     }

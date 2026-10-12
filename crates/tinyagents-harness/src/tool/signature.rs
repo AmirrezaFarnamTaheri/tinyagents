@@ -32,7 +32,7 @@ pub const MAX_NOTE_CHARS: usize = 100;
 /// [`MAX_SIGNATURE_CHARS`].
 #[must_use]
 pub fn type_signature(schema: &Value) -> String {
-    let rendered = render(schema, 0);
+    let rendered = render(&crate::canonical_json::sorted(schema), 0);
     if rendered.chars().count() <= MAX_SIGNATURE_CHARS {
         return rendered;
     }
@@ -42,9 +42,11 @@ pub fn type_signature(schema: &Value) -> String {
 }
 
 /// One `name: first sentence` line per top-level property that carries a
-/// description, in `serde_json`'s (sorted) key order. Empty when none does.
+/// description, in sorted key order independent of serde_json features.
+/// Empty when none does.
 #[must_use]
 pub fn argument_notes(schema: &Value) -> Vec<String> {
+    let schema = crate::canonical_json::sorted(schema);
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
         return Vec::new();
     };

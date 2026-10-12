@@ -502,7 +502,7 @@ impl PromptBuilder {
         // `Value` does not fail in practice; on the impossible error we hash empty
         // data for a stable result.
         let mut hasher = Sha256::new();
-        if let Ok(bytes) = serde_json::to_vec(&payload) {
+        if let Ok(bytes) = crate::canonical_json::to_vec(&payload) {
             hasher.update(&bytes);
         }
         let digest = hasher.finalize();

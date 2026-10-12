@@ -63,6 +63,7 @@ pub mod artifacts;
 mod blocking;
 pub mod cache;
 pub mod cancel;
+mod canonical_json;
 pub mod capability;
 pub mod catalog;
 pub mod config;

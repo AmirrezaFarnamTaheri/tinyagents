@@ -143,7 +143,8 @@ pub async fn answer_tool_search(
             })
         })
         .collect();
-    let rendered = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "[]".to_string());
+    let rendered = crate::canonical_json::to_string_pretty(&Value::Array(payload.clone()))
+        .unwrap_or_else(|_| "[]".to_string());
     let matched = payload.len();
     SearchAnswer {
         result: ToolResult::success(format!(
