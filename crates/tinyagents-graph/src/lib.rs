@@ -95,7 +95,7 @@ pub use observability::{
     GraphEventJournal, GraphHealthSummary, GraphLangfuseExporter, GraphLatencyMetrics,
     GraphNodeHealth, GraphNodeLatency, GraphObservation, GraphStatusStore, GraphStepLatency,
     InMemoryGraphEventJournal, InMemoryGraphStatusStore, JournalGraphSink, SpanMetadataFn,
-    StoreGraphEventJournal,
+    StoreGraphEventJournal, build_graph_langfuse_batch,
 };
 pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,

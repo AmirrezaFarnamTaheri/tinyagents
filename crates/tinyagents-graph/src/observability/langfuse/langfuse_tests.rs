@@ -404,3 +404,49 @@ fn checkpoint_events_carry_coordinates_in_metadata() {
     assert_eq!(ckpt["body"]["metadata"]["checkpoint_id"], "ckpt-7");
     assert_eq!(ckpt["body"]["metadata"]["step"], 1);
 }
+
+#[test]
+fn transport_free_batch_preserves_graph_coordinates_and_host_metadata() {
+    let observations = sample_run();
+    let metadata = |_observation: &GraphObservation| {
+        Some(Map::from_iter([
+            ("flow_id".to_owned(), json!("flow-9")),
+            ("langgraph_node".to_owned(), json!("host-node")),
+        ]))
+    };
+    let trace = LangfuseTraceConfig {
+        trace_id: Some("flow:9:run-1".to_owned()),
+        session_id: Some("flow:9".to_owned()),
+        metadata: json!({"source": "flows"}),
+        ..Default::default()
+    };
+    let payload = build_graph_langfuse_batch(trace, &observations, Some(&metadata)).unwrap();
+    let batch = payload["batch"].as_array().unwrap();
+    assert_eq!(batch[0]["type"], "trace-create");
+    assert_eq!(batch[0]["body"]["id"], "flow:9:run-1");
+    assert_eq!(batch[0]["body"]["sessionId"], "flow:9");
+    assert_eq!(batch[0]["body"]["metadata"]["source"], "flows");
+    let node = find(batch, "span-create", "flow:9:run-1:node:a:1").unwrap();
+    assert_eq!(node["body"]["metadata"]["flow_id"], "flow-9");
+    assert_eq!(node["body"]["metadata"]["langgraph_node"], "host-node");
+    assert_eq!(node["body"]["metadata"]["langgraph_step"], 1);
+    assert_eq!(node["body"]["parentObservationId"], "flow:9:run-1:step:1");
+}
+
+#[test]
+fn transport_free_batch_rejects_an_empty_journal() {
+    assert!(matches!(
+        build_graph_langfuse_batch(LangfuseTraceConfig::default(), &[], None),
+        Err(TinyAgentsError::Validation(message)) if message == "at least one observation is required"
+    ));
+}
+
+#[test]
+fn transport_free_batch_uses_root_identity_without_an_explicit_trace() {
+    let payload =
+        build_graph_langfuse_batch(LangfuseTraceConfig::default(), &sample_run(), None).unwrap();
+    let batch = payload["batch"].as_array().unwrap();
+    assert_eq!(batch[0]["body"]["id"], "root-1");
+    assert!(find(batch, "span-create", "root-1:run:root-1").is_some());
+    assert!(find(batch, "span-create", "root-1:node:b:1").is_some());
+}
