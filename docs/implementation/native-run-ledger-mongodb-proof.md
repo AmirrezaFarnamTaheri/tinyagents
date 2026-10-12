@@ -100,3 +100,18 @@ ToolResult and crosses the large-enum-variant threshold. This branch adds
 neither public variant boxing nor lint exceptions. The default workspace gate
 was run separately and passed 4,792 unit/integration/doc tests (36 ignored).
 Fresh gates after isolation must also verify the ordinary all-features graph.
+
+The observed ordering failures were:
+- prompt/mod_tests.rs: fingerprint_value_is_pinned_for_cross_process_stability;
+- tool/packs/mod_tests.rs: a_skill_alone_renders_guide_and_the_schema_of_a_present_tool;
+- tool/prompt_tests.rs: prompt_replay_renders_assistant_calls_before_results;
+- tool/signature_tests.rs: renders_arrays_unions_and_nesting and
+  renders_flat_objects_with_optional_markers;
+- observability/trace_export/otlp_tests.rs:
+  otlp_has_one_root_with_readable_io_and_call_only_usage.
+
+The pinned fingerprint changed from
+0c8eb74fc9194b5d7845d787735eb2e36a68dc9d2ed91e5e7e07a13035d7d2a6
+to 13ceff0b2049a85fe023ffef086bebc8bcc0d884d37fdef3a3563bd21565403c.
+These findings establish a feature-composition incompatibility; the isolated
+fixture intentionally does not claim to repair or validate that composition.
