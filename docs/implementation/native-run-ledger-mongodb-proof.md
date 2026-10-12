@@ -89,3 +89,9 @@ compatibility. This fixture must not be promoted as ready until the owning
 serialization contract is fixed and the complete affected graph passes, or
 a separately verified dependency-isolation design prevents that unification.
 No expected fingerprint or behavior assertion was changed to hide the failure.
+
+Strict all-features workspace Clippy independently failed at
+MiddlewareToolOutcome and DeferredCallResult: insertion-ordered JSON enlarges
+ToolResult and crosses the large-enum-variant threshold. This branch adds
+neither public variant boxing nor lint exceptions. The default workspace gate
+is run separately, so a failed all-features command cannot skip that evidence.
