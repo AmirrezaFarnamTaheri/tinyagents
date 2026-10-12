@@ -102,3 +102,121 @@ async fn sqlite_prepared_actor_retains_original_native_fence_and_scope() {
         tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
     prepared_fenced(&backend).await;
 }
+
+#[path = "driver_schema_fixtures.rs"]
+mod fixtures;
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_is_repeated_and_preserves_native_refusal_source_without_actor_ddl() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let backend = MemoryStorage::new();
+    backend.prepare_schema().await.unwrap();
+    let scope = Scope::new("alice").unwrap();
+    let raw = backend.for_scope(&scope).unwrap();
+    DriverConversationStore::prepare_schema(raw.documents().as_ref())
+        .await
+        .unwrap();
+    let restricted = backend
+        .existing_schema()
+        .unwrap()
+        .for_scope(&scope)
+        .unwrap();
+    let marker = Arc::new(std::io::Error::other("native validation original cause"));
+    let docs = Arc::new(fixtures::RecordingDocs {
+        inner: restricted.documents().clone(),
+        validates: AtomicUsize::new(0),
+        declares: AtomicUsize::new(0),
+        refuse: AtomicBool::new(false),
+        marker: marker.clone(),
+    });
+    let mut store = DriverConversationStore::new_validate_only(restricted);
+    store.docs = docs.clone();
+    assert!(store.get_thread("one").await.unwrap().is_none());
+    let first = docs.validates.load(Ordering::SeqCst);
+    assert!(first > 0);
+    docs.refuse.store(true, Ordering::SeqCst);
+    let results = [
+        store.get_thread("one").await.map(|_| ()),
+        store.list_threads().await.map(|_| ()),
+        store
+            .search_cross_thread_messages("", 0, None)
+            .await
+            .map(|_| ()),
+        store.ensure_thread(request("one")).await.map(|_| ()),
+        store.purge_threads().await.map(|_| ()),
+    ];
+    for result in results {
+        let ConversationError::Driver(error) = result.unwrap_err() else {
+            panic!("native refusal flattened");
+        };
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        let original = std::error::Error::source(error.as_ref())
+            .unwrap()
+            .downcast_ref::<Arc<std::io::Error>>()
+            .unwrap();
+        assert!(Arc::ptr_eq(original, &marker));
+    }
+    assert!(docs.validates.load(Ordering::SeqCst) >= first + 5);
+    assert_eq!(docs.declares.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        raw.documents()
+            .count(COLLECTION, &Filter::All)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn native_required_feature_validation_accepts_compatible_superset_declarations() {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("alice").unwrap();
+    let raw = backend.for_scope(&scope).unwrap();
+    raw.documents()
+        .ensure_collection(&CollectionSpec::new(COLLECTION).ttl("until"))
+        .await
+        .unwrap();
+    let store = DriverConversationStore::new_validate_only(
+        backend
+            .existing_schema()
+            .unwrap()
+            .for_scope(&scope)
+            .unwrap(),
+    );
+    assert!(store.get_thread("missing").await.unwrap().is_none());
+    assert_eq!(
+        DriverConversationStore::collection_specs(),
+        vec![CollectionSpec::new(COLLECTION)]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn schema_preparation_is_explicit_and_restricted_native_handles_refuse_it() {
+    let backend = MemoryStorage::new();
+    let raw = backend.for_scope(&Scope::local()).unwrap();
+    DriverConversationStore::prepare_schema(raw.documents().as_ref())
+        .await
+        .unwrap();
+    let actor = backend
+        .existing_schema()
+        .unwrap()
+        .for_scope(&Scope::local())
+        .unwrap();
+    let error = DriverConversationStore::prepare_schema(actor.documents().as_ref())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    actor
+        .documents()
+        .validate_collection_spec(&CollectionSpec::new(COLLECTION))
+        .await
+        .unwrap();
+    assert_eq!(
+        actor
+            .documents()
+            .count(COLLECTION, &Filter::All)
+            .await
+            .unwrap(),
+        0
+    );
+}
