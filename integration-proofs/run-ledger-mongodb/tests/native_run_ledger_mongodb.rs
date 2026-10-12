@@ -25,6 +25,7 @@ use tinystoragedrivers_core::{
 };
 use tinystoragedrivers_mongodb::MongoStorage;
 
+/// Validate the explicitly opted-in unauthenticated loopback Mongo endpoint.
 fn endpoint() -> String {
     let value = std::env::var("TINYAGENTS_TEST_MONGO_URL")
         .expect("opt-in local Mongo tests require TINYAGENTS_TEST_MONGO_URL");
@@ -44,6 +45,7 @@ fn endpoint() -> String {
     );
     value
 }
+/// Create a UUID database and prepare its native Mongo schema.
 async fn backend() -> (String, String, MongoStorage) {
     let url = endpoint();
     let database = format!("tinyagents_ledger_{}", uuid::Uuid::new_v4().simple());
@@ -51,6 +53,7 @@ async fn backend() -> (String, String, MongoStorage) {
     backend.prepare_schema().await.unwrap();
     (url, database, backend)
 }
+/// Build the event shared by the sequence-boundary import and append cases.
 fn event() -> RunEventAppend {
     RunEventAppend {
         run_id: "run".into(),
@@ -58,6 +61,7 @@ fn event() -> RunEventAppend {
         payload: json!({}),
     }
 }
+/// Snapshot classic SQLite state at the requested sequence without mutating the snapshot.
 fn source(ledger: &DriverRunLedger, root: &tempfile::TempDir, sequence: i64) -> QuiescentSource {
     tinyagents_session::run_ledger::upsert_agent_run(
         root.path(),
@@ -157,6 +161,7 @@ async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
     assert_eq!(std::fs::read(source.path()).unwrap(), bytes);
     eprintln!("Actual Mongo terminal event proof completed");
 }
+/// Build a transcript entry for native actor context and isolation assertions.
 fn text(value: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", value))
 }
