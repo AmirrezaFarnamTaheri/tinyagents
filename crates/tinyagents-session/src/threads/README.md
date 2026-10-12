@@ -244,6 +244,12 @@ an in-memory inverted index over message content:
 - **Deterministic ids:** `DETERMINISTIC_MESSAGE_ID_PREFIX`,
   `run_reply_message_id`, `is_deterministic_message_id`, `reply_run_id`.
 
+A transient failure while helping another writer's pending intent returns the
+original native driver error: the caller's own message has not yet been reserved
+and can be retried. `Uncertain` describes only the caller's own accepted-attempt
+ambiguity. Definitive reconciliation corruption/fencing errors remain typed;
+unrelated title or label revisions do not undo an already published append.
+
 ## Files
 
 | File | Role |
@@ -261,9 +267,3 @@ an in-memory inverted index over message content:
 | `store/index.rs` | log folding, stat repair, cold index build |
 | `store/locks.rs` | per-root lock registry |
 | `*_tests.rs` | unit tests; `store/mod_compat_tests.rs` is the legacy-format fixture |
-
-A transient failure while helping another writer's pending intent returns the
-original native driver error: the caller's own message has not yet been reserved
-and can be retried. `Uncertain` describes only the caller's own accepted-attempt
-ambiguity. Definitive reconciliation corruption/fencing errors remain typed;
-unrelated title or label revisions do not undo an already published append.
