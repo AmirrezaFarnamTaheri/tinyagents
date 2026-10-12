@@ -390,7 +390,9 @@ impl DriverRunLedger {
             writes.push(put(
                 EVENT_HEADS,
                 key(&[&run_id]),
-                encode(&super::events::EventHead { next })?,
+                encode(&super::events::EventHead {
+                    next: (next <= i64::MAX as u64).then_some(next),
+                })?,
             ));
         }
         writes.push(put(
