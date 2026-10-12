@@ -158,3 +158,12 @@ and the full output was read from
 original prepared native append failures and the later corruption failure are
 fixed, alongside phase/CAS/TTL/fence/uncertainty controls. Broad workspace,
 coverage, strict lint, documentation and MSRV gates remain pending.
+
+The strengthened snapshot `2e880359` was freshly verified by command `28065`,
+which terminated 0 after a successful 20.68s build: 20 passed, 0 failed,
+0 ignored, 681 filtered. The complete output was read from
+`target/debug-logs/conversation-append-phase-strengthened-green.log`.
+This adds an actual two-helper finalization CAS barrier with observed native
+conflict, malformed/foreign pending identities and missing-field normalization,
+and native fresh-epoch bound recovery after each original writer is fenced.
+The previous 18-case results remain separate chronological checkpoints.
