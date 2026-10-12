@@ -36,6 +36,7 @@ tracing = "0.1"
 # vendor tinyagents use this same copy, so there is one set of port types.
 tinystoragedrivers-core = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-core", version = "0.5.0" }
 tinystoragedrivers-sqlite = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-sqlite", version = "0.5.0" }
+tinystoragedrivers-mongodb = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-mongodb", version = "0.5.0" }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
