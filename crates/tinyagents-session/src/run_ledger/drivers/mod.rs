@@ -8,6 +8,7 @@ mod agents;
 mod effects;
 mod events;
 mod import;
+mod retention;
 mod storage;
 pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
@@ -819,9 +820,8 @@ impl RunLedgerStore for DriverRunLedger {
         Err(unsupported("prune_run_events_before"))
     }
 
-    /// Implement [`RunLedgerStore::prune_run_telemetry_before`] without a weaker fallback.
-    async fn prune_run_telemetry_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_run_telemetry_before"))
+    async fn prune_run_telemetry_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.prune_telemetry(older_than).await.map_err(Into::into)
     }
 
     /// Implement [`RunLedgerStore::apply_retention`] without a weaker fallback.
