@@ -123,6 +123,7 @@ async fn terminal_event_append_uses_the_actual_mongo_bson_converter() {
     assert_eq!(events.events.len(), 1);
     assert_eq!(events.events[0].sequence, i64::MAX as u64);
     assert_eq!(std::fs::read(source.path()).unwrap(), bytes);
+    eprintln!("Actual Mongo terminal event proof completed");
 }
 #[tokio::test]
 #[ignore = "local Mongo replica set: explicit loopback URL and --ignored required"]
@@ -153,6 +154,7 @@ async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
     assert_eq!(events.events.len(), 1);
     assert_eq!(events.events[0].sequence, i64::MAX as u64);
     assert_eq!(std::fs::read(source.path()).unwrap(), bytes);
+    eprintln!("Actual Mongo terminal event proof completed");
 }
 fn text(value: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", value))
@@ -207,7 +209,15 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
     let peer = DriverRunLedger::new_existing_schema(
         peer_backend.for_scope_fenced(&scope, &fence).unwrap(),
     );
-    assert_eq!(peer.entry_head("session").await.unwrap(), Some(label));
+    assert_eq!(
+        peer.entry_head("session").await.unwrap(),
+        Some(label.clone())
+    );
+    assert!(matches!(
+        peer.entry_get("session", &label).await.unwrap().unwrap().kind,
+        EntryKind::Label(label) if label.name == "main"
+    ));
+    assert!(peer.entry_head("another-session").await.unwrap().is_none());
     assert_eq!(
         peer.entry_build_context("session", &last).await.unwrap(),
         vec![Message::user("first"), Message::user("last")]
@@ -255,4 +265,5 @@ async fn reopened_native_entry_actors_share_data_and_refuse_stale_epoch() {
             .kind,
         text("sibling")
     );
+    eprintln!("Actual Mongo reopened entry actors and stale native lease proof completed");
 }
