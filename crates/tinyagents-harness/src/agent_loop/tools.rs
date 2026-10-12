@@ -1165,19 +1165,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // decides whether the call may run. The runtime transports the
             // opaque value only; interpretation and policy remain host-owned.
             let effective_arguments = call.arguments.clone();
-            let authorization_facts = ctx
+            let prepared = ctx
                 .bounded(
                     self.call_budget(ctx),
                     async {
-                        dispatch
-                            .tool()
-                            .prepare_authorization(&effective_arguments)
-                            .await
-                            .map_err(|_| {
-                                TinyAgentsError::Tool(
-                                    "tool authorization preparation failed".to_string(),
-                                )
-                            })
+                        Ok::<_, TinyAgentsError>(
+                            dispatch
+                                .tool()
+                                .prepare_authorization(&effective_arguments)
+                                .await,
+                        )
                     },
                     || {
                         format!(
@@ -1187,6 +1184,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     },
                 )
                 .await?;
+            // A call whose facts cannot be prepared is refused before the
+            // host gate, like a denial: the model gets a per-call error it
+            // can recover from, never a failed run.
+            let authorization_facts = match prepared {
+                Ok(facts) => facts,
+                Err(error) => {
+                    ctx.limits.rollback_tool_calls(1);
+                    return Ok(ResolvedToolCall::Answered(tinytools::ToolResult::error(
+                        preparation_failure_message(&error),
+                    )));
+                }
+            };
             let authorization_context = super::tools::bind_authorization_context(
                 &call.name,
                 &model_arguments,
