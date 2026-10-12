@@ -893,3 +893,7 @@ mod agent_tests;
 #[cfg(test)]
 #[path = "entry_tree_tests.rs"]
 mod entry_tree_tests;
+
+#[cfg(test)]
+#[path = "event_bson_tests.rs"]
+mod event_bson_tests;
