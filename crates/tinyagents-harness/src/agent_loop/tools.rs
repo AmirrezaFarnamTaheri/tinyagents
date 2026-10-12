@@ -106,6 +106,17 @@ use sha2::{Digest, Sha256};
 use tinyinference_llm::message::ContentBlock;
 use tinytools::{ToolCall as CanonicalToolCall, ToolCallId, ToolCallOptions};
 
+/// The per-call error text for a tool whose authorization facts could not be
+/// prepared.
+///
+/// Keeps the tool's own top-level reason (for example "command analysis is
+/// unavailable") so the model can adjust, but not the error's source chain:
+/// a tool attaches lower-level diagnostics as context it never meant for the
+/// transcript.
+pub(super) fn preparation_failure_message(error: &anyhow::Error) -> String {
+    format!("tool authorization preparation failed: {error}")
+}
+
 /// Bind tool-produced authorization facts to both the caller's request and the
 /// validated arguments that will be executed. The host still owns the meaning
 /// of `facts`; this envelope only prevents facts from being replayed for a
