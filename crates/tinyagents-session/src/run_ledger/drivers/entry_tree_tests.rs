@@ -496,3 +496,78 @@ async fn native_import_preserves_duplicate_ordinal_sqlite_insertion_order() {
         classic.tips().unwrap()
     );
 }
+
+#[tokio::test]
+async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensures() {
+    use tinystoragedrivers_core::ErrorKind;
+    let backend = MemoryStorage::new();
+    let scope = Scope::local();
+    let restricted = backend.existing_schema().unwrap();
+    let denied = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
+    assert!(
+        matches!(denied.entry_append_to_head("s", kind("denied")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::NotFound)
+    );
+    let trusted = backend.for_scope(&scope).unwrap();
+    assert!(
+        trusted
+            .documents()
+            .collections("")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    DriverRunLedger::prepare_schema(trusted.documents().as_ref())
+        .await
+        .unwrap();
+    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
+    let root = actor
+        .entry_append_to_head("s", kind("admitted"))
+        .await
+        .unwrap();
+    actor.entry_label("s", &root, "named").await.unwrap();
+    actor.entry_rebuild_index("s").await.unwrap();
+    assert_eq!(
+        actor.entry_build_context("s", &root).await.unwrap(),
+        vec![Message::user("admitted")]
+    );
+}
+
+#[tokio::test]
+async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_entries() {
+    use tinystoragedrivers_core::ErrorKind;
+    let backend = MemoryStorage::new();
+    let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
+    let cycle = Entry {
+        id: EntryId::from("cycle"),
+        parent_id: Some(EntryId::from("cycle")),
+        ordinal: 0,
+        kind: kind("cycle"),
+        ts: "2025-01-01T00:00:00Z".into(),
+    };
+    native
+        .entry_import_legacy("cycle-session", &[cycle.clone()])
+        .await
+        .unwrap();
+    assert!(
+        matches!(native.entry_ancestor_chain("cycle-session", &cycle.id).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Serialization)
+    );
+    let last = Entry {
+        id: EntryId::from("last"),
+        parent_id: None,
+        ordinal: i64::MAX as u64,
+        kind: kind("last"),
+        ts: cycle.ts,
+    };
+    native
+        .entry_import_legacy("full", &[last.clone()])
+        .await
+        .unwrap();
+    assert!(
+        matches!(native.entry_append_to_head("full", kind("overflow")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::InvalidInput)
+    );
+    assert_eq!(
+        native.entry_get("full", &last.id).await.unwrap(),
+        Some(last.clone())
+    );
+    assert_eq!(native.entry_head("full").await.unwrap(), Some(last.id));
+}
