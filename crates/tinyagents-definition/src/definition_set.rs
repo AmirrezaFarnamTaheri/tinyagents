@@ -125,12 +125,14 @@ impl<X: Clone> DefinitionSet<X> {
     }
 }
 
-impl<X: DeserializeOwned + Default> DefinitionSet<X> {
+impl<X: DeserializeOwned + Default + Clone> DefinitionSet<X> {
     /// Layers every `*.toml` in each existing directory, in order, over the set.
     ///
     /// Missing directories are skipped, a directory already visited is not read
-    /// twice, and the merged hierarchy is validated afterwards.
+    /// twice, and the merged hierarchy is validated before anything is kept: on
+    /// error the set is left exactly as it was.
     pub fn load_dirs(&mut self, dirs: &[&Path], validation: DefinitionValidation) -> Result<()> {
+        let mut staged = self.clone();
         let mut seen: Vec<&Path> = Vec::new();
         for dir in dirs {
             if !dir.is_dir() || seen.contains(dir) {
@@ -141,10 +143,12 @@ impl<X: DeserializeOwned + Default> DefinitionSet<X> {
             load_dir_with_validation(dir, &mut loaded, validation)?;
             for definition in loaded {
                 tracing::info!(id = %definition.id, "[agent_defs] layered custom definition");
-                self.insert(definition);
+                staged.insert(definition);
             }
         }
-        self.validate_tier_hierarchy()
+        staged.validate_tier_hierarchy()?;
+        *self = staged;
+        Ok(())
     }
 }
 
