@@ -78,7 +78,7 @@ pub use delegation::{
     run_delegation_durable, run_or_resume_delegation,
 };
 pub use export::{
-    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
+    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, GraphTopologyReport, NodeInfo,
     NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, from_json, to_json,
     to_mermaid,
 };

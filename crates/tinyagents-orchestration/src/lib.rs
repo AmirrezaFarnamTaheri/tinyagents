@@ -16,6 +16,7 @@
 pub mod status;
 pub mod subagent;
 pub mod teams;
+pub mod topology;
 pub mod workflow;
 
 #[cfg(test)]

@@ -43,8 +43,10 @@
 //! assert!(mermaid.contains("flowchart TD"));
 //! ```
 
+mod report;
 mod types;
 
+pub use report::GraphTopologyReport;
 pub use types::{
     ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
     NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo,
