@@ -52,19 +52,20 @@ where
     D: Fn(Worker<P>, String) -> R,
 {
     let concurrency = resolve_concurrency(configured_concurrency, workers.len());
-    // `branch_ctx` carries the index; tag it so hooks see it too. Hooks run on
+    // The branch context is built only after approval, so a denied worker has
+    // no setup side effects. Hooks run on
     // the branch's own task, so `on_finish` fires as each worker completes.
     run(
         workers,
         concurrency,
         cancel,
-        |i| (i, branch_ctx(i)),
-        |w, (idx, c)| {
+        |i| i,
+        |w, idx| {
             // Exactly one of `ready` (denied) or `fut` (approved) is set.
             let (ready, fut) = match hooks.approve(idx, &w) {
                 Ok(()) => {
                     hooks.on_start(idx, &w);
-                    (None, Some(exec(w, c)))
+                    (None, Some(exec(w, branch_ctx(idx))))
                 }
                 Err(reason) => {
                     tracing::debug!(index = idx, "[parallel] worker denied by approval hook");

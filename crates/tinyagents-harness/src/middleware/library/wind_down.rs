@@ -158,6 +158,16 @@ where
     );
     harness.with_policy(policy);
     let handle = handle?;
+    if !handle
+        .policy()
+        .is_allowed(crate::steering::SteeringCommandKind::Pause)
+    {
+        tracing::warn!(
+            target: "tinyagents::middleware",
+            "[wind_down] steering policy does not permit Pause; wind-down not installed"
+        );
+        return None;
+    }
     let middleware = Arc::new(WindDownMiddleware::new(handle.clone(), deadline));
     harness.push_middleware(middleware.clone());
     Some(middleware)

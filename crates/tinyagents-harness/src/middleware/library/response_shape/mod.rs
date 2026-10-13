@@ -88,12 +88,11 @@ impl<Ctx: Send + Sync + 'static> Middleware<(), Ctx> for ResponseShapeMiddleware
             // With a validator installed the loop only runs the strict output
             // check when the request carries a schema-shaped format. Replacing
             // the permissive schema with `JsonObject`/`Text` would silently
-            // switch validation off, so those formats keep the schema.
+            // switch validation off, and `Auto` may resolve to a synthetic tool
+            // call whose arguments bypass the text validator, so those formats
+            // keep the native schema.
             let keeps_validation = shape.validator.is_none()
-                || matches!(
-                    format,
-                    ResponseFormat::JsonSchema { .. } | ResponseFormat::Auto { .. }
-                );
+                || matches!(format, ResponseFormat::JsonSchema { .. });
             if keeps_validation {
                 request.response_format = Some(format.clone());
             }
