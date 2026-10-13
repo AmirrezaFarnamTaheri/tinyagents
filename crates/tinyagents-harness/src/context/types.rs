@@ -385,7 +385,7 @@ pub struct RunContext<Ctx = ()> {
     /// Typed host extension slots: per-run host values (turn origin,
     /// workspace handle, progress sink, ...) keyed by type. Replaces ambient
     /// `task_local!` state; inherited by child contexts and visible to tools
-    /// through `ToolExecutionContext::host`. See [`HostExtensions`].
+    /// through `ToolExecutionContext::host`. See [`super::HostExtensions`].
     pub host_ext: super::HostExtensions,
     /// Event fan-out bus for observability.
     pub events: EventSink,

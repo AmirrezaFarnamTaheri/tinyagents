@@ -283,8 +283,8 @@ impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for ObserverScope {
 }
 /// Existing TinyAgents exporter; this module adds no transport implementation.
 ///
-/// Traces go out as OTLP: build requests from [`TraceSpan`]s with
-/// [`otlp_requests`] and send them with `LangfuseClient::send_otlp`, the
+/// Traces go out as OTLP: build requests from `TraceSpan`s with
+/// `otlp_requests` and send them with `LangfuseClient::send_otlp`, the
 /// supported Langfuse trace path. `create_score` still posts scores to the
 /// batch API, which remains supported for scores.
 #[cfg(feature = "langfuse")]
