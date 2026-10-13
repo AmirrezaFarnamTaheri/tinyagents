@@ -42,3 +42,6 @@ pub use workspace::{LegacyWorkspaceReport, WorkspaceLayout, import_workspace};
 
 #[cfg(test)]
 mod fixtures;
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
