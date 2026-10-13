@@ -11,6 +11,7 @@ mod events;
 mod import;
 mod retention;
 mod storage;
+mod team;
 pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
 use std::sync::Arc;
@@ -618,33 +619,35 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::claim_agent_team_task`] without a weaker fallback.
     async fn claim_agent_team_task(
         &self,
-        _team_id: &str,
-        _task_id: &str,
-        _member_id: &str,
-        _claim_token: &str,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
     ) -> Result<ClaimOutcome> {
-        Err(unsupported("claim_agent_team_task"))
+        self.claim_team_task(team_id, task_id, member_id, claim_token)
+            .await
     }
 
     /// Implement [`RunLedgerStore::complete_agent_team_task`] without a weaker fallback.
     async fn complete_agent_team_task(
         &self,
-        _team_id: &str,
-        _task_id: &str,
-        _member_id: &str,
-        _evidence: &[String],
-        _require_evidence: bool,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        evidence: &[String],
+        require_evidence: bool,
     ) -> Result<CompletionOutcome> {
-        Err(unsupported("complete_agent_team_task"))
+        self.complete_team_task(team_id, task_id, member_id, evidence, require_evidence)
+            .await
     }
 
     /// Implement [`RunLedgerStore::shutdown_agent_team_member`] without a weaker fallback.
     async fn shutdown_agent_team_member(
         &self,
-        _team_id: &str,
-        _member_id: &str,
+        team_id: &str,
+        member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>> {
-        Err(unsupported("shutdown_agent_team_member"))
+        self.shutdown_team_member(team_id, member_id).await
     }
 
     async fn mark_agent_team_member_running(
