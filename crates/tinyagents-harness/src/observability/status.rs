@@ -43,7 +43,7 @@ const MIN_SECRET_LEN: usize = 8;
 /// One id serves a whole turn: the `EventSink::with_stream_id` prefix (so
 /// persisted `event_id`s are the restart-stable `{run_id}-evt-{offset}`), the
 /// journal stream key, and the status-store key. The `simple()` uuid form (no
-/// hyphens) stays inside [`FileStore`]'s allowed-character set.
+/// hyphens) keeps the id readable in logs and file names.
 pub fn mint_run_id() -> RunId {
     RunId::new(format!("run.{}", uuid::Uuid::new_v4().simple()))
 }
