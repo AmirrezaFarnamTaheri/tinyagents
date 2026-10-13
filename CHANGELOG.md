@@ -64,7 +64,35 @@ let report = import_workspace(&provider, "agent-id", workspace_dir).await?;
   the same only-if-absent path.
 - `DriverRunLedger::import_legacy_database` imports one database directly.
 
+### Turn-state files and the directory attachment stash removed
+
+- `TurnStateStore` (the per-turn JSON files under `memory/conversations/turn_states/`)
+  is removed. `TurnStates` is implemented by `InMemoryTurnStates` and
+  `DriverTurnStates`; a library host with no session provider gets the memory
+  store by default.
+- `TurnStateMirror::new` takes an `Arc<dyn TurnStates>` instead of a
+  `TurnStateStore`. An interrupted turn's partial answer is carried into the
+  transcript only when the host attaches a locator with
+  `TurnStateMirror::with_transcripts`; otherwise it stays in the snapshot.
+- `multimodal::AttachmentStash` (a directory of files) is removed. Use
+  `BlobAttachmentStash` over blob and document ports, which is also the
+  implementation hosts with no storage URL should use over the memory driver.
+  Retrieval is by id (`read`, `read_data_uri`, `build_index`); there is no
+  path to hand a file reader, so `managed_path` and path-keyed `write` results
+  are gone.
+- The classic turn-state layout is still read, never written, by
+  `session::legacy::import_workspace`.
+
 ### Not yet moved
 
-The path-bound JSONL transcript, turn-state-file and thread stores, and the
-artifact and media offload, still use files and are migrated in a follow-up.
+These still use files and are migrated in follow-ups (tracked in
+tinyhumansai/openhuman#7688):
+
+- the JSONL transcript writer, reader and `FileTranscriptLocator`
+  (path-bound; `session_raw/` adoption, spend and view helpers read them);
+- the JSONL thread store (`ConversationStore`, `FileConversationStore`):
+  `DriverConversationStore` does not yet implement `update_message`,
+  `delete_messages_from` or `purge_threads`, so the file store stays until it
+  does;
+- the artifact offload (`artifacts::ArtifactOffload`) and media outputs, which
+  write files the model later opens by path.
