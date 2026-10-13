@@ -64,9 +64,11 @@ mod budget;
 mod call_effect;
 mod compaction_pressure;
 mod context;
+mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
 mod image_trim;
+mod lifecycle_hooks;
 mod loop_guards;
 mod memory_protocol;
 mod memory_protocol_middleware;
@@ -100,6 +102,14 @@ pub use call_effect::{
 pub use credential_scrub::{
     CredentialScrubMiddleware, REDACTION_PLACEHOLDER, ToolScrubber, redaction_notice,
     scrub_with_notice,
+};
+pub use context_ladder::{
+    COMPACTION_TAIL_WINDOW_FRACTION, ContextLadder, UNKNOWN_WINDOW_FALLBACK_TOKENS,
+    compression_policy, microcompact_for_window, with_turn_aware_tail,
+};
+pub use lifecycle_hooks::{
+    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
+    PackedToolRouter,
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
@@ -161,6 +171,12 @@ pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
 
+#[cfg(test)]
+#[path = "context_ladder_tests.rs"]
+mod context_ladder_test;
+#[cfg(test)]
+#[path = "lifecycle_hooks_tests.rs"]
+mod lifecycle_hooks_test;
 #[cfg(test)]
 #[path = "arg_recovery_tests.rs"]
 mod arg_recovery_test;
