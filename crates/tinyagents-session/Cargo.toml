@@ -32,7 +32,7 @@ tokio = { workspace = true, default-features = true, features = ["sync"] }
 # `threads` names its atomic-rewrite temp files `.conversations-<uuid>.tmp`.
 uuid = { workspace = true }
 # Session stores over `tinystoragedrivers` ports (`storage-drivers` feature).
-tinystoragedrivers-core = { workspace = true, optional = true, features = ["blocking"] }
+tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
 # `sessions.db` runs on the SQLite driver's native mode: the driver owns the
 # shared per-file connection, this crate keeps its own tables and SQL.
 tinystoragedrivers-sqlite = { workspace = true }
@@ -46,10 +46,8 @@ tracing = ["tinyagents-harness/tracing"]
 # A `SessionStoreProvider` over `tinystoragedrivers` ports, so a host can keep
 # every agent's transcripts, turn states, records and journal in whichever
 # backend it opened (SQLite, MongoDB, memory, ...).
-storage-drivers = [
-    "dep:tinystoragedrivers-core",
-    "tinyagents-harness/storage-drivers",
-]
+# Retained as a no-op: storage drivers are always on.
+storage-drivers = []
 
 [dev-dependencies]
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
