@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
-use super::ops::RunTransition;
+use super::types::RunTransition;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
 use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
@@ -330,23 +330,32 @@ pub trait RunLedgerStore: Send + Sync {
     /// `shutdown_agent_team_member`.
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool>;
 
-    /// The bound-handle form of [`super::tool_effects::record_tool_started`], with the same semantics.
+    /// Records that a tool call has been admitted and is about to execute.
+    ///
+    /// Idempotent on `(run_id, call_id)`: a second write re-stamps `started_at` and
+    /// overwrites the tool, idempotency and summary fields, so a caller that retries
+    /// after an ambiguous failure need not special-case "already started".
     async fn record_tool_started(&self, start: ToolEffectStart) -> Result<ToolEffectRow>;
 
-    /// The bound-handle form of [`super::tool_effects::settle_tool_effect`], with the same semantics.
+    /// Settles a recorded call to a terminal status (`completed`, `failed`,
+    /// `interrupted` or `deferred`) and stamps `settled_at`. A settle for a call
+    /// that was never recorded creates its row.
     async fn settle_tool_effect(&self, settle: ToolEffectSettle) -> Result<Option<ToolEffectRow>>;
 
-    /// The bound-handle form of [`super::tool_effects::list_unresolved_tool_effects`], with the same semantics.
+    /// Lists a run's calls still `started`, oldest first: the calls a resumed run
+    /// must classify before it re-executes anything.
     async fn list_unresolved_tool_effects(&self, run_id: &str) -> Result<Vec<ToolEffectRow>>;
 
-    /// The bound-handle form of [`super::tool_effects::mark_interrupted`], with the same semantics.
+    /// Settles one call as `interrupted`: it was in flight across a resume and is
+    /// not safe to re-execute blindly.
     async fn mark_tool_effect_interrupted(
         &self,
         run_id: &str,
         call_id: &str,
     ) -> Result<Option<ToolEffectRow>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::append`], with the same semantics.
+    /// Appends `kind` as a new entry under `parent_id` and returns its id. `None`
+    /// is only valid for a session's first entry.
     async fn entry_append(
         &self,
         session_id: &str,
@@ -354,37 +363,41 @@ pub trait RunLedgerStore: Send + Sync {
         kind: EntryKind,
     ) -> Result<EntryId>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::append_to_head`], with the same semantics.
+    /// Appends `kind` as a child of the current head (the entry with the greatest
+    /// ordinal), the "linear append still works" path.
     async fn entry_append_to_head(&self, session_id: &str, kind: EntryKind) -> Result<EntryId>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::head`], with the same semantics.
+    /// The entry with the greatest ordinal, if any entry has been appended.
     async fn entry_head(&self, session_id: &str) -> Result<Option<EntryId>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::get`], with the same semantics.
+    /// One entry by id.
     async fn entry_get(&self, session_id: &str, id: &EntryId) -> Result<Option<Entry>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::ancestor_chain`], with the same semantics.
+    /// The root-to-`tip` ancestor chain in chronological order.
     async fn entry_ancestor_chain(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Entry>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::tips`], with the same semantics.
+    /// Every current tip (an entry with no children), in ordinal order.
     async fn entry_tips(&self, session_id: &str) -> Result<Vec<EntryId>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::branches`], with the same semantics.
+    /// Every named branch label and the tip it names.
     async fn entry_branches(&self, session_id: &str) -> Result<Vec<Branch>>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::label`], with the same semantics.
+    /// Names `tip` by appending a label entry under it; returns the label entry's id.
     async fn entry_label(&self, session_id: &str, tip: &EntryId, name: &str) -> Result<EntryId>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::fork`], with the same semantics.
+    /// Creates a new tip without disturbing existing ones: `Branch` scope names an
+    /// existing entry, `Tree` scope copies the ancestor path.
     async fn entry_fork(&self, session_id: &str, tip: &EntryId, fork: Fork) -> Result<EntryId>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::rebuild_index`], with the same semantics.
+    /// Rebuilds the materialized ancestor-chain index from the immutable entries.
     async fn entry_rebuild_index(&self, session_id: &str) -> Result<()>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::import_legacy`], with the same semantics.
+    /// Imports legacy linear entries, skipping any id already present so a repeated
+    /// import of the same source is a no-op.
     async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()>;
 
-    /// The bound-handle form of [`crate::entry_tree::EntryTree::build_context`], with the same semantics.
+    /// Projects `tip`'s ancestor chain to a model-ready message list, stopping at
+    /// the newest compaction on the path.
     async fn entry_build_context(&self, session_id: &str, tip: &EntryId) -> Result<Vec<Message>>;
 
     /// Deletes every **finished** session that ended before `older_than`, together
@@ -440,14 +453,18 @@ pub trait RunLedgerStore: Send + Sync {
     /// half-built index.
     async fn reindex_fts(&self) -> Result<usize>;
 
-    /// The bound-handle form of [`super::command_center::list_agent_work`], with the same semantics.
+    /// Lists recent background agent work grouped by command-center bucket.
+    /// Reads at most `limit` (default 200, capped 500) most-recently-updated runs.
+    /// Read-only.
     async fn list_agent_work(
         &self,
         limit: Option<u32>,
         display_name: &(dyn for<'a> Fn(&'a str) -> Option<String> + Sync),
     ) -> Result<CommandCenterView>;
 
-    /// The bound-handle form of [`super::command_center::apply_control`], with the same semantics.
+    /// Applies a control verb (stop, retry, continue, follow-up) to one run as a
+    /// durable transition plus a timeline event in one atomic commit, and returns
+    /// the re-projected row.
     async fn apply_control(
         &self,
         run_id: &str,

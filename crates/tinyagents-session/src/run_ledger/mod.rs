@@ -27,7 +27,6 @@ pub use history::{
 };
 pub use port::RunLedgerStore;
 
-pub use ops_types::RunTransition;
 pub use recovery::{
     CallRecovery, DanglingToolCall, MissingEffectRow, RecoveryClass, classify_recovery,
     classify_recovery_with, overall_recovery,
@@ -41,7 +40,7 @@ pub use types::{
     AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
     AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
     RunEvent, RunEventAppend, RunEventListRequest, RunEventListResponse, RunTelemetry,
-    RunTelemetryUpsert, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
+    RunTelemetryUpsert, RunTransition, WorkflowLeaseClaim, WorkflowRun, WorkflowRunListRequest,
     WorkflowRunListResponse, WorkflowRunStatus, WorkflowRunUpsert,
 };
 

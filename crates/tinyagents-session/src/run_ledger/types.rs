@@ -765,3 +765,16 @@ pub enum CompletionOutcome {
     /// No task matched the given team + task id.
     UnknownTask,
 }
+
+/// Result of [`RunLedgerStore::transition_agent_run_status_from`](super::RunLedgerStore::transition_agent_run_status_from).
+#[derive(Debug, Clone)]
+pub enum RunTransition {
+    /// The run was still in the expected status; it moved and the event (if
+    /// any) was recorded. Carries the run as stored afterwards.
+    Applied(AgentRun),
+    /// The run had already left the expected status; nothing was written.
+    /// Carries the run as it is now.
+    StatusChanged(AgentRun),
+    /// No run has this id.
+    NotFound,
+}
