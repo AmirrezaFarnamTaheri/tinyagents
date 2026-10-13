@@ -12,11 +12,9 @@
 //! mutations stays host work.
 
 pub mod mirror;
-pub mod store;
 pub mod types;
 
 pub use mirror::TurnStateMirror;
-pub use store::TurnStateStore;
 pub use types::{
     SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus, TurnLifecycle,
     TurnPhase, TurnState,
