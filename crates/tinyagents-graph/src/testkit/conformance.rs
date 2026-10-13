@@ -753,3 +753,58 @@ where
         "prune preserves the writes of the checkpoints it keeps"
     );
 }
+
+/// Runs the [`TaskCache`](crate::TaskCache) contract against `cache`.
+///
+/// Covers miss-then-hit round trips, per-key isolation, overwrite, TTL expiry
+/// (a lapsed entry reads as a miss and stays gone), and `clear` dropping one
+/// graph's entries without touching another's. Takes a short real sleep for the
+/// TTL check.
+pub async fn task_cache_contract<C>(cache: C)
+where
+    C: crate::TaskCache,
+{
+    use crate::TaskCacheKey;
+    use serde_json::json;
+    use std::time::Duration;
+    use tinyagents_harness::ids::GraphId;
+
+    let key = |graph: &str, node: &str, hash: &str| {
+        TaskCacheKey::new(GraphId::new(graph), NodeId::from(node), hash)
+    };
+    let k = key("g", "n", "h1");
+    assert_eq!(cache.get(&k).await.unwrap(), None, "empty cache misses");
+    cache.put(&k, json!({"v": [1, 2]}), None).await.unwrap();
+    assert_eq!(cache.get(&k).await.unwrap(), Some(json!({"v": [1, 2]})));
+    for other in [key("g", "n", "h2"), key("g", "m", "h1"), key("x", "n", "h1")] {
+        assert_eq!(cache.get(&other).await.unwrap(), None, "keys are distinct");
+    }
+    cache.put(&k, json!("new"), None).await.unwrap();
+    assert_eq!(cache.get(&k).await.unwrap(), Some(json!("new")), "overwrite");
+
+    let short = key("g", "n", "short");
+    cache
+        .put(&short, json!(1), Some(Duration::from_millis(30)))
+        .await
+        .unwrap();
+    assert_eq!(cache.get(&short).await.unwrap(), Some(json!(1)));
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert_eq!(cache.get(&short).await.unwrap(), None, "expired after TTL");
+    assert_eq!(cache.get(&short).await.unwrap(), None, "stays expired");
+    cache.put(&short, json!(2), None).await.unwrap();
+    assert_eq!(
+        cache.get(&short).await.unwrap(),
+        Some(json!(2)),
+        "re-put revives an expired key"
+    );
+
+    cache.put(&key("other", "n", "h"), json!(9), None).await.unwrap();
+    cache.clear(&GraphId::new("g")).await.unwrap();
+    assert_eq!(cache.get(&k).await.unwrap(), None, "clear drops the graph");
+    assert_eq!(cache.get(&short).await.unwrap(), None);
+    assert_eq!(
+        cache.get(&key("other", "n", "h")).await.unwrap(),
+        Some(json!(9)),
+        "clear leaves other graphs"
+    );
+}
