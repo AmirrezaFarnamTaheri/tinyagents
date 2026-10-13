@@ -45,6 +45,7 @@ impl std::error::Error for DefinitionRegistryError {}
 pub use definition::{
     AgentDefinition, EXTENDED_MAX_TOOL_ITERATIONS, Extensions, IterationPolicy, ToolScopeResolution,
 };
+pub use definition_set::DefinitionSet;
 pub use execution_spec::{ModelSpec, SPAWN_TOOL_NAMES, SandboxMode, ToolScope};
 pub use loader::{
     DefinitionValidation, load_dir, load_dir_with_validation, load_file, load_file_with_validation,
@@ -55,6 +56,7 @@ pub use subagents::{SkillsWildcard, SubagentEntry};
 pub use tier::{AgentTier, validate_tier_transition};
 
 mod definition;
+mod definition_set;
 mod execution_spec;
 mod loader;
 mod prompt;
