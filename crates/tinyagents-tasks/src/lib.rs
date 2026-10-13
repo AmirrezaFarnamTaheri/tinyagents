@@ -16,6 +16,7 @@
 //! [`tinyagents_harness::tool::ToolRegistry`] alongside any other tools.
 
 mod completions;
+mod driver_store;
 mod reconcile;
 mod recovery;
 mod runtime;
@@ -28,7 +29,7 @@ mod types;
 pub use completions::{
     CompletionArtifact, CompletionFormatter, CompletionRecord, CompletionResult, CompletionRouter,
     CompletionState, CompletionStatus, CompletionStore, DEFAULT_MAX_ATTEMPTS,
-    InMemoryCompletionStore, JsonlCompletionStore, NeutralCompletionFormatter, NotifyMode,
+    DriverCompletionStore, InMemoryCompletionStore, NeutralCompletionFormatter, NotifyMode,
     RecordOutcome, TombstoneOutcome,
 };
 pub use reconcile::{
@@ -39,9 +40,10 @@ pub use recovery::{
     build_restart_recovery_note, recovery_children,
 };
 pub use runtime::DetachedTaskRegistry;
-pub use store::{InMemoryTaskStore, JsonlTaskStore, TaskStore};
+pub use driver_store::DriverTaskStore;
+pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
-    TaskStoreRegistry, TaskStoreRegistryError, open_jsonl_task_store_or_memory,
+    TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
 };
 pub use tool::{
     OrchestrationTool, SteeringRegistry, orchestration_tool_schema, orchestration_tool_schemas,

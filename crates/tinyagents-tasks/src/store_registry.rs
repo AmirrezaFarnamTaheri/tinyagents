@@ -19,10 +19,10 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::store::{InMemoryTaskStore, JsonlTaskStore, TaskStore};
+use crate::driver_store::DriverTaskStore;
+use crate::store::{InMemoryTaskStore, TaskStore};
 
 /// Why a registry lookup could not complete.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +58,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> TaskStoreRegistry<K> {
     /// `open` is infallible by design: a store that cannot be made durable
     /// should degrade to an in-memory one rather than take the caller's
     /// orchestration surface down with it. See
-    /// [`open_jsonl_task_store_or_memory`].
+    /// [`open_driver_task_store_or_memory`].
     pub fn new(open: impl Fn(&K) -> Arc<dyn TaskStore> + Send + Sync + 'static) -> Self {
         Self {
             stores: Mutex::new(HashMap::new()),
@@ -147,40 +147,32 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for TaskStoreRegistry<K
     }
 }
 
-/// Opens a durable [`JsonlTaskStore`] at `path`, degrading to an in-memory store.
+/// Opens a durable [`DriverTaskStore`] over `docs`, degrading to an in-memory store.
 ///
-/// The parent directory is created first. A failure at either step — an
-/// unwritable directory, a corrupt or unreadable log — yields an
-/// [`InMemoryTaskStore`] instead of an error: losing durability across a restart
-/// is a far smaller harm than refusing to run orchestration at all, and a host
-/// on a read-only volume should still be able to spawn work.
-pub fn open_jsonl_task_store_or_memory(path: &Path) -> Arc<dyn TaskStore> {
-    if let Some(parent) = path.parent()
-        && let Err(err) = std::fs::create_dir_all(parent)
-    {
-        tracing::warn!(
-            dir = %parent.display(),
-            error = %err,
-            "[orchestration] task store directory unavailable; falling back to memory"
-        );
-        return Arc::new(InMemoryTaskStore::new());
-    }
-
-    match JsonlTaskStore::open(path) {
-        Ok(store) => {
-            tracing::debug!(
-                path = %path.display(),
-                "[orchestration] opened durable task store"
-            );
-            Arc::new(store)
-        }
+/// A failure to start the store's bridge thread or to declare its collections
+/// yields an [`InMemoryTaskStore`] instead of an error: losing durability across
+/// a restart is a far smaller harm than refusing to run orchestration at all, so
+/// a host whose backend is briefly unavailable can still spawn work.
+pub fn open_driver_task_store_or_memory(
+    docs: Arc<dyn tinystoragedrivers_core::DocumentStore>,
+) -> Arc<dyn TaskStore> {
+    let store = match DriverTaskStore::new(docs) {
+        Ok(store) => store,
         Err(err) => {
             tracing::warn!(
-                path = %path.display(),
                 error = %err,
                 "[orchestration] durable task store unavailable; falling back to memory"
             );
-            Arc::new(InMemoryTaskStore::new())
+            return Arc::new(InMemoryTaskStore::new());
         }
+    };
+    // Declare eagerly so an unusable backend degrades now, not at first use.
+    if let Err(err) = store.declare_collections() {
+        tracing::warn!(
+            error = %err,
+            "[orchestration] durable task store unavailable; falling back to memory"
+        );
+        return Arc::new(InMemoryTaskStore::new());
     }
+    Arc::new(store)
 }

@@ -125,6 +125,17 @@ impl DriverTaskStore {
         ]
     }
 
+    /// Declare the collections now, so a backend that cannot hold them is
+    /// found at open time rather than at the first task.
+    ///
+    /// # Errors
+    ///
+    /// The backend's refusal, or the bridge failing.
+    pub fn declare_collections(&self) -> Result<()> {
+        let this = self.clone();
+        self.run(async move { this.declare().await })
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl std::future::Future<Output = Result<T>> + Send + 'static,
