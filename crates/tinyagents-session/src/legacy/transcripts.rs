@@ -58,7 +58,8 @@ pub fn raw_dir(workspace_dir: &Path) -> PathBuf {
 
 /// Every `*.jsonl` under the raw directory (flat and date-grouped), by stem.
 fn transcript_files(raw: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
-    let mut found = Vec::new();
+    let mut flat = Vec::new();
+    let mut dated = Vec::new();
     let mut entries: Vec<_> = std::fs::read_dir(raw)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
@@ -67,14 +68,16 @@ fn transcript_files(raw: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
             let mut inner: Vec<_> = std::fs::read_dir(&path)?.collect::<Result<_, _>>()?;
             inner.sort_by_key(|entry| entry.file_name());
             for entry in inner {
-                push_jsonl(&mut found, entry.path());
+                push_jsonl(&mut dated, entry.path());
             }
         } else {
-            push_jsonl(&mut found, path);
+            push_jsonl(&mut flat, path);
         }
     }
     // The flat layout wins over a date-grouped duplicate of the same stem, so a
     // stem is imported once, from the newest layout that has it.
+    let mut found = flat;
+    found.extend(dated);
     let mut seen = std::collections::HashSet::new();
     found.retain(|(stem, _)| seen.insert(stem.clone()));
     Ok(found)
@@ -89,7 +92,12 @@ fn push_jsonl(found: &mut Vec<(String, PathBuf)>, path: PathBuf) {
     }
 }
 
-fn count_markdown(workspace_dir: &Path) -> usize {
+/// Markdown sessions that have no JSONL transcript of the same stem.
+///
+/// The classic writer renders a `.md` companion beside every transcript it
+/// writes; those are views of a transcript this pass imports, not data. Only a
+/// Markdown file with no JSONL source is a session the importer cannot carry.
+fn count_markdown_only(workspace_dir: &Path, stems: &std::collections::HashSet<String>) -> usize {
     let sessions = workspace_dir.join("sessions");
     let Ok(days) = std::fs::read_dir(sessions) else {
         return 0;
@@ -97,7 +105,14 @@ fn count_markdown(workspace_dir: &Path) -> usize {
     days.flatten()
         .filter_map(|day| std::fs::read_dir(day.path()).ok())
         .flat_map(|files| files.flatten())
-        .filter(|file| file.path().extension().and_then(|e| e.to_str()) == Some("md"))
+        .filter(|file| {
+            let path = file.path();
+            path.extension().and_then(|e| e.to_str()) == Some("md")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|stem| !stems.contains(stem))
+        })
         .count()
 }
 
@@ -221,15 +236,17 @@ pub fn import_transcripts(
     workspace_dir: &Path,
     destination: &dyn TranscriptLocator,
 ) -> anyhow::Result<TranscriptImportReport> {
-    let mut report = TranscriptImportReport {
-        markdown_skipped: count_markdown(workspace_dir),
-        ..Default::default()
-    };
+    let mut report = TranscriptImportReport::default();
     let raw = raw_dir(workspace_dir);
-    if !raw.is_dir() {
-        return Ok(report);
-    }
-    for (stem, path) in transcript_files(&raw)? {
+    let files = if raw.is_dir() {
+        transcript_files(&raw)?
+    } else {
+        Vec::new()
+    };
+    let stems: std::collections::HashSet<String> =
+        files.iter().map(|(stem, _)| stem.clone()).collect();
+    report.markdown_skipped = count_markdown_only(workspace_dir, &stems);
+    for (stem, path) in files {
         let (display, model) = match (read_transcript_display(&path), read_transcript(&path)) {
             (Ok(display), Ok(model)) => (display, model),
             (Err(error), _) | (_, Err(error)) => {

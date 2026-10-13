@@ -1,9 +1,9 @@
 //! Importer tests for the file stores: JSONL transcripts and turn-state JSON.
 
 use super::*;
-use crate::port::{DriverSessionStores, SessionStoreProvider, TurnStates};
+use crate::port::{DriverSessionStores, TurnStates};
 use crate::transcript::{
-    MessageUsage, TranscriptLocator, TranscriptMessage, TranscriptMeta, TurnUsage,
+    MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage,
     append_interrupted_partial, append_tools_record, append_transcript_turn, read_transcript,
     read_transcript_display, write_transcript,
 };
@@ -42,8 +42,8 @@ fn usage(iteration: u32) -> TurnUsage {
         usage: MessageUsage {
             input: 10,
             output: 20,
-            cached_input: 0,
             cost_usd: 0.01,
+            ..Default::default()
         },
         ts: "2026-01-01T00:00:01Z".into(),
         reasoning_content: Some("because".into()),
