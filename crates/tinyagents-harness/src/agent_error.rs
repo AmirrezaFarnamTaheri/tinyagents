@@ -145,22 +145,22 @@ impl std::error::Error for AgentError {
 
 impl AgentError {
     /// User/provider-state outcomes that the UI already surfaces to the
-    /// user and that no developer can act on from Sentry — `run_single`
+    /// user and that no developer can act on from Sentry — a host
     /// suppresses their Sentry emission (`log::info!` only) while still
     /// returning the `Err` so the existing `AgentError` + `recoverable`
     /// semantics are preserved.
     ///
     /// - `MaxIterationsExceeded`: deterministic tool-loop cap, drives
-    ///   OPENHUMAN-TAURI-99 / -98 suppression.
+    ///   error-reporter suppression.
     /// - `EmptyProviderResponse`: degenerate/poisoned chat completion,
-    ///   drives TAURI-RUST-4JX suppression.
+    ///   also suppressed.
     ///
     /// Other variants are real failures (`ProviderError` upstream HTTP /
     /// network, `ToolExecutionError` callable bug, `ContextLimitExceeded`
     /// compaction gap, `CostBudgetExceeded`, `CompactionFailed`,
     /// `PermissionDenied` config bug, `Other` escape hatch) and must
     /// continue to escalate.
-    pub fn skips_sentry(&self) -> bool {
+    pub fn is_expected_outcome(&self) -> bool {
         matches!(
             self,
             Self::MaxIterationsExceeded { .. } | Self::EmptyProviderResponse { .. }

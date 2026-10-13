@@ -10,12 +10,16 @@
 //! a run can roll up cost across many calls.
 
 mod gateway_charge;
+mod turn_cost;
 mod types;
 
 use std::ops::{Add, AddAssign};
 
 use tinyinference_llm::usage::Usage;
 pub use gateway_charge::GatewayChargeModel;
+pub use turn_cost::{
+    CallCost, CallUsage, CostSource, CostTally, TurnCost, call_cost, estimate_call_cost_usd,
+};
 pub use types::*;
 
 impl CostTotals {

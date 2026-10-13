@@ -21,7 +21,7 @@ fn max_iterations_detection_matches_display() {
     // The substring helper must match the variant's own Display output —
     // the channels dispatch / web_channel sites flatten the typed error
     // through a `String` boundary, so any drift between the constant
-    // and `Display` silently re-enables Sentry emission for the cap
+    // and `Display` silently re-enables the error reporter emission for the cap
     // (OPENHUMAN-TAURI-99 / -98).
     let rendered = AgentError::MaxIterationsExceeded { max: 8 }.to_string();
     assert!(is_max_iterations_error(&rendered));
@@ -91,9 +91,9 @@ fn from_anyhow_recovers_typed_agent_error_and_other_source() {
 // `agent::session_host::turn` returns this variant when the provider's
 // chat completion contains no text, no thinking, and no tool calls (a
 // degenerate/poisoned response — typically a flaky local model). The
-// variant was added so `run_single` can route it through `skips_sentry()`
+// variant was added so `run_single` can route it through `is_expected_outcome()`
 // and demote like `MaxIterationsExceeded`, keeping TAURI-RUST-4JX off
-// Sentry while preserving the user-visible error and the `Err` propagation
+// the error reporter while preserving the user-visible error and the `Err` propagation
 // contract.
 
 #[test]
@@ -103,7 +103,7 @@ fn empty_provider_response_display_matches_user_facing_string() {
     // `agent/session_host/turn.rs:801` (the warn breadcrumb) explicitly
     // calls out the "surfacing as error instead of a silent blank reply"
     // contract. Any change to this byte string is a user-visible message
-    // change and a Sentry-fingerprint change.
+    // change and a the error reporter-fingerprint change.
     let err = AgentError::EmptyProviderResponse { iteration: 1 };
     assert_eq!(
         err.to_string(),
@@ -112,20 +112,20 @@ fn empty_provider_response_display_matches_user_facing_string() {
 }
 
 #[test]
-fn skips_sentry_returns_true_for_known_user_state_variants() {
+fn is_expected_outcome_returns_true_for_known_user_state_variants() {
     // The two variants that represent user/provider state rather than a
-    // code bug — `run_single` suppresses both from Sentry while still
+    // code bug — `run_single` suppresses both from the error reporter while still
     // returning `Err` so the user sees the failure.
-    assert!(AgentError::MaxIterationsExceeded { max: 10 }.skips_sentry());
-    assert!(AgentError::EmptyProviderResponse { iteration: 1 }.skips_sentry());
+    assert!(AgentError::MaxIterationsExceeded { max: 10 }.is_expected_outcome());
+    assert!(AgentError::EmptyProviderResponse { iteration: 1 }.is_expected_outcome());
 }
 
 #[test]
-fn skips_sentry_returns_false_for_real_failures() {
+fn is_expected_outcome_returns_false_for_real_failures() {
     // Every other variant represents either an actionable bug, an
     // upstream provider/network failure that triage cares about, or a
     // CompactionFailed that already has its own follow-up logic — none
-    // of them should silently disappear from Sentry.
+    // of them should silently disappear from the error reporter.
     let real_failures = [
         AgentError::ProviderError {
             message: "boom".into(),
@@ -154,6 +154,6 @@ fn skips_sentry_returns_false_for_real_failures() {
         AgentError::Other(anyhow::anyhow!("plain failure")),
     ];
     for err in real_failures {
-        assert!(!err.skips_sentry(), "must NOT skip Sentry for: {err}");
+        assert!(!err.is_expected_outcome(), "must NOT skip the error reporter for: {err}");
     }
 }
