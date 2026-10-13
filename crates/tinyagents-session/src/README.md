@@ -2,7 +2,7 @@
 
 Driver-backed history for agent sessions (`DriverRunLedger` over any
 `tinystoragedrivers` backend), a restart-survivable ledger for background
-agent/workflow execution, a JSONL-backed transcript store for KV-cache-stable resume, and a JSONL chat
+agent/workflow execution, a JSONL-backed transcript store for KV-cache-stable resume, and a driver-backed chat
 thread/message store for the product-facing chat log.
 
 ## Why this is a top-level module
@@ -21,7 +21,7 @@ would imply a dependency that exists in neither direction.
 | `graph::checkpoint` | "how do I resume this interrupted run?" | until resumed |
 | **`session` (driver ledger)** | "what happened, what did it cost, how did runs nest?" | indefinitely |
 | **`session::transcript` (JSONL)** | "what exact messages did the model see?" | indefinitely, resumed verbatim |
-| **`session::threads` (JSONL)** | "which chats does the user have, and what is in them?" | indefinitely |
+| **`session::threads` (driver)** | "which chats does the user have, and what is in them?" | indefinitely |
 
 The driver-backed history (`run_ledger`) is queryable history that
 nothing resumes *from*: cross-session search, cost attribution, and
@@ -39,7 +39,7 @@ and thread files are still derived from the workspace root:
 {host storage backend}                          ← sessions, run ledger (collections)
 {workspace_dir}/session_raw/{stem}.jsonl        ← JSONL: transcripts (source of truth)
 {workspace_dir}/sessions/YYYY_MM_DD/{stem}.md   ← human-readable transcript view
-{workspace_dir}/memory/conversations/           ← JSONL: chat threads + messages
+(chat threads + messages live in the storage driver, not on disk)
 ```
 
 ## Public surface
@@ -61,7 +61,7 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Transcripts** — full-rewrite and append-only writers, model-context and
   display readers, thread lookups and usage summaries — see its own
   [README](./transcript/README.md)
-- **Chat threads** — `ConversationStore` and its wire types (re-exported at
+- **Chat threads** — `DriverConversationStore` and its wire types (re-exported at
   the root), plus the free functions and channel subscriber under
   `session::threads` — see its own [README](./threads/README.md)
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
@@ -130,6 +130,6 @@ gate fails — otherwise a retry after fixing an unrelated gate would fail
 | `types.rs` | serde record types for sessions/messages/tool calls |
 | `fts.rs` | search-snippet cap and snippet helper |
 | `run_ledger/` | background run + team coordination — see its own [README](./run_ledger/README.md) |
-| `threads/` | JSONL chat thread/message store with a cross-thread search index — see its own [README](./threads/README.md) |
+| `threads/` | driver-backed chat thread/message store with a cross-thread search index — see its own [README](./threads/README.md) |
 | `transcript.rs` + `transcript/` | durable, provider-neutral transcripts for KV-cache-stable resume — see its own [README](./transcript/README.md) |
 | `*_tests.rs` | module-local unit tests |
