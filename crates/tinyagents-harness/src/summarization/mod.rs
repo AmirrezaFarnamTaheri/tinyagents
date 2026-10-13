@@ -30,6 +30,7 @@ pub(crate) mod dispatch;
 mod file_ops;
 mod model_summarizer;
 pub mod pairing;
+pub mod payload_summarizer;
 mod render;
 mod resilient;
 mod response_overflow;

@@ -17,10 +17,12 @@
 //! policy, progress and approvals remain host concerns.
 
 pub mod collect;
+pub mod hooks;
 pub mod staging;
 pub mod workers;
 
 pub use collect::{BranchReport, Collected, OverlapWarning, overlap_warnings};
+pub use hooks::{RunHooks, resolve_concurrency, run_with_hooks};
 pub use staging::{
     AdmissionPolicy, AdmissionVerdict, Plan, Preflight, Rejection, RejectionKind, Task, Worker,
     WorkerDispatchMode, with_ownership_boundary,
@@ -30,3 +32,7 @@ pub use workers::run;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod hooks_tests;

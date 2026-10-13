@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tinyagents_harness::retry::RetryPolicy;
@@ -74,4 +75,49 @@ fn the_orchestration_path_names_the_same_policy_type_as_the_graph() {
     let policy: tinyagents_graph::SubAgentPolicy =
         SubAgentPolicy::default().with_timeout(Duration::from_secs(1));
     assert_eq!(policy.timeout, Some(Duration::from_secs(1)));
+}
+
+#[derive(Debug, PartialEq)]
+struct OriginTag(&'static str);
+
+fn prepared_with_origin(factory_sets_host: bool) -> PreparedSubagent<()> {
+    use tinyagents_harness::context::RunConfig;
+    let mut policy = SubAgentPolicy::default();
+    policy.retry.max_attempts = 2;
+    PreparedSubagent::new(
+        "t".to_string(),
+        "agent".to_string(),
+        vec![],
+        ToolSnapshot::new(vec![]).unwrap(),
+        RunContext::new(RunConfig::new("first"), ()).with_host(OriginTag("web")),
+    )
+    .with_policy(policy)
+    .with_retry_context(Arc::new(move |attempt| {
+        let ctx = RunContext::new(RunConfig::new(format!("retry-{attempt}")), ());
+        Ok(if factory_sets_host {
+            ctx.with_host(OriginTag("cron"))
+        } else {
+            ctx
+        })
+    }))
+}
+
+#[test]
+fn retry_attempts_inherit_the_first_attempts_host_extensions() {
+    let mut source = AttemptSource::from_prepared(&prepared_with_origin(false));
+    let retry = source.next(1, CancellationToken::new()).unwrap();
+    assert_eq!(
+        retry.run_context.host::<OriginTag>(),
+        Some(&OriginTag("web"))
+    );
+}
+
+#[test]
+fn retry_factory_host_extensions_win_over_the_inherited_ones() {
+    let mut source = AttemptSource::from_prepared(&prepared_with_origin(true));
+    let retry = source.next(1, CancellationToken::new()).unwrap();
+    assert_eq!(
+        retry.run_context.host::<OriginTag>(),
+        Some(&OriginTag("cron"))
+    );
 }

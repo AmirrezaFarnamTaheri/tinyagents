@@ -105,6 +105,10 @@ pub mod tool;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
 pub mod turn_deadline;
+pub mod turn_outcome;
+pub mod turn_policy;
+pub mod turn_run_error;
+pub mod turn_run_finalize;
 pub mod turn_stop;
 pub mod workspace;
 

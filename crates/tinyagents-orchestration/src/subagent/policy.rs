@@ -58,6 +58,9 @@ struct Template<C> {
     policy: SubAgentPolicy,
     result_policy: ResultPolicy,
     factory: AttemptContextFactory<C>,
+    /// Host extensions of the first attempt's context, carried to retries
+    /// whose factory-built context installs none of its own.
+    host_ext: tinyagents_harness::context::HostExtensions,
 }
 
 impl<C> AttemptSource<C> {
@@ -77,6 +80,7 @@ impl<C> AttemptSource<C> {
                 policy: prepared.policy.clone(),
                 result_policy: prepared.result_policy.clone(),
                 factory,
+                host_ext: prepared.run_context.host_extensions().clone(),
             });
         Self { template }
     }
@@ -98,6 +102,9 @@ impl<C> AttemptSource<C> {
             .as_ref()
             .ok_or(SubagentError::MissingCapability("retry context factory"))?;
         let mut context: RunContext<C> = (template.factory)(attempt)?;
+        if context.host_extensions().is_empty() {
+            context = context.with_host_extensions(template.host_ext.clone());
+        }
         template.policy.budget.apply_call_caps(&mut context.config);
         let mut prepared = PreparedSubagent::new(
             template.task_id.clone(),

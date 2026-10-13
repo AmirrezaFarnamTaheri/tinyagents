@@ -64,9 +64,11 @@ mod budget;
 mod call_effect;
 mod compaction_pressure;
 mod context;
+mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
 mod image_trim;
+mod lifecycle_hooks;
 mod loop_guards;
 mod memory_protocol;
 mod memory_protocol_middleware;
@@ -78,6 +80,7 @@ mod repeat_progress;
 mod repeat_progress_state;
 mod research_budget;
 mod resilience;
+mod response_shape;
 mod shell_turn_budget;
 mod stop_hooks;
 mod stop_latch;
@@ -85,6 +88,7 @@ mod tool_policy;
 mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
+mod wind_down;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -96,6 +100,10 @@ pub use call_effect::{
     CallEffect, DispatchTarget, ToolEffectFacts, ToolFactsLookup, call_effect, dispatch_target,
     facts_for_tool, name_effect, tool_sets_lookup,
 };
+pub use context_ladder::{
+    COMPACTION_TAIL_WINDOW_FRACTION, ContextLadder, UNKNOWN_WINDOW_FALLBACK_TOKENS,
+    compression_policy, microcompact_for_window, with_turn_aware_tail,
+};
 pub use credential_scrub::{
     CredentialScrubMiddleware, REDACTION_PLACEHOLDER, ToolScrubber, redaction_notice,
     scrub_with_notice,
@@ -105,6 +113,10 @@ pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
+};
+pub use lifecycle_hooks::{
+    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
+    PackedToolRouter,
 };
 pub use loop_guards::{
     LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
@@ -134,6 +146,10 @@ pub use research_budget::{
     DIRECT_WEB_READ_LIMIT, RESEARCH_CLOSE_INSTRUCTION, ResearchBudgetMiddleware, WEB_BLOCKED_NOTE,
     WEB_BUDGET_EXHAUSTED_INSTRUCTION,
 };
+pub use response_shape::{
+    FinalResponse, ResponseShape, ResponseShapeScope, ResponseUsage, ResponseValidator,
+    install_response_shape,
+};
 pub use shell_turn_budget::{
     DEFAULT_MAX_TIMEOUT_SECS, SHELL_TIMEOUT_RESERVE, ShellTimeoutClamp,
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget, clamp_shell_timeout,
@@ -153,6 +169,7 @@ pub use verify_before_finish::{
     DEFAULT_MIN_REMAINING_WALL_CLOCK, FinishActivity, FinishCheckTrigger,
     MIN_REMAINING_MODEL_CALLS, VerifyBeforeFinishMiddleware,
 };
+pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
@@ -166,6 +183,9 @@ mod artifact_toc_test;
 #[cfg(test)]
 #[path = "context_fold_tests.rs"]
 mod context_fold_test;
+#[cfg(test)]
+#[path = "context_ladder_tests.rs"]
+mod context_ladder_test;
 #[cfg(test)]
 #[path = "context_loop_tests.rs"]
 mod context_loop_test;
