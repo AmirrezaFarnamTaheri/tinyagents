@@ -57,3 +57,11 @@ strip = "debuginfo"
 tinytools-agent = { path = "vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "vendor/tinytools/crates/tinytools" }
 
+
+# `tinyinference-image` and `tinyinference-providers` name the storage ports as
+# git dependencies at the same tag the vendored submodule is pinned to. Redirect
+# those onto the vendored path so the graph holds one `DocumentStore` /
+# `SecretStore` trait rather than a git and a path copy of the same version.
+[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
+tinystoragedrivers-core = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-core" }
+tinystoragedrivers-secrets = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-secrets" }
