@@ -18,14 +18,14 @@ fn a_timeout_past_the_turn_remainder_is_reduced_to_leave_a_reserve() {
 
 #[test]
 fn a_timeout_that_fits_is_left_alone() {
-    assert_eq!(clamp_shell_timeout(Some(100), SECS(260)), None);
-    assert_eq!(clamp_shell_timeout(Some(170), SECS(260)), None);
+    assert_eq!(clamp_shell_timeout(Some(100), SECS(260), 3600), None);
+    assert_eq!(clamp_shell_timeout(Some(170), SECS(260), 3600), None);
 }
 
 #[test]
 fn an_unbounded_command_gets_the_turn_remainder_as_its_deadline() {
     for requested in [None, Some(0)] {
-        let clamp = clamp_shell_timeout(requested, SECS(3_600)).expect("unbounded is clamped");
+        let clamp = clamp_shell_timeout(requested, SECS(3_600), 3600).expect("unbounded is clamped");
         assert_eq!(clamp.requested, None);
         assert_eq!(clamp.clamped_secs, 3_510);
         assert_eq!(
@@ -37,8 +37,8 @@ fn an_unbounded_command_gets_the_turn_remainder_as_its_deadline() {
 
 #[test]
 fn injected_timeout_never_exceeds_the_shell_schema_maximum() {
-    let clamp = clamp_shell_timeout(None, SECS(7_200)).expect("unbounded is clamped");
-    assert_eq!(clamp.clamped_secs, crate::tools::timeout::MAX_TIMEOUT_SECS);
+    let clamp = clamp_shell_timeout(None, SECS(7_200), 3600).expect("unbounded is clamped");
+    assert_eq!(clamp.clamped_secs, 3600);
 }
 
 #[test]
@@ -46,13 +46,13 @@ fn near_the_deadline_the_command_gets_half_of_what_is_left() {
     // Less than twice the reserve left: the reserve would eat everything, so
     // the command and the answer split what remains.
     assert_eq!(
-        clamp_shell_timeout(Some(600), SECS(100))
+        clamp_shell_timeout(Some(600), SECS(100), 3600)
             .unwrap()
             .clamped_secs,
         50
     );
     assert_eq!(
-        clamp_shell_timeout(Some(600), Duration::ZERO)
+        clamp_shell_timeout(Some(600), Duration::ZERO, 3600)
             .unwrap()
             .clamped_secs,
         1,
@@ -172,7 +172,7 @@ async fn malformed_explicit_timeout_is_left_for_argument_validation() {
 
 #[test]
 fn installing_reads_the_turn_ceiling_from_the_harness_policy() {
-    let mut harness: AgentHarness<(), OpenHumanRunContext> = AgentHarness::new();
+    let mut harness: AgentHarness<(), ()> = AgentHarness::new();
     let mut policy = harness.policy().clone();
     policy.limits.max_wall_clock_ms = Some(120_000);
     harness.with_policy(policy);

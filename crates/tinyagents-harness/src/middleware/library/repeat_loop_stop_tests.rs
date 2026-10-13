@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::session_host::stop_summary::StopReasonKind;
 
 #[test]
 fn only_an_identical_re_issue_counts_as_a_repeated_failure() {
@@ -53,17 +52,14 @@ fn security_and_side_effect_classes_keep_their_own_wording() {
 }
 
 #[test]
-fn the_repeat_loop_note_reads_as_a_repeating_step() {
+fn the_repeat_loop_note_names_the_repeating_and_the_last_error() {
     let note = repeat_loop_halt_summary(
         "file_read",
         2,
         "Failed to resolve path 'src/lbi.rs': No such file or directory (os error 2)",
     );
-    assert_eq!(
-        StopReasonKind::from_stop_note(&note),
-        StopReasonKind::RepeatingStep,
-        "{note}"
-    );
-    let stop = crate::agent::turn_stop::TurnStop::breaker(&note);
-    assert_eq!(stop.failure_class.as_deref(), Some("repeating_step"));
+    assert!(note.contains("kept re-issuing tool calls"), "{note}");
+    assert!(note.contains("refused 2 identical"), "{note}");
+    assert!(note.contains("`file_read`"), "{note}");
+    assert!(note.contains("src/lbi.rs"), "{note}");
 }

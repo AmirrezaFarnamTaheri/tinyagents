@@ -59,6 +59,13 @@ use tinyinference_llm::tool::{ToolCall, ToolDelta, ToolSchema};
 use tinytools::ToolResult;
 
 mod arg_recovery;
+mod call_effect;
+mod loop_guards;
+mod repeat_loop_stop;
+mod research_budget;
+mod shell_turn_budget;
+mod stop_latch;
+mod unmet_deliverable;
 mod artifact_toc;
 mod budget;
 mod compaction_pressure;
@@ -80,6 +87,29 @@ mod verify_before_finish;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
+pub use call_effect::{
+    CallEffect, DispatchTarget, ToolEffectFacts, ToolFactsLookup, call_effect, dispatch_target,
+    facts_for_tool, name_effect, tool_sets_lookup,
+};
+pub use loop_guards::{
+    LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
+    RECOVERABLE_REPEAT_FAILURE_THRESHOLD, is_repeat_call_exempt,
+};
+pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
+pub use research_budget::{
+    DIRECT_WEB_READ_LIMIT, RESEARCH_CLOSE_INSTRUCTION, ResearchBudgetMiddleware,
+    WEB_BLOCKED_NOTE, WEB_BUDGET_EXHAUSTED_INSTRUCTION,
+};
+pub use shell_turn_budget::{
+    DEFAULT_MAX_TIMEOUT_SECS, SHELL_TIMEOUT_RESERVE, ShellTimeoutClamp,
+    ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget,
+    clamp_shell_timeout, install_time_notes,
+};
+pub use stop_latch::{HaltSummarySlot, StopLatch};
+pub use unmet_deliverable::{
+    UnmetDeliverableMiddleware, candidate_paths, install as install_unmet_deliverable,
+    notice as unmet_deliverable_notice, wrap_harness_instruction,
+};
 pub use artifact_toc::{
     ARTIFACT_INDEX_NAMESPACE, ArtifactIndexTocMiddleware, FOOTER_ALLOWANCE, NO_WINDOW_ALLOWANCE,
     split_input_allowance,

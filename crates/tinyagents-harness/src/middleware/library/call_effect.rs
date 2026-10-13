@@ -283,3 +283,7 @@ pub fn call_effect(
     // dispatcher says nothing about it.
     leaf_effect(inner_facts, target.tool)
 }
+
+#[cfg(test)]
+#[path = "call_effect_tests.rs"]
+mod tests;

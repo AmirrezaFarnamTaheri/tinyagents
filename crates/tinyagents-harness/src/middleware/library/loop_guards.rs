@@ -55,3 +55,7 @@ impl Default for LoopGuardThresholds {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "loop_guards_tests.rs"]
+mod tests;
