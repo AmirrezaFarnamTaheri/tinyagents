@@ -37,7 +37,7 @@ pub mod ordered_sender;
 pub use call_dedupe::{CallDedupe, IterationCursor, advance_iteration};
 pub use cap_pauser::{CapPauser, PauseRecorder};
 pub use compaction_log::log_compacted;
-pub use ordered_sender::OrderedSender;
+pub use ordered_sender::{DEFAULT_MAX_OVERFLOW, OrderedSender, SendFailure};
 pub use types::*;
 // EventSinkInner is pub(crate) so bring it into scope explicitly for impls
 // below; it is not re-exported by `pub use types::*`.
