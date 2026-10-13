@@ -51,22 +51,13 @@ use std::time::Duration;
 use tinyagents_session::run_ledger::{WorkflowLeaseClaim, WorkflowRun, WorkflowRunUpsert};
 
 fn refusal() -> WorkflowPersistenceError {
-    {
-        WorkflowPersistenceError::Ledger(
-            tinystoragedrivers_core::StorageError::new(
-                tinystoragedrivers_core::ErrorKind::Unavailable,
-                "registration backend unavailable",
-            )
-            .into(),
+    WorkflowPersistenceError::Ledger(
+        tinystoragedrivers_core::StorageError::new(
+            tinystoragedrivers_core::ErrorKind::Unavailable,
+            "registration backend unavailable",
         )
-    }
-    #[cfg(not(feature = "storage-drivers"))]
-    {
-        WorkflowPersistenceError::Ledger(
-            tinyagents_harness::TinyAgentsError::Storage("registration backend unavailable".into())
-                .into(),
-        )
-    }
+        .into(),
+    )
 }
 
 struct RegistrationRefusal {
