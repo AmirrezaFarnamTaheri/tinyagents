@@ -217,8 +217,10 @@ pub fn run_policy(options: &TurnPolicyOptions) -> RunPolicy {
     // With no deadline the harness awaits each call UNBOUNDED, so a wedged
     // model stream or delegated sub-agent would park the loop with no terminal
     // event. A turn ceiling arms the per-call timeout.
-    policy.limits.max_wall_clock_ms =
-        turn_wall_clock_ms(overrides.turn_timeout_secs.as_deref(), options.local_provider);
+    policy.limits.max_wall_clock_ms = turn_wall_clock_ms(
+        overrides.turn_timeout_secs.as_deref(),
+        options.local_provider,
+    );
     // Per-call ceiling: hang detection scoped to the one call that wedged.
     policy.limits.max_model_call_ms = model_call_wall_clock_ms(
         overrides.model_call_timeout_secs.as_deref(),

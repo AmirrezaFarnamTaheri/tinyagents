@@ -122,7 +122,10 @@ async fn required_tool_call_forces_tools_until_one_succeeds() {
     mw.before_model(&mut ctx(), &(), &mut request)
         .await
         .expect("before_model");
-    assert!(request.response_format.is_some(), "format returns after a tool ran");
+    assert!(
+        request.response_format.is_some(),
+        "format returns after a tool ran"
+    );
 }
 
 #[tokio::test]
@@ -185,14 +188,9 @@ async fn validator_failures_are_recorded_and_feed_the_repair_loop() {
     assert_eq!(report.validation_error.as_deref(), Some("EmptyObject"));
 
     let strict = StrictValidator(Arc::clone(&scope));
-    let err = OutputValidator::<(), ()>::validate(
-        &strict,
-        &mut ctx(),
-        &(),
-        &serde_json::json!({}),
-    )
-    .await
-    .expect_err("retry");
+    let err = OutputValidator::<(), ()>::validate(&strict, &mut ctx(), &(), &serde_json::json!({}))
+        .await
+        .expect_err("retry");
     assert!(matches!(err, TinyAgentsError::ModelRetry(reason) if reason == "EmptyObject"));
 }
 

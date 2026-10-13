@@ -84,6 +84,9 @@ fn the_halt_summary_is_taken_exactly_once() {
     let slot = new_halt_summary_slot();
     assert_eq!(take_halt_summary(&slot), None);
     *slot.lock().expect("lock") = Some("repeated failure".into());
-    assert_eq!(take_halt_summary(&slot).as_deref(), Some("repeated failure"));
+    assert_eq!(
+        take_halt_summary(&slot).as_deref(),
+        Some("repeated failure")
+    );
     assert_eq!(take_halt_summary(&slot), None);
 }
