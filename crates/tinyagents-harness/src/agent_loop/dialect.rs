@@ -350,6 +350,11 @@ pub(super) struct TextRecovery {
     /// visible text and counted in [`DroppedBlocks::withheld`] instead of
     /// becoming a call. See [`TextRecovery::withholding`].
     pub(super) withhold: bool,
+    /// The stream scrubber runs only calls whose block opened with a
+    /// chat-template special token (`ParsedToolCall::special_token`), so
+    /// quoted plain markup is scrubbed but never run. Set for a native model
+    /// under `TextDialectRecovery::Auto` (#6733).
+    pub(super) special_tokens_only: bool,
 }
 
 /// Tool-call blocks a grammar recognised on one model attempt that did not
@@ -465,6 +470,7 @@ impl TextRecovery {
                 Arc::clone(&self.dropped),
             )
             .withholding(self.withhold)
+            .special_tokens_only(self.special_tokens_only)
         })
     }
 }
@@ -633,6 +639,8 @@ pub(super) struct DeltaScrubber {
     withhold: bool,
     /// Complete calls withheld on this attempt.
     withheld: usize,
+    /// See [`TextRecovery::special_tokens_only`].
+    special_tokens_only: bool,
 }
 
 impl DeltaScrubber {
@@ -655,7 +663,14 @@ impl DeltaScrubber {
             dropped,
             withhold: false,
             withheld: 0,
+            special_tokens_only: false,
         }
+    }
+
+    /// Run only special-token calls (see [`TextRecovery::special_tokens_only`]).
+    pub(super) fn special_tokens_only(mut self, only: bool) -> Self {
+        self.special_tokens_only = only;
+        self
     }
 
     /// Scrub calls without dispatching them (see [`TextRecovery::withholding`]).
@@ -686,7 +701,10 @@ impl DeltaScrubber {
                 .record_withheld(calls.len(), &self.model_call_id);
             return;
         }
-        for call in calls {
+        for call in calls
+            .into_iter()
+            .filter(|call| call.special_token || !self.special_tokens_only)
+        {
             let slot = self.calls.len() + 1;
             self.calls
                 .push(to_tool_call(call, &self.model_call_id, slot));
