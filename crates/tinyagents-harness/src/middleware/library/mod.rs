@@ -202,9 +202,6 @@ mod credential_scrub_test;
 #[path = "image_trim_tests.rs"]
 mod image_trim_test;
 #[cfg(test)]
-#[path = "lifecycle_hooks_tests.rs"]
-mod lifecycle_hooks_test;
-#[cfg(test)]
 #[path = "policy_gate_tests.rs"]
 mod policy_gate_test;
 #[cfg(test)]

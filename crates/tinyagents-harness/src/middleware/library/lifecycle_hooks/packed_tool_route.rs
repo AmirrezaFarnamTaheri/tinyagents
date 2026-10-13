@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use crate::context::RunContext;
 use crate::error::Result as TaResult;
 use crate::middleware::Middleware;
-use tinyinference_llm::model::ModelRequest;
 use tinyinference_llm::tool::ToolCall;
 
 use super::PackedToolRouter;
