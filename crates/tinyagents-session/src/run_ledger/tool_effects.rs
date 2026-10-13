@@ -29,21 +29,18 @@
 //! a variable-width JSON blob column (unqueryable) or overloading the run's
 //! own status with per-call meaning it does not have.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, params};
 
 use async_trait::async_trait;
-use tinyagents_harness::error::Result;
+use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::tool::{
     ToolEffect as HarnessToolEffect, ToolEffectLedger, ToolEffectSettle as HarnessToolEffectSettle,
     ToolEffectStart as HarnessToolEffectStart, ToolEffectStatus as HarnessToolEffectStatus,
 };
 
-use super::super::context::StorageContext;
-use super::store::init_run_ledger_schema;
-
-/// Grep prefix for tool-effect-ledger logging.
-const LOG_PREFIX: &str = "[session_db:tool_effects]";
+use super::port::RunLedgerStore;
 
 /// Lifecycle state of one recorded tool effect.
 ///
@@ -128,7 +125,7 @@ pub struct ToolEffectRow {
     pub settled_at: Option<DateTime<Utc>>,
 }
 
-/// Fields a caller supplies to [`record_tool_started`].
+/// Fields a caller supplies to [`RunLedgerStore::record_tool_started`].
 #[derive(Debug, Clone)]
 pub struct ToolEffectStart {
     pub run_id: String,
@@ -138,257 +135,85 @@ pub struct ToolEffectStart {
     pub effect_summary: Option<String>,
 }
 
-/// Fields a caller supplies to [`settle_tool_effect`].
+/// Fields a caller supplies to [`RunLedgerStore::settle_tool_effect`].
 #[derive(Debug, Clone)]
 pub struct ToolEffectSettle {
     pub run_id: String,
     pub call_id: String,
     /// Must not be [`ToolEffectStatus::Started`] — settling *to* `started`
-    /// is not a meaningful transition; callers use [`record_tool_started`]
+    /// is not a meaningful transition; callers use [`RunLedgerStore::record_tool_started`]
     /// for that.
     pub status: ToolEffectStatus,
     pub effect_summary: Option<String>,
 }
 
-/// Records that a tool call has been admitted and is about to execute.
-///
-/// Idempotent on `(run_id, call_id)`: a second `record_tool_started` for the
-/// same call re-stamps `started_at` and overwrites the tool/idempotency/
-/// summary fields rather than erroring, so a caller that retries the write
-/// after an ambiguous failure (timeout, but the write actually landed) does
-/// not have to special-case "already started".
-pub fn record_tool_started(
-    workspace_dir: &std::path::Path,
-    start: ToolEffectStart,
-) -> Result<ToolEffectRow> {
-    let now = Utc::now();
-    tracing::debug!(
-        "{LOG_PREFIX} record_tool_started run_id={} call_id={} tool={}",
-        start.run_id,
-        start.call_id,
-        start.tool
-    );
-    crate::store::with_transaction(workspace_dir, |conn| {
-        init_run_ledger_schema(conn)?;
-        conn.execute(
-            "INSERT INTO tool_effects (
-                run_id, call_id, tool, status, idempotency_key, effect_summary,
-                started_at, settled_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
-             ON CONFLICT(run_id, call_id) DO UPDATE SET
-                tool = excluded.tool,
-                status = excluded.status,
-                idempotency_key = excluded.idempotency_key,
-                effect_summary = excluded.effect_summary,
-                started_at = excluded.started_at,
-                settled_at = NULL",
-            params![
-                start.run_id,
-                start.call_id,
-                start.tool,
-                ToolEffectStatus::Started.as_str(),
-                start.idempotency_key,
-                start.effect_summary,
-                now.to_rfc3339(),
-            ],
-        )
-        .storage_context("record tool effect started")?;
-        get_tool_effect_inner(conn, &start.run_id, &start.call_id)?
-            .storage_context("tool effect missing after record_tool_started")
-    })
-}
-
-/// Records the terminal outcome of a previously-started tool call.
-///
-/// A settle for a `(run_id, call_id)` with no prior `started` row still
-/// inserts one (with `started_at` backfilled to now) rather than erroring —
-/// see [`tinyagents_harness::tool::ToolEffectLedger::settled`]'s contract:
-/// a ledger attached only after some tools already began must not wedge the
-/// loop on an unseen call id.
-///
-/// Returns `None` only if the write itself did not take effect, which should
-/// not happen given the upsert above; kept `Option` to mirror the read-back
-/// pattern used by the rest of this crate rather than unwrap in the caller.
-pub fn settle_tool_effect(
-    workspace_dir: &std::path::Path,
-    settle: ToolEffectSettle,
-) -> Result<Option<ToolEffectRow>> {
-    let now = Utc::now();
-    tracing::debug!(
-        "{LOG_PREFIX} settle_tool_effect run_id={} call_id={} status={}",
-        settle.run_id,
-        settle.call_id,
-        settle.status.as_str()
-    );
-    crate::store::with_transaction(workspace_dir, |conn| {
-        init_run_ledger_schema(conn)?;
-        conn.execute(
-            "INSERT INTO tool_effects (
-                run_id, call_id, tool, status, idempotency_key, effect_summary,
-                started_at, settled_at
-             ) VALUES (?1, ?2, '', ?3, NULL, ?4, ?5, ?5)
-             ON CONFLICT(run_id, call_id) DO UPDATE SET
-                status = excluded.status,
-                effect_summary = COALESCE(excluded.effect_summary, tool_effects.effect_summary),
-                settled_at = excluded.settled_at",
-            params![
-                settle.run_id,
-                settle.call_id,
-                settle.status.as_str(),
-                settle.effect_summary,
-                now.to_rfc3339(),
-            ],
-        )
-        .storage_context("settle tool effect")?;
-        get_tool_effect_inner(conn, &settle.run_id, &settle.call_id)
-    })
-}
-
-/// Lists every effect for `run_id` still in [`ToolEffectStatus::Started`] —
-/// admitted but never settled, the signature of a crash between the two.
-pub fn list_unresolved_tool_effects(
-    workspace_dir: &std::path::Path,
-    run_id: &str,
-) -> Result<Vec<ToolEffectRow>> {
-    crate::store::with_connection(workspace_dir, |conn| {
-        init_run_ledger_schema(conn)?;
-        let mut stmt = conn.prepare(
-            "SELECT run_id, call_id, tool, status, idempotency_key, effect_summary,
-                    started_at, settled_at
-             FROM tool_effects
-             WHERE run_id = ?1 AND status = ?2
-             ORDER BY started_at ASC",
-        )?;
-        let rows = stmt.query_map(
-            params![run_id, ToolEffectStatus::Started.as_str()],
-            map_tool_effect_row,
-        )?;
-        let mut effects = Vec::new();
-        for row in rows {
-            effects.push(row?);
-        }
-        Ok(effects)
-    })
-}
-
-/// Marks one call's effect as [`ToolEffectStatus::Interrupted`] — the
-/// resume-time verdict for a `started` row whose tool is not safe to
-/// blindly re-execute (`tinytools::ToolReplay::Never`).
-///
-/// Returns `None` if no row exists for `(run_id, call_id)`.
-pub fn mark_interrupted(
-    workspace_dir: &std::path::Path,
-    run_id: &str,
-    call_id: &str,
-) -> Result<Option<ToolEffectRow>> {
-    settle_tool_effect(
-        workspace_dir,
-        ToolEffectSettle {
-            run_id: run_id.to_string(),
-            call_id: call_id.to_string(),
-            status: ToolEffectStatus::Interrupted,
-            effect_summary: None,
-        },
-    )
-}
-
-fn get_tool_effect_inner(
-    conn: &rusqlite::Connection,
-    run_id: &str,
-    call_id: &str,
-) -> Result<Option<ToolEffectRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT run_id, call_id, tool, status, idempotency_key, effect_summary,
-                started_at, settled_at
-         FROM tool_effects WHERE run_id = ?1 AND call_id = ?2",
-    )?;
-    Ok(stmt
-        .query_row(params![run_id, call_id], map_tool_effect_row)
-        .optional()?)
-}
-
-fn map_tool_effect_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ToolEffectRow> {
-    Ok(ToolEffectRow {
-        run_id: row.get(0)?,
-        call_id: row.get(1)?,
-        tool: row.get(2)?,
-        status: ToolEffectStatus::parse(&row.get::<_, String>(3)?),
-        idempotency_key: row.get(4)?,
-        effect_summary: row.get(5)?,
-        started_at: parse_rfc3339(&row.get::<_, String>(6)?)?,
-        settled_at: parse_rfc3339_opt(row.get(7)?)?,
-    })
-}
-
-fn parse_rfc3339(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|err| {
-            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
-        })
-}
-
-fn parse_rfc3339_opt(raw: Option<String>) -> rusqlite::Result<Option<DateTime<Utc>>> {
-    match raw {
-        Some(value) => parse_rfc3339(&value).map(Some),
-        None => Ok(None),
-    }
-}
-
-/// SQLite-backed `tinyagents_harness::tool::ToolEffectLedger`, so a harness
-/// run can attach durable tool-effect bookkeeping with
-/// `RunContext::with_tool_effect_ledger(Arc::new(RunLedgerToolEffects::new(workspace_dir)))`
+/// A `tinyagents_harness::tool::ToolEffectLedger` over a bound
+/// [`RunLedgerStore`], so a harness run can attach durable tool-effect
+/// bookkeeping with
+/// `RunContext::with_tool_effect_ledger(Arc::new(RunLedgerToolEffects::new(ledger)))`
 /// without the harness crate depending on `tinyagents-session`.
 ///
-/// Thin `async` wrapper: every method call is a bounded, synchronous SQLite
-/// statement (matching every other write in this crate), so no `spawn_blocking`
-/// is used — the same tradeoff `tinyagents_session::store` already makes
-/// throughout.
+/// The ledger is whatever backend the host opened (SQLite, MongoDB, memory):
+/// the adapter holds no path and opens no file. Calls are the ledger's own
+/// atomic per-call operations, so a row is written `started` before the call
+/// executes and settled in place afterwards.
 #[derive(Clone)]
 pub struct RunLedgerToolEffects {
-    workspace_dir: std::path::PathBuf,
+    ledger: Arc<dyn RunLedgerStore>,
 }
 
 impl RunLedgerToolEffects {
-    /// Builds a ledger backed by the session database under `workspace_dir`.
-    pub fn new(workspace_dir: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-        }
+    /// Builds a tool-effect ledger over `ledger`.
+    pub fn new(ledger: Arc<dyn RunLedgerStore>) -> Self {
+        Self { ledger }
     }
+}
+
+impl std::fmt::Debug for RunLedgerToolEffects {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunLedgerToolEffects").finish_non_exhaustive()
+    }
+}
+
+fn storage(error: impl std::fmt::Display) -> TinyAgentsError {
+    TinyAgentsError::Storage(format!("tool-effect ledger: {error}"))
 }
 
 #[async_trait]
 impl ToolEffectLedger for RunLedgerToolEffects {
     async fn started(&self, start: HarnessToolEffectStart) -> Result<()> {
-        record_tool_started(
-            &self.workspace_dir,
-            ToolEffectStart {
+        self.ledger
+            .record_tool_started(ToolEffectStart {
                 run_id: start.run_id.as_str().to_string(),
                 call_id: start.call_id.as_str().to_string(),
                 tool: start.tool,
                 idempotency_key: Some(start.idempotency_key),
                 effect_summary: start.effect_summary,
-            },
-        )?;
-        Ok(())
+            })
+            .await
+            .map(|_| ())
+            .map_err(storage)
     }
 
     async fn settled(&self, settle: HarnessToolEffectSettle) -> Result<()> {
-        settle_tool_effect(
-            &self.workspace_dir,
-            ToolEffectSettle {
+        self.ledger
+            .settle_tool_effect(ToolEffectSettle {
                 run_id: settle.run_id.as_str().to_string(),
                 call_id: settle.call_id.as_str().to_string(),
                 status: ToolEffectStatus::from_harness(settle.status),
                 effect_summary: settle.effect_summary,
-            },
-        )?;
-        Ok(())
+            })
+            .await
+            .map(|_| ())
+            .map_err(storage)
     }
 
     async fn unresolved(&self, run_id: &str) -> Result<Vec<HarnessToolEffect>> {
-        let rows = list_unresolved_tool_effects(&self.workspace_dir, run_id)?;
+        let rows = self
+            .ledger
+            .list_unresolved_tool_effects(run_id)
+            .await
+            .map_err(storage)?;
         Ok(rows
             .into_iter()
             .map(|row| HarnessToolEffect {
