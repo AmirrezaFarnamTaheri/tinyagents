@@ -20,10 +20,9 @@ use tinyagents_graph::GraphEventSink;
 use tinyagents_graph::parallel::{FailurePolicy, ParallelOptions, map_reduce};
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{
-    WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
-    compare_and_swap_workflow_run, get_workflow_run, renew_workflow_run_lease,
-    try_claim_workflow_run, upsert_workflow_run,
+    RunLedgerStore, WorkflowLeaseClaim, WorkflowRun, WorkflowRunStatus, WorkflowRunUpsert,
 };
+use tinystoragedrivers_core::Blocking;
 
 use super::child_step::run_child_step_authoritative;
 use super::persistence::{
@@ -82,31 +81,66 @@ pub trait WorkflowStore: Send + Sync {
     -> Result<bool, OrchestrationError>;
 }
 
-/// `tinyagents-session` run-ledger adapter with a caller-selected workspace.
-#[derive(Debug, Clone)]
+/// Synchronous [`WorkflowStore`] over a bound run-ledger handle.
+///
+/// Every call reaches the ledger's async operations through a [`Blocking`]
+/// bridge thread, so it works from inside or outside a tokio runtime. The
+/// handle is whatever backend the host opened (SQLite, MongoDB, memory); this
+/// adapter opens no file and has no fallback. Prefer
+/// [`LedgerWorkflowStore`](super::LedgerWorkflowStore) with
+/// `WorkflowEngine::new_async`, which keeps typed errors and needs no bridge.
+#[derive(Clone)]
 pub struct SessionWorkflowStore {
-    workspace_dir: PathBuf,
+    ledger: Arc<dyn RunLedgerStore>,
+    bridge: Blocking,
+}
+
+impl std::fmt::Debug for SessionWorkflowStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionWorkflowStore").finish_non_exhaustive()
+    }
 }
 
 impl SessionWorkflowStore {
-    pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-        }
+    /// Adapt `ledger`, starting a bridge thread for the synchronous calls.
+    ///
+    /// # Errors
+    ///
+    /// The bridge thread cannot start.
+    pub fn new(ledger: Arc<dyn RunLedgerStore>) -> Result<Self, OrchestrationError> {
+        Ok(Self::with_bridge(
+            ledger,
+            Blocking::new().map_err(|error| OrchestrationError(error.to_string()))?,
+        ))
     }
 
-    pub fn workspace_dir(&self) -> &Path {
-        &self.workspace_dir
+    /// Adapt `ledger`, sharing an existing bridge.
+    pub fn with_bridge(ledger: Arc<dyn RunLedgerStore>, bridge: Blocking) -> Self {
+        Self { ledger, bridge }
+    }
+
+    fn run<T: Send + 'static>(
+        &self,
+        work: impl std::future::Future<Output = Result<T, tinyagents_session::run_ledger::LedgerError>>
+        + Send
+        + 'static,
+    ) -> Result<T, OrchestrationError> {
+        self.bridge
+            .run(work)
+            .map_err(|error| OrchestrationError(error.to_string()))?
+            .map_err(|error| OrchestrationError(error.to_string()))
     }
 }
 
 impl WorkflowStore for SessionWorkflowStore {
     fn load(&self, id: &str) -> Result<Option<WorkflowRun>, OrchestrationError> {
-        get_workflow_run(&self.workspace_dir, id).map_err(OrchestrationError::from)
+        let (ledger, id) = (Arc::clone(&self.ledger), id.to_owned());
+        self.run(async move { ledger.get_workflow_run(&id).await })
     }
 
     fn upsert(&self, row: WorkflowRunUpsert) -> Result<WorkflowRun, OrchestrationError> {
-        upsert_workflow_run(&self.workspace_dir, row).map_err(OrchestrationError::from)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_workflow_run(row).await })
     }
 
     fn claim(
@@ -115,14 +149,10 @@ impl WorkflowStore for SessionWorkflowStore {
         owner: &str,
         lease_for: Duration,
     ) -> Result<WorkflowLeaseClaim, OrchestrationError> {
-        try_claim_workflow_run(
-            &self.workspace_dir,
-            id,
-            owner,
-            chrono::Duration::from_std(lease_for)
-                .map_err(|error| OrchestrationError(error.to_string()))?,
-        )
-        .map_err(OrchestrationError::from)
+        let lease = chrono::Duration::from_std(lease_for)
+            .map_err(|error| OrchestrationError(error.to_string()))?;
+        let (ledger, id, owner) = (Arc::clone(&self.ledger), id.to_owned(), owner.to_owned());
+        self.run(async move { ledger.try_claim_workflow_run(&id, &owner, lease).await })
     }
 
     fn compare_and_swap(
@@ -132,15 +162,14 @@ impl WorkflowStore for SessionWorkflowStore {
         owner: &str,
         lease_for: Duration,
     ) -> Result<Option<WorkflowRun>, OrchestrationError> {
-        compare_and_swap_workflow_run(
-            &self.workspace_dir,
-            row,
-            expected_revision,
-            owner,
-            chrono::Duration::from_std(lease_for)
-                .map_err(|error| OrchestrationError(error.to_string()))?,
-        )
-        .map_err(OrchestrationError::from)
+        let lease = chrono::Duration::from_std(lease_for)
+            .map_err(|error| OrchestrationError(error.to_string()))?;
+        let (ledger, owner) = (Arc::clone(&self.ledger), owner.to_owned());
+        self.run(async move {
+            ledger
+                .compare_and_swap_workflow_run(row, expected_revision, &owner, lease)
+                .await
+        })
     }
 
     fn renew(
@@ -149,14 +178,10 @@ impl WorkflowStore for SessionWorkflowStore {
         owner: &str,
         lease_for: Duration,
     ) -> Result<bool, OrchestrationError> {
-        renew_workflow_run_lease(
-            &self.workspace_dir,
-            id,
-            owner,
-            chrono::Duration::from_std(lease_for)
-                .map_err(|error| OrchestrationError(error.to_string()))?,
-        )
-        .map_err(OrchestrationError::from)
+        let lease = chrono::Duration::from_std(lease_for)
+            .map_err(|error| OrchestrationError(error.to_string()))?;
+        let (ledger, id, owner) = (Arc::clone(&self.ledger), id.to_owned(), owner.to_owned());
+        self.run(async move { ledger.renew_workflow_run_lease(&id, &owner, lease).await })
     }
 }
 
