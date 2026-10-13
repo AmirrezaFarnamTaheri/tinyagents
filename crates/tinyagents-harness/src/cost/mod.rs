@@ -9,11 +9,13 @@
 //! from the registry catalog. [`CostTotals`] supports `+`/`+=` accumulation so
 //! a run can roll up cost across many calls.
 
+mod gateway_charge;
 mod types;
 
 use std::ops::{Add, AddAssign};
 
 use tinyinference_llm::usage::Usage;
+pub use gateway_charge::GatewayChargeModel;
 pub use types::*;
 
 impl CostTotals {

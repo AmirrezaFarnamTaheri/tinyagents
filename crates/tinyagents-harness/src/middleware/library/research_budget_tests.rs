@@ -22,7 +22,6 @@ fn invocation(call_id: impl AsRef<str>, tool_name: impl Into<String>) -> ToolInv
     ToolInvocationIdentity::new(crate::ids::CallId::new(call_id.as_ref()), tool_name)
 }
 
-
 /// Every direct web-read tool the budget governs.
 const WEB_TOOLS: [&str; 4] = [
     "web_search_tool",
@@ -62,11 +61,7 @@ fn tool_names(request: &ModelRequest) -> Vec<&str> {
         .collect()
 }
 
-async fn record_reads(
-    mw: &ResearchBudgetMiddleware,
-    run: &mut RunContext<()>,
-    reads: usize,
-) {
+async fn record_reads(mw: &ResearchBudgetMiddleware, run: &mut RunContext<()>, reads: usize) {
     for i in 0..reads {
         let name = WEB_TOOLS[i % WEB_TOOLS.len()];
         mw.after_tool(
@@ -151,10 +146,7 @@ async fn a_spent_web_budget_keeps_the_non_web_tools() {
         tinyinference_llm::model::ToolChoice::Auto
     );
     let instruction = request.messages.last().unwrap().text();
-    assert_eq!(
-        instruction,
-        super::WEB_BUDGET_EXHAUSTED_INSTRUCTION
-    );
+    assert_eq!(instruction, super::WEB_BUDGET_EXHAUSTED_INSTRUCTION);
     assert!(instruction.contains("remaining tools"));
 
     // Every later request of the turn stays narrowed the same way.

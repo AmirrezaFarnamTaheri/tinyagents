@@ -9,11 +9,13 @@ use tinyinference_llm::model::{
 };
 use tinyinference_llm::usage::ChargedAmount;
 
+/// A model wrapper that settles measured gateway charges into the response usage.
 pub struct GatewayChargeModel {
     inner: Arc<dyn ChatModel<()>>,
 }
 
 impl GatewayChargeModel {
+    /// Wraps `inner`, normalising each completed response's charge.
     pub fn new(inner: Arc<dyn ChatModel<()>>) -> Self {
         Self { inner }
     }

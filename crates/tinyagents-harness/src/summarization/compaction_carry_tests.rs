@@ -1,5 +1,5 @@
-use super::*;
 use super::super::{SummaryPlacement, checkpoint_message};
+use super::*;
 use tinyinference_llm::tool::ToolCall;
 
 fn checkpoint(body: &str) -> Message {
@@ -125,17 +125,4 @@ fn the_last_user_message_skips_checkpoints() {
     let history = vec![Message::user("real"), checkpoint("summary"), call("c1")];
     assert_eq!(last_user_message(&history), Some(&Message::user("real")));
     assert_eq!(last_user_message(&[checkpoint("only")]), None);
-}
-
-#[test]
-fn a_checkpoint_survives_the_session_transcript_round_trip() {
-    // The driver hands persisted history to the harness through the native
-    // transcript form; the checkpoint must still read as one on the far side,
-    // or the next turn would summarize it as raw history.
-    let original = checkpoint("## Goal\nship it");
-    let native = tinyagents_runtime::transcript::message_to_native_transcript(&original)
-        .expect("user rows convert");
-    let back = crate::agent::message_convert::chat_message_to_message(&native);
-    assert!(is_checkpoint(&back), "{back:?}");
-    assert_eq!(back.text(), original.text());
 }

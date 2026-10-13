@@ -1,6 +1,6 @@
 use super::*;
-use std::sync::Arc;
 use crate::steering::SteeringHandle;
+use std::sync::Arc;
 
 fn latch() -> (StopLatch, HaltSummarySlot) {
     let slot: HaltSummarySlot = Arc::default();

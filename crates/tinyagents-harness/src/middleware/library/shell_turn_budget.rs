@@ -26,11 +26,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use crate::context::RunContext;
 use crate::error::Result as TaResult;
 use crate::middleware::{Middleware, ToolInvocationIdentity, TurnClock, TurnClockMiddleware};
 use crate::runtime::AgentHarness;
+use async_trait::async_trait;
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
 
@@ -180,7 +180,9 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutClampMiddleware {
             }
             None => None,
         };
-        let Some(clamp) = clamp_shell_timeout(requested, clock.remaining(), self.0.max_timeout_secs) else {
+        let Some(clamp) =
+            clamp_shell_timeout(requested, clock.remaining(), self.0.max_timeout_secs)
+        else {
             return Ok(());
         };
         tracing::debug!(

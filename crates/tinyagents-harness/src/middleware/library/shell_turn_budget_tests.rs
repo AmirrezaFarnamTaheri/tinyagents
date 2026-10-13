@@ -1,7 +1,7 @@
 use super::*;
-use serde_json::json;
 use crate::context::RunConfig;
 use crate::middleware::ToolInvocationIdentity;
+use serde_json::json;
 
 const SECS: fn(u64) -> Duration = Duration::from_secs;
 
@@ -25,7 +25,8 @@ fn a_timeout_that_fits_is_left_alone() {
 #[test]
 fn an_unbounded_command_gets_the_turn_remainder_as_its_deadline() {
     for requested in [None, Some(0)] {
-        let clamp = clamp_shell_timeout(requested, SECS(3_600), 3600).expect("unbounded is clamped");
+        let clamp =
+            clamp_shell_timeout(requested, SECS(3_600), 3600).expect("unbounded is clamped");
         assert_eq!(clamp.requested, None);
         assert_eq!(clamp.clamped_secs, 3_510);
         assert_eq!(

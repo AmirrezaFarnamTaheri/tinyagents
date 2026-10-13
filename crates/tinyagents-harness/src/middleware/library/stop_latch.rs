@@ -16,12 +16,12 @@
 //! [`super::repeat_loop_stop`]), and takes the relabel back when the rest of
 //! the batch shows progress.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::steering::{SteeringCommand, SteeringHandle};
 
-use super::repeat_loop_stop::{is_correctable_class, repeat_loop_halt_summary, RepeatLoopWitness};
+use super::repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 
 use super::repeat_progress::HaltSummarySlot;
 

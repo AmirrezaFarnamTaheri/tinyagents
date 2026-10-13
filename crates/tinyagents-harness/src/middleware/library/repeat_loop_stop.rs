@@ -14,8 +14,8 @@
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Most failed-call signatures remembered in one run.
 const MAX_FAILED_CALLS: usize = 256;
@@ -72,12 +72,7 @@ impl RepeatLoopWitness {
     /// volatile spans (timestamps, durations, request ids) normalised away; a
     /// retry that fails differently (a task that got further, a different
     /// error) is new evidence, not a repeat.
-    pub fn record_failure(
-        &self,
-        tool: &str,
-        arg_fingerprint: &str,
-        failure_text: &str,
-    ) -> bool {
+    pub fn record_failure(&self, tool: &str, arg_fingerprint: &str, failure_text: &str) -> bool {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         crate::no_progress::normalize_volatile(failure_text).hash(&mut hasher);
         let key = format!("{tool}\u{1f}{arg_fingerprint}\u{1f}{:x}", hasher.finish());

@@ -119,8 +119,7 @@ fn the_notice_names_the_paths_and_asks_for_a_partial_file() {
 }
 
 fn tool_round(id: &str, name: &str) -> tinyinference_llm::model::ModelResponse {
-    let mut response =
-        tinyinference_llm::model::ModelResponse::assistant(String::new());
+    let mut response = tinyinference_llm::model::ModelResponse::assistant(String::new());
     response.message.content = Vec::new();
     response.message.tool_calls = vec![ToolCall::new(id, name, serde_json::json!({}))];
     response.finish_reason = Some("tool_calls".to_string());
@@ -141,16 +140,10 @@ async fn an_unwritten_deliverable_holds_the_answer_once_and_permits_a_fix() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "here is what I found".to_string(),
-            ),
+            tinyinference_llm::model::ModelResponse::assistant("here is what I found".to_string()),
             tool_round("c1", "writer"),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "written and answered".to_string(),
-            ),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "must not be reached".to_string(),
-            ),
+            tinyinference_llm::model::ModelResponse::assistant("written and answered".to_string()),
+            tinyinference_llm::model::ModelResponse::assistant("must not be reached".to_string()),
         ])),
     );
     harness.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
@@ -188,12 +181,8 @@ async fn a_request_naming_no_missing_file_is_left_alone() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "done".to_string(),
-            ),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "must not be reached".to_string(),
-            ),
+            tinyinference_llm::model::ModelResponse::assistant("done".to_string()),
+            tinyinference_llm::model::ModelResponse::assistant("must not be reached".to_string()),
         ])),
     );
     harness.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
@@ -259,12 +248,8 @@ async fn candidates_come_from_the_current_turns_request() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "first answer".to_string(),
-            ),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "second answer".to_string(),
-            ),
+            tinyinference_llm::model::ModelResponse::assistant("first answer".to_string()),
+            tinyinference_llm::model::ModelResponse::assistant("second answer".to_string()),
         ])),
     );
     harness.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
@@ -437,12 +422,8 @@ async fn the_runs_state_is_dropped_when_the_turn_ends() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "first answer".to_string(),
-            ),
-            tinyinference_llm::model::ModelResponse::assistant(
-                "second answer".to_string(),
-            ),
+            tinyinference_llm::model::ModelResponse::assistant("first answer".to_string()),
+            tinyinference_llm::model::ModelResponse::assistant("second answer".to_string()),
         ])),
     );
     harness.register_tool(Arc::new(FakeTool::returning("writer", "ok")));

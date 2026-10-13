@@ -55,8 +55,7 @@ pub struct ToolEffectFacts {
 }
 
 /// Looks up the declarations of a registered tool by name, for these args.
-pub type ToolFactsLookup =
-    Arc<dyn Fn(&str, &Value) -> Option<ToolEffectFacts> + Send + Sync>;
+pub type ToolFactsLookup = Arc<dyn Fn(&str, &Value) -> Option<ToolEffectFacts> + Send + Sync>;
 
 /// The facts `tool` declares for a call with `args`.
 pub fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
@@ -264,11 +263,7 @@ fn leaf_effect(facts: Option<ToolEffectFacts>, name: &str) -> CallEffect {
 /// A dispatcher is judged by its target, unless the dispatcher itself already
 /// declares an external effect for these arguments (`composio_execute` does
 /// for a mutating action slug).
-pub fn call_effect(
-    lookup: Option<&ToolFactsLookup>,
-    tool: &str,
-    args: &Value,
-) -> CallEffect {
+pub fn call_effect(lookup: Option<&ToolFactsLookup>, tool: &str, args: &Value) -> CallEffect {
     let facts = lookup.and_then(|lookup| lookup(tool, args));
     let Some(target) = dispatch_target(tool, args) else {
         return leaf_effect(facts, tool);
