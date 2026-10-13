@@ -300,7 +300,7 @@ impl Default for InMemoryEventJournal {
 ///
 /// Each run's observations are appended to the store under a stream named by
 /// the run id, so `read_from` resumes from a durable offset. Pair with
-/// [`crate::store::JsonlAppendStore`] for a local durable journal or
+/// [`crate::store::DriverAppendStore`] for a durable journal or
 /// [`crate::store::InMemoryAppendStore`] for deterministic tests.
 #[derive(Clone, Debug)]
 pub struct StoreEventJournal<A: AppendStore> {
@@ -454,7 +454,7 @@ pub struct JournalSink {
 }
 
 /// An [`EventListener`] that appends each [`EventRecord`] as a JSON line into a
-/// [`JsonlAppendStore`](crate::store::JsonlAppendStore) stream.
+/// [`DriverAppendStore`](crate::store::DriverAppendStore) stream.
 ///
 /// This is the lightweight durable sink: it persists the live record (id,
 /// offset, event) under a fixed stream name. Each record is handed to a

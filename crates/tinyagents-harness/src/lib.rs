@@ -146,7 +146,7 @@ pub use observability::{
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
     RedactingSink, StoreEventJournal,
 };
-pub use observability::{FileStatusStore, mint_run_id, reap_orphaned_runs};
+pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
