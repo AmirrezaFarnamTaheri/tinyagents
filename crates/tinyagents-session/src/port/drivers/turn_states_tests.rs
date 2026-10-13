@@ -245,3 +245,116 @@ fn concurrent_settles_and_sweeps_never_lose_a_turn() {
     assert_eq!(all.len(), 8);
     assert!(all.iter().all(is_terminal), "every turn ended up terminal");
 }
+
+#[test]
+fn roundtrips_subagent_interleaved_transcript_with_full_fidelity() {
+    // A settled turn whose subagent streamed reasoning, called a tool, then
+    // narrated — the interleaved transcript (not just the flat tool rows) plus
+    // the per-row `seq` ordering keys must survive a driver round-trip verbatim,
+    // so a reopened transcript rehydrates without losing the subagent's
+    // reasoning (the gap SubagentDrawer/chatRuntimeSlice documented).
+    let (store, _docs) = store();
+    let mut state = started("thread-sub", "req-1", 0);
+    state.lifecycle = TurnLifecycle::Completed;
+    state.updated_at = state.started_at.clone();
+
+    let activity = SubagentActivity {
+        task_id: "sub-1".into(),
+        agent_id: "researcher".into(),
+        status: Some("completed".into()),
+        mode: Some("typed".into()),
+        dedicated_thread: Some(false),
+        child_iteration: Some(1),
+        child_max_iterations: Some(8),
+        iterations: Some(2),
+        elapsed_ms: Some(1234),
+        output_chars: Some(42),
+        worker_thread_id: Some("worker-thread-9".into()),
+        parent_call_id: Some("call-1".into()),
+        output: Some("done".into()),
+        tool_calls: vec![SubagentToolCall {
+            call_id: "c1".into(),
+            tool_name: "search".into(),
+            status: ToolTimelineStatus::Success,
+            iteration: Some(1),
+            elapsed_ms: Some(12),
+            output_chars: Some(6),
+            display_name: Some("Searching".into()),
+            detail: None,
+            args: Some(serde_json::json!({ "query": "rust serde" })),
+            failure: None,
+            output: Some("3 hits".into()),
+        }],
+        transcript: vec![
+            SubagentTranscriptItem::Thinking {
+                iteration: Some(1),
+                text: "let me search.".into(),
+            },
+            SubagentTranscriptItem::Tool {
+                iteration: Some(1),
+                call_id: "c1".into(),
+                tool_name: "search".into(),
+                status: ToolTimelineStatus::Success,
+                elapsed_ms: Some(12),
+                output_chars: Some(6),
+                display_name: Some("Searching".into()),
+                detail: None,
+            },
+            SubagentTranscriptItem::Text {
+                iteration: Some(1),
+                text: "Found it.".into(),
+            },
+        ],
+    };
+
+    state.tool_timeline.push(ToolTimelineEntry {
+        id: "subagent:sub-1".into(),
+        name: "subagent:researcher".into(),
+        round: 1,
+        status: ToolTimelineStatus::Success,
+        args_buffer: None,
+        display_name: Some("Researcher".into()),
+        detail: None,
+        source_tool_name: Some("spawn_subagent".into()),
+        subagent: Some(activity),
+        failure: None,
+        output: None,
+        seq: Some(3),
+    });
+
+    store.put(&state).expect("put");
+    let loaded = store.get("thread-sub").expect("get").expect("present");
+    // Structural equality proves nothing in the interleaved transcript,
+    // subagent activity, or the `seq` ordering keys was dropped or reordered.
+    assert_eq!(loaded, state);
+
+    // Spot-check the interleaving explicitly so a future regression that keeps
+    // the fields but loses the ordering still fails here.
+    let activity = loaded.tool_timeline[0]
+        .subagent
+        .as_ref()
+        .expect("subagent activity restored");
+    assert_eq!(activity.transcript.len(), 3);
+    assert!(matches!(
+        activity.transcript[0],
+        SubagentTranscriptItem::Thinking { .. }
+    ));
+    assert!(matches!(
+        activity.transcript[1],
+        SubagentTranscriptItem::Tool { .. }
+    ));
+    assert!(matches!(
+        activity.transcript[2],
+        SubagentTranscriptItem::Text { .. }
+    ));
+    // The child call's arguments are what the reloaded row's "Input" block
+    // renders from. Spot-checked by value (like the interleaving above) so a
+    // regression names the field instead of failing as one opaque struct
+    // inequality (#5987).
+    assert_eq!(
+        activity.tool_calls[0].args,
+        Some(serde_json::json!({ "query": "rust serde" })),
+        "child tool arguments must survive the driver round-trip"
+    );
+    assert_eq!(loaded.tool_timeline[0].seq, Some(3));
+}
