@@ -41,7 +41,7 @@ pub use turn_states::{TurnStateImportReport, import_turn_states};
 pub use workspace::{LegacyWorkspaceReport, WorkspaceLayout, import_workspace};
 
 #[cfg(test)]
-mod fixtures;
+pub(crate) mod fixtures;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
