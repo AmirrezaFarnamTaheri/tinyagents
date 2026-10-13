@@ -140,3 +140,33 @@ async fn attachments_survive_a_reopened_sqlite_file() {
     );
     assert!(reopened.read("persisted").await.unwrap().is_some());
 }
+
+#[tokio::test]
+async fn concurrent_writes_of_one_id_both_succeed() {
+    let s = stash(u64::MAX, Duration::from_secs(3600));
+    let (a, b) = tokio::join!(s.write("same", TINY_PNG), s.write("same", TINY_PNG));
+    let (a, b) = (a.unwrap(), b.unwrap());
+    assert_eq!(a, b);
+    assert_eq!(s.build_index().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn concurrent_writes_under_a_tight_cap_leave_the_stash_within_its_cap() {
+    let one = stash(u64::MAX, Duration::from_secs(3600))
+        .write("p", TINY_PNG)
+        .await
+        .unwrap()
+        .len;
+    // Room for exactly one attachment.
+    let s = stash(one, Duration::from_secs(3600));
+    let other = s.clone();
+    let (a, b) = tokio::join!(s.write("a", TINY_PNG), other.write("b", TINY_PNG));
+    // An attachment may be evicted by a later write after its own write
+    // returned, so check the end state: one write succeeded and the stash is
+    // back under its cap.
+    assert!(a.is_ok() || b.is_ok(), "both concurrent writes failed");
+    let index = s.build_index().await.unwrap();
+    let total: u64 = index.values().map(|entry| entry.len).sum();
+    assert!(!index.is_empty());
+    assert!(total <= one, "stash over its cap: {total} > {one}");
+}

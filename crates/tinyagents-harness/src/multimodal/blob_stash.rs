@@ -2,10 +2,10 @@
 //! bytes kept out of band so conversations persist a compact
 //! `[Image: … #att:<id>]` placeholder instead of a multi-megabyte `data:` URI.
 //!
-//! [`BlobAttachmentStash`] is the storage-backed counterpart of
-//! [`AttachmentStash`](super::stash::AttachmentStash): the same mechanism
-//! (dedup'd writes, size-cap eviction, TTL sweep, id index) with no directory
-//! of files. The host owns the policy (how large, how long); the tenant scope is
+//! [`BlobAttachmentStash`] is the only attachment stash: dedup'd writes,
+//! size-cap eviction, TTL sweep and an id index over the host's blob and
+//! document ports, with no directory of files (the earlier directory-backed
+//! stash is removed). The host owns the policy (how large, how long); the tenant scope is
 //! already bound into the handles it passes.
 //!
 //! # Layout

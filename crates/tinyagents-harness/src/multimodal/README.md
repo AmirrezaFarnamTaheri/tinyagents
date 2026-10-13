@@ -67,7 +67,7 @@ format contributes a header naming it plus a content hash.
 | `png.rs` | Optional lossless PNG optimization. |
 | `payload.rs`  | `FilePayload`, message composition, truncation, hashing.           |
 | `error.rs`    | `MultimodalError`, `Result`.                                       |
-| `mod_tests.rs`, `resolve_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `stash_tests.rs` | Marker, MIME, size, path, intake, archive, PNG and stash behavior. |
+| `mod_tests.rs`, `resolve_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, archive, PNG and stash behavior. |
 
 ## Operational constraints
 
