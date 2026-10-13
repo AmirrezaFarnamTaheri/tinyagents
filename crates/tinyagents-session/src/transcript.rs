@@ -132,6 +132,7 @@
 //! | `adoption`      | Folding pre-identity transcripts into a session.              |
 
 mod adoption;
+mod agent_files;
 mod background;
 mod history;
 mod jsonl;
@@ -149,6 +150,7 @@ pub mod view;
 mod writer;
 
 pub use adoption::{SessionAdoption, adopt_legacy_session_transcripts};
+pub use agent_files::{AgentTranscriptFiles, agent_transcript_root};
 pub use background::{append_background_message, append_background_message_with_lock_notification};
 pub(crate) use history::same_transcript_messages;
 pub use history::{
