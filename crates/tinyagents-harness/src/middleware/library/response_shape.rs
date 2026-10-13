@@ -213,15 +213,15 @@ impl<Ctx: Send + Sync + 'static> Middleware<(), Ctx> for ResponseShapeMiddleware
         response: &mut ModelResponse,
     ) -> TaResult<()> {
         record(&self.0, response);
-        if response.tool_calls().is_empty() {
-            if let Some(validator) = &self.0.shape.validator {
-                let error = validator
-                    .validate(&response.text(), response.finish_reason.as_deref())
-                    .err();
-                let mut report = self.0.lock_report();
-                report.structured_attempts = report.structured_attempts.saturating_add(1);
-                report.validation_error = error;
-            }
+        if response.tool_calls().is_empty()
+            && let Some(validator) = &self.0.shape.validator
+        {
+            let error = validator
+                .validate(&response.text(), response.finish_reason.as_deref())
+                .err();
+            let mut report = self.0.lock_report();
+            report.structured_attempts = report.structured_attempts.saturating_add(1);
+            report.validation_error = error;
         }
         if self.0.shape.require_tool_call
             && !self.0.tool_succeeded.load(Ordering::Acquire)
