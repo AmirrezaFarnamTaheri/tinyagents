@@ -6,6 +6,8 @@
 //! call: cache keys, prompt assembly, store persistence, retry policies,
 //! channel reducers, and deterministic summarization.
 
+mod common;
+use common::storage;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,7 +24,7 @@ use tinyagents_harness::cache::{
 use tinyagents_harness::prompt::{MessagesTemplate, PromptBuilder, PromptTemplate, TemplateRole};
 use tinyagents_harness::retry::{FallbackPolicy, RateLimiter, RetryPolicy, is_retryable};
 use tinyagents_harness::store::{
-    AppendStore, FileStore, InMemoryAppendStore, InMemoryStore, JsonlAppendStore, Store,
+    AppendStore, DriverAppendStore, DriverStore, InMemoryAppendStore, InMemoryStore, Store,
     StoreRegistry,
 };
 use tinyagents_harness::summarization::{
@@ -137,17 +139,13 @@ async fn stores_round_trip_across_ephemeral_and_file_backends() {
     memory_store.delete("ns", "a").await.expect("delete");
     assert!(memory_store.get("ns", "a").await.expect("get").is_none());
 
-    let dir =
-        std::env::temp_dir().join(format!("tinyagents-e2e-public-api-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("tempdir");
-    let file_store = FileStore::new(dir.join("kv"));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file_store = DriverStore::new(storage::docs(&storage::sqlite(dir.path(), "kv.sqlite")));
     file_store.put("safe", "key", json!("value")).await.unwrap();
     assert_eq!(
         file_store.get("safe", "key").await.unwrap(),
         Some(json!("value"))
     );
-    assert!(file_store.put("../bad", "key", json!(null)).await.is_err());
 
     let append = InMemoryAppendStore::new();
     assert_eq!(append.append("events", json!("a")).await.unwrap(), 0);
@@ -158,18 +156,18 @@ async fn stores_round_trip_across_ephemeral_and_file_backends() {
         vec![(1, json!("b"))]
     );
 
-    let jsonl_a = JsonlAppendStore::new(dir.join("append"));
+    let streams = || Arc::clone(storage::sqlite(dir.path(), "append.sqlite").streams());
+    let jsonl_a = DriverAppendStore::new(streams());
     assert_eq!(
         jsonl_a.append("stream", json!({ "n": 1 })).await.unwrap(),
         0
     );
-    let jsonl_b = JsonlAppendStore::new(dir.join("append"));
+    let jsonl_b = DriverAppendStore::new(streams());
     assert_eq!(
         jsonl_b.append("stream", json!({ "n": 2 })).await.unwrap(),
         1
     );
     assert_eq!(jsonl_a.len("stream").await.unwrap(), 2);
-    assert!(jsonl_a.append("../escape", json!(0)).await.is_err());
 
     let mut registry = StoreRegistry::new();
     registry.register("file", Arc::new(file_store.clone()));

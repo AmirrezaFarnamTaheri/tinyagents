@@ -1,23 +1,23 @@
 //! Feature/integration tests for the harness store infrastructure.
 //!
 //! Covers the durable substrate that outlives a single run: key-value stores
-//! (in-memory, file-backed with path-traversal guards), append-only journals
-//! (offset semantics, retention/eviction, JSONL durability), the store
-//! registry.
+//! (in-memory and driver-backed), append-only journals (offset semantics,
+//! retention/eviction, driver durability), the store registry.
 //!
-//! Deterministic and offline. File-backed cases use std::sync::Arc;
-
-mod common;
-use common::storage;
-use a unique temp directory.
+//! Deterministic and offline. Durable cases use a SQLite database in a unique
+//! temp directory.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::json;
 use tinyagents_harness::store::{
     AppendStore, DriverAppendStore, DriverStore, InMemoryAppendStore, InMemoryStore, Store,
     StoreRegistry,
 };
+
+mod common;
+use common::storage;
 
 /// A process-unique temp directory for file-backed cases.
 fn temp_dir(tag: &str) -> PathBuf {
