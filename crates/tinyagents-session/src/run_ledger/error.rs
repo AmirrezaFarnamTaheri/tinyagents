@@ -18,11 +18,9 @@ pub enum LedgerError {
     #[error(transparent)]
     Control(Box<super::command_center::ControlError>),
     /// Source inspection is unsupported until the host supplies a checkpointed snapshot.
-    #[cfg(feature = "storage-drivers")]
     #[error("legacy ledger source requires a host checkpoint or consistent snapshot: {path}")]
     SourceRequiresSnapshot { path: std::path::PathBuf },
     /// A driver operation failed, retaining capability/conflict/admission kinds.
-    #[cfg(feature = "storage-drivers")]
     #[error(transparent)]
     Driver(Box<tinystoragedrivers_core::StorageError>),
 }
@@ -39,7 +37,6 @@ impl From<super::command_center::ControlError> for LedgerError {
     }
 }
 
-#[cfg(feature = "storage-drivers")]
 impl From<tinystoragedrivers_core::StorageError> for LedgerError {
     fn from(error: tinystoragedrivers_core::StorageError) -> Self {
         Self::Driver(Box::new(error))

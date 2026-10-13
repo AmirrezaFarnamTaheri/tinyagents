@@ -31,10 +31,8 @@
 //! consistent names make multi-store applications easier to audit.
 
 pub mod conformance;
-#[cfg(feature = "storage-drivers")]
 mod drivers;
 pub mod namespaced;
-#[cfg(feature = "storage-drivers")]
 mod schema_admission;
 mod types;
 
@@ -47,9 +45,7 @@ use serde_json::Value;
 
 pub use types::*;
 
-#[cfg(feature = "storage-drivers")]
 pub use drivers::{DriverAppendStore, DriverStore};
-#[cfg(feature = "storage-drivers")]
 pub use schema_admission::SchemaAdmission;
 
 use crate::error::{Result, TinyAgentsError};

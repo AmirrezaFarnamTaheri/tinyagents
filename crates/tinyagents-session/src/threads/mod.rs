@@ -55,7 +55,5 @@ pub use types::{
 #[path = "persistence_tests.rs"]
 mod persistence_tests;
 
-#[cfg(feature = "storage-drivers")]
 pub mod driver;
-#[cfg(feature = "storage-drivers")]
 pub use driver::DriverConversationStore;

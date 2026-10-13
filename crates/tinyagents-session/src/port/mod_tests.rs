@@ -52,7 +52,6 @@ fn the_file_turn_state_store_is_a_turn_states() {
     assert_eq!(turns.clear_all().unwrap(), 0);
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
     let dir = tempfile::tempdir().unwrap();
@@ -67,7 +66,6 @@ fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
     );
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     #[derive(Debug, thiserror::Error)]
@@ -95,7 +93,6 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 /// Pins the default checked accessor for an unchanged file provider.
 fn checked_accessor_keeps_legacy_file_provider_compatible() {
@@ -107,7 +104,6 @@ fn checked_accessor_keeps_legacy_file_provider_compatible() {
     assert!(stores.turn_states.list().unwrap().is_empty());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 /// Pins Arc forwarding rather than selecting the infallible default.
 fn checked_accessor_arc_forwards_native_refusal() {
@@ -195,7 +191,6 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
     assert!(default.run_ledger_for_agent("allowed").unwrap().is_none());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
     use tinyagents_harness::store::SchemaAdmission;
@@ -271,7 +266,6 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
     assert!(!dir.path().join("memory").exists());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn optional_conversation_provider_keeps_native_refusal_kind_and_source_through_arc() {
     use crate::threads::{ConversationError, ConversationPersistence, ConversationResult};

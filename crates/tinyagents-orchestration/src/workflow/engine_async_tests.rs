@@ -51,7 +51,6 @@ use std::time::Duration;
 use tinyagents_session::run_ledger::{WorkflowLeaseClaim, WorkflowRun, WorkflowRunUpsert};
 
 fn refusal() -> WorkflowPersistenceError {
-    #[cfg(feature = "storage-drivers")]
     {
         WorkflowPersistenceError::Ledger(
             tinystoragedrivers_core::StorageError::new(
@@ -339,7 +338,6 @@ async fn ignored_synchronous_registration_refusal_cannot_leave_authoritative_dri
     ));
 }
 
-#[cfg(feature = "storage-drivers")]
 #[path = "engine_driver_tests.rs"]
 mod driver_tests;
 

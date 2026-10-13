@@ -99,7 +99,6 @@ async fn authoritative_registration_refuses_synchronous_success() {
     registration.register_async("child".into()).await.unwrap();
 }
 
-#[cfg(feature = "storage-drivers")]
 #[tokio::test(flavor = "current_thread")]
 async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
     use tinyagents_session::run_ledger::DriverRunLedger;
@@ -120,7 +119,6 @@ async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
     assert!(first.load("workflow").await.unwrap().is_some());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[path = "persistence_refusal_tests.rs"]
 mod refusal_tests;
 
