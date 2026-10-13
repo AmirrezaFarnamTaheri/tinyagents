@@ -173,122 +173,8 @@ fn subagent_correlates_by_ledger_parent_call_id_over_the_heuristic() {
     )
     .unwrap();
 
-    crate::run_ledger::upsert_agent_run(
-        dir.path(),
-        crate::run_ledger::AgentRunUpsert {
-            id: "sub-exact-1".to_string(),
-            kind: crate::run_ledger::AgentRunKind::Subagent,
-            parent_run_id: None,
-            parent_thread_id: Some(thread_id.to_string()),
-            agent_id: Some("researcher".to_string()),
-            status: crate::run_ledger::AgentRunStatus::Completed,
-            prompt_ref: None,
-            worker_thread_id: None,
-            checkpoint_path: None,
-            checkpoint: None,
-            summary: None,
-            error: None,
-            metadata: serde_json::json!({ "parentCallId": "call-real" }),
-            started_at: None,
-            completed_at: None,
-        },
-    )
-    .expect("seed run ledger row");
-
-    let projected = project_thread_scoped_with(dir.path(), thread_id, None, &lookup)
-        .expect("project thread");
-    let subagent_call_id = projected.items.iter().find_map(|item| match item {
-        DisplayItem::Subagent { call_id, .. } => Some(call_id.clone()),
-        _ => None,
-    });
-    assert_eq!(
-        subagent_call_id,
-        Some(Some("call-real".to_string())),
-        "exact ledger correlation must win over the first-unclaimed heuristic; items={:#?}",
-        projected.items
-    );
-}
-
-/// Parent transcript with two identically-shaped spawn calls, the second of
-/// which carries `result_for_real` as its tool result. Returns the child's
-/// resolved `call_id` after projecting a child whose `_meta` says `task_id` /
-/// `thread_id`.
-/// The native replay envelope a host persists a tool row as; the reader
-/// unwraps it to the tool's own output. (A raw JSON output that itself carries
-/// a `tool_call_id` key is indistinguishable from an envelope, so a realistic
-/// transcript always has the envelope.)
-fn envelope(call_id: &str, output: &str) -> String {
-    serde_json::json!({"tool_call_id": call_id, "content": output}).to_string()
-}
-
-fn row_content(wrap: bool, call_id: &str, output: &str) -> String {
-    if wrap {
-        envelope(call_id, output)
-    } else {
-        output.to_owned()
-    }
-}
-
-fn project_two_spawns(
-    result_for_decoy: &str,
-    result_for_real: &str,
-    child_task_id: &str,
-    child_thread_id: &str,
-) -> Option<String> {
-    project_spawns(
-        true,
-        result_for_decoy,
-        result_for_real,
-        child_task_id,
-        child_thread_id,
-    )
-}
-
-/// `wrap` persists each tool row as a replay envelope; `false` stores the raw
-/// tool output unwrapped.
-fn project_spawns(
-    wrap: bool,
-    result_for_decoy: &str,
-    result_for_real: &str,
-    child_task_id: &str,
-    child_thread_id: &str,
-) -> Option<String> {
-    let dir = TempDir::new().unwrap();
-    let root_stem = "800_orch_link";
-    let thread_id = "thr_link";
-    let commit_ts = chrono::DateTime::from_timestamp(1_900_000, 0)
-        .unwrap()
-        .to_rfc3339();
-    let call = |id: &str| format!(r#"{{"id":"{id}","name":"worker","arguments":"{{}}"}}"#);
-    let root_body = [
-        r#"{"role":"user","content":"go","request_id":"req-1"}"#.to_string(),
-        format!(
-            r#"{{"role":"assistant","content":"","provider":"test","model":"test","usage":{{"input":1,"output":1,"cached_input":0,"cost_usd":0.0}},"tool_calls":[{},{}],"iteration":1,"request_id":"req-1","ts":"{commit_ts}"}}"#,
-            call("call-decoy"),
-            call("call-real")
-        ),
-        format!(
-            r#"{{"role":"tool","content":{},"id":"call-decoy","request_id":"req-1"}}"#,
-            serde_json::to_string(&row_content(wrap, "call-decoy", result_for_decoy)).unwrap()
-        ),
-        format!(
-            r#"{{"role":"tool","content":{},"id":"call-real","request_id":"req-1"}}"#,
-            serde_json::to_string(&row_content(wrap, "call-real", result_for_real)).unwrap()
-        ),
-    ];
-    let root_refs: Vec<&str> = root_body.iter().map(String::as_str).collect();
-    write_raw(dir.path(), root_stem, thread_id, &root_refs);
-
-    let child_stem = format!("{root_stem}__2000000_000000001_worker");
-    let child = transcript::resolve_keyed_transcript_path(dir.path(), &child_stem).unwrap();
-    let meta = format!(
-        r#"{{"_meta":{{"version":1,"agent":"worker","agent_id":"worker","agent_type":"subagent","dispatcher":"native","created":"2026-07-21T00:00:00Z","updated":"2026-07-21T00:00:10Z","turn_count":1,"input_tokens":1,"output_tokens":1,"cached_input_tokens":0,"charged_amount_usd":0.0,"thread_id":"{child_thread_id}","task_id":"{child_task_id}"}}}}"#
-    );
-    std::fs::write(
-        &child,
-        format!("{meta}\n{{\"role\":\"assistant\",\"content\":\"done\"}}\n"),
-    )
-    .unwrap();
+    // The run ledger knows which call spawned `sub-exact-1`.
+    let lookup = |task_id: &str| (task_id == "sub-exact-1").then(|| "call-real".to_string());
 
     let projected = project_thread(dir.path(), thread_id).expect("project thread");
     projected.items.iter().find_map(|item| match item {
@@ -465,7 +351,7 @@ fn project_two_roots(
         "thr_roots",
         &[first_path, second_path],
         &[child_path],
-        Some(dir.path()),
+        None,
     );
     projected.items.iter().find_map(|item| match item {
         DisplayItem::Subagent { call_id, .. } => call_id.clone(),
