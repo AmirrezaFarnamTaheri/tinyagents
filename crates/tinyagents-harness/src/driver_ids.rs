@@ -1,4 +1,7 @@
 //! Document ids for the driver-backed stores.
+//!
+//! Shared by the driver stores of this workspace so every one derives ids the
+//! same way; a host writing its own store over the ports can use it too.
 
 use sha2::{Digest, Sha256};
 
@@ -7,7 +10,7 @@ use sha2::{Digest, Sha256};
 /// Length prefixes make the encoding injective, so `("a", "bc")` and
 /// `("ab", "c")` never meet, and hashing keeps the id inside any driver's
 /// length limit however long the parts are.
-pub(crate) fn hashed_id(parts: &[&str]) -> String {
+pub fn hashed_id(parts: &[&str]) -> String {
     let mut digest = Sha256::new();
     for part in parts {
         digest.update((part.len() as u64).to_be_bytes());

@@ -63,7 +63,7 @@ pub mod artifacts;
 pub mod cache;
 pub mod cancel;
 mod canonical_json;
-mod driver_ids;
+pub mod driver_ids;
 pub mod capability;
 pub mod catalog;
 pub mod config;

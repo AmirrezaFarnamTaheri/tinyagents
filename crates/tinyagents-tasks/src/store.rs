@@ -6,9 +6,10 @@
 //! through this trait so the record on disk always matches what a control
 //! reported to the model. [`InMemoryTaskStore`] is the reference state
 //! machine — it owns transition validation and filtering — and
-//! [`JsonlTaskStore`] wraps it to add durability and per-task history by
-//! appending one JSON line per transition. `reconcile.rs` reads through this
-//! trait to settle orphaned records left by a dead executor.
+//! [`DriverTaskStore`](crate::DriverTaskStore) applies the very same
+//! transitions to records on any `tinystoragedrivers` backend, adding
+//! durability and per-task history. `reconcile.rs` reads through this trait to
+//! settle orphaned records left by a dead executor.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
