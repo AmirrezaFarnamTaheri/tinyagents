@@ -60,7 +60,7 @@ impl CapPauser {
         on_pause: Option<PauseRecorder>,
     ) -> Result<Arc<Self>> {
         if cap == 0 {
-            return Err(TinyAgentsError::Config(
+            return Err(TinyAgentsError::Validation(
                 "cap pauser: a zero model-call cap cannot be enforced by pausing".into(),
             ));
         }

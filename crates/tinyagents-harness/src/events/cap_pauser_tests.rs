@@ -19,7 +19,7 @@ fn complete(sink: &EventSink, call_id: &str) {
 
 fn pauser_on(sink: &EventSink) -> (SteeringHandle, Arc<CapPauser>) {
     let handle = SteeringHandle::new(SteeringPolicy::allow_all());
-    let pauser = CapPauser::new(handle.clone(), CAP, "agent_turn");
+    let pauser = CapPauser::new(handle.clone(), CAP, "agent_turn").unwrap();
     sink.subscribe(pauser.clone());
     (handle, pauser)
 }
@@ -85,7 +85,8 @@ fn recorder_runs_with_counts_before_the_pause_is_sent() {
         2,
         "agent_turn",
         Some(recorder),
-    ));
+    )
+    .unwrap());
 
     complete(&sink, "agent_turn-model-1");
     assert!(seen.lock().unwrap().is_empty());
@@ -104,4 +105,12 @@ fn completions_past_the_cap_keep_requesting_pause() {
         complete(&sink, &format!("agent_turn-model-{n}"));
     }
     assert_eq!(handle.pending(), 2);
+}
+
+#[test]
+fn a_zero_cap_or_a_handle_that_refuses_pause_is_rejected() {
+    let allow = SteeringHandle::new(SteeringPolicy::allow_all());
+    assert!(CapPauser::new(allow, 0, "agent_turn").is_err());
+    let refuses = SteeringHandle::new(SteeringPolicy::new());
+    assert!(CapPauser::new(refuses, 2, "agent_turn").is_err());
 }
