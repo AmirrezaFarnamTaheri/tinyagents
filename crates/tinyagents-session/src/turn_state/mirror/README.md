@@ -1,7 +1,7 @@
 # session::turn_state::mirror
 
 `TurnStateMirror` keeps the authoritative `TurnState` snapshot of one in-flight
-turn in sync with the agent loop and writes it through to a `TurnStateStore`,
+turn in sync with the agent loop and writes it through to a `TurnStates` store,
 so a UI that reattaches (or a process that restarts) can rebuild the live turn.
 
 ## Design
@@ -30,9 +30,9 @@ mirror never flushes per streaming delta.
 - Narration and thinking coalesce within a round; a tool call or a new round
   starts a new block. Ordering keys are monotonic per turn.
 - `finish` runs when the bridge exits. The bridge can outlive its turn, and the
-  turn driver settles the snapshot itself (`TurnStateStore::settle_turn`), so
+  turn driver settles the snapshot itself (`TurnStates::settle_turn`), so
   `finish` writes `Interrupted` only through
-  `TurnStateStore::put_unless_completed`: the completed check and the write
+  `TurnStates::put_unless_completed`: the completed check and the write
   are one store operation under the store lock. A completed turn is kept, an
   unreadable snapshot is left alone, and only a turn actually marked
   interrupted gets its partial answer appended to the session transcript

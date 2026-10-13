@@ -7,20 +7,21 @@ remains the durable conversation history.
 
 ## Public surface
 
-`TurnStateStore` in `store.rs` loads, writes, queries, settles, and recovers
-snapshots. `types.rs` defines the serializable `TurnState`, lifecycle, phase,
-tool timeline, and sub-agent activity shapes. The crate re-exports the store
-and common types from its turn-state module.
+The `TurnStates` port (`crate::port`) loads, writes, queries, settles, and
+recovers snapshots; `InMemoryTurnStates` and the driver-backed
+`DriverTurnStates` implement it. `types.rs` defines the serializable `TurnState`, lifecycle, phase,
+tool timeline, and sub-agent activity shapes. The crate re-exports the common
+types from its turn-state module.
 
 ## Persistence and lifecycle
 
-Each request has a snapshot beneath the workspace conversation turn-state
-directory. Writes use a temporary file and atomic replacement, and a
-process-wide lock serializes read-modify-write operations. Startup recovery
+Each request has one snapshot in the store the host installed (memory by
+default, or any `tinystoragedrivers` backend). Conditional writes are
+compare-and-swap operations on the snapshot document. Startup recovery
 marks leftover non-terminal turns interrupted. Completed snapshots are pruned
 to the newest retention window per thread; active snapshots are retained.
 Settlement is idempotent for missing or already-terminal snapshots.
 
-Snapshots are workspace-local operational state, not an audit log. Callers
+Snapshots are operational state, not an audit log. Callers
 should persist progress at meaningful turn boundaries and settle a turn when
 its final lifecycle becomes known.
