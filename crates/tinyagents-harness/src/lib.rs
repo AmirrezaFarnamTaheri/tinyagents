@@ -58,6 +58,7 @@
 //! crates directly, or the compiler will see two distinct copies of the same
 //! type.
 
+pub mod agent_error;
 pub mod agent_loop;
 pub mod artifacts;
 pub mod cache;
@@ -99,6 +100,8 @@ pub mod summarization;
 pub mod terminal;
 pub mod testkit;
 pub mod title;
+pub mod turn_deadline;
+pub mod turn_stop;
 pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]

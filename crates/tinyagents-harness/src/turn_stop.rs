@@ -4,10 +4,8 @@
 //! normal completion path (`TurnCompleted` / `SubagentCompleted`), so without
 //! this they read as clean completions in traces and to a delegating parent:
 //!
-//! * the repeated-failure **breaker** (`tinyagents::middleware::repeated_failure`)
-//!   halts the run with a stop note;
-//! * the **wind-down** at the turn deadline
-//!   (`tinyagents::deadline_wind_down`) pauses the run before the backstop;
+//! * the repeated-failure **breaker** halts the run with a stop note;
+//! * the **wind-down** at the turn deadline pauses the run before the backstop;
 //! * the **iteration cap** stops a run whose last response still asked for
 //!   tools.
 //!
@@ -84,14 +82,15 @@ impl TurnStop {
     /// `X` still blocks operation `Y` on `Z`.`; only `X` and `Y` are kept
     /// (the scope `Z` can be a URL or path). Other notes get the stop-reason
     /// kind as their class and no operation.
-    pub fn breaker(note: &str) -> Self {
+    ///
+    /// `fallback_class` maps a note with no class to the host's stop-reason
+    /// key (it may carry a `turn_stop.` prefix, which is stripped).
+    pub fn breaker(note: &str, fallback_class: impl FnOnce(&str) -> &'static str) -> Self {
         let lead = note.split("Last error").next().unwrap_or(note);
         let failure_class = backticked_after(lead, "failure class `")
             .and_then(ident)
             .or_else(|| {
-                let key =
-                    crate::agent::session_host::stop_summary::StopReasonKind::from_stop_note(note)
-                        .key();
+                let key = fallback_class(note);
                 ident(key.strip_prefix("turn_stop.").unwrap_or(key))
             });
         let operation = backticked_after(lead, "still blocks operation `").and_then(ident);
@@ -105,9 +104,14 @@ impl TurnStop {
     /// How a top-level run ended, from the outcome's flags. The breaker is the
     /// explicit cause and wins; a wind-down pause can also leave the run
     /// without a final response (which reads as a cap), so it beats the cap.
-    pub fn classify(breaker_halt: Option<&str>, wind_down: bool, hit_cap: bool) -> Option<Self> {
+    pub fn classify(
+        breaker_halt: Option<&str>,
+        wind_down: bool,
+        hit_cap: bool,
+        fallback_class: impl FnOnce(&str) -> &'static str,
+    ) -> Option<Self> {
         if let Some(note) = breaker_halt {
-            return Some(Self::breaker(note));
+            return Some(Self::breaker(note, fallback_class));
         }
         if wind_down {
             return Some(Self::wind_down());
@@ -117,11 +121,14 @@ impl TurnStop {
 
     /// The stop behind a sub-agent's `Incomplete { reason }`: the runner's
     /// cap reason, else the breaker note it carries verbatim.
-    pub fn from_incomplete_reason(reason: &str) -> Self {
+    pub fn from_incomplete_reason(
+        reason: &str,
+        fallback_class: impl FnOnce(&str) -> &'static str,
+    ) -> Self {
         if reason == SUBAGENT_ITERATION_CAP_REASON {
             Self::iteration_cap()
         } else {
-            Self::breaker(reason)
+            Self::breaker(reason, fallback_class)
         }
     }
 

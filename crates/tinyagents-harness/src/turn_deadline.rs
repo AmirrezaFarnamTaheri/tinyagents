@@ -1,7 +1,7 @@
 //! Wall-clock deadline of one top-level agent turn.
 //!
-//! A web-chat turn runs under an outer backstop (`web_chat::ops::turn_guards`)
-//! that drops the turn future when it elapses. Dropping it discards
+//! A host may run a turn under an outer backstop that drops the turn future
+//! when it elapses. Dropping it discards
 //! everything the turn did. Production showed ~55 orchestrator turns a week
 //! dying this way at exactly 900s, after 50–98 model calls, with nothing
 //! delivered. They died there because the harness's own turn ceiling (3600s,
@@ -23,20 +23,13 @@
 //! For every positive backstop, `wind_down < hard_stop < backstop`
 //! (see `turn_deadline_tests.rs`).
 //!
-//! The web-turn guard scopes the deadline on a task-local
-//! ([`with_turn_deadline`]). The top-level session turn
-//! (`OpenHumanSessionHost::turn_with_origin`) copies it onto its explicit run
-//! context. Turns with no backstop, such as other channels or the CLI, carry
-//! `None` and keep their previous behaviour.
+//! The deadline is a plain value the host passes on the run context; there is
+//! no task-local. Turns with no backstop carry `None`.
 
-use std::future::Future;
 use std::time::{Duration, Instant};
 
-/// Default outer wall-clock backstop for one web-chat turn, in seconds.
+/// Default outer wall-clock backstop for one turn, in seconds.
 pub const DEFAULT_TURN_BACKSTOP_SECS: u64 = 900;
-
-/// Environment override for the backstop, in seconds; `0` disables it.
-pub const TURN_BACKSTOP_ENV: &str = "OPENHUMAN_WEB_TURN_TIMEOUT_SECS";
 
 /// Upper bound on the gap between wind-down and the backstop. It has to cover
 /// the tool round already in flight plus the grounded close (one model call,
@@ -46,18 +39,14 @@ const WIND_DOWN_MARGIN: Duration = Duration::from_secs(120);
 /// Upper bound on the gap between the harness hard stop and the backstop.
 const HARD_STOP_MARGIN: Duration = Duration::from_secs(60);
 
-/// Pure core of [`configured_backstop`]: an absent or unparseable value falls
-/// back to [`DEFAULT_TURN_BACKSTOP_SECS`]. `0` disables the backstop (`None`).
+/// Parse a backstop override in seconds (the host reads its own env var): an
+/// absent or unparseable value falls back to [`DEFAULT_TURN_BACKSTOP_SECS`].
+/// `0` disables the backstop (`None`).
 pub fn parse_backstop(env_value: Option<&str>) -> Option<Duration> {
     let secs = env_value
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(DEFAULT_TURN_BACKSTOP_SECS);
     (secs > 0).then(|| Duration::from_secs(secs))
-}
-
-/// The backstop in force for this process (env [`TURN_BACKSTOP_ENV`]).
-pub fn configured_backstop() -> Option<Duration> {
-    parse_backstop(std::env::var(TURN_BACKSTOP_ENV).ok().as_deref())
 }
 
 /// One turn's backstop, anchored at the instant the backstop started counting.
@@ -126,23 +115,6 @@ impl TurnDeadline {
             .min(u128::from(u64::MAX)) as u64;
         let remaining_ms = remaining_ms.max(1);
         Some(configured_ms.map_or(remaining_ms, |ms| ms.min(remaining_ms)))
-    }
-}
-
-tokio::task_local! {
-    static CURRENT_TURN_DEADLINE: TurnDeadline;
-}
-
-/// The deadline scoped on the current task, if any.
-pub fn current() -> Option<TurnDeadline> {
-    CURRENT_TURN_DEADLINE.try_with(|deadline| *deadline).ok()
-}
-
-/// Run `future` with `deadline` scoped on the task (a no-op scope for `None`).
-pub async fn with_turn_deadline<F: Future>(deadline: Option<TurnDeadline>, future: F) -> F::Output {
-    match deadline {
-        Some(deadline) => CURRENT_TURN_DEADLINE.scope(deadline, future).await,
-        None => future.await,
     }
 }
 
