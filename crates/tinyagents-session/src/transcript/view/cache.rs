@@ -99,7 +99,7 @@ impl TranscriptViewCache {
             thread_id,
             &root_paths,
             &sub_paths,
-            Some(workspace_dir),
+            None,
         ));
 
         let mut inner = self.inner.lock().ok()?;

@@ -16,7 +16,10 @@ use std::path::Path;
 
 use serde::Serialize;
 
-pub use project::{project_records, project_thread, project_thread_scoped, resolve_files_scoped};
+pub use project::{
+    project_records, project_thread, project_thread_scoped, project_thread_scoped_with,
+    resolve_files_scoped,
+};
 #[allow(deprecated)]
 pub use types::SubagentStatus;
 pub use types::{DisplayItem, ProjectedTranscript, ToolCallStatus, TranscriptSubagentStatus};
@@ -29,6 +32,27 @@ pub use types::{DisplayItem, ProjectedTranscript, ToolCallStatus, TranscriptSuba
 pub const TOOL_RESULT_FAILURES_METADATA_KEY: &str = "openhuman_tool_failures";
 
 const LOG_PREFIX: &str = "[threads][transcript]";
+
+/// Resolves the tool call that spawned a sub-agent task.
+///
+/// The run ledger stamps the spawning call id on the task's run
+/// (`metadata.parentCallId`). A host that has the ledger passes it here so the
+/// projection places each sub-agent under the exact call that spawned it;
+/// without one the projection falls back to a timestamp/target-argument
+/// heuristic. Implemented for closures.
+pub trait SpawnCallLookup: Sync {
+    /// The `call_id` of the tool call that spawned `task_id`, if known.
+    fn parent_call_id(&self, task_id: &str) -> Option<String>;
+}
+
+impl<F> SpawnCallLookup for F
+where
+    F: Fn(&str) -> Option<String> + Sync,
+{
+    fn parent_call_id(&self, task_id: &str) -> Option<String> {
+        self(task_id)
+    }
+}
 
 /// Default page size — roughly one screen of chat items.
 pub const DEFAULT_LIMIT: usize = 50;
