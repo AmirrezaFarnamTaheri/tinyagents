@@ -33,12 +33,17 @@ tokio = { workspace = true, default-features = true, features = ["sync"] }
 uuid = { workspace = true }
 # Session stores over `tinystoragedrivers` ports (`storage-drivers` feature).
 tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
-# `sessions.db` runs on the SQLite driver's native mode: the driver owns the
-# shared per-file connection, this crate keeps its own tables and SQL.
-tinystoragedrivers-sqlite = { workspace = true }
+# The legacy-session importer reads a classic `sessions.db` read-only through
+# the SQLite driver's re-export of `rusqlite`. Nothing else in this crate
+# touches SQLite: persistence goes through the storage ports.
+tinystoragedrivers-sqlite = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["legacy-import"]
+# `legacy`: a public, read-only, id-preserving importer for classic workspaces
+# (`session_db/sessions.db`, `session_raw/*.jsonl` transcripts and turn-state
+# JSON) into the storage ports. Disable it to drop the SQLite reader.
+legacy-import = ["dep:tinystoragedrivers-sqlite"]
 # Tracing instrumentation is now always compiled in (via the `tracing` crate
 # dependency above). This feature is retained as a no-op so downstream
 # feature forwards keep compiling.
@@ -50,6 +55,7 @@ tracing = ["tinyagents-harness/tracing"]
 storage-drivers = []
 
 [dev-dependencies]
+tinystoragedrivers-sqlite = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
