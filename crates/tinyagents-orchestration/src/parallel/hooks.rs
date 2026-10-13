@@ -64,10 +64,10 @@ where
             Err(reason) => {
                 tracing::debug!(index = idx, "[parallel] worker denied by approval hook");
                 let r = denied(w, reason);
-                return Either::Ready(idx, r);
+                return Either::Ready(r);
             }
         };
-        Either::Run(idx, fut.expect("set above"))
+        Either::Run(fut.expect("set above"))
     })
     .await?;
     for (i, r) in out.iter().enumerate() {
@@ -77,8 +77,8 @@ where
 }
 
 enum Either<R, Fut> {
-    Ready(usize, R),
-    Run(usize, Fut),
+    Ready(R),
+    Run(Fut),
 }
 
 async fn run_indexed<P, C, R, B, G, Fut>(
@@ -105,8 +105,8 @@ where
             let step = prep(i, w, c);
             async move {
                 match step {
-                    Either::Ready(_, r) => r,
-                    Either::Run(_, fut) => fut.await,
+                    Either::Ready(r) => r,
+                    Either::Run(fut) => fut.await,
                 }
             }
         },
