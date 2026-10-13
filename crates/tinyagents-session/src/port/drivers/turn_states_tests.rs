@@ -1,4 +1,9 @@
 use super::*;
+use crate::turn_state::types::SubagentTranscriptItem;
+use crate::turn_state::{
+    SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus,
+};
+
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn store() -> (DriverTurnStates, Arc<dyn DocumentStore>) {

@@ -2,14 +2,14 @@
 //! ordering keys and interrupted-turn finalization.
 
 use super::*;
+use crate::port::InMemoryTurnStates;
+use crate::transcript::FileTranscriptLocator;
 use crate::transcript::{
     self, DisplayRecord, TranscriptMessage, TranscriptMeta, read_transcript,
     read_transcript_display,
 };
 use crate::turn_state::types::{SubagentActivity, ToolTimelineEntry, ToolTimelineStatus};
 use crate::turn_state::types::{TranscriptItem, TurnLifecycle};
-use crate::port::InMemoryTurnStates;
-use crate::transcript::FileTranscriptLocator;
 use tempfile::tempdir;
 
 fn memory_store() -> Arc<InMemoryTurnStates> {
@@ -34,38 +34,44 @@ fn mirror_over(
 }
 
 /// A store whose conditional write cannot read the stored outcome.
-struct UnreadableOutcome(InMemoryTurnStates);
+struct UnreadableOutcome {
+    inner: InMemoryTurnStates,
+    unreadable: std::sync::atomic::AtomicBool,
+}
 
 impl TurnStates for UnreadableOutcome {
     fn put(&self, state: &TurnState) -> Result<(), String> {
-        self.0.put(state)
+        self.inner.put(state)
     }
-    fn put_unless_completed(&self, _: &TurnState) -> Result<bool, String> {
-        Err("stored snapshot is unreadable".into())
+    fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> {
+        if self.unreadable.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("stored snapshot is unreadable".into());
+        }
+        self.inner.put_unless_completed(state)
     }
     fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> {
-        self.0.get(thread_id)
+        self.inner.get(thread_id)
     }
     fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> {
-        self.0.get_turn(thread_id, request_id)
+        self.inner.get_turn(thread_id, request_id)
     }
     fn delete(&self, thread_id: &str) -> Result<bool, String> {
-        self.0.delete(thread_id)
+        self.inner.delete(thread_id)
     }
     fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
-        self.0.delete_turn(thread_id, request_id)
+        self.inner.delete_turn(thread_id, request_id)
     }
     fn list(&self) -> Result<Vec<TurnState>, String> {
-        self.0.list()
+        self.inner.list()
     }
     fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> {
-        self.0.list_thread(thread_id)
+        self.inner.list_thread(thread_id)
     }
     fn clear_all(&self) -> Result<usize, String> {
-        self.0.clear_all()
+        self.inner.clear_all()
     }
     fn mark_all_interrupted(&self, now: &str) -> Result<usize, String> {
-        self.0.mark_all_interrupted(now)
+        self.inner.mark_all_interrupted(now)
     }
     fn settle_turn(
         &self,
@@ -74,7 +80,8 @@ impl TurnStates for UnreadableOutcome {
         lifecycle: TurnLifecycle,
         now: &str,
     ) -> Result<bool, String> {
-        self.0.settle_turn(thread_id, request_id, lifecycle, now)
+        self.inner
+            .settle_turn(thread_id, request_id, lifecycle, now)
     }
 }
 
@@ -307,9 +314,15 @@ fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
 fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
     let dir = tempdir().expect("tempdir");
     let path = seed_root_transcript(dir.path(), "thr_corrupt");
-    let store = Arc::new(UnreadableOutcome(InMemoryTurnStates::default()));
+    let store = Arc::new(UnreadableOutcome {
+        inner: InMemoryTurnStates::default(),
+        unreadable: std::sync::atomic::AtomicBool::new(false),
+    });
     let mut m = mirror_over(dir.path(), store.clone(), "thr_corrupt", "req-c");
     m.state.streaming_text = "maybe delivered".into();
+    store
+        .unreadable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     m.finish();
     let stored = store.get_turn("thr_corrupt", "req-c").unwrap().unwrap();
     assert_eq!(

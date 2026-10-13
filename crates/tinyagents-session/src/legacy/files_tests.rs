@@ -274,9 +274,18 @@ fn write_snapshot(workspace: &std::path::Path, state: &TurnState) {
 #[test]
 fn turn_states_keep_their_ids_including_the_flat_legacy_form() {
     let dir = tempfile::tempdir().unwrap();
-    write_snapshot(dir.path(), &state("thread-a", "req-1", TurnLifecycle::Completed));
-    write_snapshot(dir.path(), &state("thread-a", "req-2", TurnLifecycle::Streaming));
-    write_snapshot(dir.path(), &state("thread-b", "req-9", TurnLifecycle::Started));
+    write_snapshot(
+        dir.path(),
+        &state("thread-a", "req-1", TurnLifecycle::Completed),
+    );
+    write_snapshot(
+        dir.path(),
+        &state("thread-a", "req-2", TurnLifecycle::Streaming),
+    );
+    write_snapshot(
+        dir.path(),
+        &state("thread-b", "req-9", TurnLifecycle::Started),
+    );
     // The flat form older cores wrote: <hex(thread)>.json at the root.
     let flat =
         turn_states::turn_state_dir(dir.path()).join(format!("{}.json", hex::encode("thread-c")));
