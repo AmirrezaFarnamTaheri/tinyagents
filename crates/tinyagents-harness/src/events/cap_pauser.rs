@@ -43,11 +43,7 @@ impl CapPauser {
     /// completes, so it cannot prevent the first call) or when the handle's
     /// steering policy does not permit [`SteeringCommandKind::Pause`] (the
     /// command would be queued and then skipped, so the cap would never hold).
-    pub fn new(
-        handle: SteeringHandle,
-        cap: usize,
-        run_id: impl Into<String>,
-    ) -> Result<Arc<Self>> {
+    pub fn new(handle: SteeringHandle, cap: usize, run_id: impl Into<String>) -> Result<Arc<Self>> {
         Self::with_recorder(handle, cap, run_id, None)
     }
 

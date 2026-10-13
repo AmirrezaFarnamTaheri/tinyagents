@@ -80,13 +80,9 @@ fn recorder_runs_with_counts_before_the_pause_is_sent() {
         let handle = handle.clone();
         Arc::new(move |n, cap| seen.lock().unwrap().push((n, cap, handle.pending())))
     };
-    sink.subscribe(CapPauser::with_recorder(
-        handle.clone(),
-        2,
-        "agent_turn",
-        Some(recorder),
-    )
-    .unwrap());
+    sink.subscribe(
+        CapPauser::with_recorder(handle.clone(), 2, "agent_turn", Some(recorder)).unwrap(),
+    );
 
     complete(&sink, "agent_turn-model-1");
     assert!(seen.lock().unwrap().is_empty());

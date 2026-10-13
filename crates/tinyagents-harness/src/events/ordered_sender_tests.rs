@@ -52,7 +52,10 @@ async fn closed_receiver_discards_quietly() {
     let sender = OrderedSender::new(Some(tx));
     drop(rx);
     for i in 0..4u32 {
-        assert!(matches!(sender.send(i), Err(SendFailure::Closed(_)) | Ok(())));
+        assert!(matches!(
+            sender.send(i),
+            Err(SendFailure::Closed(_)) | Ok(())
+        ));
     }
 }
 

@@ -8,8 +8,14 @@
 //! task and passes the scope here, and the middleware holds the `Arc` from
 //! then on, so a model call that runs on another task still sees it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+mod types;
+
+pub use types::{
+    FinalResponse, ResponseShape, ResponseShapeScope, ResponseUsage, ResponseValidator,
+};
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat, ToolChoice};
@@ -20,119 +26,6 @@ use crate::middleware::{Middleware, ToolInvocationIdentity};
 use crate::runtime::AgentHarness;
 use crate::structured::OutputValidator;
 use tinytools::ToolResult;
-
-/// Validates terminal provider text without retrieving external resources.
-pub trait ResponseValidator: Send + Sync {
-    /// Returns a safe classification, never response content.
-    fn validate(&self, text: &str, finish_reason: Option<&str>) -> Result<(), String>;
-}
-
-/// What a host asks of every model call in one turn.
-#[derive(Clone, Default)]
-pub struct ResponseShape {
-    /// Host validation of the original terminal text, before any repair.
-    pub validator: Option<Arc<dyn ResponseValidator>>,
-    /// Bounded number of output repair attempts.
-    pub structured_retries: u8,
-    /// Sent as `response_format` on every call of the turn's tool loop.
-    pub response_format: Option<ResponseFormat>,
-    /// Replaces the turn's per-call output cap.
-    pub max_output_tokens: Option<u32>,
-    /// Provider routing/reasoning options, applied to every model call.
-    pub provider_options: serde_json::Value,
-    /// Require a successful tool execution before accepting terminal output.
-    pub require_tool_call: bool,
-    /// Nucleus sampling probability applied to every call of this turn.
-    pub top_p: Option<f64>,
-}
-
-impl std::fmt::Debug for ResponseShape {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResponseShape")
-            .field("response_format", &self.response_format)
-            .field("max_output_tokens", &self.max_output_tokens)
-            .field("validator", &self.validator.is_some())
-            .field("structured_retries", &self.structured_retries)
-            .finish()
-    }
-}
-
-/// What the turn's final model call reported.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct FinalResponse {
-    /// Reported accounting captured before the harness can refuse an answer.
-    pub usage: Option<ResponseUsage>,
-    /// Whether any call omitted its charged cost.
-    pub unknown_cost: bool,
-    /// Strict validation classification of the last terminal answer.
-    pub validation_error: Option<String>,
-    /// Number of terminal answer attempts (excluding tool calls).
-    pub structured_attempts: u16,
-    /// Whether the harness ended with a structured validation error.
-    pub structured_failed: bool,
-    /// The provider's finish reason for the last call (`stop`, `length`, ...).
-    pub finish_reason: Option<String>,
-    /// The model the provider says answered the last call.
-    pub answered_model: Option<String>,
-    /// Reasoning tokens summed over every call of the turn.
-    pub reasoning_tokens: u64,
-}
-
-/// Usage summed over physical responses, including rejected terminal answers.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ResponseUsage {
-    /// Prompt tokens reported by the provider.
-    pub input_tokens: u64,
-    /// Generated tokens reported by the provider.
-    pub output_tokens: u64,
-    /// Cached prompt tokens.
-    pub cached_tokens: u64,
-    /// Reasoning tokens.
-    pub reasoning_tokens: u64,
-    /// Charged cost, unknown if any response omitted it.
-    pub cost_usd: Option<f64>,
-    /// At least one call supplied a billing receipt, including a malformed one.
-    /// Distinguishes absent receipts from invalid authoritative billing data.
-    pub has_cost_receipt: bool,
-}
-
-/// A shape and the report slot its turn fills.
-#[derive(Debug, Default)]
-pub struct ResponseShapeScope {
-    shape: ResponseShape,
-    report: Mutex<FinalResponse>,
-    tool_succeeded: AtomicBool,
-}
-
-impl ResponseShapeScope {
-    /// A scope asking for `shape`.
-    #[must_use]
-    pub fn new(shape: ResponseShape) -> Arc<Self> {
-        Arc::new(Self {
-            shape,
-            report: Mutex::default(),
-            tool_succeeded: AtomicBool::new(false),
-        })
-    }
-
-    /// The shape this scope asks for.
-    #[must_use]
-    pub fn shape(&self) -> &ResponseShape {
-        &self.shape
-    }
-
-    /// What the turn's calls have reported so far.
-    #[must_use]
-    pub fn report(&self) -> FinalResponse {
-        self.lock_report().clone()
-    }
-
-    fn lock_report(&self) -> std::sync::MutexGuard<'_, FinalResponse> {
-        self.report
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
 
 /// Push the shaping middleware onto `harness` for `scope`. When the shape has
 /// a validator, also arms the loop's bounded output repair with a permissive
@@ -192,7 +85,18 @@ impl<Ctx: Send + Sync + 'static> Middleware<(), Ctx> for ResponseShapeMiddleware
             request.response_format = None;
             request.tool_choice = ToolChoice::Required;
         } else if let Some(format) = &shape.response_format {
-            request.response_format = Some(format.clone());
+            // With a validator installed the loop only runs the strict output
+            // check when the request carries a schema-shaped format. Replacing
+            // the permissive schema with `JsonObject`/`Text` would silently
+            // switch validation off, so those formats keep the schema.
+            let keeps_validation = shape.validator.is_none()
+                || matches!(
+                    format,
+                    ResponseFormat::JsonSchema { .. } | ResponseFormat::Auto { .. }
+                );
+            if keeps_validation {
+                request.response_format = Some(format.clone());
+            }
         }
         if !shape.provider_options.is_null() {
             request.provider_options = shape.provider_options.clone();
@@ -348,5 +252,5 @@ fn record(scope: &ResponseShapeScope, response: &ModelResponse) {
 }
 
 #[cfg(test)]
-#[path = "response_shape_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
