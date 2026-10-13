@@ -44,9 +44,7 @@ pub fn estimate_call_cost_usd(pricing: Option<&ModelPricing>, usage: &CallUsage)
     let usage = Usage {
         input_tokens: usage.usage.input_tokens,
         output_tokens: usage.usage.output_tokens,
-        cache_read_tokens: usage
-            .cached_input_tokens()
-            .min(usage.usage.input_tokens),
+        cache_read_tokens: usage.cached_input_tokens().min(usage.usage.input_tokens),
         ..Default::default()
     };
     Some(estimate_cost(pricing, &usage).total_cost)

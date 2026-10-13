@@ -48,29 +48,37 @@ fn permission_denied_display() {
 
 #[test]
 fn display_formats_other_variants() {
-    assert!(AgentError::ProviderError {
-        message: "boom".into(),
-        retryable: true,
-    }
-    .to_string()
-    .contains("retryable=true"));
-    assert!(AgentError::ContextLimitExceeded {
-        utilization_pct: 98
-    }
-    .to_string()
-    .contains("98% utilized"));
-    assert!(AgentError::ToolExecutionError {
-        tool_name: "shell".into(),
-        message: "denied".into(),
-    }
-    .to_string()
-    .contains("Tool execution error [shell]"));
-    assert!(AgentError::CompactionFailed {
-        message: "summary failed".into(),
-        consecutive_failures: 3,
-    }
-    .to_string()
-    .contains("3 consecutive"));
+    assert!(
+        AgentError::ProviderError {
+            message: "boom".into(),
+            retryable: true,
+        }
+        .to_string()
+        .contains("retryable=true")
+    );
+    assert!(
+        AgentError::ContextLimitExceeded {
+            utilization_pct: 98
+        }
+        .to_string()
+        .contains("98% utilized")
+    );
+    assert!(
+        AgentError::ToolExecutionError {
+            tool_name: "shell".into(),
+            message: "denied".into(),
+        }
+        .to_string()
+        .contains("Tool execution error [shell]")
+    );
+    assert!(
+        AgentError::CompactionFailed {
+            message: "summary failed".into(),
+            consecutive_failures: 3,
+        }
+        .to_string()
+        .contains("3 consecutive")
+    );
 }
 
 #[test]
@@ -154,6 +162,9 @@ fn is_expected_outcome_returns_false_for_real_failures() {
         AgentError::Other(anyhow::anyhow!("plain failure")),
     ];
     for err in real_failures {
-        assert!(!err.is_expected_outcome(), "must NOT skip the error reporter for: {err}");
+        assert!(
+            !err.is_expected_outcome(),
+            "must NOT skip the error reporter for: {err}"
+        );
     }
 }
