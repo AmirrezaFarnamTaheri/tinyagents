@@ -18,17 +18,6 @@ use tinyagents_harness::*;
 use tinyagents_registry::*;
 use tinyinference_llm::usage::UsageTotals;
 
-fn temp_path(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "tinyagents-{name}-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ))
-}
-
 #[tokio::test]
 async fn driver_checkpointer_persists_lists_copies_prunes_and_deletes_threads() {
     let dir = tempfile::tempdir().unwrap();

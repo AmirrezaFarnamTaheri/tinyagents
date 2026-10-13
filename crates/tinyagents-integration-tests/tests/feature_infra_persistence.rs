@@ -19,17 +19,6 @@ use tinyagents_harness::store::{
 mod common;
 use common::storage;
 
-/// A process-unique temp directory for file-backed cases.
-fn temp_dir(tag: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    dir.push(format!("tinyagents_feature_infra_{tag}_{nanos}"));
-    dir
-}
-
 // ── Store: key-value semantics ──────────────────────────────────────────────
 
 #[tokio::test]
