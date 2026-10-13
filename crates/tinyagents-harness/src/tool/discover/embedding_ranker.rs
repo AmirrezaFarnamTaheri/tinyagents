@@ -78,8 +78,8 @@ impl EmbeddingToolRanker {
 
     /// A ranker over `provider` with an in-memory cache only. `signature`
     /// identifies the provider's embedding space (for example
-    /// `provider=voyage;model=voyage-3;dims=1024`); the disk cache is valid
-    /// only for the signature it was written under.
+    /// `provider=voyage;model=voyage-3;dims=1024`); a persistent cache is
+    /// valid only for the signature it was written under.
     pub fn new(provider: Arc<dyn EmbeddingModel>, signature: impl Into<String>) -> Self {
         Self {
             provider,
@@ -92,8 +92,9 @@ impl EmbeddingToolRanker {
     /// Persist catalogue embeddings through a host-supplied cache port.
     ///
     /// Vectors already held in memory are cleared. A failed port never falls
-    /// back to a filesystem write. Hosts should create a new ranker when its tenant or credential namespace
-    /// changes; its in-memory cache is bound to this handle.
+    /// back to a filesystem write. Hosts should create a new ranker when its
+    /// tenant or credential namespace changes; its in-memory cache is bound to
+    /// this handle.
     pub fn with_cache(mut self, cache: Arc<dyn EmbeddingCache>) -> Self {
         self.cache
             .write()
