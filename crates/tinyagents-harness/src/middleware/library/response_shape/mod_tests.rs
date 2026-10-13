@@ -235,3 +235,23 @@ fn install_arms_output_repair_only_when_a_validator_is_present() {
     assert_eq!(policy.truncated_empty_retries, 0);
     assert_eq!(policy.truncated_empty_nudges, 0);
 }
+
+#[tokio::test]
+async fn a_validator_keeps_the_schema_when_the_shape_asks_for_json_object() {
+    let (scope, mw) = middleware(ResponseShape {
+        validator: Some(Arc::new(RejectEmptyObject)),
+        response_format: Some(ResponseFormat::JsonObject),
+        ..Default::default()
+    });
+    let permissive = ResponseFormat::JsonSchema {
+        name: "host_answer".into(),
+        schema: serde_json::json!({}),
+    };
+    let mut request = request_with_tool();
+    request.response_format = Some(permissive.clone());
+    mw.before_model(&mut ctx(), &(), &mut request)
+        .await
+        .expect("before_model");
+    assert_eq!(request.response_format, Some(permissive));
+    assert!(scope.shape().validator.is_some());
+}
