@@ -363,13 +363,26 @@ async fn durable_sinks_report_backend_append_failures() {
         }
     );
 
-    let root = tempfile::tempdir().unwrap();
-    let blocked_root = root.path().join("blocked");
-    std::fs::write(&blocked_root, b"not a directory").unwrap();
-    let jsonl_sink = crate::observability::JsonlSink::new(
-        crate::store::JsonlAppendStore::new(blocked_root),
-        "events",
-    );
+    /// An append store whose every write is refused.
+    #[derive(Debug)]
+    struct Refusing;
+    #[async_trait::async_trait]
+    impl crate::store::AppendStore for Refusing {
+        async fn append(&self, _: &str, _: serde_json::Value) -> crate::error::Result<u64> {
+            Err(crate::error::TinyAgentsError::Storage("refused".into()))
+        }
+        async fn read_from(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> crate::error::Result<Vec<(u64, serde_json::Value)>> {
+            Ok(Vec::new())
+        }
+        async fn len(&self, _: &str) -> crate::error::Result<u64> {
+            Ok(0)
+        }
+    }
+    let jsonl_sink = crate::observability::JsonlSink::new(Arc::new(Refusing), "events");
     jsonl_sink.on_event(&EventRecord {
         id: EventId::new("evt-jsonl-failure"),
         offset: 0,
