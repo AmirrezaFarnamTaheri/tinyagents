@@ -62,7 +62,10 @@ where
             continue;
         }
         if !admission.has_thread && admission.thread_scoped.contains(name) {
-            tracing::debug!(tool = name, "[tool-registration] dropped thread-scoped tool");
+            tracing::debug!(
+                tool = name,
+                "[tool-registration] dropped thread-scoped tool"
+            );
             continue;
         }
         plan.candidates.push(name.to_string());
@@ -74,7 +77,10 @@ where
             continue;
         }
         if admission.is_subagent_run && admission.spawn_tools.contains(name) {
-            tracing::warn!(tool = name, "[tool-registration] refused spawn tool on sub-agent");
+            tracing::warn!(
+                tool = name,
+                "[tool-registration] refused spawn tool on sub-agent"
+            );
             plan.spawn_refused.push(name.to_string());
             continue;
         }

@@ -5,7 +5,10 @@ fn set(names: &[&str]) -> HashSet<String> {
 }
 
 fn open() -> ToolAdmission {
-    ToolAdmission { has_thread: true, ..Default::default() }
+    ToolAdmission {
+        has_thread: true,
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -17,7 +20,10 @@ fn no_allowlist_admits_all_deduplicated_in_order() {
 
 #[test]
 fn empty_allowlist_denies_everything() {
-    let admission = ToolAdmission { allowed: Some(HashSet::new()), ..open() };
+    let admission = ToolAdmission {
+        allowed: Some(HashSet::new()),
+        ..open()
+    };
     let plan = plan_registration(["a", "b"], &admission);
     assert!(plan.admitted.is_empty());
     assert_eq!(plan.candidates.len(), 2);
@@ -25,7 +31,10 @@ fn empty_allowlist_denies_everything() {
 
 #[test]
 fn allowlist_admits_exact_members() {
-    let admission = ToolAdmission { allowed: Some(set(&["a"])), ..open() };
+    let admission = ToolAdmission {
+        allowed: Some(set(&["a"])),
+        ..open()
+    };
     assert_eq!(plan_registration(["a", "b"], &admission).admitted, ["a"]);
 }
 
@@ -56,6 +65,9 @@ fn subagent_never_gets_spawn_tools_even_if_allowlisted() {
 
 #[test]
 fn root_run_keeps_spawn_tools() {
-    let admission = ToolAdmission { spawn_tools: set(&["spawn"]), ..open() };
+    let admission = ToolAdmission {
+        spawn_tools: set(&["spawn"]),
+        ..open()
+    };
     assert_eq!(plan_registration(["spawn"], &admission).admitted, ["spawn"]);
 }
