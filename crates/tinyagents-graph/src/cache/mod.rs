@@ -9,16 +9,15 @@
 //! plus [`CompiledGraph::with_cached_node`](crate::CompiledGraph::with_cached_node).
 //!
 //! Two backends ship here: [`InMemoryTaskCache`] (process-local, TTL-aware)
-//! and, behind the `sqlite` feature, [`SqliteTaskCache`].
+//! and [`DriverTaskCache`], which keeps entries on any `tinystoragedrivers`
+//! backend (SQLite, MongoDB, ...) the host opened.
 
+mod drivers;
 mod memory;
-#[cfg(feature = "sqlite")]
-mod sqlite;
 mod types;
 
+pub use drivers::DriverTaskCache;
 pub use memory::InMemoryTaskCache;
-#[cfg(feature = "sqlite")]
-pub use sqlite::SqliteTaskCache;
 pub(crate) use types::CachedNode;
 pub use types::{TaskCache, TaskCacheKey};
 

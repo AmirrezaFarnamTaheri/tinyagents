@@ -477,8 +477,8 @@ fn register_reducer_is_reachable_through_the_graph_builder() {
 }
 
 #[tokio::test]
-async fn channel_state_graph_round_trips_through_file_checkpointer() {
-    use crate::checkpoint::{Checkpointer, FileCheckpointer};
+async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
+    use crate::checkpoint::Checkpointer;
     use crate::command::{Command, Interrupt};
     use std::sync::Arc;
 
@@ -514,8 +514,9 @@ async fn channel_state_graph_round_trips_through_file_checkpointer() {
 
     let dir = tempfile::tempdir().unwrap();
     {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(FileCheckpointer::<ChannelState>::new(dir.path()));
+        let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
+            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+        );
         let g = graph().with_checkpointer(cp);
         let paused = g.run_with_thread("ch-thread", initial).await.unwrap();
         assert!(paused.is_interrupted());
@@ -525,8 +526,9 @@ async fn channel_state_graph_round_trips_through_file_checkpointer() {
     // process-wide registered) `"sum"` reducer and the resumed run must
     // merge through it correctly.
     {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(FileCheckpointer::<ChannelState>::new(dir.path()));
+        let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
+            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+        );
         let g = graph().with_checkpointer(cp);
         let exec = g
             .resume("ch-thread", Command::resume(json!({ "bump": 7 })))
@@ -534,62 +536,6 @@ async fn channel_state_graph_round_trips_through_file_checkpointer() {
             .unwrap();
         assert_eq!(exec.state.get("total"), Some(&json!(7)));
         assert_eq!(exec.state.get("log"), Some(&json!(["collected"])));
-    }
-}
-
-#[cfg(feature = "sqlite")]
-#[tokio::test]
-async fn channel_state_graph_round_trips_through_sqlite_checkpointer() {
-    use crate::checkpoint::{Checkpointer, SqliteCheckpointer};
-    use crate::command::{Command, Interrupt};
-    use std::sync::Arc;
-
-    fn graph() -> crate::compiled::CompiledGraph<ChannelState, ChannelUpdate> {
-        GraphBuilder::<ChannelState, ChannelUpdate>::new()
-            .set_reducer(ChannelState::new())
-            .add_node("collect", |_s: ChannelState, c: NodeContext| async move {
-                match c.resume {
-                    Some(value) => {
-                        let bump = value.get("bump").and_then(Value::as_i64).unwrap_or(0);
-                        Ok(NodeResult::Update(
-                            ChannelUpdate::new().set("total", bump).at_step(c.step),
-                        ))
-                    }
-                    None => Ok(NodeResult::Interrupt(Interrupt::new(
-                        "collect",
-                        json!({ "ask": "bump?" }),
-                    ))),
-                }
-            })
-            .set_entry("collect")
-            .set_finish("collect")
-            .compile()
-            .unwrap()
-    }
-
-    let initial = ChannelState::new().with_channel("total", BinaryAggregate::named("sum").unwrap());
-
-    let dir = tempfile::tempdir().unwrap();
-    let db_path = dir.path().join("checkpoints.sqlite");
-    {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(SqliteCheckpointer::<ChannelState>::open(&db_path).unwrap());
-        let g = graph().with_checkpointer(cp);
-        let paused = g
-            .run_with_thread("ch-thread-sqlite", initial)
-            .await
-            .unwrap();
-        assert!(paused.is_interrupted());
-    }
-    {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(SqliteCheckpointer::<ChannelState>::open(&db_path).unwrap());
-        let g = graph().with_checkpointer(cp);
-        let exec = g
-            .resume("ch-thread-sqlite", Command::resume(json!({ "bump": 9 })))
-            .await
-            .unwrap();
-        assert_eq!(exec.state.get("total"), Some(&json!(9)));
     }
 }
 

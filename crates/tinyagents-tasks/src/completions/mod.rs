@@ -7,8 +7,8 @@
 //!
 //! - [`CompletionRecord`]: one finished child, keyed by task id, with a
 //!   delivery [`CompletionState`] and an attempt counter.
-//! - [`CompletionStore`]: [`InMemoryCompletionStore`] and the crash-safe
-//!   [`JsonlCompletionStore`].
+//! - [`CompletionStore`]: [`InMemoryCompletionStore`] and the durable
+//!   [`DriverCompletionStore`] over `tinystoragedrivers` ports.
 //! - [`CompletionRouter`]: dedupe, tombstones, batch claims with attempt
 //!   counting, give-up, and routing by [`NotifyMode`] onto the parent's queue
 //!   lanes.
@@ -20,14 +20,16 @@
 //! Live pushes are at-least-once: the host acknowledges with
 //! `mark_delivered`. Nothing here relaunches a child.
 
+mod driver;
 mod format;
 mod router;
 mod store;
 mod types;
 
+pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
-pub use store::{CompletionStore, InMemoryCompletionStore, JsonlCompletionStore};
+pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,
     NotifyMode,
@@ -36,6 +38,3 @@ pub use types::{
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
-#[cfg(test)]
-#[path = "store_tests.rs"]
-mod store_tests;

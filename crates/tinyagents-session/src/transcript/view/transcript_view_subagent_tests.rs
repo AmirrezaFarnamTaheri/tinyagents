@@ -1,4 +1,5 @@
 use super::*;
+use crate::transcript::view::project_thread_scoped_with;
 
 #[test]
 fn subagent_anchors_to_parent_turn_by_spawn_timestamp() {
@@ -63,7 +64,7 @@ fn subagent_anchors_to_parent_turn_by_spawn_timestamp() {
     );
 }
 
-/// Exact correlation (#C1): when the run ledger records the spawning
+/// Exact correlation (#C1): when the lookup reports the spawning
 /// `parentCallId` for this task, it wins over the timestamp/target-argument
 /// heuristic — which would otherwise pick the first unclaimed
 /// delegation-shaped call, regardless of which one actually spawned this
@@ -103,29 +104,11 @@ fn subagent_correlates_by_ledger_parent_call_id_over_the_heuristic() {
     )
     .unwrap();
 
-    crate::run_ledger::upsert_agent_run(
-        dir.path(),
-        crate::run_ledger::AgentRunUpsert {
-            id: "sub-exact-1".to_string(),
-            kind: crate::run_ledger::AgentRunKind::Subagent,
-            parent_run_id: None,
-            parent_thread_id: Some(thread_id.to_string()),
-            agent_id: Some("researcher".to_string()),
-            status: crate::run_ledger::AgentRunStatus::Completed,
-            prompt_ref: None,
-            worker_thread_id: None,
-            checkpoint_path: None,
-            checkpoint: None,
-            summary: None,
-            error: None,
-            metadata: serde_json::json!({ "parentCallId": "call-real" }),
-            started_at: None,
-            completed_at: None,
-        },
-    )
-    .expect("seed run ledger row");
+    // The run ledger knows which call spawned `sub-exact-1`.
+    let lookup = |task_id: &str| (task_id == "sub-exact-1").then(|| "call-real".to_string());
 
-    let projected = project_thread(dir.path(), thread_id).expect("project thread");
+    let projected =
+        project_thread_scoped_with(dir.path(), thread_id, None, &lookup).expect("project thread");
     let subagent_call_id = projected.items.iter().find_map(|item| match item {
         DisplayItem::Subagent { call_id, .. } => Some(call_id.clone()),
         _ => None,
@@ -394,7 +377,7 @@ fn project_two_roots(
         "thr_roots",
         &[first_path, second_path],
         &[child_path],
-        Some(dir.path()),
+        None,
     );
     projected.items.iter().find_map(|item| match item {
         DisplayItem::Subagent { call_id, .. } => call_id.clone(),

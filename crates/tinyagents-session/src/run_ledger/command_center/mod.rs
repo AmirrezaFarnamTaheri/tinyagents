@@ -8,14 +8,13 @@
 //! an agent-id to display-name closure and own the RPC surface.
 
 mod control;
-#[cfg(feature = "storage-drivers")]
 pub(crate) mod native;
 mod types;
 mod view;
 
-pub use control::{ControlError, ControlVerb, apply_control};
+pub use control::{ControlError, ControlVerb};
 pub use types::{AgentWorkBucket, AgentWorkRow, CommandCenterGroup, CommandCenterView};
-pub use view::{bucket_for, build_view, list_agent_work};
+pub use view::{bucket_for, build_view};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

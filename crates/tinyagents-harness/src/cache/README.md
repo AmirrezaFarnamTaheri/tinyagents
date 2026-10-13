@@ -27,8 +27,9 @@ cheap and deterministic:
 - [`InMemoryResponseCache`] (`types.rs` + `memory.rs`) — LRU, dual-bounded
   (entry count and approximate byte budget) in-process implementation. Not
   durable across restarts.
-- `SqliteResponseCache` (`sqlite.rs`, feature `sqlite`) — durable,
-  namespace-scoped SQLite-backed implementation with lazy TTL purge.
+- `DriverResponseCache` (`drivers.rs`) — durable, namespace-scoped
+  implementation over a driver `DocumentStore`; TTL is native where the backend
+  has it and enforced on read everywhere.
 - [`CacheStats`], [`CacheSkipReason`] (`types.rs`) — point-in-time counters and
   the reasons a call skipped the cache lookup entirely, so a 0% hit rate is
   always explainable.
@@ -92,7 +93,7 @@ cheap and deterministic:
 | `layout.rs`      | `PromptCacheLayout`/`CacheLayoutEvent` construction and comparison logic. |
 | `memory.rs`      | `InMemoryResponseCache` LRU implementation.                         |
 | `singleflight.rs`| `SingleFlight` stampede protection.                                  |
-| `sqlite.rs`      | `SqliteResponseCache` (feature `sqlite`).                            |
+| `drivers.rs`     | `DriverResponseCache` over a driver `DocumentStore`.                 |
 | `mod_tests.rs`   | Unit tests (see its module doc for coverage).                        |
 
 ## Operational constraints
@@ -117,5 +118,5 @@ cheap and deterministic:
 - `SingleFlight::run`'s internal lock is never held across an `await`; keep
   any future edit to `claim`/`run` preserving that, or the future becomes
   `!Send` and unusable from `tokio::spawn`.
-- `InMemoryResponseCache` is not durable; `SqliteResponseCache` is, and is the
+- `InMemoryResponseCache` is not durable; `DriverResponseCache` on a durable backend is, and is the
   only backend safe to rely on across a process restart.

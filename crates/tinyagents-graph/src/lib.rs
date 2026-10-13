@@ -46,26 +46,24 @@ pub mod todos;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
+#[cfg(test)]
+mod test_support;
+
 // --- Durable execution model ---
 pub use builder::{
     END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
     NodeHandler, NodePolicy, Route, RouterFn, START,
 };
-#[cfg(feature = "sqlite")]
-pub use cache::SqliteTaskCache;
-pub use cache::{InMemoryTaskCache, TaskCache, TaskCacheKey};
+pub use cache::{DriverTaskCache, InMemoryTaskCache, TaskCache, TaskCacheKey};
 pub use channel::{
     Barrier, BinaryAggregate, Channel, ChannelSet, ChannelState, ChannelUpdate, ChannelWrite,
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
-#[cfg(feature = "storage-drivers")]
 pub use checkpoint::DriverCheckpointer;
-#[cfg(feature = "sqlite")]
-pub use checkpoint::SqliteCheckpointer;
 pub use checkpoint::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
-    FileCheckpointer, InMemoryCheckpointer, PendingActivation, PendingWrite,
+    InMemoryCheckpointer, PendingActivation, PendingWrite,
 };
 pub use command::{Command, Interrupt, NodeResult, RouteTarget, Send};
 pub use compiled::{
@@ -99,7 +97,7 @@ pub use observability::{
 };
 pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskWaitOutcome, InMemoryTaskStore, JsonlTaskStore, OrchestrationControlOutcome,
+    DetachedTaskWaitOutcome, DriverTaskStore, InMemoryTaskStore, OrchestrationControlOutcome,
     OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskRecord,
     OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, OrchestrationTool,
     OrchestrationToolKind, SteeringRegistry, TaskStore, orchestration_tool_schema,

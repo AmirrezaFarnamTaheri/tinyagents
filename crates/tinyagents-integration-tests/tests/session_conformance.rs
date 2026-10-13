@@ -2,33 +2,33 @@
 //!
 //! Mirrors `persistence_conformance.rs`'s pattern for the graph checkpointer:
 //! the same contract suite is run against every backend the crate owns, so a
-//! defect in one cannot hide behind another. The run ledger has exactly one
-//! backend (SQLite via a workspace directory), so the suite is run against
-//! two independent workspaces to pin that its state does not leak through the
-//! path-keyed connection cache. `TranscriptHistory` genuinely has two
+//! defect in one cannot hide behind another. The run ledger is certified on the
+//! memory and sqlite drivers. `TranscriptHistory` genuinely has two
 //! implementations — the production file-backed one and the in-memory test
 //! double — and both are certified here.
 
+mod common;
+
+use std::sync::Arc;
+
+use common::storage;
+use tinyagents_session::run_ledger::drivers::DriverRunLedger;
 use tinyagents_session::testkit::InMemoryTranscriptHistory;
 use tinyagents_session::testkit::conformance::{
     run_ledger_conformance, transcript_history_conformance,
 };
 use tinyagents_session::transcript::{FileTranscriptHistory, TranscriptMeta};
 
-#[test]
-fn run_ledger_satisfies_the_conformance_suite_on_a_fresh_workspace() {
-    let dir = tempfile::tempdir().unwrap();
-    run_ledger_conformance(dir.path());
+#[tokio::test]
+async fn run_ledger_satisfies_the_conformance_suite_on_memory() {
+    run_ledger_conformance(Arc::new(DriverRunLedger::new(storage::memory()))).await;
 }
 
-#[test]
-fn run_ledger_satisfies_the_conformance_suite_on_a_second_independent_workspace() {
-    // A second, independent workspace must behave identically and must not
-    // observe any state from the first (the connection cache is keyed by
-    // resolved database path, so this also pins that key derivation is
-    // actually per-workspace).
+#[tokio::test]
+async fn run_ledger_satisfies_the_conformance_suite_on_sqlite() {
     let dir = tempfile::tempdir().unwrap();
-    run_ledger_conformance(dir.path());
+    let ledger = DriverRunLedger::new(storage::sqlite(dir.path(), "ledger.sqlite"));
+    run_ledger_conformance(Arc::new(ledger)).await;
 }
 
 fn contract_meta() -> TranscriptMeta {

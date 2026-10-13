@@ -11,7 +11,6 @@ fn legacy_storage_error_keeps_original_type() {
 }
 
 /// Native unsupported failures retain their exact driver capability and error kind.
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn native_driver_error_preserves_capability_and_kind() {
     use tinystoragedrivers_core::{Capability, ErrorKind, StorageError};

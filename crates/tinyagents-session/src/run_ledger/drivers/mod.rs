@@ -8,16 +8,25 @@ mod agents;
 mod effects;
 mod entry_tree;
 mod events;
+mod history;
+mod history_retention;
+#[cfg(feature = "legacy-import")]
 mod import;
+#[cfg(feature = "legacy-import")]
+mod legacy_import;
 mod retention;
 mod storage;
-pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
+mod team;
+#[cfg(feature = "legacy-import")]
+pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
+#[cfg(feature = "legacy-import")]
+pub use import::AgentImportReport;
+#[cfg(feature = "legacy-import")]
+pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
 
 use std::sync::Arc;
 use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
-use tinystoragedrivers_core::{
-    Capability, Filter, Query, Scope, ScopedStorage, Sort, StorageError,
-};
+use tinystoragedrivers_core::{Filter, Query, Scope, ScopedStorage, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -25,9 +34,9 @@ use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
-use super::ops::RunTransition;
 use super::port::RunLedgerStore;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
+use super::types::RunTransition;
 use super::types::*;
 use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;
@@ -175,14 +184,6 @@ fn apply_workflow(
     row.completed_at = upsert.completed_at.or(row.completed_at);
     row.revision = next_revision(row.revision)?;
     Ok(())
-}
-
-fn unsupported(operation: &str) -> super::LedgerError {
-    StorageError::unsupported(
-        Capability::ValidatedBatch,
-        format!("run-ledger {operation} requires its native validated transaction implementation"),
-    )
-    .into()
 }
 
 #[async_trait::async_trait]
@@ -618,33 +619,35 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::claim_agent_team_task`] without a weaker fallback.
     async fn claim_agent_team_task(
         &self,
-        _team_id: &str,
-        _task_id: &str,
-        _member_id: &str,
-        _claim_token: &str,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
     ) -> Result<ClaimOutcome> {
-        Err(unsupported("claim_agent_team_task"))
+        self.claim_team_task(team_id, task_id, member_id, claim_token)
+            .await
     }
 
     /// Implement [`RunLedgerStore::complete_agent_team_task`] without a weaker fallback.
     async fn complete_agent_team_task(
         &self,
-        _team_id: &str,
-        _task_id: &str,
-        _member_id: &str,
-        _evidence: &[String],
-        _require_evidence: bool,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        evidence: &[String],
+        require_evidence: bool,
     ) -> Result<CompletionOutcome> {
-        Err(unsupported("complete_agent_team_task"))
+        self.complete_team_task(team_id, task_id, member_id, evidence, require_evidence)
+            .await
     }
 
     /// Implement [`RunLedgerStore::shutdown_agent_team_member`] without a weaker fallback.
     async fn shutdown_agent_team_member(
         &self,
-        _team_id: &str,
-        _member_id: &str,
+        team_id: &str,
+        member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>> {
-        Err(unsupported("shutdown_agent_team_member"))
+        self.shutdown_team_member(team_id, member_id).await
     }
 
     async fn mark_agent_team_member_running(
@@ -800,7 +803,7 @@ impl RunLedgerStore for DriverRunLedger {
             .map_err(Into::into)
     }
     async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.import(entries))
+        self.tree_mutate(session_id, |tree| tree.import(entries).map(drop))
             .await
             .map_err(Into::into)
     }
@@ -810,23 +813,23 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::prune_sessions_before`] without a weaker fallback.
-    async fn prune_sessions_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_sessions_before"))
+    async fn prune_sessions_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_sessions(older_than).await
     }
 
     /// Implement [`RunLedgerStore::trim_session_messages`] without a weaker fallback.
-    async fn trim_session_messages(&self, _session_id: &str, _keep_last: usize) -> Result<usize> {
-        Err(unsupported("trim_session_messages"))
+    async fn trim_session_messages(&self, session_id: &str, keep_last: usize) -> Result<usize> {
+        self.history_trim_messages(session_id, keep_last).await
     }
 
     /// Implement [`RunLedgerStore::prune_tool_calls_before`] without a weaker fallback.
-    async fn prune_tool_calls_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_tool_calls_before"))
+    async fn prune_tool_calls_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_tool_calls(older_than).await
     }
 
     /// Implement [`RunLedgerStore::prune_run_events_before`] without a weaker fallback.
-    async fn prune_run_events_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_run_events_before"))
+    async fn prune_run_events_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_events(older_than).await
     }
 
     async fn prune_run_telemetry_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
@@ -834,13 +837,13 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::apply_retention`] without a weaker fallback.
-    async fn apply_retention(&self, _older_than: DateTime<Utc>) -> Result<RetentionReport> {
-        Err(unsupported("apply_retention"))
+    async fn apply_retention(&self, older_than: DateTime<Utc>) -> Result<RetentionReport> {
+        self.history_apply_retention(older_than).await
     }
 
     /// Implement [`RunLedgerStore::reindex_fts`] without a weaker fallback.
     async fn reindex_fts(&self) -> Result<usize> {
-        Err(unsupported("reindex_fts"))
+        self.history_reindex().await
     }
 
     /// Implement [`RunLedgerStore::list_agent_work`] without a weaker fallback.
@@ -905,3 +908,11 @@ mod event_bson_tests;
 #[cfg(test)]
 #[path = "events_query_tests.rs"]
 mod event_query_tests;
+
+#[cfg(test)]
+#[path = "team_tests.rs"]
+mod team_tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;

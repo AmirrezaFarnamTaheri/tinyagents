@@ -41,6 +41,7 @@
 //! has no embedding dependency, so the bundled backend does a plain substring
 //! scan; a backend with an index is expected to interpret it properly.
 
+mod drivers;
 mod types;
 
 use std::collections::{BTreeSet, HashMap};
@@ -49,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use drivers::DriverNamespacedStore;
 pub use types::*;
 
 use crate::error::{Result, TinyAgentsError};
@@ -197,14 +199,14 @@ impl InMemoryNamespacedStore {
 }
 
 /// Computes an expiry timestamp from a lifetime in minutes.
-fn expiry_at(now: u64, ttl_minutes: Option<f64>) -> Option<u64> {
+pub(super) fn expiry_at(now: u64, ttl_minutes: Option<f64>) -> Option<u64> {
     ttl_minutes
         .filter(|m| m.is_finite() && *m > 0.0)
         .map(|m| now.saturating_add((m * 60_000.0) as u64))
 }
 
 /// Reads a dotted field path out of a JSON value.
-fn field<'v>(value: &'v Value, path: &str) -> Option<&'v Value> {
+pub(super) fn field<'v>(value: &'v Value, path: &str) -> Option<&'v Value> {
     let mut cursor = value;
     for segment in path.split('.') {
         cursor = cursor.get(segment)?;
@@ -213,14 +215,14 @@ fn field<'v>(value: &'v Value, path: &str) -> Option<&'v Value> {
 }
 
 /// Whether `item` satisfies every condition in `filter`.
-fn matches_filter(item: &Item, filter: &HashMap<String, FilterOp>) -> bool {
+pub(super) fn matches_filter(item: &Item, filter: &HashMap<String, FilterOp>) -> bool {
     filter
         .iter()
         .all(|(path, op)| op.matches(field(&item.value, path)))
 }
 
 /// Whether `item`'s rendered JSON contains `needle`, case-insensitively.
-fn matches_query(item: &Item, needle: &str) -> bool {
+pub(super) fn matches_query(item: &Item, needle: &str) -> bool {
     item.value
         .to_string()
         .to_lowercase()
@@ -228,7 +230,7 @@ fn matches_query(item: &Item, needle: &str) -> bool {
 }
 
 /// Whether `segments` matches `pattern`, where `*` matches any one segment.
-fn matches_wildcards(segments: &[String], pattern: &[String]) -> bool {
+pub(super) fn matches_wildcards(segments: &[String], pattern: &[String]) -> bool {
     segments.len() == pattern.len()
         && segments
             .iter()

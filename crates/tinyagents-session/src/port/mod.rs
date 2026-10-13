@@ -47,14 +47,12 @@
 //!   files) is wrapped by the host that owns it, not here: this crate keeps
 //!   the file and SQLite building blocks, and a host crate decides to use them.
 
-#[cfg(feature = "storage-drivers")]
 mod drivers;
 mod memory;
 mod types;
 
 use std::sync::Arc;
 
-#[cfg(feature = "storage-drivers")]
 pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
 };
@@ -82,7 +80,6 @@ pub trait SessionStoreProvider: Send + Sync {
     /// # Errors
     ///
     /// The native backend error, including its source, when opening is refused.
-    #[cfg(feature = "storage-drivers")]
     fn try_for_agent(
         &self,
         agent_id: &str,
@@ -102,7 +99,6 @@ pub trait SessionStoreProvider: Send + Sync {
     /// `Ok(None)` means this provider does not support actor rebinding. It does
     /// not authorize selecting a different backend or a file fallback. Errors
     /// retain their native sources; hosts must propagate a configured refusal.
-    #[cfg(feature = "storage-drivers")]
     fn bind_actor(
         &self,
         _backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
@@ -138,7 +134,6 @@ pub trait SessionStoreProvider: Send + Sync {
     /// # Errors
     ///
     /// Native actor admission errors, retaining their sources.
-    #[cfg(feature = "storage-drivers")]
     fn bind_actor_with_schema_admission(
         &self,
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
@@ -343,7 +338,6 @@ impl TurnStates for TurnStateStore {
 /// A provider shared behind an [`Arc`] is still a provider.
 impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
     /// Forwards checked opening to the shared provider, including its native errors.
-    #[cfg(feature = "storage-drivers")]
     fn try_for_agent(
         &self,
         agent_id: &str,
@@ -351,7 +345,6 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         (**self).try_for_agent(agent_id)
     }
 
-    #[cfg(feature = "storage-drivers")]
     fn bind_actor(
         &self,
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,
@@ -374,7 +367,6 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         (**self).run_ledger_for_agent(agent_id)
     }
 
-    #[cfg(feature = "storage-drivers")]
     fn bind_actor_with_schema_admission(
         &self,
         backend: Arc<dyn tinystoragedrivers_core::StorageBackend>,

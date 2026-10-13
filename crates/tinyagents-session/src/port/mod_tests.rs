@@ -1,9 +1,10 @@
 use super::*;
 use crate::testkit::conformance::session_store_conformance;
 use crate::transcript::FileTranscriptLocator;
-use tinyagents_harness::store::{FileStore, JsonlAppendStore};
+use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
-/// The on-disk building blocks, assembled the way a desktop host's provider
+/// The file-backed transcript and turn-state building blocks (with in-memory
+/// key-value and journal stores), assembled the way a desktop host's provider
 /// assembles them: everything under one workspace, shared by every agent.
 struct FileStores {
     workspace: std::path::PathBuf,
@@ -14,8 +15,8 @@ impl SessionStoreProvider for FileStores {
         AgentStores {
             transcripts: Arc::new(FileTranscriptLocator::new(&self.workspace)),
             turn_states: Arc::new(TurnStateStore::new(self.workspace.clone())),
-            kv: Arc::new(FileStore::new(self.workspace.join("kv"))),
-            journal: Arc::new(JsonlAppendStore::new(self.workspace.join("journal"))),
+            kv: Arc::new(InMemoryStore::new()),
+            journal: Arc::new(InMemoryAppendStore::new()),
         }
     }
 }
@@ -52,7 +53,6 @@ fn the_file_turn_state_store_is_a_turn_states() {
     assert_eq!(turns.clear_all().unwrap(), 0);
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
     let dir = tempfile::tempdir().unwrap();
@@ -67,7 +67,6 @@ fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
     );
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     #[derive(Debug, thiserror::Error)]
@@ -95,7 +94,6 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
     assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 /// Pins the default checked accessor for an unchanged file provider.
 fn checked_accessor_keeps_legacy_file_provider_compatible() {
@@ -107,7 +105,6 @@ fn checked_accessor_keeps_legacy_file_provider_compatible() {
     assert!(stores.turn_states.list().unwrap().is_empty());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 /// Pins Arc forwarding rather than selecting the infallible default.
 fn checked_accessor_arc_forwards_native_refusal() {
@@ -152,7 +149,8 @@ fn checked_accessor_arc_forwards_native_refusal() {
 /// Providers opt into a ledger explicitly; an Arc forwards the selected handle.
 #[test]
 fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
-    use crate::run_ledger::{RunLedgerStore, SqliteRunLedger};
+    use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
     struct LedgerProvider {
         sessions: InMemorySessionStores,
         ledger: Arc<dyn RunLedgerStore>,
@@ -174,8 +172,9 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
             Ok((id == "allowed").then(|| self.ledger.clone()))
         }
     }
-    let dir = tempfile::tempdir().unwrap();
-    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(DriverRunLedger::new(
+        MemoryStorage::new().for_scope(&Scope::local()).unwrap(),
+    ));
     let provider = Arc::new(LedgerProvider {
         sessions: InMemorySessionStores::new(),
         ledger: ledger.clone(),
@@ -189,13 +188,13 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
             .unwrap()
             .is_none()
     );
+    let dir = tempfile::tempdir().unwrap();
     let default = FileStores {
         workspace: dir.path().to_path_buf(),
     };
     assert!(default.run_ledger_for_agent("allowed").unwrap().is_none());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
     use tinyagents_harness::store::SchemaAdmission;
@@ -271,7 +270,6 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
     assert!(!dir.path().join("memory").exists());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[test]
 fn optional_conversation_provider_keeps_native_refusal_kind_and_source_through_arc() {
     use crate::threads::{ConversationError, ConversationPersistence, ConversationResult};

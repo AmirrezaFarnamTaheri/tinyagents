@@ -5,8 +5,8 @@
 //! search.
 //!
 //! This is the *product-facing* chat log a UI lists and renders (threads with
-//! titles, labels, message counts). It is independent of the SQLite session
-//! history ([`crate::ops`]) and of the model-facing [`crate::transcript`]
+//! titles, labels, message counts). It is independent of the driver-backed session
+//! history ([`crate::SessionHistoryStore`]) and of the model-facing [`crate::transcript`]
 //! files: nothing here touches `session_db/` or `session_raw/`.
 //!
 //! The module was moved verbatim from TinyMemory's `tinymemory-conversations`
@@ -55,7 +55,5 @@ pub use types::{
 #[path = "persistence_tests.rs"]
 mod persistence_tests;
 
-#[cfg(feature = "storage-drivers")]
 pub mod driver;
-#[cfg(feature = "storage-drivers")]
 pub use driver::DriverConversationStore;

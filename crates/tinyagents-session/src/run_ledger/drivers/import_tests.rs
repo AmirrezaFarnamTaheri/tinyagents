@@ -1,6 +1,51 @@
 use super::super::tests::ledgers;
 use super::*;
+use crate::legacy::fixtures::classic_database;
 use tinystoragedrivers_core::ErrorKind;
+use tinystoragedrivers_sqlite::rusqlite;
+
+const STARTED: &str = "2026-01-01T00:00:00+00:00";
+
+/// A closed, checkpointed classic database holding run `run` (the shape
+/// `agent_tests::run` builds), the given events, and optionally telemetry.
+fn classic_source(
+    ledger: &DriverRunLedger,
+    root: &tempfile::TempDir,
+    events: &[(i64, &str)],
+    input_tokens: Option<i64>,
+) -> QuiescentSource {
+    let path = root.path().join("snapshot.db");
+    classic_database(&path, 7, |db| {
+        db.execute(
+            "INSERT INTO agent_runs (id, kind, parent_run_id, parent_thread_id, agent_id, status,
+                                     prompt_ref, worker_thread_id, checkpoint_json, summary,
+                                     metadata_json, started_at, updated_at)
+             VALUES ('run', 'worker_thread', 'parent', 'thread', 'agent', 'running', 'prompt',
+                     'worker', '{\"step\":1}', 'original', '{\"keep\":true}', ?1, ?1)",
+            [STARTED],
+        )
+        .unwrap();
+        for (sequence, label) in events {
+            db.execute(
+                "INSERT INTO run_events (run_id, sequence, event_type, payload_json, timestamp)
+                 VALUES ('run', ?1, ?2, '{\"source\":true}', ?3)",
+                rusqlite::params![sequence, label, STARTED],
+            )
+            .unwrap();
+        }
+        if let Some(tokens) = input_tokens {
+            db.execute(
+                "INSERT INTO run_telemetry (run_id, input_tokens, updated_at) VALUES ('run', ?1, ?2)",
+                rusqlite::params![tokens, STARTED],
+            )
+            .unwrap();
+        }
+    });
+    QuiescentSource::asserted_by_trusted_host(
+        path,
+        SourceOwner::asserted_by_trusted_host(ledger.scope().clone()),
+    )
+}
 
 /// Cross-tenant authority is rejected before a missing source can be opened or created.
 #[test]
@@ -123,38 +168,9 @@ fn preflight_reserved_path_characters_preserve_original_source() {
 async fn admitted_agent_import_preserves_source_and_retry_never_overwrites_native_edits() {
     let (ledger, sibling) = ledgers();
     let root = tempfile::tempdir().unwrap();
-    let input = super::super::agent_tests::run("run");
-    let original = crate::run_ledger::upsert_agent_run(root.path(), input).unwrap();
-    crate::run_ledger::append_run_event(
-        root.path(),
-        RunEventAppend {
-            run_id: "run".into(),
-            event_type: "old".into(),
-            payload: serde_json::json!({"source":true}),
-        },
-    )
-    .unwrap();
-    crate::run_ledger::upsert_run_telemetry(
-        root.path(),
-        RunTelemetryUpsert {
-            run_id: "run".into(),
-            input_tokens: Some(7),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    let path = root.path().join("snapshot.db");
-    // Trusted fixture stops source calls and creates a consistent, closed snapshot;
-    // the importer must never checkpoint the cached classic connection itself.
-    let db = rusqlite::Connection::open(crate::store::db_path(root.path())).unwrap();
-    db.execute("VACUUM INTO ?1", [path.to_str().unwrap()])
-        .unwrap();
-    drop(db);
+    let source = classic_source(&ledger, &root, &[(1, "old")], Some(7));
+    let path = source.path().to_path_buf();
     let bytes = std::fs::read(&path).unwrap();
-    let source = QuiescentSource::asserted_by_trusted_host(
-        &path,
-        SourceOwner::asserted_by_trusted_host(ledger.scope().clone()),
-    );
     let report = ledger
         .import_agent_family(&source, "import-1")
         .await
@@ -163,7 +179,7 @@ async fn admitted_agent_import_preserves_source_and_retry_never_overwrites_nativ
     assert_eq!(report.events, 1);
     assert_eq!(report.telemetry, 1);
     let row = ledger.get_agent_run("run").await.unwrap().unwrap();
-    assert_eq!(row.started_at, original.started_at);
+    assert_eq!(row.started_at.to_rfc3339(), STARTED);
     assert_eq!(row.telemetry.unwrap().input_tokens, 7);
     ledger
         .transition_agent_run_status("run", AgentRunStatus::Completed, None, None)
@@ -186,28 +202,7 @@ async fn admitted_agent_import_preserves_source_and_retry_never_overwrites_nativ
 }
 
 fn complete_source(ledger: &DriverRunLedger, root: &tempfile::TempDir) -> QuiescentSource {
-    crate::run_ledger::upsert_agent_run(root.path(), super::super::agent_tests::run("run"))
-        .unwrap();
-    for label in ["one", "two", "three"] {
-        crate::run_ledger::append_run_event(
-            root.path(),
-            RunEventAppend {
-                run_id: "run".into(),
-                event_type: label.into(),
-                payload: serde_json::json!({}),
-            },
-        )
-        .unwrap();
-    }
-    let snapshot = root.path().join("snapshot.db");
-    let db = rusqlite::Connection::open(crate::store::db_path(root.path())).unwrap();
-    db.execute("VACUUM INTO ?1", [snapshot.to_str().unwrap()])
-        .unwrap();
-    drop(db);
-    QuiescentSource::asserted_by_trusted_host(
-        snapshot,
-        SourceOwner::asserted_by_trusted_host(ledger.scope().clone()),
-    )
+    classic_source(ledger, root, &[(1, "one"), (2, "two"), (3, "three")], None)
 }
 
 #[tokio::test]

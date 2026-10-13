@@ -161,7 +161,7 @@ pub(crate) enum DelegationUpdate {
 pub struct DelegationConfig {
     /// Upper bound on reviewer-requested revisions before forcing `finalize`.
     pub max_revisions: usize,
-    /// Optional durable checkpointer (e.g. a `FileCheckpointer`). When set with a
+    /// Optional durable checkpointer (e.g. a `DriverCheckpointer`). When set with a
     /// `thread_id`, the run persists its state at every super-step boundary.
     pub checkpointer: Option<Arc<dyn Checkpointer<DelegationState>>>,
     /// Thread id for checkpoint keying; required for the checkpointer to persist.

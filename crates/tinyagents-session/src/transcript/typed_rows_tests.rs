@@ -439,16 +439,14 @@ fn the_in_memory_history_returns_lifted_rows_like_the_file_backend() {
 }
 
 #[test]
-fn plain_journal_message_keeps_the_legacy_string_form_of_typed_rows() {
-    use crate::transcript::import::convert::plain_journal_message;
+fn legacy_content_keeps_the_string_form_of_typed_rows() {
     let typed = TranscriptMessage::assistant_with_calls(
         "on it",
         vec![TranscriptToolCall::from(call("c1", None))],
     );
-    let journal = plain_journal_message(typed.clone());
-    assert_eq!(journal.content, typed.legacy_content());
-    // The journal string reads back as the original typed row.
-    let back = TranscriptMessage::from_legacy("assistant", journal.content);
+    let legacy = typed.legacy_content();
+    // The legacy string reads back as the original typed row.
+    let back = TranscriptMessage::from_legacy("assistant", legacy);
     assert!(back.same_row_as(&typed));
     let image = TranscriptMessage::user_with_parts(vec![
         TranscriptPart::Text {
@@ -458,9 +456,9 @@ fn plain_journal_message_keeps_the_legacy_string_form_of_typed_rows() {
             url: "data:image/png;base64,AA".into(),
         },
     ]);
-    let journal = plain_journal_message(image.clone());
-    assert!(journal.content.contains("[OH_IMAGE:"));
-    assert!(TranscriptMessage::from_legacy("user", journal.content).same_row_as(&image));
+    let legacy = image.legacy_content();
+    assert!(legacy.contains("[OH_IMAGE:"));
+    assert!(TranscriptMessage::from_legacy("user", legacy).same_row_as(&image));
 }
 
 #[test]

@@ -35,10 +35,10 @@ crashes mid-execution.
 
 ### Backends
 
-- `FileCheckpointer` (`file.rs`) — durable, file-backed implementation; no
-  external dependencies.
-- `SqliteCheckpointer` (`sqlite.rs`, feature `sqlite`) — Sqlite-backed
-  implementation for concurrent/multi-process access.
+- `DriverCheckpointer` (`drivers.rs`) — durable implementation over a
+  `tinystoragedrivers` `DocumentStore`, so the host's backend (SQLite, MongoDB,
+  memory) holds the checkpoints. The file and SQLite checkpointers were removed
+  in favour of it.
 - An in-memory backend is also available for tests (see `mod.rs`/`mod_tests.rs`);
   suitable only for a single process's lifetime.
 
@@ -73,8 +73,7 @@ crashes mid-execution.
 | --- | --- |
 | `types.rs` | `Checkpoint`, `CheckpointTuple`, `CheckpointConfig`, `CheckpointMetadata`, `CheckpointSource`, `DurabilityMode`, `PendingActivation`, `BarrierArrivals`, `PendingWrite`. |
 | `mod.rs` | The `Checkpointer` trait and the in-memory backend. |
-| `file.rs` | `FileCheckpointer`. |
-| `sqlite.rs` | `SqliteCheckpointer` (feature `sqlite`). |
+| `drivers.rs` | `DriverCheckpointer` over a driver `DocumentStore`. |
 | `mod_tests.rs` | Unit tests (put/get round-trips, namespace scoping, history, pruning). |
 
 ## Operational constraints
@@ -83,7 +82,7 @@ crashes mid-execution.
   implementation that ignores namespace when a caller asks for it will let a
   parent and a subgraph run collide on resume. Any new backend must honor the
   namespace-scoped `get`/`list` contract.
-- `FileCheckpointer` and `SqliteCheckpointer` are safe across process
+- `DriverCheckpointer` on a durable backend is safe across process
   restarts; the in-memory backend is not — never use it where resumability
   after a crash is required.
 - Checkpoint ids must be collision-free across process restarts (see

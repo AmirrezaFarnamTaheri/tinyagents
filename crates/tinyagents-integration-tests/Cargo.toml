@@ -14,7 +14,6 @@ chrono = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 reqwest = { workspace = true }
-rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
@@ -24,6 +23,8 @@ tinyagents-orchestration = { path = "../tinyagents-orchestration" }
 tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-registry = { path = "../tinyagents-registry" }
 tinyagents-session = { path = "../tinyagents-session" }
+tinystoragedrivers-core = { workspace = true }
+tinystoragedrivers-sqlite = { workspace = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.3.0" }
 tinyinference-embeddings = { path = "../../vendor/tinyinference/crates/tinyinference-embeddings", version = "0.3.0" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
@@ -31,7 +32,8 @@ tokio = { workspace = true, default-features = true, features = ["macros", "rt-m
 
 [features]
 default = []
-sqlite = ["tinyagents-graph/sqlite", "tinyagents-harness/sqlite"]
+# Retained as a no-op: SQLite persistence is the tinystoragedrivers SQLite driver.
+sqlite = []
 # `tools` is kept as the forwarded feature name for backward compatibility
 # (see `tinyagents-harness`'s deprecated `tools` alias for `builtin-tools`).
 tools = ["tinyagents-harness/builtin-tools"]

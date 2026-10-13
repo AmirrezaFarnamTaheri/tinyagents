@@ -15,7 +15,12 @@ use tinyagents_session::run_ledger::{
 use super::*;
 
 fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
-    TeamService::new(SessionTeamLedger::new(dir.path()))
+    TeamService::new(
+        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
+            dir.path(),
+        )))
+        .unwrap(),
+    )
 }
 
 fn solo_team(service: &TeamService<SessionTeamLedger>) -> (String, String) {

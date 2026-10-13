@@ -12,7 +12,7 @@
 //!
 //! # Cargo features
 //!
-//! - `sqlite` — durable, file-backed stores (`rusqlite`).
+//! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
 //! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
 //!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),
@@ -60,7 +60,6 @@
 
 pub mod agent_loop;
 pub mod artifacts;
-mod blocking;
 pub mod cache;
 pub mod cancel;
 mod canonical_json;
@@ -70,6 +69,7 @@ pub mod config;
 pub mod context;
 pub mod cost;
 pub mod dialect;
+pub mod driver_ids;
 pub mod error;
 pub mod events;
 mod finish_reason;
@@ -145,7 +145,7 @@ pub use observability::{
     HarnessStatusStore, InMemoryEventJournal, InMemoryStatusStore, JournalSink, JsonlSink,
     RedactingSink, StoreEventJournal,
 };
-pub use observability::{FileStatusStore, mint_run_id, reap_orphaned_runs};
+pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 #[cfg(feature = "langfuse")]
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,

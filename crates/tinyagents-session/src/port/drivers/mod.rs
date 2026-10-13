@@ -181,6 +181,27 @@ impl DriverSessionStores {
         Ok(())
     }
 
+    /// The concrete run ledger of `agent_id`, bound to the same scope as its
+    /// other stores. Hosts use it where the object-safe
+    /// [`SessionStoreProvider::run_ledger_for_agent`] handle is not enough, such
+    /// as the legacy-database import.
+    ///
+    /// # Errors
+    ///
+    /// The native scope binding error.
+    pub fn driver_run_ledger(
+        &self,
+        agent_id: &str,
+    ) -> Result<crate::run_ledger::DriverRunLedger, StorageError> {
+        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        Ok(match self.schema_admission {
+            SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
+            SchemaAdmission::ValidateOnly => {
+                crate::run_ledger::DriverRunLedger::new_existing_schema(scoped)
+            }
+        })
+    }
+
     /// The scope agent `agent_id` is stored under.
     pub fn scope_for(agent_id: &str) -> Scope {
         if !agent_id.starts_with(HASHED_SCOPE)

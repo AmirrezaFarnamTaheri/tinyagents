@@ -170,7 +170,7 @@ async fn registration_and_child_failures_retain_native_unavailable_kind() {
     let error = refusal();
     assert_eq!(native_kind(&error), ErrorKind::Unavailable);
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
+    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger),
         cas: AtomicUsize::new(0),

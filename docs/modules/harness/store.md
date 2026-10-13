@@ -118,8 +118,8 @@ Example:
 ```rust
 let stores = StoreRegistry::new()
     .register("threads", MongoStore::new(mongo, "threads"))
-    .register_append("events", JsonlStore::new("./data/events.jsonl"))
-    .register("artifacts", FileStore::new("./data/artifacts"))
+    .register_append("events", DriverAppendStore::new(streams))
+    .register("artifacts", DriverStore::new(docs))
     .register("cache", InMemoryStore::new());
 ```
 
@@ -148,7 +148,7 @@ Properties:
 - should support deterministic ordering
 - should be cloneable through `Arc`
 
-### JsonlStore
+### DriverAppendStore (replaces the removed JSONL store)
 
 Use for:
 
@@ -177,10 +177,10 @@ Record shape:
 }
 ```
 
-JSONL is not ideal for high-concurrency writes unless guarded by a writer task or
-file lock. The implementation should document its concurrency guarantees.
+The backend allocates offsets, so concurrent appends and several store
+instances over one database stay monotonic.
 
-### FileStore
+### DriverStore (replaces the removed file store)
 
 Use for:
 
@@ -271,9 +271,8 @@ Minimum indexes:
 
 Both run against every in-tree backend in
 `crates/tinyagents-integration-tests/tests/store_conformance.rs`
-(`InMemoryStore`, `FileStore`, `InMemoryNamespacedStore`; no in-tree SQLite
-`Store`/`NamespacedStore` exists yet, only the sqlite-feature `ResponseCache`
-in the cache module). A downstream crate certifies its own backend by calling
+(`InMemoryStore`, `DriverStore`, `InMemoryNamespacedStore`,
+`DriverNamespacedStore`, each driver store on the memory and SQLite drivers). A downstream crate certifies its own backend by calling
 the matching function from its own `#[tokio::test]`.
 
 ## Store Events
@@ -446,7 +445,7 @@ Example:
 ```text
 host-owned memory middleware
   -> store::StoreRegistry["threads"]
-  -> MongoStore or JsonlStore
+  -> MongoStore or DriverAppendStore
 ```
 
 This keeps memory policy testable while allowing the backing storage to change.

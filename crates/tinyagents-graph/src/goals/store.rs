@@ -15,7 +15,7 @@
 //! # Single-process only
 //!
 //! `thread_lock` serializes writers **within one process**. Across multiple
-//! processes sharing the same [`FileStore`](tinyagents_harness::store::FileStore)
+//! processes sharing the same file store
 //! there is no atomic CAS, so two concurrent read-modify-writes can lose an
 //! update. The `goal_id` guard still prevents *logical corruption* from stale
 //! accounting, but not lost updates. For multi-writer deployments funnel goal
@@ -48,7 +48,7 @@ fn thread_lock(thread_id: &str) -> Arc<Mutex<()>> {
 }
 
 /// Hex-encodes the thread id into a [`Store`]-safe key. Required because
-/// [`FileStore`](tinyagents_harness::store::FileStore) rejects key bytes outside
+/// file store rejects key bytes outside
 /// `[A-Za-z0-9._-]`; hex is uniform across every backend.
 fn key(thread_id: &str) -> String {
     thread_id

@@ -11,15 +11,14 @@
 //! than one Jev `Choice`.
 //!
 //! Catalogue embeddings are cached in memory by content hash and optionally
-//! through a host cache port or a disk file, keyed by embedding space, so a cold
-//! process pays for the catalogue once and every later search embeds only
-//! the intent (one provider call).
+//! through a host cache port ([`EmbeddingCache`], with
+//! [`DriverEmbeddingCache`](super::DriverEmbeddingCache) over the storage
+//! drivers), keyed by embedding space, so a cold process pays for the catalogue
+//! once and every later search embeds only the intent (one provider call).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use serde::{Deserialize, Serialize};
 use tinyinference_embeddings::EmbeddingModel;
 use tinytools::{RankCandidate, RankContext, RankError, RankHit, ToolRanker};
 
@@ -28,7 +27,7 @@ use tinytools::{RankCandidate, RankContext, RankError, RankHit, ToolRanker};
 /// failure cost one batch, not the catalogue.
 const EMBED_BATCH: usize = 64;
 
-/// Persistence for rebuildable catalogue embeddings, independent of storage drivers.
+/// Persistence for rebuildable catalogue embeddings.
 ///
 /// A host binds the handle to its tenant and credential namespace. The ranker
 /// supplies its embedding-space signature and stable summary/family hashes;
@@ -60,14 +59,7 @@ pub struct EmbeddingToolRanker {
     /// vector is never compared against one from a different model.
     signature: String,
     cache: RwLock<HashMap<u64, Vec<f32>>>,
-    cache_path: Option<PathBuf>,
     persistent_cache: Option<Arc<dyn EmbeddingCache>>,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct DiskCache {
-    signature: String,
-    entries: HashMap<u64, Vec<f32>>,
 }
 
 impl std::fmt::Debug for EmbeddingToolRanker {
@@ -75,7 +67,6 @@ impl std::fmt::Debug for EmbeddingToolRanker {
         f.debug_struct("EmbeddingToolRanker")
             .field("provider", &self.provider.name())
             .field("model", &self.provider.model_id())
-            .field("cache_path", &self.cache_path)
             .field("persistent_cache", &self.persistent_cache.is_some())
             .finish_non_exhaustive()
     }
@@ -87,51 +78,24 @@ impl EmbeddingToolRanker {
 
     /// A ranker over `provider` with an in-memory cache only. `signature`
     /// identifies the provider's embedding space (for example
-    /// `provider=voyage;model=voyage-3;dims=1024`); the disk cache is valid
-    /// only for the signature it was written under.
+    /// `provider=voyage;model=voyage-3;dims=1024`); a persistent cache is
+    /// valid only for the signature it was written under.
     pub fn new(provider: Arc<dyn EmbeddingModel>, signature: impl Into<String>) -> Self {
         Self {
             provider,
             signature: signature.into(),
             cache: RwLock::new(HashMap::new()),
-            cache_path: None,
             persistent_cache: None,
         }
     }
 
-    /// A ranker whose catalogue embeddings also persist at `path`, keyed by
-    /// the provider's signature so a model change invalidates them. A
-    /// missing or unreadable file is an empty cache, never an error.
-    pub fn with_disk_cache(mut self, path: PathBuf) -> Self {
-        self.persistent_cache = None;
-        self.cache
-            .write()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
-        let loaded = std::fs::read(&path)
-            .ok()
-            .and_then(|raw| serde_json::from_slice::<DiskCache>(&raw).ok())
-            .filter(|disk| disk.signature == self.signature);
-        if let Some(disk) = loaded {
-            tracing::debug!(
-                entries = disk.entries.len(),
-                path = %path.display(),
-                "[tool-search] loaded embedding cache"
-            );
-            *self.cache.write().unwrap_or_else(|p| p.into_inner()) = disk.entries;
-        }
-        self.cache_path = Some(path);
-        self
-    }
-
     /// Persist catalogue embeddings through a host-supplied cache port.
     ///
-    /// This replaces any previously selected disk cache and clears vectors
-    /// loaded from it. A failed port never falls back to a filesystem write.
-    /// Hosts should create a new ranker when its tenant or credential namespace
-    /// changes; its in-memory cache is bound to this handle.
+    /// Vectors already held in memory are cleared. A failed port never falls
+    /// back to a filesystem write. Hosts should create a new ranker when its
+    /// tenant or credential namespace changes; its in-memory cache is bound to
+    /// this handle.
     pub fn with_cache(mut self, cache: Arc<dyn EmbeddingCache>) -> Self {
-        self.cache_path = None;
         self.cache
             .write()
             .unwrap_or_else(|p| p.into_inner())
@@ -245,35 +209,7 @@ impl EmbeddingToolRanker {
                 );
             }
         }
-        self.persist();
         Ok(())
-    }
-
-    fn persist(&self) {
-        let Some(path) = &self.cache_path else {
-            return;
-        };
-        let disk = DiskCache {
-            signature: self.signature.clone(),
-            entries: self.cache.read().unwrap_or_else(|p| p.into_inner()).clone(),
-        };
-        let write = || -> std::io::Result<()> {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-            let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-            serde_json::to_writer(&mut tmp, &disk)?;
-            tmp.as_file().sync_all()?;
-            tmp.persist(path).map(|_| ()).map_err(|error| error.error)
-        };
-        if let Err(error) = write() {
-            tracing::warn!(
-                path = %path.display(),
-                error = %error,
-                "[tool-search] could not persist embedding cache"
-            );
-        }
     }
 }
 

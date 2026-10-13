@@ -121,7 +121,7 @@ async fn cancellation_short_circuits_to_finalize() {
 async fn human_gated_run_parks_on_interrupt_then_resume_approves() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let make_config = || DelegationConfig {
         require_review_approval: true,
         checkpointer: Some(cp.clone()),
@@ -196,7 +196,7 @@ async fn concurrent_calls_for_the_same_thread_never_overlap() {
 
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let make_config = || DelegationConfig {
         checkpointer: Some(cp.clone()),
         thread_id: Some("racing-thread".to_string()),
@@ -229,7 +229,7 @@ async fn run_delegation_rejects_require_review_approval() {
     // discarding it.
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let config = DelegationConfig {
         require_review_approval: true,
         checkpointer: Some(cp),
@@ -267,7 +267,7 @@ async fn human_gated_without_checkpointer_or_thread_id_is_rejected() {
 
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let checkpointer_only = DelegationConfig {
         require_review_approval: true,
         checkpointer: Some(cp),
@@ -293,7 +293,7 @@ async fn human_gated_without_checkpointer_or_thread_id_is_rejected() {
 async fn ttl_expiry_resume_with_deny_blocks_the_result() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let make_config = || DelegationConfig {
         require_review_approval: true,
         checkpointer: Some(cp.clone()),
@@ -330,7 +330,7 @@ async fn ttl_expiry_resume_with_deny_blocks_the_result() {
 async fn durable_checkpointer_persists_thread_state() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let config = DelegationConfig {
         checkpointer: Some(cp.clone()),
         thread_id: Some("run-1".to_string()),
@@ -421,7 +421,7 @@ fn schema_version_defaults_to_zero_and_step_records_round_trip() {
 async fn run_or_resume_starts_fresh_without_a_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let config = DelegationConfig {
         checkpointer: Some(cp),
         thread_id: Some("fresh-1".to_string()),
@@ -439,7 +439,7 @@ async fn run_or_resume_starts_fresh_without_a_checkpoint() {
 async fn run_or_resume_continues_from_last_boundary_after_a_crash() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     // Count stage invocations across BOTH the crashed run and the resume, to
     // prove plan/execute are NOT re-run on resume.
     let plan_runs = Arc::new(AtomicUsize::new(0));
@@ -527,7 +527,7 @@ async fn run_or_resume_continues_from_last_boundary_after_a_crash() {
 async fn run_or_resume_is_idempotent_on_a_finalized_thread() {
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let stage_runs = Arc::new(AtomicUsize::new(0));
     let make_runner = || {
         let stage_runs = stage_runs.clone();
@@ -589,8 +589,8 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
     }
     let dir = tempfile::tempdir().unwrap();
     // Seed the store as the OLD state type under the thread.
-    let legacy_cp: crate::checkpoint::FileCheckpointer<LegacyState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let legacy_cp: crate::checkpoint::DriverCheckpointer<LegacyState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let legacy = Checkpoint::new(
         LegacyState {
             plan: Some("old".to_string()),
@@ -612,7 +612,7 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
     // Reopen the SAME store as the current state type and resume: the
     // undecodable record is expired and a fresh run completes.
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -633,8 +633,8 @@ async fn checkpoint_below_current_schema_version_expires_to_fresh_run() {
     // e.g. a pre-#3884 record whose executions happened to be empty) must be
     // expired, not resumed: `schema_version` is a real guard, not just a doc.
     let dir = tempfile::tempdir().unwrap();
-    let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let checkpoint = Checkpoint::new(
         DelegationState {
             plan: Some("stale".to_string()),
@@ -655,7 +655,7 @@ async fn checkpoint_below_current_schema_version_expires_to_fresh_run() {
         .expect("seed old-schema checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -687,8 +687,8 @@ async fn checkpoint_above_current_schema_version_also_expires_to_fresh_run() {
     // catches this: resuming it under this binary's older semantics would be
     // silently wrong rather than loudly incompatible.
     let dir = tempfile::tempdir().unwrap();
-    let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let checkpoint = Checkpoint::new(
         DelegationState {
             plan: Some("from-the-future".to_string()),
@@ -706,7 +706,7 @@ async fn checkpoint_above_current_schema_version_also_expires_to_fresh_run() {
         .expect("seed future-schema checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -766,8 +766,8 @@ async fn cancelled_checkpoint_still_scheduling_finalize_is_resumed_not_terminal(
     // classified that live boundary as terminal and returned it unfinished,
     // never producing the cancellation summary.
     let dir = tempfile::tempdir().unwrap();
-    let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let checkpoint = Checkpoint::new(
         DelegationState {
             plan: Some("PLAN".to_string()),
@@ -790,7 +790,7 @@ async fn cancelled_checkpoint_still_scheduling_finalize_is_resumed_not_terminal(
         .expect("seed cancelled-but-not-finalized checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -818,7 +818,7 @@ async fn cancellation_at_the_approval_node_routes_to_finalize() {
     let cancel = CancellationToken::new();
     let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
     let config = DelegationConfig {
         require_review_approval: true,
         checkpointer: Some(cp.clone()),
@@ -925,7 +925,7 @@ async fn concurrent_resume_delegation_calls_for_the_same_thread_never_overlap() 
 
     let dir = tempfile::tempdir().unwrap();
     let real_cp: Arc<dyn Checkpointer<DelegationState>> =
-        Arc::new(crate::checkpoint::FileCheckpointer::new(dir.path()));
+        Arc::new(crate::test_support::dir_checkpointer(dir.path()));
 
     // Park on the approval interrupt first, through the real checkpointer.
     let setup_config = DelegationConfig {
@@ -981,8 +981,8 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
     // additive checkpoint by ignoring unknown fields, letting an older
     // binary consume the approval under outdated semantics.
     let dir = tempfile::tempdir().unwrap();
-    let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let checkpoint = Checkpoint::new(
         DelegationState {
             plan: Some("PLAN".to_string()),
@@ -1011,7 +1011,7 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
         .expect("seed future-schema checkpoint parked on approval");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         require_review_approval: true,
@@ -1144,8 +1144,8 @@ async fn terminal_checkpoint_with_a_pending_interrupt_surfaces_it() {
     // surface it, not silently drop `pending`. (The live routing never
     // produces this shape; the terminal branch is defensive.)
     let dir = tempfile::tempdir().unwrap();
-    let seed: crate::checkpoint::FileCheckpointer<DelegationState> =
-        crate::checkpoint::FileCheckpointer::new(dir.path());
+    let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
+        crate::test_support::dir_checkpointer(dir.path());
     let mut state = DelegationState::new_run();
     state.final_output = Some("done".to_string());
     let checkpoint = Checkpoint::new(state, Vec::new())
@@ -1160,7 +1160,7 @@ async fn terminal_checkpoint_with_a_pending_interrupt_surfaces_it() {
     seed.put(checkpoint).await.expect("seed terminal+interrupt");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::FileCheckpointer::<DelegationState>::new(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),

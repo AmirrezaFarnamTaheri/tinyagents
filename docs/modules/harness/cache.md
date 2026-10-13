@@ -282,9 +282,10 @@ a *response*-cache lookup miss. Reporting only: nothing warms or retries a cache
 - `InMemoryResponseCache` — bounded on **both** an entry count and an
   approximate byte budget (an entry count alone does not bound memory when
   responses are long-context). Recency is an ordered map, not a linear scan.
-- `SqliteResponseCache` (feature `sqlite`) — durable, WAL, `(ns, key)` primary
-  key with an `expiry` column and a lazy purge on read. Namespaces do not
-  cross-serve and clear independently.
+- `DriverResponseCache` — durable, over a `tinystoragedrivers` `DocumentStore`
+  (SQLite, MongoDB, memory). One document per `(namespace, key)` with an
+  `expiresAtMs` field: TTL is native where the backend advertises it and is
+  also enforced on read. Namespaces do not cross-serve and clear independently.
 - `SingleFlight` — collapses concurrent identical misses into one provider call
   so N simultaneous callers do not all pay for the same answer. Errors are not
   shared: a follower whose leader failed runs its own call.

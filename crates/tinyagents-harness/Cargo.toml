@@ -25,7 +25,6 @@ futures = { workspace = true }
 regex = "1"
 rustix = { version = "1", features = ["fs"] }
 reqwest = { workspace = true, features = ["stream", "http2"], optional = true }
-rusqlite = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
@@ -44,18 +43,18 @@ tinytools-std = { path = "../../vendor/tinytools/crates/tinytools-std", version 
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread", "fs", "io-util", "process"] }
 # Storage ports (no database client): the `storage-drivers` adapters put
 # the harness `Store` / `AppendStore` on any tinystoragedrivers backend.
-tinystoragedrivers-core = { workspace = true, optional = true }
+tinystoragedrivers-core = { workspace = true }
 tempfile = { workspace = true }
 wait-timeout = { version = "0.2", optional = true }
 uuid = { workspace = true }
 
 [features]
 default = ["claude-code", "langfuse"]
-sqlite = ["dep:rusqlite"]
+sqlite = []
 # `store::DriverStore` / `store::DriverAppendStore` over tinystoragedrivers
 # ports, so a host's chosen backend (SQLite, MongoDB, memory) holds harness
 # data.
-storage-drivers = ["dep:tinystoragedrivers-core"]
+storage-drivers = []
 # `tools` is a deprecated alias kept so downstream feature forwards that
 # still spell out the old name keep compiling.
 tools = ["builtin-tools"]
@@ -80,6 +79,7 @@ tracing = ["tinytools-agent/tracing"]
 
 [dev-dependencies]
 png = "0.17"
+tinystoragedrivers-sqlite = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]

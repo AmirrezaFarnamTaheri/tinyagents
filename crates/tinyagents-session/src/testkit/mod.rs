@@ -13,10 +13,15 @@
 //! suites. Call them from a `#[test]` against any implementation:
 //!
 //! ```rust
+//! use std::sync::Arc;
+//! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
+//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! let dir = tempfile::tempdir().unwrap();
-//! run_ledger_conformance(dir.path());
+//! # tokio::runtime::Builder::new_multi_thread().build().unwrap().block_on(async {
+//! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+//! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
+//! # });
 //! ```
 //!
 //! # In-memory transcript double

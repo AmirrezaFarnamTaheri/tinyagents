@@ -28,14 +28,12 @@ pub enum ConversationError {
     #[error(transparent)]
     Worker(#[from] tokio::task::JoinError),
     /// Native capability, conflict, fencing and backend detail remains available.
-    #[cfg(feature = "storage-drivers")]
     #[error("{0}")]
     Driver(#[source] Box<tinystoragedrivers_core::StorageError>),
     /// A native write acknowledgment could not be resolved to this exact attempt.
     ///
     /// The original native failure remains the source. Ordinary-ID append is
     /// not silently retried, since repeated UUID calls preserve classic semantics.
-    #[cfg(feature = "storage-drivers")]
     #[error("conversation operation {operation} has an unresolved acknowledgment")]
     Uncertain {
         /// The operation whose exact outcome could not be established.
@@ -46,7 +44,6 @@ pub enum ConversationError {
     },
 }
 
-#[cfg(feature = "storage-drivers")]
 impl From<tinystoragedrivers_core::StorageError> for ConversationError {
     fn from(error: tinystoragedrivers_core::StorageError) -> Self {
         Self::Driver(Box::new(error))

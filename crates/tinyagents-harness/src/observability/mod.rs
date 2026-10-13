@@ -30,9 +30,9 @@ mod profile;
 mod types;
 mod worker;
 
-pub mod file_status;
 pub mod reaper;
 pub mod replay;
+pub mod status;
 pub mod trace_export;
 
 #[doc(hidden)]
@@ -45,13 +45,13 @@ pub use langfuse::{
 pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
 // Shared Langfuse payload helpers reused by the graph observability exporter so
 // ISO-8601 timestamp formatting and null-field pruning live in one place.
-pub use file_status::{
-    FileStatusStore, STATUS_NS, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
-};
 #[cfg(feature = "langfuse")]
 #[doc(hidden)]
 pub use langfuse::{clean_nulls, iso_ms};
 pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs};
+pub use status::{
+    DriverStatusStore, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
+};
 pub use types::*;
 
 use std::collections::HashMap;
@@ -63,7 +63,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::events::{AgentEvent, EventListener, EventRecord, HarnessRunStatus};
 use crate::ids::{CallId, RunId};
-use crate::store::{AppendStore, JsonlAppendStore};
+use crate::store::AppendStore;
 
 // ---------------------------------------------------------------------------
 // AgentLatencyMetrics
@@ -722,11 +722,11 @@ impl EventListener for JournalSink {
 // ---------------------------------------------------------------------------
 
 impl JsonlSink {
-    /// Builds a sink that appends each [`EventRecord`] as a JSON line into the
-    /// `stream` of `store`.
+    /// Builds a sink that appends each [`EventRecord`] as a JSON value into the
+    /// `stream` of `store` (any [`AppendStore`], including the driver-backed one).
     ///
     /// [`EventRecord`]: crate::events::EventRecord
-    pub fn new(store: JsonlAppendStore, stream: impl Into<String>) -> Self {
+    pub fn new(store: Arc<dyn AppendStore>, stream: impl Into<String>) -> Self {
         let stream = stream.into();
         let worker = Arc::new(AppendWorker::spawn(
             "jsonl-sink",

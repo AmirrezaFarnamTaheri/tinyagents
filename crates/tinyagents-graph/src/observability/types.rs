@@ -288,7 +288,7 @@ pub struct InMemoryGraphEventJournal {
 ///
 /// Each run's observations are appended to the store under a stream named by
 /// the run id, so `read_from` resumes from a durable offset. Pair with
-/// [`tinyagents_harness::store::JsonlAppendStore`] for a local durable journal or
+/// [`tinyagents_harness::store::DriverAppendStore`] for a durable journal or
 /// [`tinyagents_harness::store::InMemoryAppendStore`] for deterministic tests.
 #[derive(Clone, Debug)]
 pub struct StoreGraphEventJournal<A: AppendStore> {

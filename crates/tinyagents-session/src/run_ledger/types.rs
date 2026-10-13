@@ -259,7 +259,7 @@ pub struct WorkflowRun {
 ///
 /// A driver takes this lease before acting on a workflow so at most one
 /// process is ever advancing a given run; see
-/// [`super::ops::try_claim_workflow_run`].
+/// `try_claim_workflow_run`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkflowLeaseClaim {
     /// The lease was free (or expired) and is now held by the caller.
@@ -764,4 +764,17 @@ pub enum CompletionOutcome {
     NotClaimed,
     /// No task matched the given team + task id.
     UnknownTask,
+}
+
+/// Result of [`RunLedgerStore::transition_agent_run_status_from`](super::RunLedgerStore::transition_agent_run_status_from).
+#[derive(Debug, Clone)]
+pub enum RunTransition {
+    /// The run was still in the expected status; it moved and the event (if
+    /// any) was recorded. Carries the run as stored afterwards.
+    Applied(AgentRun),
+    /// The run had already left the expected status; nothing was written.
+    /// Carries the run as it is now.
+    StatusChanged(AgentRun),
+    /// No run has this id.
+    NotFound,
 }

@@ -35,7 +35,7 @@ use super::namespaced::{
 /// absent key, which must not error), list, and namespace isolation. Any
 /// backend that passes this behaves interchangeably as a flat harness
 /// [`Store`] — this is what [`crate::store::InMemoryStore`] and
-/// [`crate::store::FileStore`] are both certified against.
+/// [`crate::store::DriverStore`] are both certified against.
 pub async fn run_store_conformance<S: Store>(store: &S) {
     // put + get round-trips the exact value.
     store

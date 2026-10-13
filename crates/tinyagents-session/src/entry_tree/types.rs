@@ -78,7 +78,7 @@ pub enum EntryKind {
     /// An ordinary conversation message.
     Message(TranscriptMessage),
     /// A durable record of a context-compaction operation. Context
-    /// projection ([`crate::entry_tree::EntryTree::build_context`]) never
+    /// projection ([`crate::entry_tree::project_chain`]) never
     /// reads past the newest entry of this kind on the path to a tip.
     Compaction(CompactionEntry),
     /// A note written at a navigation point summarizing the path that was
@@ -89,7 +89,7 @@ pub enum EntryKind {
     /// A host-defined out-of-band record, e.g. a tool-execution or
     /// notification entry that is not itself a conversation message. Mirrors
     /// `tinyinference_llm::message::CustomMessage` and is projected to
-    /// `Message::Custom` by [`crate::entry_tree::EntryTree::build_context`].
+    /// `Message::Custom` by [`crate::entry_tree::project_chain`].
     Custom(CustomEntry),
 }
 

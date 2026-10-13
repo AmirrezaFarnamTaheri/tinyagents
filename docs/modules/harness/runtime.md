@@ -454,10 +454,10 @@ pub enum StoreValue {
 Initial store backends:
 
 - `InMemoryStore`: deterministic tests and examples.
-- `JsonlStore`: append-only local development, replayable event logs, and cheap
+- `DriverAppendStore`: append-only event streams on any driver backend, replayable event logs, and cheap
   debugging.
-- `FileStore`: local artifacts such as tool outputs, provider payload snapshots,
-  and prompt fixtures.
+- `DriverStore`: durable keyed values (artifacts such as tool outputs, provider payload snapshots,
+  and prompt fixtures).
 - `MongoStore`: durable application/runtime records for server deployments.
 
 Later store backends:
@@ -483,9 +483,9 @@ Backend selection should be per store namespace:
 
 ```rust
 let stores = StoreRegistry::new()
-    .register("events", JsonlStore::new("./data/events.jsonl"))
+    .register("events", DriverAppendStore::new(streams))
     .register("threads", MongoStore::new(mongo, "threads"))
-    .register("artifacts", FileStore::new("./data/artifacts"));
+    .register("artifacts", DriverStore::new(docs));
 ```
 
 Store events should flow through `harness::events` or the registry event bus:

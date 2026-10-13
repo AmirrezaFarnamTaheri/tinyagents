@@ -79,6 +79,7 @@ pub mod mime;
 pub mod payload;
 pub mod png;
 pub use png::optimize_png_lossless;
+pub mod blob_stash;
 pub mod resolve;
 pub mod stash;
 pub mod types;
@@ -91,6 +92,7 @@ pub use archive::{
     ArchiveEntry, ArchiveEntryKind, ArchiveError, ArchiveFormat, ArchiveLimits, ArchiveListing,
     ArchiveTruncation, inspect_archive,
 };
+pub use blob_stash::{BlobAttachmentStash, StashedAttachment};
 pub use config::{ALLOWED_IMAGE_MIME_TYPES, FileLimits, ImageLimits};
 pub use error::{MultimodalError, Result};
 pub use markers::{

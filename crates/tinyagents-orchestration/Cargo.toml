@@ -26,17 +26,21 @@ tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-ll
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
 tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
 tracing = { workspace = true }
+# `blocking` bridges the synchronous `TeamLedger` / `WorkflowStore` traits onto the
+# async run-ledger port.
+tinystoragedrivers-core = { workspace = true, features = ["blocking"] }
 uuid = { version = "1", features = ["v4"] }
 
 [features]
 default = []
-storage-drivers = ["tinyagents-session/storage-drivers"]
+# Retained as a no-op: storage drivers are always on.
+storage-drivers = []
 tracing = [
     "tinyagents-harness/tracing",
 ]
 
 [dev-dependencies]
-tinystoragedrivers-core = { workspace = true }
+tinystoragedrivers-sqlite = { workspace = true }
 dotenvy = "0.15"
 futures = { workspace = true }
 tempfile = "3"

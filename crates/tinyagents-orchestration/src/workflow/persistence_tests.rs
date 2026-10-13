@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinyagents_session::run_ledger::{SqliteRunLedger, WorkflowRunStatus};
+use tinyagents_session::run_ledger::WorkflowRunStatus;
 
 fn row() -> WorkflowRunUpsert {
     WorkflowRunUpsert {
@@ -20,7 +20,7 @@ fn row() -> WorkflowRunUpsert {
 #[tokio::test(flavor = "current_thread")]
 async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
+    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
     let expected = ledger.upsert_workflow_run(row()).await.unwrap();
     let store: Arc<dyn AsyncWorkflowStore> = Arc::new(LedgerWorkflowStore::new(ledger));
     assert_eq!(store.load("workflow").await.unwrap(), Some(expected));
@@ -29,8 +29,10 @@ async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
 #[tokio::test(flavor = "current_thread")]
 async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
     let workspace = tempfile::tempdir().unwrap();
-    let first = LedgerWorkflowStore::new(Arc::new(SqliteRunLedger::new(workspace.path())));
-    let second = LedgerWorkflowStore::new(Arc::new(SqliteRunLedger::new(workspace.path())));
+    let first =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
+    let second =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
     let initial = first.upsert(row()).await.unwrap();
     assert_eq!(initial.revision, 0);
     let WorkflowLeaseClaim::Acquired(claimed) = first
@@ -99,7 +101,6 @@ async fn authoritative_registration_refuses_synchronous_success() {
     registration.register_async("child".into()).await.unwrap();
 }
 
-#[cfg(feature = "storage-drivers")]
 #[tokio::test(flavor = "current_thread")]
 async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
     use tinyagents_session::run_ledger::DriverRunLedger;
@@ -120,14 +121,14 @@ async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
     assert!(first.load("workflow").await.unwrap().is_some());
 }
 
-#[cfg(feature = "storage-drivers")]
 #[path = "persistence_refusal_tests.rs"]
 mod refusal_tests;
 
 #[tokio::test(flavor = "current_thread")]
-async fn invalid_lease_duration_refuses_before_opening_sqlite() {
+async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let workspace = tempfile::tempdir().unwrap();
-    let store = LedgerWorkflowStore::new(Arc::new(SqliteRunLedger::new(workspace.path())));
+    let store =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
     let lease = Duration::MAX;
     assert!(matches!(
         store.claim("workflow", "owner", lease).await,
@@ -141,7 +142,8 @@ async fn invalid_lease_duration_refuses_before_opening_sqlite() {
         store.renew("workflow", "owner", lease).await,
         Err(WorkflowPersistenceError::LeaseDuration(_))
     ));
-    assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 0);
+    // Nothing reached the ledger: the refused claim created no workflow.
+    assert!(store.load("workflow").await.unwrap().is_none());
 }
 
 struct LegacyCallback(std::sync::atomic::AtomicUsize);
@@ -176,7 +178,7 @@ async fn explicit_legacy_registration_preserves_callback_results() {
 #[tokio::test(flavor = "current_thread")]
 async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(SqliteRunLedger::new(workspace.path()));
+    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
     ledger.upsert_workflow_run(row()).await.unwrap();
     let WorkflowLeaseClaim::Acquired(expired) = ledger
         .try_claim_workflow_run("workflow", "old-owner", chrono::Duration::seconds(-1))

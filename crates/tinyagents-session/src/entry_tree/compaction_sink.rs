@@ -6,15 +6,20 @@
 //! only defines the interface; this is the durable, session-backed
 //! implementation a host attaches to a [`RunContext`][tinyagents_harness::context::RunContext]
 //! via `RunContext::with_compaction_sink`.
+//!
+//! [`CompactionSink::persist`] is synchronous, so each call reaches the
+//! run ledger's async entry-tree operations through a [`Blocking`] bridge
+//! thread; that works from inside or outside a tokio runtime.
 
-use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use tinyagents_harness::error::Result;
+use tinystoragedrivers_core::Blocking;
+
+use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::summarization::{CompactionRecord, CompactionSink};
 
-use super::EntryTree;
 use super::types::{CompactionEntry, EntryId, EntryKind};
+use crate::run_ledger::RunLedgerStore;
 
 /// A [`CompactionSink`] that persists every [`CompactionRecord`] a run
 /// produces into a session's entry tree as a durable
@@ -27,44 +32,64 @@ use super::types::{CompactionEntry, EntryId, EntryKind};
 /// non-system message slice, not an [`EntryId`] the entry tree understands.
 /// `persist` translates it by re-walking the ancestor chain of the current
 /// tip and counting only the entries
-/// [`EntryTree::build_context`] itself turns into messages
+/// [`project_chain`](super::project_chain) itself turns into messages
 /// ([`EntryKind::Message`] and [`EntryKind::Custom`] — the same filter
 /// `entry_to_message` applies internally), so the index lines up with what a
 /// harness compaction step actually operated on. A record whose index falls
 /// outside that count (for example, one produced from a transcript this
 /// session never saw) is skipped rather than persisted as a boundary that
-/// would corrupt [`EntryTree::build_context`].
+/// would corrupt the projected context.
 /// [`CompactionRecord::details`] key carrying the live index of a user
 /// message the harness pinned out of the folded range.
 const PINNED_USER_INDEX: &str = "pinned_user_index";
 
 /// [`CompactionEntry::details`] key carrying that message's [`EntryId`], read
-/// back by [`EntryTree::build_context`].
+/// back by [`project_chain`](super::project_chain).
 pub(crate) const PINNED_ENTRY_ID: &str = "pinned_entry_id";
 
-pub struct SessionCompactionSink<'a> {
-    tree: EntryTree<'a>,
+pub struct SessionCompactionSink {
+    ledger: Arc<dyn RunLedgerStore>,
+    session_id: String,
+    bridge: Blocking,
     tip: Mutex<Option<EntryId>>,
 }
 
-impl<'a> SessionCompactionSink<'a> {
+fn ledger_error(error: impl std::fmt::Display) -> TinyAgentsError {
+    TinyAgentsError::Storage(format!("compaction sink: {error}"))
+}
+
+impl SessionCompactionSink {
     /// Builds a sink anchored to `session_id`'s current head at construction
     /// time. The tip advances to each new compaction entry as
     /// [`Self::persist`] is called, so a run that compacts more than once
     /// keeps appending to the same branch instead of re-anchoring at the
     /// original head every time.
-    pub fn new(workspace_dir: &'a Path, session_id: impl Into<String>) -> Result<Self> {
-        let tree = EntryTree::new(workspace_dir, session_id);
-        let tip = tree.head()?;
+    ///
+    /// # Errors
+    ///
+    /// The bridge thread cannot start, or the ledger cannot read the head.
+    pub fn new(ledger: Arc<dyn RunLedgerStore>, session_id: impl Into<String>) -> Result<Self> {
+        let session_id = session_id.into();
+        let bridge = Blocking::new().map_err(ledger_error)?;
+        let tip = {
+            let ledger = Arc::clone(&ledger);
+            let session_id = session_id.clone();
+            bridge
+                .run(async move { ledger.entry_head(&session_id).await })
+                .map_err(ledger_error)?
+                .map_err(ledger_error)?
+        };
         Ok(Self {
-            tree,
+            ledger,
+            session_id,
+            bridge,
             tip: Mutex::new(tip),
         })
     }
 
-    /// The entry tree this sink writes to.
-    pub fn tree(&self) -> &EntryTree<'a> {
-        &self.tree
+    /// The session whose entry tree this sink writes to.
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// The current tip this sink will anchor its next compaction entry to.
@@ -73,7 +98,7 @@ impl<'a> SessionCompactionSink<'a> {
     }
 }
 
-impl CompactionSink for SessionCompactionSink<'_> {
+impl CompactionSink for SessionCompactionSink {
     fn persist(&self, record: &CompactionRecord) -> Result<()> {
         let mut tip_guard = self.tip.lock().expect("tip mutex poisoned");
         let Some(tip) = tip_guard.clone() else {
@@ -82,7 +107,15 @@ impl CompactionSink for SessionCompactionSink<'_> {
             return Ok(());
         };
 
-        let chain = self.tree.ancestor_chain(&tip)?;
+        let chain = {
+            let ledger = Arc::clone(&self.ledger);
+            let session_id = self.session_id.clone();
+            let tip = tip.clone();
+            self.bridge
+                .run(async move { ledger.entry_ancestor_chain(&session_id, &tip).await })
+                .map_err(ledger_error)?
+                .map_err(ledger_error)?
+        };
         let message_entry_ids: Vec<EntryId> = chain
             .iter()
             .filter(|entry| matches!(entry.kind, EntryKind::Message(_) | EntryKind::Custom(_)))
@@ -115,7 +148,15 @@ impl CompactionSink for SessionCompactionSink<'_> {
             usage: record.usage,
             details,
         });
-        let new_tip = self.tree.append(Some(&tip), entry)?;
+        let new_tip = {
+            let ledger = Arc::clone(&self.ledger);
+            let session_id = self.session_id.clone();
+            let parent = tip.clone();
+            self.bridge
+                .run(async move { ledger.entry_append(&session_id, Some(&parent), entry).await })
+                .map_err(ledger_error)?
+                .map_err(ledger_error)?
+        };
         *tip_guard = Some(new_tip);
         Ok(())
     }

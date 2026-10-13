@@ -5,6 +5,8 @@
 //! protection), C-SQLITE-CACHE (durability) and CACHE-9 (LRU recency without a
 //! linear scan).
 
+mod common;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -293,23 +295,23 @@ async fn cancelling_a_leader_releases_followers() {
     assert_eq!(flight.inflight_len(), 0);
 }
 
-// ── C-SQLITE-CACHE ───────────────────────────────────────────────────────────
+// ── C-DRIVER-CACHE ───────────────────────────────────────────────────────────
 
-#[cfg(feature = "sqlite")]
-mod sqlite_backend {
+mod driver_backend {
     use super::*;
     use tinyagents_harness::Result;
-    use tinyagents_harness::cache::SqliteResponseCache;
+    use tinyagents_harness::cache::DriverResponseCache;
+
+    use crate::common::storage;
 
     #[tokio::test]
-    async fn sqlite_cache_round_trips_and_expires() -> Result<()> {
-        let cache = SqliteResponseCache::in_memory()?;
+    async fn driver_cache_round_trips_and_expires() -> Result<()> {
+        let cache = DriverResponseCache::new(storage::docs(&storage::memory()));
         assert!(cache.get("k").await?.is_none());
 
         cache.put("k", ModelResponse::assistant("durable")).await?;
         let hit = cache.get("k").await?.expect("stored");
         assert_eq!(hit.text(), "durable");
-        assert_eq!(cache.stats().entries, 1);
 
         cache
             .put_with_ttl(
@@ -321,43 +323,39 @@ mod sqlite_backend {
         tokio::time::sleep(Duration::from_millis(40)).await;
         assert!(
             cache.get("short").await?.is_none(),
-            "an expired row must read as a miss"
+            "an expired entry must read as a miss"
         );
-        assert_eq!(
-            cache.stats().entries,
-            1,
-            "the expired row must be purged lazily on read"
-        );
+        assert_eq!(cache.get("k").await?.expect("untouched").text(), "durable");
         Ok(())
     }
 
     #[tokio::test]
-    async fn sqlite_cache_survives_a_dropped_handle() -> Result<()> {
+    async fn driver_cache_survives_a_dropped_handle() -> Result<()> {
         // Durability is the whole point: `InMemoryResponseCache` loses
         // everything when the value is dropped, so every restart pays the
         // provider bill again.
-        let dir = std::env::temp_dir().join(format!("tinyagents-cache-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("responses.sqlite3");
-        let _ = std::fs::remove_file(&path);
-
+        let dir = tempfile::tempdir().unwrap();
         {
-            let cache = SqliteResponseCache::open(&path)?;
+            let cache = DriverResponseCache::new(storage::docs(&storage::sqlite(
+                dir.path(),
+                "responses.sqlite",
+            )));
             cache
                 .put("k", ModelResponse::assistant("persisted"))
                 .await?;
         }
-        let reopened = SqliteResponseCache::open(&path)?;
+        let reopened = DriverResponseCache::new(storage::docs(&storage::sqlite(
+            dir.path(),
+            "responses.sqlite",
+        )));
         let hit = reopened.get("k").await?.expect("survives a reopen");
         assert_eq!(hit.text(), "persisted");
-
-        let _ = std::fs::remove_file(&path);
         Ok(())
     }
 
     #[tokio::test]
-    async fn sqlite_namespaces_do_not_cross_serve_and_clear_independently() -> Result<()> {
-        let base = SqliteResponseCache::in_memory()?;
+    async fn driver_namespaces_do_not_cross_serve_and_clear_independently() -> Result<()> {
+        let base = DriverResponseCache::new(storage::docs(&storage::memory()));
         let tenant_a = base.with_namespace("tenant-a");
         let tenant_b = base.with_namespace("tenant-b");
 

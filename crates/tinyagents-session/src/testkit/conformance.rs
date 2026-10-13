@@ -2,15 +2,12 @@
 //!
 //! Two suites, one per storage seam this crate owns:
 //!
-//! * [`run_ledger_conformance`] exercises the run-ledger's free-function API
-//!   (append/read, parent-run lineage, idempotent re-import of the same run
-//!   id, event append + ordered listing, and a concurrent lease-claim race)
-//!   against a workspace directory. The ledger has exactly one backend today
-//!   ([`crate::store`]'s SQLite-backed connection cache, keyed by workspace
-//!   path) — there is no second implementation to parameterize this suite
-//!   over — so it is run here against two *independent* workspaces to pin
-//!   that the contract holds without any shared, path-keyed cache state
-//!   leaking between them.
+//! * [`run_ledger_conformance`] exercises any
+//!   [`RunLedgerStore`] (append/read, parent-run lineage, idempotent
+//!   re-import of the same run id, event append + ordered listing, and the
+//!   concurrent lease-claim and team-task-claim races). Every backend a host
+//!   opens goes through the one driver implementation, so this suite is run
+//!   here against the memory and SQLite drivers.
 //! * [`transcript_history_conformance`] exercises
 //!   [`crate::transcript::TranscriptHistory`]/[`crate::transcript::TranscriptRead`],
 //!   which — unlike the ledger — genuinely has two independent
@@ -28,16 +25,13 @@
 //! Each function panics with a descriptive message on the first violation, so
 //! call it from a `#[test]`.
 
-use std::path::Path;
-
 use serde_json::json;
 
 use crate::port::SessionStoreProvider;
 use crate::run_ledger::{
-    AgentRunKind, AgentRunListRequest, AgentRunStatus, AgentRunUpsert, RunEventAppend,
-    RunEventListRequest, WorkflowLeaseClaim, WorkflowRunStatus, WorkflowRunUpsert,
-    append_run_event, get_agent_run, list_agent_runs, list_recent_run_events,
-    try_claim_workflow_run, upsert_agent_run, upsert_workflow_run,
+    AgentRunKind, AgentRunListRequest, AgentRunStatus, AgentRunUpsert, AgentTeamTaskStatus,
+    AgentTeamTaskUpsert, ClaimOutcome, RunEventAppend, RunEventListRequest, RunLedgerStore,
+    WorkflowLeaseClaim, WorkflowRunStatus, WorkflowRunUpsert,
 };
 use crate::transcript::{
     SessionRef, TranscriptHistory, TranscriptMessage, TranscriptMeta, TranscriptPartial,
@@ -65,52 +59,64 @@ fn contract_run(id: &str, parent: Option<&str>) -> AgentRunUpsert {
     }
 }
 
-/// Runs the run-ledger contract against the SQLite-backed store rooted at
-/// `workspace_dir`.
+/// Runs the run-ledger contract against any [`RunLedgerStore`].
 ///
 /// Covers append/read (`upsert_agent_run` + `get_agent_run`), parent-run
 /// lineage (`list_agent_runs` filtered by `parent_run_id`), idempotent
 /// re-import (re-upserting the same run id updates the row in place rather
 /// than duplicating it), event append + ordered listing
-/// (`append_run_event` + `list_recent_run_events`), and a concurrent
-/// lease-claim race (`try_claim_workflow_run` from two racing threads,
-/// exactly one of which must win).
-pub fn run_ledger_conformance(workspace_dir: &Path) {
+/// (`append_run_event` + `list_recent_run_events`), a concurrent lease-claim
+/// race (`try_claim_workflow_run` from racing tasks, exactly one of which
+/// must win), and the atomic team-task claim race (exactly one member wins a
+/// contested task).
+///
+/// The ledger is a port: certify a backend by passing a fresh, empty handle.
+pub async fn run_ledger_conformance(ledger: std::sync::Arc<dyn RunLedgerStore>) {
     // ── Append / read ────────────────────────────────────────────────
-    let created = upsert_agent_run(workspace_dir, contract_run("run-a", None))
+    let created = ledger
+        .upsert_agent_run(contract_run("run-a", None))
+        .await
         .expect("upsert run-a succeeds");
     assert_eq!(created.id, "run-a", "upsert returns the row it just wrote");
     assert_eq!(created.status, AgentRunStatus::Running);
 
-    let fetched = get_agent_run(workspace_dir, "run-a")
+    let fetched = ledger
+        .get_agent_run("run-a")
+        .await
         .expect("get run-a succeeds")
         .expect("run-a exists after being upserted");
     assert_eq!(fetched.id, "run-a");
 
     assert!(
-        get_agent_run(workspace_dir, "does-not-exist")
+        ledger
+            .get_agent_run("does-not-exist")
+            .await
             .expect("get on a missing id succeeds")
             .is_none(),
         "a missing run id must resolve to None, not an error"
     );
 
     // ── Lineage ──────────────────────────────────────────────────────
-    upsert_agent_run(workspace_dir, contract_run("run-b", Some("run-a")))
+    ledger
+        .upsert_agent_run(contract_run("run-b", Some("run-a")))
+        .await
         .expect("upsert run-b succeeds");
-    upsert_agent_run(workspace_dir, contract_run("run-c", None)).expect("upsert run-c succeeds");
-    let children = list_agent_runs(
-        workspace_dir,
-        &AgentRunListRequest {
+    ledger
+        .upsert_agent_run(contract_run("run-c", None))
+        .await
+        .expect("upsert run-c succeeds");
+    let children = ledger
+        .list_agent_runs(&AgentRunListRequest {
             parent_run_id: Some("run-a".to_string()),
             ..AgentRunListRequest::default()
-        },
-    )
-    .expect("list children of run-a succeeds");
+        })
+        .await
+        .expect("list children of run-a succeeds");
     assert_eq!(
         children.runs.len(),
         1,
         "the parent_run_id filter must return exactly the lineage under run-a, \
-         not every run in the workspace"
+         not every run in the scope"
     );
     assert_eq!(children.runs[0].id, "run-b");
 
@@ -121,15 +127,22 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
     let mut resumed = contract_run("run-a", None);
     resumed.status = AgentRunStatus::Completed;
     resumed.summary = Some("finished".to_string());
-    upsert_agent_run(workspace_dir, resumed).expect("re-upsert run-a succeeds");
+    ledger
+        .upsert_agent_run(resumed)
+        .await
+        .expect("re-upsert run-a succeeds");
 
-    let after = get_agent_run(workspace_dir, "run-a")
+    let after = ledger
+        .get_agent_run("run-a")
+        .await
         .expect("get run-a succeeds")
         .expect("run-a still exists");
     assert_eq!(after.status, AgentRunStatus::Completed);
     assert_eq!(after.summary.as_deref(), Some("finished"));
 
-    let all = list_agent_runs(workspace_dir, &AgentRunListRequest::default())
+    let all = ledger
+        .list_agent_runs(&AgentRunListRequest::default())
+        .await
         .expect("list all runs succeeds");
     assert_eq!(
         all.runs.iter().filter(|run| run.id == "run-a").count(),
@@ -139,25 +152,23 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
 
     // ── Event append + ordered listing ──────────────────────────────
     for (event_type, n) in [("step", 1), ("step", 2), ("finished", 3)] {
-        append_run_event(
-            workspace_dir,
-            RunEventAppend {
+        ledger
+            .append_run_event(RunEventAppend {
                 run_id: "run-a".to_string(),
                 event_type: event_type.to_string(),
                 payload: json!({ "n": n }),
-            },
-        )
-        .expect("append_run_event succeeds");
+            })
+            .await
+            .expect("append_run_event succeeds");
     }
-    let events = list_recent_run_events(
-        workspace_dir,
-        &RunEventListRequest {
+    let events = ledger
+        .list_recent_run_events(&RunEventListRequest {
             run_id: "run-a".to_string(),
             after_sequence: None,
             limit: None,
-        },
-    )
-    .expect("list_recent_run_events succeeds");
+        })
+        .await
+        .expect("list_recent_run_events succeeds");
     assert_eq!(events.events.len(), 3, "every appended event is listed");
     let sequence_ns: Vec<i64> = events
         .events
@@ -169,18 +180,22 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
         vec![1, 2, 3],
         "events list back in append (sequence) order"
     );
+    assert_eq!(
+        events.events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "sequences are dense and start at one"
+    );
 
     // Polling with an `after_sequence` cursor returns only what is newer.
     let cursor = events.events[0].sequence;
-    let after = list_recent_run_events(
-        workspace_dir,
-        &RunEventListRequest {
+    let after = ledger
+        .list_recent_run_events(&RunEventListRequest {
             run_id: "run-a".to_string(),
             after_sequence: Some(cursor),
             limit: None,
-        },
-    )
-    .expect("cursor-bounded list succeeds");
+        })
+        .await
+        .expect("cursor-bounded list succeeds");
     assert_eq!(
         after.events.len(),
         2,
@@ -188,11 +203,10 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
     );
 
     // ── Concurrency ──────────────────────────────────────────────────
-    // A workflow lease is the ledger's one compare-and-swap primitive: two
-    // concurrent claims for the same id must serialize so exactly one wins.
-    upsert_workflow_run(
-        workspace_dir,
-        WorkflowRunUpsert {
+    // A workflow lease is the ledger's compare-and-swap primitive: concurrent
+    // claims for the same id must serialize so exactly one wins.
+    ledger
+        .upsert_workflow_run(WorkflowRunUpsert {
             id: "workflow-contract".to_string(),
             definition_id: "contract".to_string(),
             parent_thread_id: None,
@@ -203,36 +217,74 @@ pub fn run_ledger_conformance(workspace_dir: &Path) {
             summary: None,
             started_at: None,
             completed_at: None,
-        },
-    )
-    .expect("seed workflow run succeeds");
+        })
+        .await
+        .expect("seed workflow run succeeds");
 
-    let workspace = workspace_dir.to_path_buf();
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let mut workers = Vec::new();
-    for owner in ["first", "second"] {
-        let workspace = workspace.clone();
-        let barrier = barrier.clone();
-        workers.push(std::thread::spawn(move || {
-            barrier.wait();
-            try_claim_workflow_run(
-                &workspace,
-                "workflow-contract",
-                owner,
-                chrono::Duration::minutes(1),
-            )
-            .expect("try_claim_workflow_run does not error")
-        }));
+    let mut claimers = tokio::task::JoinSet::new();
+    for owner in ["first", "second", "third"] {
+        let ledger = ledger.clone();
+        claimers.spawn(async move {
+            ledger
+                .try_claim_workflow_run("workflow-contract", owner, chrono::Duration::minutes(1))
+                .await
+                .expect("try_claim_workflow_run does not error")
+        });
     }
-    let claims: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
-    let acquired = claims
-        .iter()
-        .filter(|claim| matches!(claim, WorkflowLeaseClaim::Acquired(_)))
-        .count();
+    let mut acquired = 0;
+    while let Some(claim) = claimers.join_next().await {
+        if matches!(claim.expect("claim task"), WorkflowLeaseClaim::Acquired(_)) {
+            acquired += 1;
+        }
+    }
     assert_eq!(
         acquired, 1,
-        "exactly one of two concurrent claims for the same lease must win"
+        "exactly one of the concurrent claims for the same lease must win"
     );
+
+    // Likewise a contested team task goes to exactly one member.
+    ledger
+        .upsert_agent_team_task(AgentTeamTaskUpsert {
+            id: "contract-task".to_string(),
+            team_id: "contract-team".to_string(),
+            title: "contested".to_string(),
+            objective: None,
+            status: AgentTeamTaskStatus::Todo,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .expect("seed team task succeeds");
+    let mut members = tokio::task::JoinSet::new();
+    for n in 0..4 {
+        let ledger = ledger.clone();
+        members.spawn(async move {
+            ledger
+                .claim_agent_team_task(
+                    "contract-team",
+                    "contract-task",
+                    &format!("member-{n}"),
+                    &format!("token-{n}"),
+                )
+                .await
+                .expect("claim_agent_team_task does not error")
+        });
+    }
+    let mut claimed = 0;
+    while let Some(outcome) = members.join_next().await {
+        match outcome.expect("member task") {
+            ClaimOutcome::Claimed(_) => claimed += 1,
+            ClaimOutcome::AlreadyClaimed => {}
+            other => panic!("unexpected claim outcome {other:?}"),
+        }
+    }
+    assert_eq!(claimed, 1, "exactly one member wins a contested task");
 }
 
 fn contract_message(role: &str, content: &str) -> TranscriptMessage {

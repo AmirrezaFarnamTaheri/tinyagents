@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::transcript::{self, CompactionMarker, DisplayMessage, DisplayRecord};
 
-use super::TOOL_RESULT_FAILURES_METADATA_KEY;
+use super::{SpawnCallLookup, TOOL_RESULT_FAILURES_METADATA_KEY};
 
 use super::prompt_tools::{self, CallRegistry, PromptToolResult};
 use super::resolve;
@@ -47,11 +47,25 @@ pub fn project_thread_scoped(
 ) -> Option<ProjectedTranscript> {
     let (root_paths, sub_paths) =
         resolve::resolve_files_scoped(workspace_dir, thread_id, agent_id)?;
+    Some(project_from_files(thread_id, &root_paths, &sub_paths, None))
+}
+
+/// [`project_thread_scoped`] with a [`SpawnCallLookup`], so a sub-agent is
+/// placed under the exact tool call that spawned it when the run ledger knows
+/// which one that was, instead of by the timestamp/target heuristic.
+pub fn project_thread_scoped_with(
+    workspace_dir: &Path,
+    thread_id: &str,
+    agent_id: Option<&str>,
+    lookup: &dyn SpawnCallLookup,
+) -> Option<ProjectedTranscript> {
+    let (root_paths, sub_paths) =
+        resolve::resolve_files_scoped(workspace_dir, thread_id, agent_id)?;
     Some(project_from_files(
         thread_id,
         &root_paths,
         &sub_paths,
-        Some(workspace_dir),
+        Some(lookup),
     ))
 }
 
@@ -87,7 +101,7 @@ pub fn project_from_files(
     thread_id: &str,
     root_paths: &[PathBuf],
     sub_paths: &[PathBuf],
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) -> ProjectedTranscript {
     tracing::debug!(
         "{LOG_PREFIX} projecting thread={thread_id} roots={} subagent_files={}",
@@ -156,7 +170,7 @@ pub fn project_from_files(
         sub_paths,
         &subagents::turn_segments(&records),
         root_thread_id.as_deref(),
-        workspace_dir,
+        lookup,
     );
     tracing::debug!(
         "{LOG_PREFIX} projected thread={thread_id} top_level_items={top_level} subagents={}",

@@ -13,18 +13,21 @@
 //!   bridge tool the agent loop advertises and answers.
 //! - [`EmbeddingToolRanker`] — a semantic [`tinytools::ToolRanker`] over any
 //!   [`tinyinference_embeddings::EmbeddingModel`], with an in-memory and
-//!   optional host-supplied or on-disk embedding cache.
+//!   optional host-supplied embedding cache.
 //! - [EmbeddingCache] — async persistence for rebuildable catalogue vectors;
 //!   the host binds its namespace and the ranker keeps embedding spaces separate.
+//!   [`DriverEmbeddingCache`] stores them on any `tinystoragedrivers` backend.
 //! - [`render_manifest`] — the budgeted listing inside `tool_search`'s
 //!   description.
 
 mod bridge;
+mod embedding_cache;
 mod embedding_ranker;
 mod manifest;
 mod types;
 
 pub use bridge::{SearchAnswer, TOOL_SEARCH_NAME, answer_tool_search, bridge_schemas};
+pub use embedding_cache::DriverEmbeddingCache;
 pub use embedding_ranker::{EmbeddingCache, EmbeddingToolRanker};
 // The BM25 arithmetic lives in `tinytools::rank` now, so a host ranks with the
 // same index the bridge does; the old paths keep resolving.

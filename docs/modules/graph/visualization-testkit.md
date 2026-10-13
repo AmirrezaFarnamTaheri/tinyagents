@@ -93,8 +93,8 @@ durable backing so the same store can be closed and reconstructed. Wire them
 across every backend in one test file:
 
 ```rust
-use tinyagents_graph::checkpoint::{FileCheckpointer, InMemoryCheckpointer};
-use tinyagents_tasks::{InMemoryTaskStore, JsonlTaskStore};
+use tinyagents_graph::checkpoint::{DriverCheckpointer, InMemoryCheckpointer};
+use tinyagents_tasks::InMemoryTaskStore;
 use tinyagents_graph::testkit::conformance::{
     checkpointer_concurrent_contract, taskstore_concurrent_contract, taskstore_replay_contract,
 };
@@ -110,15 +110,14 @@ fn task_store_handles_concurrent_writes() {
 }
 
 #[test]
-fn jsonl_task_store_replays_after_restart() {
-    let path = std::env::temp_dir().join("conformance-replay.jsonl");
-    let _ = std::fs::remove_file(&path);
-    taskstore_replay_contract(|| JsonlTaskStore::open(&path).unwrap());
-    let _ = std::fs::remove_file(&path);
+fn driver_task_store_replays_after_restart() {
+    // `open` returns a `DriverTaskStore` over the same SQLite file each call.
+    let dir = tempfile::tempdir().unwrap();
+    taskstore_replay_contract(|| open_driver_task_store(dir.path()));
 }
 ```
 
-Only durable backends (`FileCheckpointer`, `JsonlTaskStore`, SQLite) can pass
+Only durable backends (`DriverCheckpointer`, `DriverTaskStore` on a durable driver) can pass
 the replay contract — an in-memory store drops state on reopen, so run it only
 against the durable ones.
 

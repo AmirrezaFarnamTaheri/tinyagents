@@ -1,8 +1,7 @@
 //! Unit tests for graph orchestration: tool argument parsing and outcomes for
 //! `spawn`/`await`/`cancel`/`kill`/`status`/`list`/`timeout`/`race`/`yield`/
 //! `steer`, `TaskStore` transition validation and filtering for both
-//! [`InMemoryTaskStore`] and [`JsonlTaskStore`] (including log replay and
-//! history), `reconcile_orphaned_tasks` sweep semantics, and
+//! [`InMemoryTaskStore`] (the durable [`DriverTaskStore`] has its own tests), `reconcile_orphaned_tasks` sweep semantics, and
 //! `DetachedTaskRegistry` ownership/steering/cancellation behavior.
 
 use std::sync::Arc;
@@ -375,40 +374,6 @@ async fn release_cancellation_drops_the_token_without_cancelling_it() {
     let cancelled = registry.cancel_trusted(&task_id).unwrap();
     assert_eq!(cancelled.metadata, "m");
     join.abort();
-}
-
-fn unique_log_path(tag: &str) -> std::path::PathBuf {
-    // Deterministic-per-test path in the system temp dir (no clock/random ids).
-    std::env::temp_dir().join(format!("tinyagents-taskstore-{tag}.jsonl"))
-}
-
-#[test]
-fn jsonl_store_survives_restart_and_keeps_history() {
-    let path = unique_log_path("restart");
-    let _ = std::fs::remove_file(&path);
-    let task_id = TaskId::new("task-a");
-
-    {
-        let store = JsonlTaskStore::open(&path).unwrap();
-        store.insert(graph_spec(task_id.as_str())).unwrap();
-        store.mark_running(&task_id).unwrap();
-        store
-            .complete(&task_id, OrchestrationTaskResult::text("done"))
-            .unwrap();
-        // Full lifecycle history is retained (pending → running → completed).
-        let history = store.history(&task_id);
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[0].status, OrchestrationTaskStatus::Pending);
-        assert_eq!(history[2].status, OrchestrationTaskStatus::Completed);
-    }
-
-    // Re-open: state and history are reconstructed from the append log.
-    let reopened = JsonlTaskStore::open(&path).unwrap();
-    let record = reopened.get(&task_id).expect("task survives restart");
-    assert_eq!(record.status, OrchestrationTaskStatus::Completed);
-    assert_eq!(reopened.history(&task_id).len(), 3);
-
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -868,39 +833,6 @@ async fn steer_tool_redirect_without_payload_is_rejected() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jsonl_store_persists_inside_multi_thread_runtime() {
-    // Exercises the `block_in_place` path: persist runs on a tokio worker.
-    let path = unique_log_path("multi-thread-runtime");
-    let _ = std::fs::remove_file(&path);
-    let task_id = TaskId::new("task-mt");
-
-    let store = JsonlTaskStore::open(&path).unwrap();
-    store.insert(graph_spec(task_id.as_str())).unwrap();
-    store.mark_running(&task_id).unwrap();
-    store
-        .complete(&task_id, OrchestrationTaskResult::text("done"))
-        .unwrap();
-
-    assert_eq!(store.history(&task_id).len(), 3);
-    let _ = std::fs::remove_file(&path);
-}
-
-#[tokio::test]
-async fn jsonl_store_persists_inside_current_thread_runtime() {
-    // A current-thread runtime must not panic (block_in_place is skipped).
-    let path = unique_log_path("current-thread-runtime");
-    let _ = std::fs::remove_file(&path);
-    let task_id = TaskId::new("task-ct");
-
-    let store = JsonlTaskStore::open(&path).unwrap();
-    store.insert(graph_spec(task_id.as_str())).unwrap();
-    store.mark_running(&task_id).unwrap();
-
-    assert_eq!(store.history(&task_id).len(), 2);
-    let _ = std::fs::remove_file(&path);
-}
-
 // --- TaskStoreRegistry ---------------------------------------------------
 
 #[test]
@@ -998,35 +930,6 @@ fn registry_debug_reports_open_store_count() {
 fn registry_lock_error_displays_the_poison_detail() {
     let err = TaskStoreRegistryError::Lock("poisoned".to_string());
     assert!(err.to_string().contains("poisoned"));
-}
-
-#[test]
-fn jsonl_fallback_opens_a_durable_store_and_replays_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("nested").join("tasks.jsonl");
-
-    let store = open_jsonl_task_store_or_memory(&path);
-    store.insert(graph_spec("t1")).expect("insert");
-    assert!(path.exists(), "durable store must create its log");
-
-    // Reopening replays the log rather than starting empty.
-    let reopened = open_jsonl_task_store_or_memory(&path);
-    assert_eq!(reopened.list(OrchestrationTaskFilter::default()).len(), 1);
-}
-
-#[test]
-fn jsonl_fallback_degrades_to_memory_when_the_log_is_unreadable() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    // A directory where the log file should be: `JsonlTaskStore::open` cannot
-    // use it, so the caller must still get a working store.
-    let path = dir.path().join("tasks.jsonl");
-    std::fs::create_dir(&path).expect("create dir in the log's place");
-
-    let store = open_jsonl_task_store_or_memory(&path);
-    store
-        .insert(graph_spec("t1"))
-        .expect("memory store still accepts work");
-    assert_eq!(store.list(OrchestrationTaskFilter::default()).len(), 1);
 }
 
 // --- reconcile_orphaned_tasks -------------------------------------------

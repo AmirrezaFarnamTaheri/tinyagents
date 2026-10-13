@@ -33,7 +33,7 @@ tests remain valuable but do not close an E2E gap.
 
 | Feature | Test to add |
 | --- | --- |
-| Durable reviewed delegation | `e2e_graph_delegation.rs` with `FileCheckpointer`, approval interrupt/resume, revision, and denial. |
+| Durable reviewed delegation | `e2e_graph_delegation.rs` with `DriverCheckpointer`, approval interrupt/resume, revision, and denial. |
 | Typed graph channels/barriers | `e2e_graph_channels.rs` for aggregate, barrier, ephemeral, conflict, events, and checkpoints. |
 | Workspace dispatch claims | A mixed tool-side-effect batch proving permitted parallelism, writer serialization, and unsafe-path rejection. |
 | Goal tools in a model loop | A scripted model invoking registered goal tools and an over-budget preflight block. |
