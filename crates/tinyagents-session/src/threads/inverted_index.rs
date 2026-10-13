@@ -173,8 +173,9 @@ impl InvertedIndex {
         self.by_message.insert(key, doc_id);
     }
 
-    /// Drop every document belonging to a thread. Used by
-    /// `delete_thread` and during full purge.
+    /// Drop every document belonging to a thread. Only the incremental index
+    /// tests use it now that search rebuilds the index per query.
+    #[allow(dead_code)]
     pub fn remove_thread(&mut self, thread_id: &str) {
         let to_remove: Vec<u32> = self
             .by_message
@@ -201,6 +202,7 @@ impl InvertedIndex {
         self.role_pool.clear();
     }
 
+    #[allow(dead_code)]
     fn remove_doc(&mut self, doc_id: u32) {
         let idx = doc_id as usize;
         let Some(entry) = self.docs.get_mut(idx).and_then(|slot| slot.take()) else {
