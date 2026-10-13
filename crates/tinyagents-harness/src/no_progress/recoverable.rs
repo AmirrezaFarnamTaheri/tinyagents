@@ -126,8 +126,12 @@ impl RecoveryDecision {
 pub trait RecoveryPolicy: Send + Sync {
     /// `tool` failed with `error`; `body_level_failure` marks a failure
     /// reported inside a successful result body.
-    fn classify(&self, tool: &str, error: &str, body_level_failure: bool)
-    -> Option<RecoveryDecision>;
+    fn classify(
+        &self,
+        tool: &str,
+        error: &str,
+        body_level_failure: bool,
+    ) -> Option<RecoveryDecision>;
 }
 
 /// Retries allowed for a tool rejecting its own arguments against its schema:

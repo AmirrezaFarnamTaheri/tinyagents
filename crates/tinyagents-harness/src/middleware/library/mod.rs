@@ -61,6 +61,7 @@ use tinytools::ToolResult;
 mod arg_recovery;
 mod call_effect;
 mod loop_guards;
+mod output_cap;
 mod repeat_loop_stop;
 mod research_budget;
 mod shell_turn_budget;
@@ -94,6 +95,9 @@ pub use call_effect::{
 pub use loop_guards::{
     LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
     RECOVERABLE_REPEAT_FAILURE_THRESHOLD, is_repeat_call_exempt,
+};
+pub use output_cap::{
+    OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages, should_compact,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use research_budget::{
