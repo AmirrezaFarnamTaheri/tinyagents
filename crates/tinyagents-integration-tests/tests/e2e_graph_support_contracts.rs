@@ -12,6 +12,8 @@ use tinyagents_graph::testkit::{
 };
 use tinyagents_graph::*;
 use tinyagents_harness::ids::ExecutionStatus;
+mod common;
+use common::storage;
 use tinyagents_harness::*;
 use tinyagents_registry::*;
 use tinyinference_llm::usage::UsageTotals;
@@ -28,10 +30,9 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 }
 
 #[tokio::test]
-async fn file_checkpointer_persists_lists_copies_prunes_and_deletes_threads() {
-    let dir = temp_path("file-checkpointer");
-    let checkpointer = std::sync::Arc::new(FileCheckpointer::<i32>::new(&dir));
-    assert_eq!(checkpointer.base_dir(), dir.as_path());
+async fn driver_checkpointer_persists_lists_copies_prunes_and_deletes_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpointer = std::sync::Arc::new(storage::checkpointer::<i32>(dir.path()));
 
     let graph = GraphBuilder::<i32, i32>::overwrite()
         .add_node("a", |s, _c: NodeContext| async move {
@@ -112,16 +113,14 @@ async fn file_checkpointer_persists_lists_copies_prunes_and_deletes_threads() {
         .await
         .expect("delete thread");
     assert!(checkpointer.list("copy-target").await.unwrap().is_empty());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn file_checkpointer_state_history_walks_lineage_newest_first() {
-    // Exercises FileCheckpointer's single-pass `state_history` override: the
-    // whole thread file is read once and the parent lineage walked in memory,
-    // returning snapshots newest-first with the lineage spine intact.
-    let dir = temp_path("file-checkpointer-history");
-    let checkpointer = std::sync::Arc::new(FileCheckpointer::<i32>::new(&dir));
+async fn driver_checkpointer_state_history_walks_lineage_newest_first() {
+    // Walks the parent lineage and returns snapshots newest-first with the
+    // lineage spine intact.
+    let dir = tempfile::tempdir().unwrap();
+    let checkpointer = std::sync::Arc::new(storage::checkpointer::<i32>(dir.path()));
     let graph = GraphBuilder::<i32, i32>::overwrite()
         .add_node("a", |s, _c: NodeContext| async move {
             Ok(NodeResult::Update(s + 1))
@@ -167,7 +166,6 @@ async fn file_checkpointer_state_history_walks_lineage_newest_first() {
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].values, 2);
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

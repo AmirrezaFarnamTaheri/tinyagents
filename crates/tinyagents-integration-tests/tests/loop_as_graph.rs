@@ -20,7 +20,10 @@ use serde_json::json;
 use tinyagents_graph::agent_loop::{
     AgentLoopGraphExt, GraphLoopDriver, LoopRuntime, LoopState, compile_loop, node,
 };
-use tinyagents_graph::{FileCheckpointer, InMemoryCheckpointer};
+use tinyagents_graph::InMemoryCheckpointer;
+
+mod common;
+use common::storage;
 use tinyagents_harness::TinyAgentsError;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::{AgentHarness, LoopExecution, RunPolicy};
@@ -448,9 +451,9 @@ async fn checkpoint_resume_across_interrupt_in_memory() {
 }
 
 #[tokio::test]
-async fn checkpoint_resume_across_interrupt_file() {
+async fn checkpoint_resume_across_interrupt_sqlite() {
     let dir = tempdir();
-    checkpoint_resume_with(Arc::new(FileCheckpointer::new(dir.path()))).await;
+    checkpoint_resume_with(Arc::new(storage::checkpointer(dir.path()))).await;
 }
 
 /// Minimal temp-dir helper (avoids pulling in the `tempfile` crate just for
