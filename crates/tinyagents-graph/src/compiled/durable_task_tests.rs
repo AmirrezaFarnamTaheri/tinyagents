@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::builder::{GraphBuilder, NodeContext};
-use crate::checkpoint::{Checkpointer, FileCheckpointer, InMemoryCheckpointer};
+use crate::checkpoint::{Checkpointer, InMemoryCheckpointer};
 use crate::command::{Command, Interrupt, NodeResult};
 use serde_json::json;
 use std::sync::Arc;
