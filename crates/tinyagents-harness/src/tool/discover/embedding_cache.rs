@@ -28,7 +28,7 @@ use tokio::sync::OnceCell;
 
 use super::EmbeddingCache;
 use crate::driver_ids::hashed_id;
-use crate::error::{Result, TinyAgentsError};
+use crate::error::Result;
 use crate::store::map_driver_error as map_error;
 
 /// Document ids fetched per concurrent wave when loading.
@@ -148,7 +148,3 @@ impl EmbeddingCache for DriverEmbeddingCache {
 #[cfg(test)]
 #[path = "embedding_cache_tests.rs"]
 mod tests;
-
-// Keep the error type referenced for docs.
-#[allow(dead_code)]
-type _Unused = TinyAgentsError;
