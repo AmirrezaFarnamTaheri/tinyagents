@@ -91,8 +91,8 @@ impl<Ctx: Send + Sync + 'static> Middleware<(), Ctx> for ResponseShapeMiddleware
             // switch validation off, and `Auto` may resolve to a synthetic tool
             // call whose arguments bypass the text validator, so those formats
             // keep the native schema.
-            let keeps_validation = shape.validator.is_none()
-                || matches!(format, ResponseFormat::JsonSchema { .. });
+            let keeps_validation =
+                shape.validator.is_none() || matches!(format, ResponseFormat::JsonSchema { .. });
             if keeps_validation {
                 request.response_format = Some(format.clone());
             }

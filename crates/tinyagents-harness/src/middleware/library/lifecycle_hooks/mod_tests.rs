@@ -3,11 +3,11 @@
 use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::middleware::Middleware;
+use crate::middleware::library::BudgetTracker;
 use serde_json::json;
+use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelRequest;
 use tinyinference_llm::tool::ToolCall;
-use crate::middleware::library::BudgetTracker;
-use tinyinference_llm::message::Message;
 
 struct Pack(Option<&'static str>);
 

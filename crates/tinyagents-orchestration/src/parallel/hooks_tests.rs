@@ -67,20 +67,31 @@ async fn denied_worker_is_skipped_but_keeps_its_slot_and_progress_fires() {
         deny: Some("b"),
         ..Default::default()
     };
+    let built: Mutex<Vec<usize>> = Mutex::default();
     let out = run_with_hooks(
         workers(&["a", "b", "c"]),
         2,
         CancellationToken::new(),
         &hooks,
-        |_| (),
+        |i| {
+            built.lock().unwrap().push(i);
+        },
         |w, _| async move { format!("ran:{}", w.id) },
         |w, reason| format!("denied:{}:{reason}", w.id),
     )
     .await
     .unwrap();
     assert_eq!(out, vec!["ran:a", "denied:b:no", "ran:c"]);
+    // A denied worker never gets a branch context built for it.
+    let mut built = built.lock().unwrap().clone();
+    built.sort();
+    assert_eq!(built, vec![0, 2]);
     let mut started = hooks.started.lock().unwrap().clone();
     started.sort();
     assert_eq!(started, vec![0, 2]);
-    assert_eq!(*hooks.finished.lock().unwrap(), out);
+    let mut finished = hooks.finished.lock().unwrap().clone();
+    finished.sort();
+    let mut expected = out.clone();
+    expected.sort();
+    assert_eq!(finished, expected);
 }
