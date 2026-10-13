@@ -29,6 +29,9 @@
 
 mod types;
 
+pub mod compaction_log;
+
+pub use compaction_log::log_compacted;
 pub use types::*;
 // EventSinkInner is pub(crate) so bring it into scope explicitly for impls
 // below; it is not re-exported by `pub use types::*`.

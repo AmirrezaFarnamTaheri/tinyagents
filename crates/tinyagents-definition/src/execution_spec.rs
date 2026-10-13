@@ -71,6 +71,24 @@ pub enum SandboxMode {
     Sandboxed,
 }
 
+/// The tools through which an agent spawns sub-agents of its own choosing.
+/// A named scope that lists none of them delegates only to what its host
+/// declared, never to an inherited roster.
+pub const SPAWN_TOOL_NAMES: &[&str] = &[
+    "spawn_subagent",
+    "spawn_async_subagent",
+    "spawn_parallel_agents",
+    "spawn_worker_thread",
+];
+
+impl ToolScope {
+    /// Whether this is a named scope that lists one of [`SPAWN_TOOL_NAMES`].
+    pub fn names_a_spawn_tool(&self) -> bool {
+        matches!(self, ToolScope::Named(names)
+            if names.iter().any(|name| SPAWN_TOOL_NAMES.contains(&name.as_str())))
+    }
+}
+
 impl<'de> Deserialize<'de> for ModelSpec {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]

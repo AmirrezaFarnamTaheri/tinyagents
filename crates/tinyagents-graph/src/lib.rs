@@ -78,9 +78,9 @@ pub use delegation::{
     run_delegation_durable, run_or_resume_delegation,
 };
 pub use export::{
-    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology, NodeInfo,
-    NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo, from_json, to_json,
-    to_mermaid,
+    ChannelInfo, ConditionalEdgeInfo, EdgeInfo, GraphPolicySummary, GraphTopology,
+    GraphTopologyReport, NodeInfo, NodePolicySummary, RouteInfo, ValidationReport, WaitingEdgeInfo,
+    from_json, to_json, to_mermaid,
 };
 pub use goals::store as goal_store;
 pub use goals::{
@@ -92,8 +92,8 @@ pub use goals::{
 pub use observability::{
     GraphEventJournal, GraphHealthSummary, GraphLangfuseExporter, GraphLatencyMetrics,
     GraphNodeHealth, GraphNodeLatency, GraphObservation, GraphStatusStore, GraphStepLatency,
-    InMemoryGraphEventJournal, InMemoryGraphStatusStore, JournalGraphSink, SpanMetadataFn,
-    StoreGraphEventJournal, build_graph_langfuse_batch,
+    GraphTracingSink, InMemoryGraphEventJournal, InMemoryGraphStatusStore, JournalGraphSink,
+    SpanMetadataFn, StoreGraphEventJournal, build_graph_langfuse_batch,
 };
 pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,

@@ -42,9 +42,11 @@
 //! caller reading the journal right after the run returns sees a complete log.
 
 mod langfuse;
+mod tracing_sink;
 mod types;
 
 pub use langfuse::{GraphLangfuseExporter, SpanMetadataFn, build_graph_langfuse_batch};
+pub use tracing_sink::GraphTracingSink;
 pub use types::*;
 
 use std::collections::{HashMap, VecDeque};

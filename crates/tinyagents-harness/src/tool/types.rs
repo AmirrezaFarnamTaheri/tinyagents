@@ -62,6 +62,9 @@ pub struct ToolExecutionContext {
     /// Type-erased application state snapshot, when the host attached one
     /// with [`RunContext::with_state_view`]. Read it through [`Self::state`].
     pub state_view: Option<Arc<dyn Any + Send + Sync>>,
+    /// Typed host extensions of the run (see [`RunContext::with_host`]).
+    /// Read through [`Self::host`].
+    pub host_ext: crate::context::HostExtensions,
     /// Sink behind [`tinytools::ToolRunContext::report_progress`], captured
     /// from the loop's scoped progress gate when the context is built. Being
     /// held here (not looked up per report), it survives a move into a spawned
@@ -88,6 +91,7 @@ impl ToolExecutionContext {
             workspace: ctx.workspace.clone(),
             store: ctx.namespaced_store.clone(),
             state_view: ctx.state_view.clone(),
+            host_ext: ctx.host_ext.clone(),
             progress: super::progress::ToolProgressGate::current_sink_for(&call_id),
             nested: super::nested::current_for(&call_id),
         }
@@ -111,6 +115,13 @@ impl ToolExecutionContext {
         self.state_view
             .as_deref()
             .and_then(|view| view.downcast_ref::<S>())
+    }
+
+    /// The host extension of type `X` the run installed with
+    /// [`RunContext::with_host`], or `None`.
+    #[must_use]
+    pub fn host<X: Any + Send + Sync>(&self) -> Option<&X> {
+        self.host_ext.get::<X>()
     }
 
     /// Calls another registered tool as a **nested call** of this one and

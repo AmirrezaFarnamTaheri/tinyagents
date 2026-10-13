@@ -488,6 +488,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         })
     }
 
+    /// Runs one user turn: wraps `input` in a [`SessionTurnRequest`] and drives
+    /// [`Session::turn`], the single entry hosts call instead of owning a turn
+    /// loop. Host policy rides in `options` and the session's hooks.
+    pub async fn run_turn(
+        &mut self,
+        input: Message,
+        options: TurnOptions<C>,
+    ) -> Result<SessionTurnOutcome, RuntimeError> {
+        self.turn(SessionTurnRequest::new(input), options).await
+    }
+
     /// Executes and commits one state transition.
     pub async fn turn(
         &mut self,

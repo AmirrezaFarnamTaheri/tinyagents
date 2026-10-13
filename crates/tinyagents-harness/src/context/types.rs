@@ -382,6 +382,11 @@ pub struct RunContext<Ctx = ()> {
     /// with [`RunContext::with_state_view`] instead. Shared with child
     /// contexts, which run against the same application state.
     pub state_view: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    /// Typed host extension slots: per-run host values (turn origin,
+    /// workspace handle, progress sink, ...) keyed by type. Replaces ambient
+    /// `task_local!` state; inherited by child contexts and visible to tools
+    /// through `ToolExecutionContext::host`. See [`super::HostExtensions`].
+    pub host_ext: super::HostExtensions,
     /// Event fan-out bus for observability.
     pub events: EventSink,
     /// Live limit tracker derived from `config`.

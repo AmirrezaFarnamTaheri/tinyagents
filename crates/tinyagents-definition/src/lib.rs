@@ -45,7 +45,7 @@ impl std::error::Error for DefinitionRegistryError {}
 pub use definition::{
     AgentDefinition, EXTENDED_MAX_TOOL_ITERATIONS, Extensions, IterationPolicy, ToolScopeResolution,
 };
-pub use execution_spec::{ModelSpec, SandboxMode, ToolScope};
+pub use execution_spec::{ModelSpec, SPAWN_TOOL_NAMES, SandboxMode, ToolScope};
 pub use loader::{
     DefinitionValidation, load_dir, load_dir_with_validation, load_file, load_file_with_validation,
 };
@@ -198,3 +198,7 @@ mod tests;
 #[cfg(test)]
 #[path = "lib_vocabulary_tests.rs"]
 mod vocabulary_tests;
+
+#[cfg(test)]
+#[path = "execution_spec_tests.rs"]
+mod execution_spec_tests;

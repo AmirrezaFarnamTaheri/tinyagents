@@ -34,10 +34,12 @@
 //! ```
 
 mod depth;
+mod host_ext;
 mod stats;
 mod types;
 
 pub use depth::{current_run_depth, with_run_depth};
+pub use host_ext::HostExtensions;
 pub use stats::*;
 pub use types::*;
 
@@ -308,6 +310,7 @@ impl<Ctx> RunContext<Ctx> {
             stores: StoreRegistry::new(),
             namespaced_store: None,
             state_view: None,
+            host_ext: HostExtensions::new(),
             events,
             limits,
             steering: None,
@@ -487,6 +490,7 @@ impl<Ctx> RunContext<Ctx> {
             .with_stores(self.stores.clone())
             .with_optional_namespaced_store(self.namespaced_store.clone())
             .with_optional_state_view(self.state_view.clone())
+            .with_host_extensions(self.host_ext.clone())
             .with_events(self.events.clone())
             // A linked child token: a parent cancel cascades down, but
             // cancelling this child leaves the parent and siblings running.
@@ -724,6 +728,53 @@ impl<Ctx> RunContext<Ctx> {
     ) -> Self {
         self.state_view = Some(state);
         self
+    }
+
+    /// Installs a typed host extension (`X`), replacing any earlier value of
+    /// the same type. Read it back with [`RunContext::host`], or from a tool
+    /// with [`ToolExecutionContext::host`][crate::tool::ToolExecutionContext::host].
+    /// Child contexts inherit the whole map; a child may install its own
+    /// value without affecting the parent. This is the explicit replacement
+    /// for ambient `task_local!` host state.
+    #[must_use]
+    pub fn with_host<X: std::any::Any + Send + Sync>(mut self, value: X) -> Self {
+        self.host_ext = self.host_ext.with(value);
+        self
+    }
+
+    /// As [`with_host`](Self::with_host) for an already-shared value.
+    #[must_use]
+    pub fn with_host_arc<X: std::any::Any + Send + Sync>(
+        mut self,
+        value: std::sync::Arc<X>,
+    ) -> Self {
+        self.host_ext = self.host_ext.with_arc(value);
+        self
+    }
+
+    /// Replaces the whole host extension map.
+    #[must_use]
+    pub fn with_host_extensions(mut self, host_ext: HostExtensions) -> Self {
+        self.host_ext = host_ext;
+        self
+    }
+
+    /// The installed host extension of type `X`, if any.
+    #[must_use]
+    pub fn host<X: std::any::Any + Send + Sync>(&self) -> Option<&X> {
+        self.host_ext.get::<X>()
+    }
+
+    /// The installed host extension of type `X` as a shared handle.
+    #[must_use]
+    pub fn host_arc<X: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<X>> {
+        self.host_ext.get_arc::<X>()
+    }
+
+    /// The whole host extension map (cheap to clone).
+    #[must_use]
+    pub fn host_extensions(&self) -> &HostExtensions {
+        &self.host_ext
     }
 
     fn with_optional_state_view(
