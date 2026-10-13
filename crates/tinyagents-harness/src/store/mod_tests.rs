@@ -1,13 +1,10 @@
 //! Tests for the harness store backends.
 //!
-//! Cover [`super::InMemoryStore`] and [`super::FileStore`] put/get/delete/list
-//! round-tripping and namespace isolation, [`super::FileStore`] name
-//! sanitization and atomic-write guarantees, [`super::StoreRegistry`] default
-//! and named-store lookup/replacement, and both [`super::AppendStore`]
-//! backends ([`super::InMemoryAppendStore`], [`super::JsonlAppendStore`]) for
-//! offset monotonicity, `read_from` tailing, per-stream isolation, retention
-//! eviction, and — for the JSONL backend specifically — cross-instance offset
-//! correctness and recovery from a write torn mid-character or mid-line.
+//! Cover [`super::InMemoryStore`] put/get/delete/list round-tripping and
+//! namespace isolation, [`super::StoreRegistry`] default and named-store
+//! lookup/replacement, and [`super::InMemoryAppendStore`] offset monotonicity,
+//! `read_from` tailing, per-stream isolation and retention eviction. The
+//! driver-backed stores are covered in `drivers_tests.rs`.
 
 use std::sync::Arc;
 
@@ -77,29 +74,7 @@ async fn in_memory_namespaces_are_isolated() {
     assert_eq!(store.list("a").await.unwrap(), vec!["k"]);
 }
 
-struct TempDir(std::path::PathBuf);
 
-impl TempDir {
-    fn new(tag: &str) -> Self {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("tinyagents-store-test-{tag}-{nanos}"));
-        std::fs::create_dir_all(&path).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-#[tokio::test]
-#[tokio::test]
-#[tokio::test]
 #[tokio::test]
 async fn store_registry_default_store_is_stable() {
     let reg = StoreRegistry::new();
@@ -232,32 +207,25 @@ async fn in_memory_append_unbounded_by_default() {
 }
 
 #[tokio::test]
-#[tokio::test]
 async fn read_window_returns_a_bounded_slice_for_both_backends() {
-    let dir = TempDir::new("jsonl-window");
-    let jsonl = JsonlAppendStore::new(&dir.0);
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let driver = DriverAppendStore::new(Arc::clone(scoped.streams()));
     let memory = InMemoryAppendStore::new();
     for n in 0..5 {
-        jsonl.append("evts", json!({ "n": n })).await.unwrap();
+        driver.append("evts", json!({ "n": n })).await.unwrap();
         memory.append("evts", json!({ "n": n })).await.unwrap();
     }
     let expected = vec![(1, json!({"n": 1})), (2, json!({"n": 2}))];
-    assert_eq!(jsonl.read_window("evts", 1, 2).await.unwrap(), expected);
+    assert_eq!(driver.read_window("evts", 1, 2).await.unwrap(), expected);
     assert_eq!(memory.read_window("evts", 1, 2).await.unwrap(), expected);
-    assert!(jsonl.read_window("evts", 1, 0).await.unwrap().is_empty());
-    assert_eq!(jsonl.read_window("evts", 4, 10).await.unwrap().len(), 1);
+    assert!(driver.read_window("evts", 1, 0).await.unwrap().is_empty());
+    assert_eq!(driver.read_window("evts", 4, 10).await.unwrap().len(), 1);
     assert!(
-        jsonl
+        driver
             .read_window("missing", 0, 10)
             .await
             .unwrap()
             .is_empty()
     );
 }
-
-#[tokio::test]
-#[tokio::test]
-#[tokio::test]
-#[tokio::test]
-#[tokio::test]
-#[tokio::test]

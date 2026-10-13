@@ -101,7 +101,7 @@ async fn status_store_round_trips_and_answers_queries() {
 
 #[tokio::test]
 async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
-    use tinystoragedrivers_core::{DocumentStore, Precondition};
+    use tinystoragedrivers_core::Precondition;
     let storage = MemoryStorage::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let store = DriverStatusStore::new(docs.clone());

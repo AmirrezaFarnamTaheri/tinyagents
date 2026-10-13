@@ -4,7 +4,6 @@
 //! callers import from `crate::store` directly.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
