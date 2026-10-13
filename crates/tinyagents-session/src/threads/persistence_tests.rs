@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use tinystoragedrivers_core::ErrorKind;
 
 fn thread(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -24,17 +25,15 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn file_adapter_preserves_deterministic_append_and_missing_thread_behavior() {
-    let dir = tempfile::tempdir().unwrap();
-    let store: Box<dyn ConversationPersistence> =
-        Box::new(FileConversationStore::new(dir.path().into()));
+async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior() {
+    let store: Box<dyn ConversationPersistence> = Box::new(DriverConversationStore::in_memory().await);
     assert!(store.get_thread("missing").await.unwrap().is_none());
     assert!(store.get_messages("missing").await.unwrap().is_empty());
     assert!(matches!(
         store
             .append_message("missing", message("agent:x", "first"))
             .await,
-        Err(ConversationError::Legacy(_))
+        Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::NotFound
     ));
     store.ensure_thread(thread("one")).await.unwrap();
     let first = store
@@ -60,9 +59,8 @@ async fn file_adapter_preserves_deterministic_append_and_missing_thread_behavior
 }
 
 #[tokio::test]
-async fn file_adapter_preserves_title_labels_and_metadata_patch() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = FileConversationStore::new(dir.path().into());
+async fn memory_store_preserves_title_labels_and_metadata_patch() {
+    let store = DriverConversationStore::in_memory().await;
     store.ensure_thread(thread("one")).await.unwrap();
     store
         .update_thread_labels("one", vec!["work".into(), "general".into()], "2026-01-03")
@@ -120,9 +118,8 @@ async fn file_adapter_preserves_title_labels_and_metadata_patch() {
 }
 
 #[tokio::test]
-async fn file_adapter_tail_delete_recreate_and_purge_match_legacy() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = FileConversationStore::new(dir.path().into());
+async fn memory_store_tail_delete_recreate_and_purge() {
+    let store = DriverConversationStore::in_memory().await;
     store.ensure_thread(thread("one")).await.unwrap();
     for id in ["a", "b", "c"] {
         store.append_message("one", message(id, id)).await.unwrap();
@@ -153,9 +150,8 @@ async fn file_adapter_tail_delete_recreate_and_purge_match_legacy() {
 }
 
 #[tokio::test]
-async fn file_adapter_substring_and_cjk_search_match_existing_index() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = FileConversationStore::new(dir.path().into());
+async fn memory_store_substring_and_cjk_search_find_expected_threads() {
+    let store = DriverConversationStore::in_memory().await;
     for (id, content) in [
         ("a", "Café substring alphabet"),
         ("b", "東京で日本語"),
@@ -167,18 +163,24 @@ async fn file_adapter_substring_and_cjk_search_match_existing_index() {
             .await
             .unwrap();
     }
-    let legacy = ConversationStore::new(dir.path().into());
-    for query in ["cafe", "pha", "東京", "日", "missing", "a", ""] {
-        assert_eq!(
+    let hit = |query: &'static str| {
+        let store = store.clone();
+        async move {
             store
                 .search_cross_thread_messages(query, 20, None)
                 .await
-                .unwrap(),
-            legacy
-                .search_cross_thread_messages(query, 20, None)
                 .unwrap()
-        );
-    }
+                .into_iter()
+                .map(|hit| hit.thread_id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(hit("cafe").await, vec!["a"]);
+    assert_eq!(hit("pha").await, vec!["a"]);
+    assert_eq!(hit("東京").await, vec!["b"]);
+    assert_eq!(hit("日").await, vec!["b"]);
+    assert!(hit("missing").await.is_empty());
+    assert!(hit("").await.is_empty());
     assert!(
         store
             .search_cross_thread_messages("東京", 20, Some("b"))
@@ -189,9 +191,8 @@ async fn file_adapter_substring_and_cjk_search_match_existing_index() {
 }
 
 #[tokio::test]
-async fn file_adapter_refuses_authoritative_turn_claim_without_creating_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = FileConversationStore::new(dir.path().into());
+async fn memory_store_refuses_authoritative_turn_claim_() {
+    let store = DriverConversationStore::in_memory().await;
     let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -233,13 +234,11 @@ async fn file_adapter_refuses_authoritative_turn_claim_without_creating_files() 
             operation: "release_turn"
         })
     ));
-    assert!(!dir.path().join("memory").exists());
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn file_adapter_preserves_channel_dedup_and_optional_upsert_fields() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = FileConversationStore::new(dir.path().into());
+async fn memory_store_preserves_channel_dedup_and_optional_upsert_fields() {
+    let store = DriverConversationStore::in_memory().await;
     let mut first = thread("one");
     first.labels = Some(vec!["worker".into()]);
     first.personality_id = Some("persona".into());
@@ -262,16 +261,111 @@ async fn file_adapter_preserves_channel_dedup_and_optional_upsert_fields() {
 }
 
 #[tokio::test]
-async fn file_adapter_reports_legacy_io_failure_without_reclassifying_as_absence() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("memory"), b"not a directory").unwrap();
-    let store = FileConversationStore::new(dir.path().into());
-    let Err(ConversationError::Legacy(detail)) = store.ensure_thread(thread("one")).await else {
-        panic!("expected unchanged classic IO failure");
-    };
-    assert!(detail.contains("create") || detail.contains("directory"));
+async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_working() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    for id in ["a", "b"] {
+        store.append_message("one", message(id, id)).await.unwrap();
+    }
+    let patched = store
+        .update_message(
+            "one",
+            "b",
+            ThreadMessagePatch {
+                extra_metadata: Some(json!({"k": 1})),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(patched.extra_metadata, json!({"k": 1}));
+    let rows = store.get_messages("one").await.unwrap();
+    assert_eq!(rows[0], message("a", "a"));
+    assert_eq!(rows[1].extra_metadata, json!({"k": 1}));
+    store.append_message("one", message("c", "c")).await.unwrap();
+    assert_eq!(store.get_messages("one").await.unwrap().len(), 3);
     assert_eq!(
-        std::fs::read(dir.path().join("memory")).unwrap(),
-        b"not a directory"
+        store.get_thread("one").await.unwrap().unwrap().message_count,
+        3
+    );
+    assert!(matches!(
+        store
+            .update_message("one", "missing", ThreadMessagePatch::default())
+            .await,
+        Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::NotFound
+    ));
+    assert!(matches!(
+        store
+            .update_message("ghost", "a", ThreadMessagePatch::default())
+            .await,
+        Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::NotFound
+    ));
+}
+
+#[tokio::test]
+async fn truncation_resets_counts_and_timestamps_and_the_search_index() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    let mut first = message("a", "keepsake");
+    first.created_at = "2026-01-02T00:00:00Z".into();
+    let mut second = message("b", "discarded phrase");
+    second.created_at = "2026-01-03T00:00:00Z".into();
+    store.append_message("one", first).await.unwrap();
+    store.append_message("one", second).await.unwrap();
+    assert_eq!(
+        store.delete_messages_from("one", "b").await.unwrap(),
+        Some(1)
+    );
+    let row = store.get_thread("one").await.unwrap().unwrap();
+    assert_eq!(row.message_count, 1);
+    assert_eq!(row.last_message_at, "2026-01-02T00:00:00Z");
+    assert!(
+        store
+            .search_cross_thread_messages("discarded", 5, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        store.delete_messages_from("one", "a").await.unwrap(),
+        Some(1)
+    );
+    let row = store.get_thread("one").await.unwrap().unwrap();
+    assert_eq!(row.message_count, 0);
+    assert_eq!(row.last_message_at, row.created_at);
+    assert_eq!(
+        store.delete_messages_from("ghost", "a").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn purge_removes_live_and_deleted_threads_and_counts_only_live_ones() {
+    let store = DriverConversationStore::in_memory().await;
+    for id in ["one", "two", "gone"] {
+        store.ensure_thread(thread(id)).await.unwrap();
+        store.append_message(id, message("m", id)).await.unwrap();
+    }
+    store.delete_thread("gone", "2026-01-03").await.unwrap();
+    let stats = store.purge_threads().await.unwrap();
+    assert_eq!((stats.thread_count, stats.message_count), (2, 2));
+    assert!(store.list_threads().await.unwrap().is_empty());
+    assert_eq!(
+        store.purge_threads().await.unwrap(),
+        ConversationPurgeStats::default()
+    );
+    store.ensure_thread(thread("one")).await.unwrap();
+    assert!(store.get_messages("one").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_rewrite_retires_a_stale_append_intent_instead_of_resurrecting_it() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    store.append_message("one", message("a", "a")).await.unwrap();
+    store.delete_messages_from("one", "a").await.unwrap();
+    store.append_message("one", message("b", "b")).await.unwrap();
+    assert_eq!(
+        store.get_messages("one").await.unwrap(),
+        vec![message("b", "b")]
     );
 }

@@ -47,7 +47,7 @@ async fn independent_handles_share_metadata_but_other_scope_does_not() {
 }
 
 #[tokio::test]
-async fn unsupported_writes_never_approximate_committed_messages() {
+async fn unprepared_append_never_approximates_a_committed_message() {
     let backend = MemoryStorage::new();
     let store = scoped(&backend, "profile");
     store.ensure_thread(request("one")).await.unwrap();
@@ -66,20 +66,6 @@ async fn unsupported_writes_never_approximate_committed_messages() {
         ),
         "plain append requires its own trusted schema preparation"
     );
-    assert!(matches!(
-        store.purge_threads().await,
-        Err(ConversationError::Unsupported { .. })
-    ));
-    assert!(matches!(
-        store.delete_messages_from("one", "x").await,
-        Err(ConversationError::Unsupported { .. })
-    ));
-    assert!(matches!(
-        store
-            .update_message("one", "x", ThreadMessagePatch::default())
-            .await,
-        Err(ConversationError::Unsupported { .. })
-    ));
     assert!(store.get_messages("one").await.unwrap().is_empty());
 }
 

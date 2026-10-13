@@ -231,7 +231,9 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
 
 #[test]
 fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence() {
-    use crate::threads::{ConversationPersistence, ConversationResult, FileConversationStore};
+    use crate::threads::{
+        ConversationPersistence, ConversationResult, DriverConversationStore,
+    };
     struct Provider {
         sessions: InMemorySessionStores,
         conversations: Arc<dyn ConversationPersistence>,
@@ -247,9 +249,12 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
             Ok((id == "allowed").then(|| self.conversations.clone()))
         }
     }
-    let dir = tempfile::tempdir().unwrap();
-    let conversations: Arc<dyn ConversationPersistence> =
-        Arc::new(FileConversationStore::new(dir.path().into()));
+    let conversations: Arc<dyn ConversationPersistence> = Arc::new(
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(DriverConversationStore::in_memory()),
+    );
     let provider = Arc::new(Provider {
         sessions: InMemorySessionStores::new(),
         conversations: conversations.clone(),
@@ -266,7 +271,6 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
             .unwrap()
             .is_none()
     );
-    assert!(!dir.path().join("memory").exists());
 }
 
 #[test]
