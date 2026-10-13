@@ -187,6 +187,8 @@ impl BudgetParityObserver {
         l.input_tokens == c.input_tokens
             && l.output_tokens == c.output_tokens
             && l.cache_read_tokens == c.cache_read_tokens
+            && l.cache_creation_tokens == c.cache_creation_tokens
+            && l.reasoning_tokens == c.reasoning_tokens
             && l.total_tokens == c.total_tokens
             && run.usage.calls == crate_usage.calls
     }

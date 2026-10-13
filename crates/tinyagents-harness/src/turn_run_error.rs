@@ -43,6 +43,7 @@ pub fn classify_run_failure(error: &TinyAgentsError) -> RunFailureKind {
         }
         TinyAgentsError::Timeout(_)
         | TinyAgentsError::CallTimeout(_)
+        | TinyAgentsError::StreamIdleTimeout(_)
         | TinyAgentsError::Cancelled => RunFailureKind::TimeoutOrCancelled,
         _ => RunFailureKind::Other,
     }
