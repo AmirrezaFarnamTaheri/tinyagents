@@ -10,6 +10,8 @@ pub mod command_hooks;
 mod driver;
 mod error;
 mod hooks;
+mod managed_tools;
+mod permanent_tool;
 mod prefix;
 mod session;
 mod tools;
@@ -21,6 +23,8 @@ pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, Ses
 pub use error::RuntimeError;
 pub use hooks::{NoopSessionHooks, SessionHooks};
 pub use prefix::PrefixSnapshot;
+pub use managed_tools::{refresh_prefix, reject_synthesized_collisions};
+pub use permanent_tool::PermanentTool;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
 pub use tools::ToolSnapshot;
