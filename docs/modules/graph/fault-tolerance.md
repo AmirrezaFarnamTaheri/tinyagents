@@ -67,7 +67,7 @@ minutes). A second concurrent `run_with_thread`/`resume`/`retry` call for the
 same thread either waits on the in-process lock (same process) or is refused
 with `TinyAgentsError::Validation` if a live lease is held by another owner
 (cross-process). A lease whose owner crashed without releasing it is
-reclaimable once its TTL elapses. `DriverCheckpointer`
+reclaimable once its TTL elapses. `DriverCheckpointer` and `InMemoryCheckpointer`
 both implement the lease; the trait's default is a no-op that always succeeds,
 so out-of-tree backends keep compiling unprotected.
 
