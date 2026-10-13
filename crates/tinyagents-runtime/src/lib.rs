@@ -14,6 +14,7 @@ mod managed_tools;
 mod permanent_tool;
 mod prefix;
 mod session;
+mod tool_registration;
 mod tools;
 pub mod transcript;
 mod types;
@@ -27,6 +28,9 @@ pub use managed_tools::{refresh_prefix, reject_synthesized_collisions};
 pub use permanent_tool::PermanentTool;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
+pub use tool_registration::{
+    plan_registration, register_admitted, RegistrationPlan, ToolAdmission, ToolRegistration,
+};
 pub use tools::ToolSnapshot;
 pub use types::{
     CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
