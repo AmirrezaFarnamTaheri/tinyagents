@@ -10,11 +10,19 @@ mod entry_tree;
 mod events;
 mod history;
 mod history_retention;
+#[cfg(feature = "legacy-import")]
 mod import;
+#[cfg(feature = "legacy-import")]
+mod legacy_import;
 mod retention;
 mod storage;
 mod team;
-pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, SourceOwner};
+#[cfg(feature = "legacy-import")]
+pub use import::AgentImportReport;
+#[cfg(feature = "legacy-import")]
+pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
+#[cfg(feature = "legacy-import")]
+pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
 use std::sync::Arc;
 use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};

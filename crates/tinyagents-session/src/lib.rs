@@ -83,6 +83,8 @@
 
 mod context;
 pub mod fts;
+#[cfg(feature = "legacy-import")]
+pub mod legacy;
 pub mod entry_tree;
 mod migrations;
 pub mod ops;
