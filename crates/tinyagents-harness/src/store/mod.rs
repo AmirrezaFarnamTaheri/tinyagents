@@ -45,6 +45,7 @@ use serde_json::Value;
 
 pub use types::*;
 
+pub(crate) use drivers::map_error as map_driver_error;
 pub use drivers::{DriverAppendStore, DriverStore};
 pub use schema_admission::SchemaAdmission;
 

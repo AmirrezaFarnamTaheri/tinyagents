@@ -12,8 +12,8 @@
 //! # Two distinct caching concerns
 //!
 //! ## 1. Local response cache
-//! [`ResponseCache`] + [`InMemoryResponseCache`] (and, behind the `sqlite`
-//! feature, [`SqliteResponseCache`]) let the harness skip provider API calls
+//! [`ResponseCache`] + [`InMemoryResponseCache`] (and [`DriverResponseCache`],
+//! which keeps entries on any `tinystoragedrivers` backend) let the harness skip provider API calls
 //! entirely when it has already seen an identical request.
 //!
 //! The key is a **two-part composition**, never the prompt alone:
@@ -42,14 +42,13 @@
 //! [`SingleFlight`] collapses concurrent identical misses into one provider
 //! call.
 
+mod drivers;
 mod hash;
 mod key;
 mod layout;
 mod memory;
 mod miss;
 mod singleflight;
-#[cfg(feature = "sqlite")]
-mod sqlite;
 mod types;
 
 pub(crate) use layout::{
@@ -63,8 +62,7 @@ pub use key::{
 };
 pub use miss::{DEFAULT_CACHE_MISS_NOISE_FLOOR_TOKENS, PromptCacheMiss, PromptCacheTracker};
 pub use singleflight::SingleFlight;
-#[cfg(feature = "sqlite")]
-pub use sqlite::SqliteResponseCache;
+pub use drivers::DriverResponseCache;
 pub use types::*;
 
 #[cfg(test)]
