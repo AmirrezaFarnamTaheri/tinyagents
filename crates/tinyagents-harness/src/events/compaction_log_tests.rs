@@ -1,7 +1,7 @@
 use super::*;
 use crate::summarization::CompactionReason;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::span;
 
 /// Counts info-level events carrying the compaction log message.

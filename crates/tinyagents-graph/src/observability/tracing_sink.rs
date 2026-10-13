@@ -1,8 +1,8 @@
 //! [`GraphTracingSink`] — mirrors the graph executor's lifecycle
 //! stream onto `tracing` diagnostics.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 

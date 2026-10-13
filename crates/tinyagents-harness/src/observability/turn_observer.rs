@@ -1,13 +1,13 @@
 //! Root-turn observer hooks. Scopes attach once during harness construction;
 //! payload capture is opt-in and raw errors/provider options are never exposed.
-use async_trait::async_trait;
-use serde_json::Value;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
 use crate::context::RunContext;
 use crate::events::{AgentEvent, EventListener, EventRecord, EventSink};
 use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 use crate::runtime::AgentHarness;
+use async_trait::async_trait;
+use serde_json::Value;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tinyinference_llm::model::ModelRequest;
 
 /// Explicit consent for capturing model messages and tool input/output.
@@ -290,8 +290,8 @@ impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for ObserverScope {
 #[cfg(feature = "langfuse")]
 pub mod langfuse {
     pub use crate::observability::{
-        trace_export::{otlp::otlp_requests, ExportBrand, SpanKind, SpanStatus, TraceSpan},
         LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
+        trace_export::{ExportBrand, SpanKind, SpanStatus, TraceSpan, otlp::otlp_requests},
     };
 }
 

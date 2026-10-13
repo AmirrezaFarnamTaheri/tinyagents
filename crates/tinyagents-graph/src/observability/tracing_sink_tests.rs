@@ -1,6 +1,6 @@
 use super::*;
-use tinyagents_harness::ids::{NodeId, RunId};
 use std::sync::atomic::Ordering;
+use tinyagents_harness::ids::{NodeId, RunId};
 
 #[test]
 fn every_emitted_event_is_counted_including_unmatched_variants() {
