@@ -757,7 +757,7 @@ fn compaction_sink_advances_its_tip_across_repeated_compactions() {
 fn compaction_sink_is_a_no_op_on_an_empty_session() {
     use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
 
-    let ws = workspace();
+    let tree = EntryTree::new(&workspace(), "sess-empty");
     let sink = SessionCompactionSink::new(tree.ledger(), "sess-empty").expect("sink");
     assert_eq!(sink.tip(), None);
 
