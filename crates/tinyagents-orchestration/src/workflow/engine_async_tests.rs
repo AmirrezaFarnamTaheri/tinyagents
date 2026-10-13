@@ -307,9 +307,9 @@ impl AsyncWorkflowExecutor for SyncRegistrationAttempt {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn ignored_synchronous_registration_refusal_cannot_leave_authoritative_driver_waiting() {
     let workspace = tempfile::tempdir().unwrap();
-    let store = Arc::new(LedgerWorkflowStore::new(Arc::new(SqliteRunLedger::new(
-        workspace.path(),
-    ))));
+    let store = Arc::new(LedgerWorkflowStore::new(Arc::new(
+        crate::test_support::ledger_in(workspace.path()),
+    )));
     let engine = WorkflowEngine::new_async(store, Arc::new(SyncRegistrationAttempt));
     let definition = tests::definition();
     engine
