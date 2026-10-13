@@ -22,11 +22,9 @@ fn an_ascii_message_longer_than_the_cap_truncates_to_exactly_the_cap() {
 }
 
 #[test]
-fn the_cap_defaults_and_can_be_overridden() {
+fn the_cap_defaults_to_two_thousand_bytes() {
+    // The cap is process-wide, so a test that changed it would race every
+    // other test that indexes a message; only the default is asserted here.
     assert_eq!(DEFAULT_FTS_SNIPPET_BYTES, 2000);
-    let original = fts_snippet_bytes();
-    set_fts_snippet_bytes(10);
-    assert_eq!(fts_snippet_bytes(), 10);
-    set_fts_snippet_bytes(original);
-    assert_eq!(fts_snippet_bytes(), original);
+    assert_eq!(fts_snippet_bytes(), DEFAULT_FTS_SNIPPET_BYTES);
 }

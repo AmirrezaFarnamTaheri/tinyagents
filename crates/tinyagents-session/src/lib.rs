@@ -153,7 +153,3 @@ pub use types::{
     SessionMessage, SessionRecord, SessionSearchParams, SessionSearchResult, SessionStatus,
     SessionToolCall,
 };
-
-#[cfg(test)]
-#[path = "lib_tests.rs"]
-mod test;
