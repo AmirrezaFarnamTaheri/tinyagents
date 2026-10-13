@@ -5,7 +5,7 @@ use crate::steering::SteeringHandle;
 fn latch() -> (StopLatch, HaltSummarySlot) {
     let slot: HaltSummarySlot = Arc::default();
     (
-        StopLatch::new(SteeringHandle::default(), Arc::clone(&slot)),
+        StopLatch::new(SteeringHandle::allow_all(), Arc::clone(&slot)),
         slot,
     )
 }
