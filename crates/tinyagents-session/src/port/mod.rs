@@ -61,7 +61,7 @@ pub use types::AgentStores;
 
 pub use tinyagents_harness::store::{AppendStore, Store};
 
-use crate::turn_state::{TurnLifecycle, TurnState, TurnStateStore};
+use crate::turn_state::{TurnLifecycle, TurnState};
 
 /// Hands out each agent's stores. Installed once per runtime by the host.
 pub trait SessionStoreProvider: Send + Sync {
@@ -193,8 +193,7 @@ pub trait SessionStoreProvider: Send + Sync {
 
 /// Restart-survivable snapshots of an agent's in-flight turns.
 ///
-/// The contract of [`TurnStateStore`], the on-disk implementation, as a
-/// trait. Every method is scoped to the handle's own agent.
+/// The contract of a turn-state store. Every method is scoped to the handle's own agent.
 pub trait TurnStates: Send + Sync {
     /// Writes `state` as the snapshot of its turn.
     ///
@@ -281,58 +280,6 @@ pub trait TurnStates: Send + Sync {
         lifecycle: TurnLifecycle,
         now_rfc3339: &str,
     ) -> Result<bool, String>;
-}
-
-impl TurnStates for TurnStateStore {
-    fn put(&self, state: &TurnState) -> Result<(), String> {
-        TurnStateStore::put(self, state)
-    }
-
-    fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> {
-        TurnStateStore::put_unless_completed(self, state)
-    }
-
-    fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> {
-        TurnStateStore::get(self, thread_id)
-    }
-
-    fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> {
-        TurnStateStore::get_turn(self, thread_id, request_id)
-    }
-
-    fn delete(&self, thread_id: &str) -> Result<bool, String> {
-        TurnStateStore::delete(self, thread_id)
-    }
-
-    fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
-        TurnStateStore::delete_turn(self, thread_id, request_id)
-    }
-
-    fn list(&self) -> Result<Vec<TurnState>, String> {
-        TurnStateStore::list(self)
-    }
-
-    fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> {
-        TurnStateStore::list_thread(self, thread_id)
-    }
-
-    fn clear_all(&self) -> Result<usize, String> {
-        TurnStateStore::clear_all(self)
-    }
-
-    fn mark_all_interrupted(&self, now_rfc3339: &str) -> Result<usize, String> {
-        TurnStateStore::mark_all_interrupted(self, now_rfc3339)
-    }
-
-    fn settle_turn(
-        &self,
-        thread_id: &str,
-        request_id: &str,
-        lifecycle: TurnLifecycle,
-        now_rfc3339: &str,
-    ) -> Result<bool, String> {
-        TurnStateStore::settle_turn(self, thread_id, request_id, lifecycle, now_rfc3339)
-    }
 }
 
 /// A provider shared behind an [`Arc`] is still a provider.

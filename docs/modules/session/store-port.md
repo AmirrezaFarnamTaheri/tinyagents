@@ -54,9 +54,9 @@ implement them, so code generic over a store accepts injected handles, and
 - `InMemorySessionStores`: per-agent, process-lifetime stores
   (`InMemoryTranscriptLocator`, `InMemoryTurnStates`, the harness's
   in-memory stores). For tests and hosts that keep nothing.
-- `TurnStateStore` implements `TurnStates`, `FileTranscriptLocator`
-  implements `TranscriptLocator`; together with `open_session_stores` they
-  are the building blocks of a file-backed provider. This crate does not
+- `FileTranscriptLocator` implements `TranscriptLocator` (the file turn-state
+  store is removed; use `InMemoryTurnStates` or `DriverTurnStates`); together
+  with `open_session_stores` it is the building block of a file-backed provider. This crate does not
   assemble one: the host that owns a layout does (OpenHuman's
   `openhuman_rpc::session_store`).
 - `TranscriptLocator::append_interrupted_partial` carries the display-only

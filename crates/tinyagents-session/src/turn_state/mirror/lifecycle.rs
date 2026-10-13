@@ -15,7 +15,7 @@ impl TurnStateMirror {
             return;
         }
         // The turn driver settles this snapshot the moment the turn ends
-        // (`TurnStateStore::settle_turn`), because this bridge can outlive its
+        // (`TurnStates::settle_turn`), because this bridge can outlive its
         // turn by minutes — it only exits when its progress sender drops, and
         // for a cached per-thread session that waits for the *next* turn. If the
         // driver already recorded a terminal outcome, keep it: a late blind
@@ -66,12 +66,9 @@ impl TurnStateMirror {
         if thread_id.is_empty() {
             return;
         }
-        let workspace_dir = self.store.workspace_dir();
-        let Some(path) =
-            crate::transcript::find_root_transcript_for_thread(workspace_dir, thread_id)
-        else {
+        let Some(transcripts) = self.transcripts.as_ref() else {
             tracing::debug!(
-                "{MIRROR_LOG_PREFIX} no root transcript for thread={thread_id} yet — leaving interrupted partial ({} chars) in turn_state snapshot only",
+                "{MIRROR_LOG_PREFIX} no transcript locator for thread={thread_id} — leaving interrupted partial ({} chars) in turn_state snapshot only",
                 partial.len()
             );
             return;
@@ -82,24 +79,31 @@ impl TurnStateMirror {
             Some(self.state.request_id.as_str())
         };
         let thinking = self.state.thinking.trim();
-        let reasoning = if thinking.is_empty() {
+        let reasoning_content = if thinking.is_empty() {
             None
         } else {
-            Some(thinking)
+            Some(thinking.to_owned())
         };
-        match crate::transcript::append_interrupted_partial(
-            &path,
-            partial,
+        let record = crate::transcript::TranscriptPartial {
+            content: partial.to_owned(),
+            reasoning_content,
+            iteration: Some(self.state.iteration),
+        };
+        match transcripts.append_interrupted_partial(
+            thread_id,
+            self.agent_id.as_deref(),
+            &record,
             request_id,
-            Some(self.state.iteration),
-            reasoning,
         ) {
-            Ok(()) => tracing::debug!(
-                "{MIRROR_LOG_PREFIX} appended interrupted partial ({} chars, thinking={} chars) for thread={thread_id} request_id={} to {}",
+            Ok(true) => tracing::debug!(
+                "{MIRROR_LOG_PREFIX} appended interrupted partial ({} chars, thinking={} chars) for thread={thread_id} request_id={}",
                 partial.len(),
                 thinking.len(),
-                self.state.request_id,
-                path.display()
+                self.state.request_id
+            ),
+            Ok(false) => tracing::debug!(
+                "{MIRROR_LOG_PREFIX} no root transcript for thread={thread_id} yet — leaving interrupted partial ({} chars) in turn_state snapshot only",
+                partial.len()
             ),
             Err(err) => tracing::warn!(
                 "{MIRROR_LOG_PREFIX} failed to append interrupted partial for thread={thread_id}: {err}"

@@ -44,7 +44,7 @@
 //! | --- | --- |
 //! | The `reqwest::Client` | retained in resolver signatures for compatibility; remote fetches use a DNS-pinned direct client with redirects disabled |
 //! | [`TextExtractor`] | which document parser (if any) a host carries, and how long it may run |
-//! | The stash policy | which directory holds bytes between ingress and dispatch, how large it may grow, how long files live ([`stash::AttachmentStash`] is the mechanism) |
+//! | The stash policy | which storage scope holds bytes between ingress and dispatch, how large it may grow, how long they live ([`BlobAttachmentStash`] is the mechanism) |
 //! | Message-level counting | only the host knows what its message type is |
 //!
 //! The stash deserves a note, because the split is not obvious. A host that
@@ -81,7 +81,6 @@ pub mod png;
 pub use png::optimize_png_lossless;
 pub mod blob_stash;
 pub mod resolve;
-pub mod stash;
 pub mod types;
 
 #[cfg(test)]
@@ -105,6 +104,5 @@ pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, trunca
 pub use resolve::{
     NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
 };
-pub use stash::AttachmentStash;
 
 pub use types::{ResolvedAttachment, UnknownMimePolicy};
