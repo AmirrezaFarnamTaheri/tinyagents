@@ -1,5 +1,5 @@
 use super::*;
-use crate::entry_tree::{EntryTree, ForkPosition, ForkScope};
+use crate::entry_tree::{ForkPosition, ForkScope};
 use crate::transcript::TranscriptMessage;
 use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
 
@@ -7,13 +7,17 @@ fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))
 }
 
-async fn parity(backend: &dyn StorageBackend) {
-    let ws = tempfile::tempdir().unwrap();
-    let classic = EntryTree::new(ws.path(), "session");
+/// A tree grown through append, label and fork keeps the ids, tips, labels and
+/// context projection the classic entry tree defined: ids derive from
+/// `(session, ordinal)`, a tip is an entry nobody parents, a label is an entry
+/// plus a name, and a tree fork copies the ancestor path.
+async fn branches_forks_and_context(backend: &dyn StorageBackend) {
     let scoped = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
     let native = DriverRunLedger::new(scoped.clone());
     let peer = DriverRunLedger::new(scoped);
-    let root = classic.append_to_head(kind("root")).unwrap();
+    let at = |ordinal| EntryId::derive("session", ordinal);
+    let (root, main, branch_id, label, copy) = (at(0), at(1), at(2), at(3), at(5));
+
     assert_eq!(
         native
             .entry_append_to_head("session", kind("root"))
@@ -21,25 +25,23 @@ async fn parity(backend: &dyn StorageBackend) {
             .unwrap(),
         root
     );
-    let main = classic.append_to_head(kind("main")).unwrap();
     assert_eq!(
         peer.entry_append_to_head("session", kind("main"))
             .await
             .unwrap(),
-        main
+        main,
+        "a second handle on the same scope continues the same allocator"
     );
-    let branch = classic.append(Some(&root), kind("branch")).unwrap();
     assert_eq!(
         native
             .entry_append("session", Some(&root), kind("branch"))
             .await
             .unwrap(),
-        branch
+        branch_id
     );
-    let label = classic.label(&branch, "named").unwrap();
     assert_eq!(
         native
-            .entry_label("session", &branch, "named")
+            .entry_label("session", &branch_id, "named")
             .await
             .unwrap(),
         label
@@ -48,38 +50,55 @@ async fn parity(backend: &dyn StorageBackend) {
         scope: ForkScope::Tree,
         position: ForkPosition::At,
     };
-    let copy = classic.fork(&main, fork).unwrap();
     assert_eq!(
         native.entry_fork("session", &main, fork).await.unwrap(),
-        copy
+        copy,
+        "a tree fork copies root and main as entries 4 and 5"
     );
-    assert_eq!(
-        peer.entry_head("session").await.unwrap(),
-        classic.head().unwrap()
-    );
+    assert_eq!(peer.entry_head("session").await.unwrap(), Some(copy.clone()));
     assert_eq!(
         native.entry_tips("session").await.unwrap(),
-        classic.tips().unwrap()
+        vec![main.clone(), label.clone(), copy.clone()]
     );
     assert_eq!(
         native.entry_branches("session").await.unwrap(),
-        classic.branches().unwrap()
+        vec![Branch {
+            name: "named".into(),
+            tip_id: label.clone()
+        }]
     );
-    classic.rebuild_index().unwrap();
     native.entry_rebuild_index("session").await.unwrap();
-    for tip in [&main, &label, &copy] {
-        let mut expected = classic.ancestor_chain(tip).unwrap();
-        let mut actual = native.entry_ancestor_chain("session", tip).await.unwrap();
-        for entry in &mut expected {
-            entry.ts.clear();
-        }
-        for entry in &mut actual {
-            entry.ts.clear();
-        }
-        assert_eq!(actual, expected);
+    let texts = |chain: Vec<Entry>| -> Vec<String> {
+        chain
+            .into_iter()
+            .map(|entry| match entry.kind {
+                EntryKind::Message(m) => m.content,
+                EntryKind::Label(l) => format!("label:{}", l.name),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(
+        texts(native.entry_ancestor_chain("session", &main).await.unwrap()),
+        ["root", "main"]
+    );
+    assert_eq!(
+        texts(native.entry_ancestor_chain("session", &label).await.unwrap()),
+        ["root", "branch", "label:named"]
+    );
+    assert_eq!(
+        texts(native.entry_ancestor_chain("session", &copy).await.unwrap()),
+        ["root", "main"]
+    );
+    // The projection skips bookkeeping entries and keeps conversation order.
+    for (tip, expected) in [
+        (&main, vec!["root", "main"]),
+        (&label, vec!["root", "branch"]),
+        (&copy, vec!["root", "main"]),
+    ] {
         assert_eq!(
             native.entry_build_context("session", tip).await.unwrap(),
-            classic.build_context(tip).unwrap()
+            expected.into_iter().map(Message::user).collect::<Vec<_>>()
         );
     }
     assert!(
@@ -93,48 +112,43 @@ async fn parity(backend: &dyn StorageBackend) {
 }
 
 #[tokio::test]
-async fn memory_native_entry_tree_matches_classic_branches_forks_and_context() {
-    parity(&MemoryStorage::new()).await;
+async fn memory_entry_tree_branches_forks_and_context() {
+    branches_forks_and_context(&MemoryStorage::new()).await;
 }
 
 #[tokio::test]
-async fn sqlite_native_entry_tree_matches_classic_branches_forks_and_context() {
+async fn sqlite_entry_tree_branches_forks_and_context() {
     let ws = tempfile::tempdir().unwrap();
     let backend =
         tinystoragedrivers_sqlite::SqliteStorage::open(ws.path().join("native.sqlite")).unwrap();
-    parity(&backend).await;
+    branches_forks_and_context(&backend).await;
 }
 
 #[tokio::test]
-async fn native_import_and_parent_behavior_matches_actual_classic_store() {
-    let ws = tempfile::tempdir().unwrap();
-    let classic = EntryTree::new(ws.path(), "s");
+async fn import_and_parent_behavior_follow_the_classic_entry_tree_rules() {
     let backend = MemoryStorage::new();
     let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
-    let first = classic.append(None, kind("root")).unwrap();
-    assert_eq!(
-        native.entry_append("s", None, kind("root")).await.unwrap(),
-        first
-    );
-    let second = classic.append(None, kind("another root")).unwrap();
-    assert_eq!(
-        native
-            .entry_append("s", None, kind("another root"))
-            .await
-            .unwrap(),
-        second
-    );
+    let at = |ordinal| EntryId::derive("s", ordinal);
+    // A second root is allowed: `None` is not restricted to the first entry.
+    let first = native.entry_append("s", None, kind("root")).await.unwrap();
+    assert_eq!(first, at(0));
+    let second = native
+        .entry_append("s", None, kind("another root"))
+        .await
+        .unwrap();
+    assert_eq!(second, at(1));
+    // A parent that does not exist is accepted at write time and refused when
+    // the chain is walked, exactly as the classic store did.
     let missing = EntryId::from("missing-parent");
-    let dangling = classic.append(Some(&missing), kind("dangling")).unwrap();
-    assert_eq!(
-        native
-            .entry_append("s", Some(&missing), kind("dangling"))
-            .await
-            .unwrap(),
-        dangling
-    );
-    assert!(classic.ancestor_chain(&dangling).is_err());
+    let dangling = native
+        .entry_append("s", Some(&missing), kind("dangling"))
+        .await
+        .unwrap();
+    assert_eq!(dangling, at(2));
     assert!(native.entry_ancestor_chain("s", &dangling).await.is_err());
+
+    // An imported entry keeps its opaque id and ordinal; re-importing the same
+    // id is a no-op even when the second copy differs.
     let imported = Entry {
         id: EntryId::from("opaque-import-id"),
         parent_id: Some(first.clone()),
@@ -145,32 +159,33 @@ async fn native_import_and_parent_behavior_matches_actual_classic_store() {
     let mut changed = imported.clone();
     changed.kind = kind("ignored on repeated import");
     for input in [vec![imported.clone()], vec![changed]] {
-        classic.import_legacy(&input).unwrap();
         native.entry_import_legacy("s", &input).await.unwrap();
     }
     assert_eq!(
         native.entry_get("s", &imported.id).await.unwrap(),
-        classic.get(&imported.id).unwrap()
+        Some(imported)
     );
+    // Allocation continues past the highest imported ordinal, leaving a gap.
     assert_eq!(
         native
             .entry_append_to_head("s", kind("after gap"))
             .await
             .unwrap(),
-        classic.append_to_head(kind("after gap")).unwrap()
+        at(13)
     );
-    assert_eq!(
-        native.entry_head("s").await.unwrap(),
-        Some(EntryId::derive("s", 13))
-    );
-    let relabel = classic.label(&second, "").unwrap();
-    assert_eq!(native.entry_label("s", &second, "").await.unwrap(), relabel);
-    let relabel2 = classic.label(&first, "").unwrap();
-    assert_eq!(native.entry_label("s", &first, "").await.unwrap(), relabel2);
+    assert_eq!(native.entry_head("s").await.unwrap(), Some(at(13)));
+    // Empty label names are accepted; a name labels one tip, the newest wins.
+    assert_eq!(native.entry_label("s", &second, "").await.unwrap(), at(14));
+    assert_eq!(native.entry_label("s", &first, "").await.unwrap(), at(15));
     assert_eq!(
         native.entry_branches("s").await.unwrap(),
-        classic.branches().unwrap()
+        vec![Branch {
+            name: String::new(),
+            tip_id: at(15)
+        }]
     );
+    // Forking before a root has nowhere to go; before a dangling entry it
+    // lands on the (missing) parent id.
     assert!(
         native
             .entry_fork(
@@ -201,21 +216,14 @@ async fn native_import_and_parent_behavior_matches_actual_classic_store() {
 }
 
 #[tokio::test]
-async fn native_compaction_and_pinned_context_matches_classic_projection() {
+async fn compaction_and_pinned_context_project_summary_pinned_then_kept_rows() {
     use crate::entry_tree::CompactionEntry;
     use tinyagents_harness::summarization::SummaryPlacement;
-    let ws = tempfile::tempdir().unwrap();
-    let classic = EntryTree::new(ws.path(), "s");
     let backend = MemoryStorage::new();
     let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
     let mut ids = Vec::new();
     for text in ["old", "pinned", "kept"] {
-        let id = classic.append_to_head(kind(text)).unwrap();
-        assert_eq!(
-            native.entry_append_to_head("s", kind(text)).await.unwrap(),
-            id
-        );
-        ids.push(id);
+        ids.push(native.entry_append_to_head("s", kind(text)).await.unwrap());
     }
     for placement in [SummaryPlacement::User, SummaryPlacement::System] {
         let entry = EntryKind::Compaction(CompactionEntry {
@@ -226,15 +234,17 @@ async fn native_compaction_and_pinned_context_matches_classic_projection() {
             usage: None,
             details: serde_json::json!({"pinned_entry_id": ids[1]}),
         });
-        let tip = classic.append_to_head(entry.clone()).unwrap();
-        assert_eq!(native.entry_append_to_head("s", entry).await.unwrap(), tip);
-        let expected = classic.build_context(&tip).unwrap();
-        assert_eq!(expected.len(), 3);
-        assert_eq!(expected[1], Message::user("pinned"));
-        assert_eq!(
-            native.entry_build_context("s", &tip).await.unwrap(),
-            expected
-        );
+        let tip = native.entry_append_to_head("s", entry).await.unwrap();
+        let context = native.entry_build_context("s", &tip).await.unwrap();
+        // The summary replaces everything folded; the pinned user row follows
+        // it verbatim, then the rows kept after the boundary.
+        assert_eq!(context.len(), 3);
+        match placement {
+            SummaryPlacement::User => assert_eq!(context[0], Message::user("summary")),
+            SummaryPlacement::System => assert!(matches!(context[0], Message::System(_))),
+        }
+        assert_eq!(context[1], Message::user("pinned"));
+        assert_eq!(context[2], Message::user("kept"));
     }
 }
 
@@ -470,9 +480,7 @@ async fn successful_tree_commit_never_performs_fallible_postcommit_reads() {
 }
 
 #[tokio::test]
-async fn native_import_preserves_duplicate_ordinal_sqlite_insertion_order() {
-    let ws = tempfile::tempdir().unwrap();
-    let classic = EntryTree::new(ws.path(), "s");
+async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
     let backend = MemoryStorage::new();
     let native = DriverRunLedger::new(backend.for_scope(&Scope::local()).unwrap());
     let entries: Vec<_> = ["z-first", "a-last"]
@@ -485,15 +493,15 @@ async fn native_import_preserves_duplicate_ordinal_sqlite_insertion_order() {
             ts: "2025-01-01T00:00:00Z".into(),
         })
         .collect();
-    classic.import_legacy(&entries).unwrap();
     native.entry_import_legacy("s", &entries).await.unwrap();
-    assert_eq!(
-        native.entry_head("s").await.unwrap(),
-        classic.head().unwrap()
-    );
+    // Ties on the ordinal fall back to insertion order, not to the id.
     assert_eq!(
         native.entry_tips("s").await.unwrap(),
-        classic.tips().unwrap()
+        vec![EntryId::from("z-first"), EntryId::from("a-last")]
+    );
+    assert_eq!(
+        native.entry_head("s").await.unwrap(),
+        Some(EntryId::from("z-first"))
     );
 }
 
