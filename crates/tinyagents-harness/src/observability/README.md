@@ -33,7 +33,7 @@ surface and operational constraints.
   - `RedactingSink` — masks secrets in event payloads before forwarding.
   - `JournalSink` — persists observations into a `HarnessEventJournal`.
   - `JsonlSink` — appends records to a JSONL stream via
-    `harness::store::JsonlAppendStore`.
+    a `harness::store::AppendStore` such as `DriverAppendStore`.
   - `SinkHealth` — queue-drop and backend-append-failure totals returned by
     `JournalSink::health` and `JsonlSink::health`.
 - `AgentObservation`-derived metrics:
