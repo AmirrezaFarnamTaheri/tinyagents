@@ -85,6 +85,7 @@ mod tool_policy;
 mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
+mod wind_down;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -145,6 +146,9 @@ pub use stop_hooks::{
 pub use stop_latch::StopLatch;
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
+pub use wind_down::{
+    WindDownCallback, WindDownMiddleware, WindDownPoint, install as install_wind_down,
+};
 pub use unmet_deliverable::{
     UnmetDeliverableMiddleware, candidate_paths, install as install_unmet_deliverable,
     notice as unmet_deliverable_notice, wrap_harness_instruction,
