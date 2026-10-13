@@ -26,7 +26,8 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 
 #[tokio::test(flavor = "current_thread")]
 async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior() {
-    let store: Box<dyn ConversationPersistence> = Box::new(DriverConversationStore::in_memory().await);
+    let store: Box<dyn ConversationPersistence> =
+        Box::new(DriverConversationStore::in_memory().await);
     assert!(store.get_thread("missing").await.unwrap().is_none());
     assert!(store.get_messages("missing").await.unwrap().is_empty());
     assert!(matches!(
@@ -281,10 +282,18 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
     let rows = store.get_messages("one").await.unwrap();
     assert_eq!(rows[0], message("a", "a"));
     assert_eq!(rows[1].extra_metadata, json!({"k": 1}));
-    store.append_message("one", message("c", "c")).await.unwrap();
+    store
+        .append_message("one", message("c", "c"))
+        .await
+        .unwrap();
     assert_eq!(store.get_messages("one").await.unwrap().len(), 3);
     assert_eq!(
-        store.get_thread("one").await.unwrap().unwrap().message_count,
+        store
+            .get_thread("one")
+            .await
+            .unwrap()
+            .unwrap()
+            .message_count,
         3
     );
     assert!(matches!(
@@ -361,9 +370,15 @@ async fn purge_removes_live_and_deleted_threads_and_counts_only_live_ones() {
 async fn a_rewrite_retires_a_stale_append_intent_instead_of_resurrecting_it() {
     let store = DriverConversationStore::in_memory().await;
     store.ensure_thread(thread("one")).await.unwrap();
-    store.append_message("one", message("a", "a")).await.unwrap();
+    store
+        .append_message("one", message("a", "a"))
+        .await
+        .unwrap();
     store.delete_messages_from("one", "a").await.unwrap();
-    store.append_message("one", message("b", "b")).await.unwrap();
+    store
+        .append_message("one", message("b", "b"))
+        .await
+        .unwrap();
     assert_eq!(
         store.get_messages("one").await.unwrap(),
         vec![message("b", "b")]

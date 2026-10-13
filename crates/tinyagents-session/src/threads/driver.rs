@@ -384,7 +384,8 @@ impl ConversationPersistence for DriverConversationStore {
         patch: ThreadMessagePatch,
     ) -> ConversationResult<ThreadMessage> {
         self.admit().await?;
-        self.update_message_native(thread_id, message_id, patch).await
+        self.update_message_native(thread_id, message_id, patch)
+            .await
     }
     async fn delete_messages_from(
         &self,
@@ -392,7 +393,8 @@ impl ConversationPersistence for DriverConversationStore {
         message_id: &str,
     ) -> ConversationResult<Option<usize>> {
         self.admit().await?;
-        self.delete_messages_from_native(thread_id, message_id).await
+        self.delete_messages_from_native(thread_id, message_id)
+            .await
     }
     async fn purge_threads(&self) -> ConversationResult<ConversationPurgeStats> {
         self.admit().await?;

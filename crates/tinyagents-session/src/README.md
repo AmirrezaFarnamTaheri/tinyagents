@@ -62,8 +62,7 @@ reachable under `session::`, `session::run_ledger::`, and
   display readers, thread lookups and usage summaries — see its own
   [README](./transcript/README.md)
 - **Chat threads** — `DriverConversationStore` and its wire types (re-exported at
-  the root), plus the free functions and channel subscriber under
-  `session::threads` — see its own [README](./threads/README.md)
+  the root) under `session::threads` — see its own [README](./threads/README.md)
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
   `InMemorySessionStores`, and `DriverSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)

@@ -48,14 +48,9 @@ impl DriverConversationStore {
                 .map(|message| message.created_at.clone())
                 .unwrap_or_else(|| doc.thread.created_at.clone());
             let body = serde_json::to_value(&doc).map_err(|e| {
-                StorageError::serialization("encode rewritten conversation metadata")
-                    .with_source(e)
+                StorageError::serialization("encode rewritten conversation metadata").with_source(e)
             })?;
-            match self
-                .docs
-                .put(COLLECTION, &key, body, row.unchanged())
-                .await
-            {
+            match self.docs.put(COLLECTION, &key, body, row.unchanged()).await {
                 Ok(_) => {
                     tracing::debug!(
                         target: "tinyagents_session::threads",
@@ -169,7 +164,9 @@ impl DriverConversationStore {
                     stats.thread_count += 1;
                     stats.message_count += row.doc.thread.message_count;
                 }
-                self.docs.delete(COLLECTION, &row.id, Precondition::None).await?;
+                self.docs
+                    .delete(COLLECTION, &row.id, Precondition::None)
+                    .await?;
             }
             // Deleting shifts later rows into the first page, so restart from
             // the head until the collection is empty.

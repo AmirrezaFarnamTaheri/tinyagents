@@ -5,8 +5,7 @@
 //! unsupported authoritative operations refuse.
 
 use super::{
-    ConversationThread, CreateConversationThread, CrossThreadHit,
-    ThreadMessage, ThreadMessagePatch,
+    ConversationThread, CreateConversationThread, CrossThreadHit, ThreadMessage, ThreadMessagePatch,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
