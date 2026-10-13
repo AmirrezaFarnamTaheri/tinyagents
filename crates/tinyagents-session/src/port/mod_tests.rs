@@ -188,6 +188,7 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
             .unwrap()
             .is_none()
     );
+    let dir = tempfile::tempdir().unwrap();
     let default = FileStores {
         workspace: dir.path().to_path_buf(),
     };
