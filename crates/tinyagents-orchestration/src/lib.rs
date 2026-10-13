@@ -21,3 +21,6 @@ pub mod workflow;
 #[cfg(test)]
 #[path = "lib_boundary_tests.rs"]
 mod boundary_tests;
+
+#[cfg(test)]
+mod test_support;
