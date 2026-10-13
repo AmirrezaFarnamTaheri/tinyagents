@@ -604,35 +604,7 @@ pub(super) fn fts_match_query(raw: &str) -> String {
         .join(" AND ")
 }
 
-/// Default cap on how much of a message body is copied into the search index,
-/// in bytes.
-///
-/// Indexing whole messages would let the FTS table grow without bound next to
-/// the message rows themselves, so only a leading snippet is indexed — which
-/// means **a match beyond this offset is not findable**. That is a real
-/// behavioural limit, not an implementation detail, so it is public and
-/// overridable rather than a private constant nobody could see.
-pub const DEFAULT_FTS_SNIPPET_BYTES: usize = 2000;
-
-/// The live snippet cap. Read through [`fts_snippet_bytes`], set through
-/// [`set_fts_snippet_bytes`].
-static FTS_SNIPPET_BYTES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(DEFAULT_FTS_SNIPPET_BYTES);
-
-/// Returns the current FTS snippet cap in bytes.
-pub fn fts_snippet_bytes() -> usize {
-    FTS_SNIPPET_BYTES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Overrides the FTS snippet cap.
-///
-/// Process-wide and takes effect for subsequently indexed content only —
-/// raising it does not retroactively widen what is already indexed. Pair it
-/// with [`super::retention::reindex_fts`] to rebuild the index at the new cap.
-pub fn set_fts_snippet_bytes(bytes: usize) {
-    tracing::debug!("[session_db] fts snippet cap set to {bytes} bytes");
-    FTS_SNIPPET_BYTES.store(bytes, std::sync::atomic::Ordering::Relaxed);
-}
+pub use crate::fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
 
 /// Inserts a message's FTS entry, indexing at most [`fts_snippet_bytes`]
 /// bytes of `content` on a character boundary.
