@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::ids::TaskId;
@@ -169,31 +168,14 @@ impl TaskStore for InMemoryTaskStore {
 
     fn mark_running(&self, task_id: &TaskId) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_status(
-                record,
-                &[OrchestrationTaskStatus::Pending],
-                OrchestrationTaskStatus::Running,
-            )?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::Running;
-            record.started_at = Some(now);
-            record.updated_at = now;
+            transition::mark_running(record)?;
             Ok(record.clone())
         })
     }
 
     fn mark_awaiting(&self, task_id: &TaskId) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_status(
-                record,
-                &[
-                    OrchestrationTaskStatus::Pending,
-                    OrchestrationTaskStatus::Running,
-                ],
-                OrchestrationTaskStatus::Awaiting,
-            )?;
-            record.status = OrchestrationTaskStatus::Awaiting;
-            record.updated_at = SystemTime::now();
+            transition::mark_awaiting(record)?;
             Ok(record.clone())
         })
     }
@@ -204,17 +186,7 @@ impl TaskStore for InMemoryTaskStore {
         question: String,
     ) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_status(
-                record,
-                &[
-                    OrchestrationTaskStatus::Pending,
-                    OrchestrationTaskStatus::Running,
-                ],
-                OrchestrationTaskStatus::Awaiting,
-            )?;
-            record.status = OrchestrationTaskStatus::Awaiting;
-            record.error = Some(question);
-            record.updated_at = SystemTime::now();
+            transition::mark_awaiting_with_question(record, question)?;
             Ok(record.clone())
         })
     }
@@ -225,94 +197,194 @@ impl TaskStore for InMemoryTaskStore {
         result: OrchestrationTaskResult,
     ) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_live(record, OrchestrationTaskStatus::Completed)?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::Completed;
-            record.result = Some(result);
-            record.error = None;
-            record.updated_at = now;
-            record.ended_at = Some(now);
+            transition::complete(record, result)?;
             Ok(record.clone())
         })
     }
 
     fn fail(&self, task_id: &TaskId, error: String) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_live(record, OrchestrationTaskStatus::Failed)?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::Failed;
-            record.result = None;
-            record.error = Some(error);
-            record.updated_at = now;
-            record.ended_at = Some(now);
+            transition::fail(record, error)?;
             Ok(record.clone())
         })
     }
 
     fn timeout(&self, task_id: &TaskId, error: String) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_live(record, OrchestrationTaskStatus::TimedOut)?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::TimedOut;
-            record.result = None;
-            record.error = Some(error);
-            record.updated_at = now;
-            record.ended_at = Some(now);
+            transition::timeout(record, error)?;
             Ok(record.clone())
         })
     }
 
     fn request_cancel(&self, task_id: &TaskId) -> Result<OrchestrationControlOutcome> {
         self.with_task(task_id, |record| {
-            if record.status == OrchestrationTaskStatus::CancelRequested {
-                return Ok(control_outcome(
-                    record,
-                    "cancellation was already requested",
-                ));
-            }
-            require_live(record, OrchestrationTaskStatus::CancelRequested)?;
-            record.status = OrchestrationTaskStatus::CancelRequested;
-            record.updated_at = SystemTime::now();
-            Ok(control_outcome(record, "cancellation requested"))
+            let message = transition::request_cancel(record)?;
+            Ok(control_outcome(record, message))
         })
     }
 
     fn mark_cancelled(&self, task_id: &TaskId) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            require_status(
-                record,
-                &[OrchestrationTaskStatus::CancelRequested],
-                OrchestrationTaskStatus::Cancelled,
-            )?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::Cancelled;
-            record.updated_at = now;
-            record.ended_at = Some(now);
+            transition::mark_cancelled(record)?;
             Ok(record.clone())
         })
     }
 
     fn kill(&self, task_id: &TaskId) -> Result<OrchestrationControlOutcome> {
         self.with_task(task_id, |record| {
-            require_live(record, OrchestrationTaskStatus::Abandoned)?;
-            let now = SystemTime::now();
-            record.status = OrchestrationTaskStatus::Abandoned;
-            record.error = Some("task abandoned after kill request".to_string());
-            record.updated_at = now;
-            record.ended_at = Some(now);
-            Ok(control_outcome(record, "task abandoned after kill request"))
+            let message = transition::kill(record)?;
+            Ok(control_outcome(record, message))
         })
     }
 
     fn set_timeout_ms(&self, task_id: &TaskId, timeout_ms: u64) -> Result<OrchestrationTaskRecord> {
         self.with_task(task_id, |record| {
-            if record.is_terminal() {
-                return Err(invalid_transition(record, OrchestrationTaskStatus::Running));
-            }
-            record.spec.timeout_ms = Some(timeout_ms);
-            record.updated_at = SystemTime::now();
+            transition::set_timeout_ms(record, timeout_ms)?;
             Ok(record.clone())
         })
+    }
+}
+
+/// The task lifecycle state machine as pure functions over one record.
+///
+/// Each function validates the transition and mutates the record in place, or
+/// returns the error without touching it. [`InMemoryTaskStore`] applies them
+/// under its lock and [`DriverTaskStore`](crate::DriverTaskStore) applies them
+/// inside a version-checked write, so every store enforces the same rules.
+pub(crate) mod transition {
+    use std::time::SystemTime;
+
+    use tinyagents_harness::error::Result;
+
+    use super::{invalid_transition, require_live, require_status};
+    use crate::types::{OrchestrationTaskRecord, OrchestrationTaskResult, OrchestrationTaskStatus};
+
+    pub(crate) fn mark_running(record: &mut OrchestrationTaskRecord) -> Result<()> {
+        require_status(
+            record,
+            &[OrchestrationTaskStatus::Pending],
+            OrchestrationTaskStatus::Running,
+        )?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::Running;
+        record.started_at = Some(now);
+        record.updated_at = now;
+        Ok(())
+    }
+
+    pub(crate) fn mark_awaiting(record: &mut OrchestrationTaskRecord) -> Result<()> {
+        require_status(
+            record,
+            &[
+                OrchestrationTaskStatus::Pending,
+                OrchestrationTaskStatus::Running,
+            ],
+            OrchestrationTaskStatus::Awaiting,
+        )?;
+        record.status = OrchestrationTaskStatus::Awaiting;
+        record.updated_at = SystemTime::now();
+        Ok(())
+    }
+
+    pub(crate) fn mark_awaiting_with_question(
+        record: &mut OrchestrationTaskRecord,
+        question: String,
+    ) -> Result<()> {
+        require_status(
+            record,
+            &[
+                OrchestrationTaskStatus::Pending,
+                OrchestrationTaskStatus::Running,
+            ],
+            OrchestrationTaskStatus::Awaiting,
+        )?;
+        record.status = OrchestrationTaskStatus::Awaiting;
+        record.error = Some(question);
+        record.updated_at = SystemTime::now();
+        Ok(())
+    }
+
+    pub(crate) fn complete(
+        record: &mut OrchestrationTaskRecord,
+        result: OrchestrationTaskResult,
+    ) -> Result<()> {
+        require_live(record, OrchestrationTaskStatus::Completed)?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::Completed;
+        record.result = Some(result);
+        record.error = None;
+        record.updated_at = now;
+        record.ended_at = Some(now);
+        Ok(())
+    }
+
+    pub(crate) fn fail(record: &mut OrchestrationTaskRecord, error: String) -> Result<()> {
+        require_live(record, OrchestrationTaskStatus::Failed)?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::Failed;
+        record.result = None;
+        record.error = Some(error);
+        record.updated_at = now;
+        record.ended_at = Some(now);
+        Ok(())
+    }
+
+    pub(crate) fn timeout(record: &mut OrchestrationTaskRecord, error: String) -> Result<()> {
+        require_live(record, OrchestrationTaskStatus::TimedOut)?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::TimedOut;
+        record.result = None;
+        record.error = Some(error);
+        record.updated_at = now;
+        record.ended_at = Some(now);
+        Ok(())
+    }
+
+    /// Returns the control message. An already-requested cancellation is
+    /// idempotent: it reports success without touching the record.
+    pub(crate) fn request_cancel(record: &mut OrchestrationTaskRecord) -> Result<&'static str> {
+        if record.status == OrchestrationTaskStatus::CancelRequested {
+            return Ok("cancellation was already requested");
+        }
+        require_live(record, OrchestrationTaskStatus::CancelRequested)?;
+        record.status = OrchestrationTaskStatus::CancelRequested;
+        record.updated_at = SystemTime::now();
+        Ok("cancellation requested")
+    }
+
+    pub(crate) fn mark_cancelled(record: &mut OrchestrationTaskRecord) -> Result<()> {
+        require_status(
+            record,
+            &[OrchestrationTaskStatus::CancelRequested],
+            OrchestrationTaskStatus::Cancelled,
+        )?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::Cancelled;
+        record.updated_at = now;
+        record.ended_at = Some(now);
+        Ok(())
+    }
+
+    pub(crate) fn kill(record: &mut OrchestrationTaskRecord) -> Result<&'static str> {
+        require_live(record, OrchestrationTaskStatus::Abandoned)?;
+        let now = SystemTime::now();
+        record.status = OrchestrationTaskStatus::Abandoned;
+        record.error = Some("task abandoned after kill request".to_string());
+        record.updated_at = now;
+        record.ended_at = Some(now);
+        Ok("task abandoned after kill request")
+    }
+
+    pub(crate) fn set_timeout_ms(
+        record: &mut OrchestrationTaskRecord,
+        timeout_ms: u64,
+    ) -> Result<()> {
+        if record.is_terminal() {
+            return Err(invalid_transition(record, OrchestrationTaskStatus::Running));
+        }
+        record.spec.timeout_ms = Some(timeout_ms);
+        record.updated_at = SystemTime::now();
+        Ok(())
     }
 }
 
@@ -324,7 +396,7 @@ pub(crate) fn orchestration_not_found(task_id: &TaskId) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("orchestration task `{task_id}` does not exist"))
 }
 
-fn require_live(record: &OrchestrationTaskRecord, next: OrchestrationTaskStatus) -> Result<()> {
+pub(crate) fn require_live(record: &OrchestrationTaskRecord, next: OrchestrationTaskStatus) -> Result<()> {
     if record.status.is_live() {
         Ok(())
     } else {
@@ -332,7 +404,7 @@ fn require_live(record: &OrchestrationTaskRecord, next: OrchestrationTaskStatus)
     }
 }
 
-fn require_status(
+pub(crate) fn require_status(
     record: &OrchestrationTaskRecord,
     allowed: &[OrchestrationTaskStatus],
     next: OrchestrationTaskStatus,
@@ -344,7 +416,7 @@ fn require_status(
     }
 }
 
-fn invalid_transition(
+pub(crate) fn invalid_transition(
     record: &OrchestrationTaskRecord,
     next: OrchestrationTaskStatus,
 ) -> TinyAgentsError {
@@ -354,7 +426,7 @@ fn invalid_transition(
     ))
 }
 
-fn control_outcome(
+pub(crate) fn control_outcome(
     record: &OrchestrationTaskRecord,
     message: impl Into<String>,
 ) -> OrchestrationControlOutcome {

@@ -1981,6 +1981,8 @@ dependencies = [
  "tempfile",
  "tinyagents-harness",
  "tinyinference-llm",
+ "tinystoragedrivers-core",
+ "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
  "tracing",
