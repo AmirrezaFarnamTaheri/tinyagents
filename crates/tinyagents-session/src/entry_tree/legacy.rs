@@ -10,7 +10,7 @@
 //! [`EntryId::derive`], so re-reading the same source (same session id, same
 //! message order) always assigns the same ids and re-importing is a no-op
 //! for a store that has already imported it (see
-//! [`super::EntryTree::import_legacy`]).
+//! [`RunLedgerStore::entry_import_legacy`](crate::run_ledger::RunLedgerStore::entry_import_legacy)).
 
 use crate::transcript::{SessionTranscript, TranscriptMessage};
 use crate::types::SessionMessage;
