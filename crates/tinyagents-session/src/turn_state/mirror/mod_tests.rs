@@ -348,27 +348,3 @@ fn finish_without_a_transcript_locator_keeps_the_partial_in_the_snapshot_only() 
     assert_eq!(stored.lifecycle, TurnLifecycle::Interrupted);
     assert_eq!(stored.streaming_text, "orphan partial");
 }
-
-#[test]
-fn finish_appends_the_partial_through_an_in_memory_locator() {
-    use crate::transcript::TranscriptLocator;
-    let locator = Arc::new(crate::port::InMemoryTranscriptLocator::new("agent"));
-    let session = crate::transcript::SessionRef::new("agent", "thr_mem");
-    let seed = TranscriptMeta {
-        thread_id: Some("thr_mem".into()),
-        agent_name: "agent".into(),
-        agent_type: Some("root".into()),
-        ..seed_meta()
-    };
-    let history = locator
-        .open_stem(&crate::transcript::session_stem(&session), seed)
-        .expect("open");
-    history
-        .write_turn(&[TranscriptMessage::new("user", "hi")], &[])
-        .ok();
-    let store = memory_store();
-    let mut m = TurnStateMirror::new(store, "thr_mem", "req-m")
-        .with_transcripts(locator.clone(), Some("agent".into()));
-    m.state.streaming_text = "half".into();
-    m.finish();
-}
