@@ -63,7 +63,7 @@ fn decode(record: Value) -> Result<OrchestrationTaskRecord> {
         .map_err(|e| TinyAgentsError::Storage(format!("task store: decode record: {e}")))
 }
 
-/// A durable [`TaskStore`] stored in a driver [`DocumentStore`].
+/// A durable [`TaskStore`](crate::TaskStore) stored in a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
 pub struct DriverTaskStore {
     docs: Arc<dyn DocumentStore>,

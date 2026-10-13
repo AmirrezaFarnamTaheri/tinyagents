@@ -259,7 +259,7 @@ pub struct WorkflowRun {
 ///
 /// A driver takes this lease before acting on a workflow so at most one
 /// process is ever advancing a given run; see
-/// [`super::ops::try_claim_workflow_run`].
+/// `try_claim_workflow_run`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkflowLeaseClaim {
     /// The lease was free (or expired) and is now held by the caller.

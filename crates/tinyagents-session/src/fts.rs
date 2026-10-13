@@ -24,7 +24,7 @@ pub fn fts_snippet_bytes() -> usize {
 ///
 /// Process-wide and takes effect for subsequently indexed content only —
 /// raising it does not retroactively widen what is already indexed. Pair it
-/// with [`crate::retention::reindex_fts`] to rebuild the index at the new cap.
+/// with [`SessionHistoryStore::history_reindex`](crate::SessionHistoryStore::history_reindex) to rebuild the index at the new cap.
 pub fn set_fts_snippet_bytes(bytes: usize) {
     tracing::debug!("[session_db] fts snippet cap set to {bytes} bytes");
     FTS_SNIPPET_BYTES.store(bytes, std::sync::atomic::Ordering::Relaxed);

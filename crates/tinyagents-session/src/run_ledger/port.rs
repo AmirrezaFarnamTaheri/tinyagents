@@ -46,7 +46,7 @@ pub trait RunLedgerStore: Send + Sync {
     /// (`{}` is treated as "no metadata supplied"). `kind` additionally refuses
     /// to downgrade a `worker_thread` run back to `subagent`, since a run that
     /// has already been promoted to a worker thread should not silently revert.
-    /// Use [`transition_agent_run_status`] instead when a caller needs to
+    /// Use `transition_agent_run_status` instead when a caller needs to
     /// *clear* `error` or `completed_at`.
     async fn upsert_agent_run(&self, upsert: AgentRunUpsert) -> Result<AgentRun>;
 
@@ -54,11 +54,11 @@ pub trait RunLedgerStore: Send + Sync {
     /// the same id, returning the row as stored.
     ///
     /// Bumps `revision` on every call, including the first insert, so
-    /// [`compare_and_swap_workflow_run`] callers always have a fresh fencing
+    /// `compare_and_swap_workflow_run` callers always have a fresh fencing
     /// token. When `status` transitions to a terminal value the driver lease
     /// (`lease_owner` / `lease_expires_at`) is cleared, since a finished run has
-    /// nothing left to drive. Prefer [`compare_and_swap_workflow_run`] or
-    /// [`compare_and_swap_workflow_run_lifecycle`] for a driver actively holding
+    /// nothing left to drive. Prefer `compare_and_swap_workflow_run` or
+    /// `compare_and_swap_workflow_run_lifecycle` for a driver actively holding
     /// a lease — this plain upsert has no revision fencing of its own and can
     /// clobber a concurrent driver's write.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun>;
@@ -132,7 +132,7 @@ pub trait RunLedgerStore: Send + Sync {
 
     /// Apply a durable status transition to a single agent run.
     ///
-    /// Unlike [`upsert_agent_run`] — whose `ON CONFLICT` clause `COALESCE`s the
+    /// Unlike `upsert_agent_run` — whose `ON CONFLICT` clause `COALESCE`s the
     /// `error` and `completed_at` columns and can therefore only ever *set* them —
     /// this is a direct `UPDATE` that can both set and *clear* both columns. That
     /// is required by control verbs such as "retry", which moves a failed run back
@@ -150,7 +150,7 @@ pub trait RunLedgerStore: Send + Sync {
         completed_at: Option<DateTime<Utc>>,
     ) -> Result<Option<AgentRun>>;
 
-    /// Compare-and-set form of [`transition_agent_run_status`]: move run `id` to
+    /// Compare-and-set form of `transition_agent_run_status`: move run `id` to
     /// `status` only if it is still in `expected`, and record `event` in the same
     /// transaction, so a status change never commits without its timeline entry
     /// and never lands on top of a status another writer recorded meanwhile.
@@ -205,7 +205,7 @@ pub trait RunLedgerStore: Send + Sync {
 
     /// List durable workflow runs, most-recently-updated first, with optional
     /// filters (definition id, status, parent thread) and pagination. Mirrors
-    /// [`list_agent_runs`] for the workflow_runs table.
+    /// `list_agent_runs` for the workflow_runs table.
     async fn list_workflow_runs(
         &self,
         request: &WorkflowRunListRequest,
@@ -416,7 +416,7 @@ pub trait RunLedgerStore: Send + Sync {
     ///
     /// The oldest messages go first. Their FTS entries are content-addressed by
     /// session rather than by message id, so trimming a session's messages
-    /// necessarily leaves its index entries stale; call [`reindex_fts`] afterwards
+    /// necessarily leaves its index entries stale; call `reindex_fts` afterwards
     /// if search accuracy for trimmed sessions matters.
     async fn trim_session_messages(&self, session_id: &str, keep_last: usize) -> Result<usize>;
 
