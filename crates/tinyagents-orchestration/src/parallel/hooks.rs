@@ -52,62 +52,34 @@ where
     D: Fn(Worker<P>, String) -> R,
 {
     let concurrency = resolve_concurrency(configured_concurrency, workers.len());
-    // `branch_ctx` carries the index; tag workers so hooks see it too.
-    let indexed: Vec<(usize, Worker<P>)> = workers.into_iter().enumerate().collect();
-    let out = run_indexed(indexed, concurrency, cancel, branch_ctx, |idx, w, c| {
-        let denial = hooks.approve(idx, &w);
-        let fut = match denial {
-            Ok(()) => {
-                hooks.on_start(idx, &w);
-                Some(exec(w, c))
-            }
-            Err(reason) => {
-                tracing::debug!(index = idx, "[parallel] worker denied by approval hook");
-                let r = denied(w, reason);
-                return Either::Ready(r);
-            }
-        };
-        Either::Run(fut.expect("set above"))
-    })
-    .await?;
-    for (i, r) in out.iter().enumerate() {
-        hooks.on_finish(i, r);
-    }
-    Ok(out)
-}
-
-enum Either<R, Fut> {
-    Ready(R),
-    Run(Fut),
-}
-
-async fn run_indexed<P, C, R, B, G, Fut>(
-    indexed: Vec<(usize, Worker<P>)>,
-    concurrency: usize,
-    cancel: CancellationToken,
-    branch_ctx: B,
-    prep: G,
-) -> Result<Vec<R>>
-where
-    B: Fn(usize) -> C,
-    G: Fn(usize, Worker<P>, C) -> Either<R, Fut>,
-    Fut: Future<Output = R>,
-{
-    // Reuse `run` over a unit worker list so ordering, serial fallback and
-    // cancellation semantics are exactly those of `run`.
-    let workers: Vec<Worker<P>> = indexed.into_iter().map(|(_, w)| w).collect();
+    // `branch_ctx` carries the index; tag it so hooks see it too. Hooks run on
+    // the branch's own task, so `on_finish` fires as each worker completes.
     run(
         workers,
         concurrency,
         cancel,
         |i| (i, branch_ctx(i)),
-        |w, (i, c)| {
-            let step = prep(i, w, c);
-            async move {
-                match step {
-                    Either::Ready(r) => r,
-                    Either::Run(fut) => fut.await,
+        |w, (idx, c)| {
+            let denial = hooks.approve(idx, &w);
+            let denied_result = match denial {
+                Ok(()) => {
+                    hooks.on_start(idx, &w);
+                    None
                 }
+                Err(reason) => {
+                    tracing::debug!(index = idx, "[parallel] worker denied by approval hook");
+                    Some(denied(w.clone_for_denial(), reason))
+                }
+            };
+            let fut = denied_result.is_none().then(|| exec(w, c));
+            async move {
+                let r = match (denied_result, fut) {
+                    (Some(r), _) => r,
+                    (None, Some(fut)) => fut.await,
+                    (None, None) => unreachable!("one of denied/exec is always set"),
+                };
+                hooks.on_finish(idx, &r);
+                r
             }
         },
     )
