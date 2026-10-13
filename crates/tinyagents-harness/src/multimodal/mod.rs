@@ -80,6 +80,7 @@ pub mod payload;
 pub mod png;
 pub use png::optimize_png_lossless;
 pub mod resolve;
+pub mod blob_stash;
 pub mod stash;
 pub mod types;
 
@@ -103,6 +104,7 @@ pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, trunca
 pub use resolve::{
     NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
 };
+pub use blob_stash::{BlobAttachmentStash, StashedAttachment};
 pub use stash::AttachmentStash;
 
 pub use types::{ResolvedAttachment, UnknownMimePolicy};
