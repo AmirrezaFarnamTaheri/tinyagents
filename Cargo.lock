@@ -1950,7 +1950,7 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-tasks",
  "tinyinference-llm",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
@@ -1986,7 +1986,7 @@ dependencies = [
  "tinyinference-image",
  "tinyinference-llm",
  "tinyinference-video",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools",
  "tinytools-agent",
@@ -2019,7 +2019,7 @@ dependencies = [
  "tinyagents-session",
  "tinyinference-embeddings",
  "tinyinference-llm",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
@@ -2060,7 +2060,7 @@ dependencies = [
  "tinyagents-session",
  "tinyagents-tasks",
  "tinyinference-llm",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
@@ -2121,7 +2121,7 @@ dependencies = [
  "thiserror",
  "tinyagents-harness",
  "tinyagents-tasks",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools-agent",
  "tokio",
@@ -2140,7 +2140,7 @@ dependencies = [
  "tempfile",
  "tinyagents-harness",
  "tinyinference-llm",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
@@ -2187,7 +2187,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tinyinference-core",
- "tinystoragedrivers-core 0.8.0 (git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0)",
+ "tinystoragedrivers-core",
  "tokio",
  "tracing",
 ]
@@ -2270,21 +2270,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinystoragedrivers-core"
-version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "tinystoragedrivers-secrets"
 version = "0.8.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0#f4b73d358f2e7b2ae9993f8e696401b1d2639858"
 dependencies = [
  "async-trait",
  "atomicwrites",
@@ -2296,7 +2283,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tinystoragedrivers-core 0.8.0 (git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.8.0)",
+ "tinystoragedrivers-core",
  "tokio",
  "winapi-util",
  "windows-permissions",
@@ -2310,7 +2297,7 @@ version = "0.8.0"
 dependencies = [
  "rusqlite",
  "serde_json",
- "tinystoragedrivers-core 0.8.0",
+ "tinystoragedrivers-core",
  "tokio",
 ]
 
