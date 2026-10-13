@@ -139,7 +139,7 @@ hand-off and nothing product-specific:
   result policy, `omitted_chars`, optional `CompletionArtifact`),
   `finished_at`, `attempts`, `notify_mode` and `state` (`Pending` /
   `Delivered` / `Tombstoned` / `GaveUp`).
-- `CompletionStore` — `InMemoryCompletionStore` and `JsonlCompletionStore`.
+- `CompletionStore` — `InMemoryCompletionStore` and `DriverCompletionStore`.
   The JSONL log is append-only, one `fsync`ed line per change, replayed to the
   latest record per task id on open. A torn final line from a crash is dropped
   and the file truncated back to the last whole line; an unreadable complete
