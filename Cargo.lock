@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-sqlite"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "rusqlite",
  "serde_json",
