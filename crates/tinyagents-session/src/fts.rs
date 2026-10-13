@@ -44,3 +44,7 @@ pub fn snippet(content: &str, limit: usize) -> &str {
     }
     &content[..cutoff]
 }
+
+#[cfg(test)]
+#[path = "fts_tests.rs"]
+mod tests;

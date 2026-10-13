@@ -156,3 +156,7 @@ pub struct SessionSearchResult {
     /// pagination (i.e. not `sessions.len()`).
     pub total: u64,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
