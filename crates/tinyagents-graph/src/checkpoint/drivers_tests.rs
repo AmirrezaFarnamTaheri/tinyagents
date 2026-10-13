@@ -222,3 +222,80 @@ async fn a_corrupt_record_is_a_checkpoint_error() {
     let error = cp.get("t", None).await.unwrap_err();
     assert!(matches!(error, TinyAgentsError::Checkpoint(_)), "{error:?}");
 }
+
+/// A `State` whose `Deserialize` counts every call, so a test can assert how
+/// many full states a read decoded rather than only what it returned.
+#[derive(Debug, Clone, Serialize)]
+struct CountedState(i32);
+
+static STATE_DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl<'de> serde::Deserialize<'de> for CountedState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        STATE_DECODES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        i32::deserialize(deserializer).map(CountedState)
+    }
+}
+
+#[tokio::test]
+async fn list_and_limited_history_decode_only_what_they_return() {
+    use std::sync::atomic::Ordering;
+    let cp = DriverCheckpointer::<CountedState>::new(docs(&MemoryStorage::new(), "local"));
+    let mut parent: Option<String> = None;
+    for step in 0..40 {
+        let id = format!("c{step}");
+        let checkpoint = Checkpoint::new(CountedState(step), Vec::new())
+            .with_thread_id("t".to_string())
+            .with_checkpoint_id(id.clone())
+            .with_parent_checkpoint_id(parent.clone())
+            .with_metadata(json!({ "source": "loop", "step": step }));
+        cp.put(checkpoint).await.unwrap();
+        parent = Some(id);
+    }
+
+    STATE_DECODES.store(0, Ordering::SeqCst);
+    let listed = cp.list("t").await.unwrap();
+    assert_eq!(listed.len(), 40);
+    assert_eq!(listed[0].checkpoint_id, "c0");
+    assert_eq!(listed[39].checkpoint_id, "c39");
+    assert_eq!(
+        STATE_DECODES.load(Ordering::SeqCst),
+        0,
+        "listing must not deserialize any record's full State"
+    );
+
+    let recent = cp.state_history("t", &[], Some(1)).await.unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].checkpoint.checkpoint_id, "c39");
+    assert_eq!(
+        STATE_DECODES.load(Ordering::SeqCst),
+        1,
+        "a one-record history decodes one record, not the whole chain"
+    );
+}
+
+#[tokio::test]
+async fn put_with_writes_persists_the_checkpoint_and_its_writes() {
+    let cp = checkpointer();
+    let writes = vec![PendingWrite {
+        node: tinyagents_harness::ids::NodeId::from("n"),
+        task_id: tinyagents_harness::ids::TaskId::from("task-1"),
+        idx: 0,
+        channel: "out".to_string(),
+        payload: json!("hi"),
+    }];
+    let id = cp
+        .put_with_writes(sample("t", "c1", None, 1), &writes)
+        .await
+        .unwrap();
+    assert_eq!(id.as_str(), "c1");
+    assert!(cp.get("t", Some("c1")).await.unwrap().is_some());
+    let config = CheckpointConfig {
+        thread_id: "t".to_string(),
+        checkpoint_id: Some("c1".to_string()),
+        namespace: vec![],
+    };
+    let stored = cp.get_writes(&config).await.unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].channel, "out");
+}

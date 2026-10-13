@@ -288,13 +288,22 @@ where
         page.items.into_iter().next().map(Self::decode).transpose()
     }
 
+    /// Metadata only: the stored `State` is skipped rather than decoded, so
+    /// listing a long thread costs its headers, not its states.
     async fn list(&self, thread_id: &str) -> Result<Vec<CheckpointMetadata>> {
-        Ok(self
-            .get_thread(thread_id)
+        self.thread_docs(thread_id)
             .await?
-            .iter()
-            .map(Checkpoint::to_metadata)
-            .collect())
+            .into_iter()
+            .map(|stored| {
+                let record = stored.doc.get("record").cloned().unwrap_or(Value::Null);
+                let mut header: Checkpoint<serde::de::IgnoredAny> = serde_json::from_value(record)
+                    .map_err(|error| {
+                        decode_json_err("storage driver checkpointer", "record", error)
+                    })?;
+                header.normalize();
+                Ok(header.to_metadata())
+            })
+            .collect()
     }
 
     async fn get_thread(&self, thread_id: &str) -> Result<Vec<Checkpoint<State>>> {
