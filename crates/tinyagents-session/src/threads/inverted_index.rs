@@ -224,7 +224,7 @@ impl InvertedIndex {
     }
 
     /// The Phase 1 + Phase 2 query pipeline. Mirrors the contract of
-    /// `ConversationStore::search_cross_thread_messages` so the store
+    /// `ConversationPersistence::search_cross_thread_messages` so the store
     /// method can be a thin shim.
     pub fn search(
         &self,
