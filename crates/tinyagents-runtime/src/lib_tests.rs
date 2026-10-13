@@ -60,6 +60,34 @@ impl SessionDriver for WaitingDriver {
     }
 }
 
+/// Waits for the turn's cancellation, then hands back the rounds it
+/// completed, the way a cancellation-aware host driver does.
+struct CancelAwareDriver(
+    tinyagents_harness::CancellationToken,
+    Arc<tokio::sync::Notify>,
+);
+
+#[async_trait]
+impl SessionDriver for CancelAwareDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        self.1.notify_one();
+        self.0.cancelled().await;
+        let mut history = request.history;
+        history.push(Message::assistant("completed round"));
+        Err(DriverFailure {
+            outcome: None,
+            error: RuntimeError::Driver("stopped".into()),
+            partial: Some(DriverOutcome {
+                outcome: None,
+                history,
+                output: None,
+                partial: None,
+                interrupted: true,
+            }),
+        })
+    }
+}
+
 struct RegisteredTool;
 
 #[async_trait]
@@ -935,6 +963,56 @@ async fn cancellation_while_the_driver_is_waiting_has_one_cancelled_terminal() {
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Cancelled]
     ));
+}
+
+#[tokio::test]
+async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
+    let directory = tempfile::tempdir().unwrap();
+    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let codec = Arc::new(Codec {
+        turn_usage: Mutex::new(Some(turn_usage())),
+        ..Default::default()
+    });
+    let options = TurnOptions::default();
+    let cancellation = options.cancellation.clone();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let (hook, events) = hook(vec![]);
+    let mut session = SessionBuilder::new(Arc::new(CancelAwareDriver(
+        cancellation.clone(),
+        started.clone(),
+    )))
+    .codec(codec)
+    .hooks(hook)
+    .transcript(locator, "agent", meta())
+    .build()
+    .unwrap();
+    let turn = tokio::spawn(async move {
+        let result = session
+            .turn(SessionTurnRequest::new(Message::user("stop me")), options)
+            .await;
+        (result, session)
+    });
+    started.notified().await;
+    cancellation.cancel();
+    let (result, session) = turn.await.unwrap();
+
+    // Still a cancellation to the caller and the hooks...
+    assert_eq!(result, Err(RuntimeError::Cancelled));
+    assert!(matches!(
+        events.terminal.lock().unwrap().as_slice(),
+        [SessionTerminal::Cancelled]
+    ));
+    assert!(events.receipts.lock().unwrap().is_empty());
+    // ...but the prompt and the completed round are durable model history,
+    // so the next turn sees them and edit/regenerate can find the turn.
+    let persisted = read_transcript(&directory.path().join("session_raw/agent.jsonl")).unwrap();
+    let contents: Vec<&str> = persisted
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert_eq!(contents, ["stop me", "completed round"]);
+    assert_eq!(session.history().len(), 2);
 }
 
 #[tokio::test]
