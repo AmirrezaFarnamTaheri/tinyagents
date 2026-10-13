@@ -229,7 +229,9 @@ impl TaskStateSummarizer {
     }
 
     /// One state update over `chunk`. `None` after [`STATE_ATTEMPTS`] replies
-    /// that were tool-call markup or held no parseable JSON.
+    /// that were tool-call markup or held no parseable JSON. A retryable model
+    /// error (5xx, 429, timeout) uses up an attempt too; a permanent one, or a
+    /// retryable one on the last attempt, is returned.
     async fn update_state(
         &self,
         chunk: &[Message],
@@ -261,10 +263,28 @@ impl TaskStateSummarizer {
         }
         for attempt in 1..=STATE_ATTEMPTS {
             crate::summarization::dispatch::mark_dispatched();
-            let response = self.model.invoke(&(), request.clone()).await.map_err(|e| {
-                tracing::warn!(error = %e, "[tinyagents::task_state] state-update call failed");
-                TinyAgentsError::Model(format!("task-state model call failed: {e}"))
-            })?;
+            let response = match self.model.invoke(&(), request.clone()).await {
+                Ok(response) => response,
+                Err(e) => {
+                    let message = e.to_string();
+                    // A transient failure (a gateway 504, a 429, a timeout) on
+                    // one ~100k-token chunk would otherwise drop that chunk's
+                    // state; spend the remaining attempt on it.
+                    let retryable = crate::retry::is_retryable(&TinyAgentsError::from(e));
+                    tracing::warn!(
+                        error = %message,
+                        attempt,
+                        retryable,
+                        "[tinyagents::task_state] state-update call failed"
+                    );
+                    if retryable && attempt < STATE_ATTEMPTS {
+                        continue;
+                    }
+                    return Err(TinyAgentsError::Model(format!(
+                        "task-state model call failed: {message}"
+                    )));
+                }
+            };
             if let Some(reported) = response.usage {
                 *usage = Some(usage.map_or(reported, |sum| sum + reported));
             }
@@ -350,11 +370,22 @@ impl Summarizer for TaskStateSummarizer {
                 Err(err) => return Err(err),
             }
         }
-        let degraded = state.is_none();
-        if degraded {
+        let ledger_only = state.is_none();
+        // A skipped chunk's turns reach the checkpoint only through the
+        // ledger, so a run with any skipped chunk is degraded even when a
+        // later chunk produced a state.
+        let degraded = ledger_only || skipped > 0;
+        if ledger_only {
             tracing::warn!(
                 model = %self.model_id,
                 "[tinyagents::task_state] no model state; checkpoint carries the ledger only"
+            );
+        } else if skipped > 0 {
+            tracing::warn!(
+                model = %self.model_id,
+                chunks = chunks.len(),
+                chunks_skipped = skipped,
+                "[tinyagents::task_state] partial model state; skipped chunks carry the ledger only"
             );
         }
         let body = render_task_state(&state.unwrap_or_default().bounded(), &ledger);
@@ -375,10 +406,16 @@ impl Summarizer for TaskStateSummarizer {
                     .collect(),
                 original_token_estimate,
                 summary_token_estimate,
-                reason: if degraded {
+                reason: if ledger_only {
                     format!(
                         "TaskStateSummarizer via {} (ledger only: model state unavailable)",
                         self.model_id
+                    )
+                } else if skipped > 0 {
+                    format!(
+                        "TaskStateSummarizer via {} ({} chunk(s), {skipped} skipped: partial state)",
+                        self.model_id,
+                        chunks.len()
                     )
                 } else {
                     format!(
