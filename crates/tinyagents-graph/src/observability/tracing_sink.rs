@@ -1,5 +1,5 @@
 //! [`GraphTracingSink`] — mirrors the graph executor's lifecycle
-//! stream onto openhuman's `tracing` diagnostics.
+//! stream onto `tracing` diagnostics.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::stream::{GraphEvent, GraphEventEnvelope, GraphEventSink};
 
 /// A [`GraphEventSink`] that mirrors the graph executor's lifecycle
-/// stream onto openhuman's `tracing` diagnostics — an observability journal for
+/// stream onto `tracing` diagnostics — an observability journal for
 /// graph runs. Node/step/run/route transitions land as
 /// grep-friendly `[graph]` lines tagged with `label`; the running event count is
 /// exposed for tests. Hosts share one per graph family (fan-out,

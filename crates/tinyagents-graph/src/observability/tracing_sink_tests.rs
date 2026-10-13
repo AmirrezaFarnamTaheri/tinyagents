@@ -1,5 +1,5 @@
 use super::*;
-use crate::ids::{NodeId, RunId};
+use tinyagents_harness::ids::{NodeId, RunId};
 use std::sync::atomic::Ordering;
 
 #[test]
