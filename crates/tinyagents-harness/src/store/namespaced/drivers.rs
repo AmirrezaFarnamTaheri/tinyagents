@@ -280,7 +280,7 @@ impl DriverNamespacedStore {
         ))
     }
 
-    async fn search(&self, query: &SearchQuery, now: u64) -> Result<Vec<Item>> {
+    async fn search_items(&self, query: &SearchQuery, now: u64) -> Result<Vec<Item>> {
         let mut found: Vec<Item> = self
             .live_items(&query.namespace_prefix, now)
             .await?
@@ -306,7 +306,7 @@ impl DriverNamespacedStore {
             .collect())
     }
 
-    async fn list_namespaces(&self, query: &ListNamespacesQuery, now: u64) -> Result<Vec<Namespace>> {
+    async fn list_namespace_items(&self, query: &ListNamespacesQuery, now: u64) -> Result<Vec<Namespace>> {
         // A wildcard first segment cannot narrow by root.
         let narrow: Vec<String> = query
             .prefix
@@ -428,9 +428,9 @@ impl NamespacedStore for DriverNamespacedStore {
                     }
                     StoreResult::Ack
                 }
-                StoreOp::Search(query) => StoreResult::Items(self.search(query, now).await?),
+                StoreOp::Search(query) => StoreResult::Items(self.search_items(query, now).await?),
                 StoreOp::ListNamespaces(query) => {
-                    StoreResult::Namespaces(self.list_namespaces(query, now).await?)
+                    StoreResult::Namespaces(self.list_namespace_items(query, now).await?)
                 }
             });
         }

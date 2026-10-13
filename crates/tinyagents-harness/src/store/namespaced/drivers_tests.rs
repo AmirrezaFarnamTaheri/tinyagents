@@ -1,3 +1,4 @@
+use super::super::FlatNamespacedStore;
 use super::*;
 use crate::store::Store as FlatStore;
 use crate::store::conformance::run_namespaced_store_conformance;
@@ -94,8 +95,11 @@ async fn expired_items_are_invisible_and_reclaimed_by_a_sweep() {
         .await
         .unwrap();
     assert_eq!(found.len(), 1, "search skips expired items");
-    assert_eq!(store.sweep_expired().await.unwrap(), 1, "one left to reclaim");
+    // A backend with native TTL has already reclaimed the other expired item
+    // (it reads as absent), so a sweep finds at most one; a second finds none.
+    assert!(store.sweep_expired().await.unwrap() <= 1);
     assert_eq!(store.sweep_expired().await.unwrap(), 0);
+    assert!(store.get(&n, "also-gone").await.unwrap().is_none());
     assert!(store.get(&n, "keep").await.unwrap().is_some());
 }
 

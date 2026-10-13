@@ -43,7 +43,9 @@ async fn round_trips_expires_and_counts(cache: DriverResponseCache) {
 
     let stats = cache.stats();
     assert_eq!(stats.writes, 3);
-    assert_eq!(stats.expirations, 1);
+    // A backend with native TTL hides the expired entry itself, so only a
+    // backend without it lets this process observe (and count) the expiry.
+    assert!(stats.expirations <= 1);
     assert_eq!(stats.hits, 3);
     assert_eq!(stats.misses, 3);
 }
