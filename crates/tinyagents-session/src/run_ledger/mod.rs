@@ -12,6 +12,7 @@
 pub mod command_center;
 pub mod drivers;
 pub mod error;
+pub mod history;
 pub mod ops;
 pub mod port;
 pub mod recovery;
@@ -23,6 +24,10 @@ pub mod types;
 
 pub use drivers::DriverRunLedger;
 pub use error::{LedgerError, LedgerResult};
+pub use history::{
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
+    SessionStart,
+};
 pub use port::RunLedgerStore;
 pub use sqlite::SqliteRunLedger;
 

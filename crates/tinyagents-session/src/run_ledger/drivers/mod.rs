@@ -8,6 +8,7 @@ mod agents;
 mod effects;
 mod entry_tree;
 mod events;
+mod history;
 mod import;
 mod retention;
 mod storage;

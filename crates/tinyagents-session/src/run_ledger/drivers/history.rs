@@ -29,6 +29,8 @@ use tinystoragedrivers_core::{
 
 const LOG_PREFIX: &str = "[session_db]";
 
+type StoreResult<T> = std::result::Result<T, StorageError>;
+
 /// One full-text row: a session's agent name, a message snippet or a tool name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,7 +70,7 @@ pub(super) fn tool_call_id(id: i64) -> String {
 pub(super) fn envelope<T: Serialize + DeserializeOwned>(
     record: &T,
     keys: Value,
-) -> Result<Value, StorageError> {
+) -> StoreResult<Value> {
     let body = serde_json::to_value(record)?;
     // A nonfinite float serializes to null and would not read back.
     let _: T = serde_json::from_value(body.clone())?;
@@ -79,7 +81,7 @@ pub(super) fn envelope<T: Serialize + DeserializeOwned>(
     Ok(doc)
 }
 
-pub(super) fn session_doc(record: &SessionRecord) -> Result<Value, StorageError> {
+pub(super) fn session_doc(record: &SessionRecord) -> StoreResult<Value> {
     envelope(
         record,
         json!({
@@ -89,25 +91,25 @@ pub(super) fn session_doc(record: &SessionRecord) -> Result<Value, StorageError>
     )
 }
 
-pub(super) fn message_doc(record: &SessionMessage) -> Result<Value, StorageError> {
+pub(super) fn message_doc(record: &SessionMessage) -> StoreResult<Value> {
     envelope(
         record,
         json!({"createdMs": record.created_at.timestamp_millis()}),
     )
 }
 
-pub(super) fn tool_call_doc(record: &SessionToolCall) -> Result<Value, StorageError> {
+pub(super) fn tool_call_doc(record: &SessionToolCall) -> StoreResult<Value> {
     envelope(
         record,
         json!({"createdMs": record.created_at.timestamp_millis()}),
     )
 }
 
-pub(super) fn fts_doc(row: &FtsRow) -> Result<Value, StorageError> {
+pub(super) fn fts_doc(row: &FtsRow) -> StoreResult<Value> {
     envelope(row, json!({}))
 }
 
-fn put_fts(id: String, row: &FtsRow) -> Result<WriteOp, StorageError> {
+fn put_fts(id: String, row: &FtsRow) -> StoreResult<WriteOp> {
     Ok(WriteOp::Put {
         collection: HIST_FTS.into(),
         id,
@@ -311,7 +313,7 @@ impl DriverRunLedger {
             .await?;
         rows.into_iter()
             .map(|row| Ok(decode::<SessionToolCall>(row.doc)?.session_id))
-            .collect::<Result<_, StorageError>>()
+            .collect::<StoreResult<_>>()
             .map_err(Into::into)
     }
 }
@@ -368,21 +370,26 @@ impl SessionHistoryStore for DriverRunLedger {
             "{LOG_PREFIX} record_session_end id={id} status={}",
             end.status.as_str()
         );
-        self.change(HIST_SESSIONS, id, |previous: Option<SessionRecord>| {
-            let Some(mut record) = previous else {
-                return Err(StorageError::invalid_input(format!(
-                    "session '{id}' not found"
-                )));
-            };
-            record.status = end.status;
-            record.turn_count = end.turn_count;
-            record.input_tokens = end.input_tokens;
-            record.output_tokens = end.output_tokens;
-            record.cached_input_tokens = end.cached_input_tokens;
-            record.cost_usd = end.cost_usd;
-            record.ended_at = Some(Utc::now());
-            Ok((Some(record.clone()), record))
-        })
+        self.change_with(
+            HIST_SESSIONS,
+            id,
+            |previous: Option<SessionRecord>| {
+                let Some(mut record) = previous else {
+                    return Err(StorageError::invalid_input(format!(
+                        "session '{id}' not found"
+                    )));
+                };
+                record.status = end.status;
+                record.turn_count = end.turn_count;
+                record.input_tokens = end.input_tokens;
+                record.output_tokens = end.output_tokens;
+                record.cached_input_tokens = end.cached_input_tokens;
+                record.cost_usd = end.cost_usd;
+                record.ended_at = Some(Utc::now());
+                Ok((Some(record.clone()), record))
+            },
+            session_doc,
+        )
         .await
         .map_err(Into::into)
     }

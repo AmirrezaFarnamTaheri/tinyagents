@@ -20,6 +20,11 @@ pub(super) const IMPORTS: &str = "run_ledger_agent_imports";
 pub(super) const EVENTS: &str = "run_ledger_event_outbox";
 pub(super) const EVENT_HEADS: &str = "run_ledger_event_heads";
 pub(super) const TASKS: &str = "run_ledger_tasks";
+pub(super) const HIST_SESSIONS: &str = "session_history_sessions";
+pub(super) const HIST_MESSAGES: &str = "session_history_messages";
+pub(super) const HIST_TOOL_CALLS: &str = "session_history_tool_calls";
+pub(super) const HIST_FTS: &str = "session_history_fts";
+pub(super) const HIST_COUNTERS: &str = "session_history_counters";
 pub(super) const CAS_ATTEMPTS: usize = 64;
 
 /// Length-prefixed identifiers preserve arbitrary classic IDs without exceeding driver limits.
@@ -57,6 +62,23 @@ pub(super) fn specs() -> Vec<CollectionSpec> {
             .index(IndexSpec::new("session", ["record.sessionId"])),
         CollectionSpec::new(super::entry_tree::INDEXES)
             .index(IndexSpec::new("session", ["record.sessionId"])),
+        CollectionSpec::new(HIST_SESSIONS)
+            .index(IndexSpec::new("status_started", ["record.status", "startedMs"]))
+            .index(IndexSpec::new("parent", ["record.parent_session_id", "startedMs"]))
+            .index(IndexSpec::new("agent", ["record.agent_definition_id"]))
+            .index(IndexSpec::new("thread", ["record.thread_id"]))
+            .index(IndexSpec::new("channel", ["record.source_channel"]))
+            .index(IndexSpec::new("started", ["startedMs"])),
+        CollectionSpec::new(HIST_MESSAGES)
+            .index(IndexSpec::new("session_id", ["record.session_id", "record.id"])),
+        CollectionSpec::new(HIST_TOOL_CALLS)
+            .index(IndexSpec::new("session_id", ["record.session_id", "record.id"]))
+            .index(IndexSpec::new("tool", ["record.tool_name"]))
+            .index(IndexSpec::new("created", ["createdMs"])),
+        CollectionSpec::new(HIST_FTS)
+            .index(IndexSpec::new("session", ["record.sessionId"]))
+            .searchable(["record.agentName", "record.content", "record.toolName"]),
+        CollectionSpec::new(HIST_COUNTERS),
         CollectionSpec::new(IMPORTS),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS)
@@ -207,6 +229,24 @@ impl DriverRunLedger {
         R: Send,
         F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
     {
+        self.change_with(collection, id, change, encode::<T>).await
+    }
+
+    /// [`Self::change`] with a caller-supplied document encoder, for records that
+    /// carry their own sort keys.
+    pub(super) async fn change_with<T, R, F, E>(
+        &self,
+        collection: &str,
+        id: &str,
+        change: F,
+        encoder: E,
+    ) -> Result<R, StorageError>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync,
+        R: Send,
+        F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
+        E: Fn(&T) -> Result<Value, StorageError> + Send + Sync,
+    {
         for _ in 0..CAS_ATTEMPTS {
             let previous = self.read::<T>(collection, id).await?;
             let condition = previous
@@ -220,7 +260,7 @@ impl DriverRunLedger {
             match self
                 .scoped
                 .documents()
-                .put(collection, &key(&[id]), encode(&record)?, condition)
+                .put(collection, &key(&[id]), encoder(&record)?, condition)
                 .await
             {
                 Ok(_) => return Ok(result),
