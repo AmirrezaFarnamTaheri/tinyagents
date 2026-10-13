@@ -35,9 +35,12 @@ of a transcript with one checkpoint that has two halves.
 
 ## Operational constraints
 
-- **Failure degrades, it does not fail.** A model error, tool-call markup, or
-  no parseable JSON after two attempts keeps the previous state and the full
-  ledger. Only a failure with nothing to fall back on is an error.
+- **Failure degrades, it does not fail.** A retryable model error (5xx, 429,
+  timeout), tool-call markup, or no parseable JSON after two attempts, or a
+  permanent model error on the first, keeps the previous state and the full
+  ledger. Any skipped chunk marks the run degraded (`partial state` when a
+  later chunk still wrote one). Only a failure with nothing to fall back on is
+  an error.
 - **Bounded size.** `TaskState::bounded` and `TaskLedger::cap` cap every list and scalar so a
   checkpoint stays a few thousand tokens however many times it is carried.
 - **No sensitive logging.** Logs carry counts and the model id, never message

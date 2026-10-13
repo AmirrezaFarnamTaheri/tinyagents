@@ -296,11 +296,11 @@ summarizer) carries nothing and is handed to the model as the previous state.
   is folded in sequential chunks cut at safe points, each call updating the
   state the previous one wrote. Set it to a fraction of a small model's
   window.
-- **Degradation.** A reply that is tool-call markup or holds no parseable
-  JSON is retried once. If it still fails, the checkpoint keeps the previous
-  state plus the full ledger (the provenance reason says `ledger only`)
-  rather than failing the compaction. Only a model outage with nothing to
-  carry is an error.
+- **Degradation.** Markup, unparseable JSON or a retryable model error (5xx,
+  429, timeout) is retried once. A chunk that still fails keeps the previous
+  state plus the ledger: the reason says `ledger only` (no model state) or
+  `N skipped: partial state` (logged `degraded=true`). Only a model outage
+  with nothing to carry is an error.
 - **JSON mode** is opt-in (`with_response_format`). Some endpoints answer
   nonsense when JSON mode and reasoning are both on (Qwen3 on DashScope
   returns `"display_json"`), so the reply is parsed leniently instead.
