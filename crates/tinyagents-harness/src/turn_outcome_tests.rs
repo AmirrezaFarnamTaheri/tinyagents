@@ -36,6 +36,26 @@ fn a_length_stop_with_only_reasoning_ran_out_of_output_budget() {
 }
 
 #[test]
+fn every_provider_length_stop_spelling_ran_out_of_output_budget() {
+    for reason in ["max_tokens", "MAX_TOKENS"] {
+        assert!(ended_out_of_output_budget(Some(&response(reason, ""))));
+    }
+}
+
+#[test]
+fn the_halt_summary_survives_a_poisoned_slot() {
+    let slot = new_halt_summary_slot();
+    *slot.lock().unwrap() = Some("stalled".into());
+    let poisoner = Arc::clone(&slot);
+    let _ = std::thread::spawn(move || {
+        let _guard = poisoner.lock().unwrap();
+        panic!("poison");
+    })
+    .join();
+    assert_eq!(take_halt_summary(&slot).as_deref(), Some("stalled"));
+}
+
+#[test]
 fn a_length_stop_with_visible_text_is_a_real_answer() {
     assert!(!ended_out_of_output_budget(Some(&response(
         "length",

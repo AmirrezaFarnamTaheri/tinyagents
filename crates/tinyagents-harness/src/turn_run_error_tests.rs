@@ -31,6 +31,7 @@ fn a_timeout_or_cancellation_is_the_runs_own_failure() {
     for error in [
         TinyAgentsError::CallTimeout("model call".to_string()),
         TinyAgentsError::Timeout("run".to_string()),
+        TinyAgentsError::StreamIdleTimeout("idle".to_string()),
         TinyAgentsError::Cancelled,
     ] {
         assert_eq!(
