@@ -1,3 +1,5 @@
+mod common;
+use common::storage;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,7 +16,7 @@ use tinyagents_harness::observability::{
     AgentObservation, FanOutSink, HarnessEventJournal, HarnessStatusStore, InMemoryEventJournal,
     InMemoryStatusStore, JournalSink, JsonlSink, RedactingSink, StoreEventJournal,
 };
-use tinyagents_harness::store::{AppendStore, InMemoryAppendStore, JsonlAppendStore};
+use tinyagents_harness::store::{AppendStore, DriverAppendStore, InMemoryAppendStore};
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
 use tinyagents_registry::{CapabilityRegistry, ComponentId, ComponentKind, ComponentMetadata};
 use tinyinference_llm::providers::MockModel;
@@ -454,14 +456,9 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     );
     assert_eq!(observations[0].root_run_id.as_str(), "root-run");
 
-    let root = std::env::temp_dir().join(format!(
-        "tinyagents-jsonl-sink-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let jsonl_store = JsonlAppendStore::new(root.clone());
+    let jsonl_store: std::sync::Arc<dyn AppendStore> = std::sync::Arc::new(
+        DriverAppendStore::new(std::sync::Arc::clone(storage::memory().streams())),
+    );
     let jsonl_sink = JsonlSink::new(jsonl_store.clone(), "events");
     jsonl_sink.on_event(&secret_record);
     jsonl_sink.flush();
@@ -470,5 +467,4 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     assert_eq!(rows[0].0, 0);
     assert_eq!(rows[0].1["event"]["key"], "prefix-api-key-123-suffix");
 
-    std::fs::remove_dir_all(root).ok();
 }
