@@ -98,11 +98,11 @@ impl DriverRunLedger {
         older_than: DateTime<Utc>,
     ) -> Result<Vec<(Versioned<Value>, SessionRecord)>> {
         let filter = Filter::ne("record.status", "running")
-            .and(Filter::lt("endedMs", older_than.timestamp_millis() + 1));
+            .and(Filter::lt("endedUs", older_than.timestamp_micros() + 1));
         let mut out = Vec::new();
         for row in self.all_rows(HIST_SESSIONS, filter).await? {
             let session: SessionRecord = decode(row.doc.clone())?;
-            // Compare instants: the stored key is millisecond-truncated.
+            // Compare instants: the stored key is microsecond-truncated.
             if session.status != SessionStatus::Running
                 && session.ended_at.is_some_and(|ended| ended < older_than)
             {
@@ -179,7 +179,7 @@ impl DriverRunLedger {
 
     pub(super) async fn history_prune_tool_calls(&self, older_than: DateTime<Utc>) -> Result<usize> {
         tracing::debug!("{LOG_PREFIX} prune_tool_calls_before.entry cutoff={older_than}");
-        let filter = Filter::lt("createdMs", older_than.timestamp_millis() + 1);
+        let filter = Filter::lt("createdUs", older_than.timestamp_micros() + 1);
         let mut ops = Vec::new();
         for row in self.all_rows(HIST_TOOL_CALLS, filter).await? {
             let call: SessionToolCall = decode(row.doc)?;

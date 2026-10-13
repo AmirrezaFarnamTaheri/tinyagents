@@ -51,7 +51,7 @@ impl SessionStatus {
 
 /// A persisted agent session: one row per conversation/run, with lineage,
 /// cost, and lifecycle status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub id: String,
     /// Identifier of the agent definition that drove this session.
@@ -84,7 +84,7 @@ pub struct SessionRecord {
 }
 
 /// A single persisted message within a [`SessionRecord`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionMessage {
     pub id: i64,
     pub session_id: String,
@@ -103,7 +103,7 @@ pub struct SessionMessage {
 }
 
 /// A single persisted tool call within a [`SessionRecord`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionToolCall {
     pub id: i64,
     pub session_id: String,

@@ -85,8 +85,8 @@ pub(super) fn session_doc(record: &SessionRecord) -> StoreResult<Value> {
     envelope(
         record,
         json!({
-            "startedMs": record.started_at.timestamp_millis(),
-            "endedMs": record.ended_at.map(|ended| ended.timestamp_millis()),
+            "startedUs": record.started_at.timestamp_micros(),
+            "endedUs": record.ended_at.map(|ended| ended.timestamp_micros()),
         }),
     )
 }
@@ -94,14 +94,14 @@ pub(super) fn session_doc(record: &SessionRecord) -> StoreResult<Value> {
 pub(super) fn message_doc(record: &SessionMessage) -> StoreResult<Value> {
     envelope(
         record,
-        json!({"createdMs": record.created_at.timestamp_millis()}),
+        json!({"createdUs": record.created_at.timestamp_micros()}),
     )
 }
 
 pub(super) fn tool_call_doc(record: &SessionToolCall) -> StoreResult<Value> {
     envelope(
         record,
-        json!({"createdMs": record.created_at.timestamp_millis()}),
+        json!({"createdUs": record.created_at.timestamp_micros()}),
     )
 }
 
@@ -496,7 +496,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 filter,
-                Sort::desc("startedMs"),
+                Sort::desc("startedUs"),
                 u64::from(limit.unwrap_or(50).min(500)),
                 u64::from(offset.unwrap_or(0)),
             )
@@ -538,14 +538,14 @@ impl SessionHistoryStore for DriverRunLedger {
         let offset = u64::from(params.offset.unwrap_or(0));
         let Some(allowed) = allowed else {
             let (sessions, total) = self
-                .page_sorted(HIST_SESSIONS, filter, Sort::desc("startedMs"), limit, offset)
+                .page_sorted(HIST_SESSIONS, filter, Sort::desc("startedUs"), limit, offset)
                 .await?;
             return Ok(SessionSearchResult { sessions, total });
         };
         self.declare().await?;
         let mut matched: Vec<SessionRecord> = Vec::new();
         let mut query = Query::filter(filter)
-            .sort(Sort::desc("startedMs"))
+            .sort(Sort::desc("startedUs"))
             .limit(256);
         loop {
             let page = self
@@ -612,7 +612,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 Filter::eq("record.parent_session_id", session_id),
-                Sort::asc("startedMs"),
+                Sort::asc("startedUs"),
                 u64::MAX,
                 0,
             )

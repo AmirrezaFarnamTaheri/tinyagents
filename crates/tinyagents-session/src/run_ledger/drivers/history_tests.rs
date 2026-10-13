@@ -2,11 +2,12 @@ use super::history::message_fts_id;
 use super::storage::{HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS};
 use super::*;
 use crate::run_ledger::history::{
+    MAX_TOOL_OUTPUT_BYTES,
     NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore, SessionStart,
 };
 use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
-use tinystoragedrivers_core::{DocumentStoreExt, MemoryStorage, StorageBackend};
+use tinystoragedrivers_core::{MemoryStorage, Precondition, StorageBackend};
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())

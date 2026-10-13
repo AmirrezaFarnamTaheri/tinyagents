@@ -645,32 +645,39 @@ async fn scoped_tool_effects_preserve_restarts_settle_and_unresolved_filter() {
     );
 }
 
-/// Unimplemented cross-document transactions fail explicitly and cannot partially alter scoped records.
+/// Team and history operations that need atomic batches write only through them: a refused
+/// batch (here: an unavailable dependency check) leaves every scoped record untouched.
 #[tokio::test]
-async fn scoped_unavailable_atomic_families_report_unsupported_without_writes() {
-    fn unsupported<T: std::fmt::Debug>(result: Result<T>) {
-        assert!(matches!(result.unwrap_err(), LedgerError::Driver(ref error)
-            if error.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch)));
-    }
+async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() {
     let (ledger, _) = ledgers();
     let before = ledger
         .upsert_workflow_run(workflow("workflow"))
         .await
         .unwrap();
-    unsupported(
+    assert_eq!(
         ledger
             .claim_agent_team_task("team", "task", "member", "claim")
-            .await,
+            .await
+            .unwrap(),
+        ClaimOutcome::UnknownTask
     );
-    unsupported(
+    assert_eq!(
         ledger
             .complete_agent_team_task("team", "task", "member", &[], true)
-            .await,
+            .await
+            .unwrap(),
+        CompletionOutcome::UnknownTask
     );
-    unsupported(ledger.shutdown_agent_team_member("team", "member").await);
+    assert!(
+        ledger
+            .shutdown_agent_team_member("team", "member")
+            .await
+            .unwrap()
+            .is_none()
+    );
     ledger.entry_import_legacy("session", &[]).await.unwrap();
     ledger.entry_rebuild_index("session").await.unwrap();
-    unsupported(ledger.apply_retention(Utc::now()).await);
+    assert_eq!(ledger.apply_retention(Utc::now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
         Some(before)

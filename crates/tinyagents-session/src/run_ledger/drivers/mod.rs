@@ -902,3 +902,11 @@ mod event_bson_tests;
 #[cfg(test)]
 #[path = "events_query_tests.rs"]
 mod event_query_tests;
+
+#[cfg(test)]
+#[path = "team_tests.rs"]
+mod team_tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;
