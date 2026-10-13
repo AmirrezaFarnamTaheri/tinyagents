@@ -1901,6 +1901,7 @@ dependencies = [
  "tinyagents-tasks",
  "tinyinference-llm",
  "tinystoragedrivers-core",
+ "tinystoragedrivers-sqlite",
  "tinytools",
  "tokio",
  "tracing",

@@ -7,18 +7,19 @@
 //! storage.
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
 use tinyagents_session::run_ledger::{
-    self, AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
+    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
     AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
     AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest,
+    RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
+use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
 
 use super::runtime::drain_run_events;
@@ -76,64 +77,80 @@ pub trait TeamLedger: Send + Sync {
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>>;
 }
 
-/// [`TeamLedger`] backed by `tinyagents-session`'s run ledger at a caller
-/// supplied workspace root. It makes no workspace or host policy decision.
+/// [`TeamLedger`] over a bound `tinyagents-session` run-ledger handle.
 ///
-/// Delegates all operations to the session run-ledger functions, projecting
-/// the workspace path into each call. This is the default implementation when
-/// using TinyAgents' built-in session storage.
-#[derive(Debug, Clone)]
+/// The handle is whatever backend the host opened (SQLite, MongoDB, memory);
+/// this adapter opens no file, picks no workspace and has no fallback. Every
+/// call reaches the ledger's async operations through a [`Blocking`] bridge
+/// thread, so it works from inside or outside a tokio runtime. The claim,
+/// completion and shutdown operations are the ledger's atomic ones: a contested
+/// task goes to exactly one member.
+#[derive(Clone)]
 pub struct SessionTeamLedger {
-    workspace_dir: PathBuf,
+    ledger: Arc<dyn RunLedgerStore>,
+    bridge: Blocking,
+}
+
+impl std::fmt::Debug for SessionTeamLedger {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionTeamLedger").finish_non_exhaustive()
+    }
 }
 
 impl SessionTeamLedger {
-    /// Creates a ledger wrapping the session layer at the specified workspace.
-    pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            workspace_dir: workspace_dir.into(),
-        }
+    /// Adapt `ledger`, starting a bridge thread for the synchronous calls.
+    ///
+    /// # Errors
+    ///
+    /// The bridge thread cannot start.
+    pub fn new(ledger: Arc<dyn RunLedgerStore>) -> Result<Self> {
+        Ok(Self::with_bridge(ledger, Blocking::new()?))
     }
 
-    /// Returns the workspace directory used for all ledger operations.
-    pub fn workspace_dir(&self) -> &Path {
-        &self.workspace_dir
+    /// Adapt `ledger`, sharing an existing bridge.
+    pub fn with_bridge(ledger: Arc<dyn RunLedgerStore>, bridge: Blocking) -> Self {
+        Self { ledger, bridge }
+    }
+
+    fn run<T: Send + 'static>(
+        &self,
+        work: impl std::future::Future<
+            Output = std::result::Result<T, tinyagents_session::run_ledger::LedgerError>,
+        > + Send
+        + 'static,
+    ) -> Result<T> {
+        Ok(self.bridge.run(work)??)
     }
 }
 
 impl TeamLedger for SessionTeamLedger {
     fn upsert_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {
-        Ok(run_ledger::upsert_agent_team(&self.workspace_dir, upsert)?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team(upsert).await })
     }
     fn get_team(&self, id: &str) -> Result<Option<AgentTeam>> {
-        Ok(run_ledger::get_agent_team(&self.workspace_dir, id)?)
+        let (ledger, id) = (Arc::clone(&self.ledger), id.to_owned());
+        self.run(async move { ledger.get_agent_team(&id).await })
     }
     fn list_teams(&self, request: &AgentTeamListRequest) -> Result<AgentTeamListResponse> {
-        Ok(run_ledger::list_agent_teams(&self.workspace_dir, request)?)
+        let (ledger, request) = (Arc::clone(&self.ledger), request.clone());
+        self.run(async move { ledger.list_agent_teams(&request).await })
     }
     fn upsert_member(&self, upsert: AgentTeamMemberUpsert) -> Result<AgentTeamMember> {
-        Ok(run_ledger::upsert_agent_team_member(
-            &self.workspace_dir,
-            upsert,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team_member(upsert).await })
     }
     fn list_members(&self, team_id: &str) -> Result<Vec<AgentTeamMember>> {
-        Ok(run_ledger::list_agent_team_members(
-            &self.workspace_dir,
-            team_id,
-        )?)
+        let (ledger, team_id) = (Arc::clone(&self.ledger), team_id.to_owned());
+        self.run(async move { ledger.list_agent_team_members(&team_id).await })
     }
     fn list_tasks(&self, team_id: &str) -> Result<Vec<AgentTeamTask>> {
-        Ok(run_ledger::list_agent_team_tasks(
-            &self.workspace_dir,
-            team_id,
-        )?)
+        let (ledger, team_id) = (Arc::clone(&self.ledger), team_id.to_owned());
+        self.run(async move { ledger.list_agent_team_tasks(&team_id).await })
     }
     fn upsert_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
-        Ok(run_ledger::upsert_agent_team_task(
-            &self.workspace_dir,
-            upsert,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.upsert_agent_team_task(upsert).await })
     }
     fn claim_task(
         &self,
@@ -142,13 +159,14 @@ impl TeamLedger for SessionTeamLedger {
         member_id: &str,
         claim_token: &str,
     ) -> Result<ClaimOutcome> {
-        Ok(run_ledger::claim_agent_team_task(
-            &self.workspace_dir,
-            team_id,
-            task_id,
-            member_id,
-            claim_token,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, task, member, token) = (
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
+        );
+        self.run(async move { ledger.claim_agent_team_task(&team, &task, &member, &token).await })
     }
     fn complete_task(
         &self,
@@ -158,31 +176,35 @@ impl TeamLedger for SessionTeamLedger {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome> {
-        Ok(run_ledger::complete_agent_team_task(
-            &self.workspace_dir,
-            team_id,
-            task_id,
-            member_id,
-            evidence,
-            require_evidence,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, task, member, evidence) = (
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            evidence.to_vec(),
+        );
+        self.run(async move {
+            ledger
+                .complete_agent_team_task(&team, &task, &member, &evidence, require_evidence)
+                .await
+        })
     }
     fn shutdown_member(
         &self,
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>> {
-        Ok(run_ledger::shutdown_agent_team_member(
-            &self.workspace_dir,
-            team_id,
-            member_id,
-        )?)
+        let ledger = Arc::clone(&self.ledger);
+        let (team, member) = (team_id.to_owned(), member_id.to_owned());
+        self.run(async move { ledger.shutdown_agent_team_member(&team, &member).await })
     }
     fn append_event(&self, event: RunEventAppend) -> Result<RunEvent> {
-        Ok(run_ledger::append_run_event(&self.workspace_dir, event)?)
+        let ledger = Arc::clone(&self.ledger);
+        self.run(async move { ledger.append_run_event(event).await })
     }
     fn list_events(&self, request: &RunEventListRequest) -> Result<Vec<RunEvent>> {
-        Ok(run_ledger::list_recent_run_events(&self.workspace_dir, request)?.events)
+        let (ledger, request) = (Arc::clone(&self.ledger), request.clone());
+        self.run(async move { Ok(ledger.list_recent_run_events(&request).await?.events) })
     }
 }
 
