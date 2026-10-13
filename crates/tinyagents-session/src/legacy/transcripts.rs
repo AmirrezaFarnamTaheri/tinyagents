@@ -265,7 +265,12 @@ pub fn import_transcripts(
             continue;
         }
         let meta = display.meta.clone();
-        report.messages += replay(history.as_ref(), &meta, model.tools.as_ref(), display.records)?;
+        report.messages += replay(
+            history.as_ref(),
+            &meta,
+            model.tools.as_ref(),
+            display.records,
+        )?;
         report.imported += 1;
     }
     tracing::info!(

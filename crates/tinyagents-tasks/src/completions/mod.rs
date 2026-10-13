@@ -26,9 +26,9 @@ mod router;
 mod store;
 mod types;
 
+pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
-pub use driver::DriverCompletionStore;
 pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::*;
-use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use crate::completions::{CompletionResult, RecordOutcome};
+use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
@@ -173,8 +173,7 @@ fn compaction_matches_the_in_memory_store() {
         }
     }
     let memory = InMemoryCompletionStore::new();
-    let driver =
-        DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let driver = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
     seed(&memory);
     seed(&driver);
     assert_eq!(memory.compact(Duration::from_secs(1)).unwrap(), 2);

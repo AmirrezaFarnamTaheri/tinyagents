@@ -49,9 +49,11 @@ impl EntryTree {
 
     fn run<T: Send + 'static>(
         &self,
-        work: impl FnOnce(Arc<DriverRunLedger>, String) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<T>> + Send>,
-        >,
+        work: impl FnOnce(
+            Arc<DriverRunLedger>,
+            String,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send>>,
     ) -> Result<T> {
         self.bridge
             .run(work(self.ledger.clone(), self.session.clone()))

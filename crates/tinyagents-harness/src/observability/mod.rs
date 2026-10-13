@@ -45,13 +45,13 @@ pub use langfuse::{
 pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
 // Shared Langfuse payload helpers reused by the graph observability exporter so
 // ISO-8601 timestamp formatting and null-field pruning live in one place.
-pub use status::{
-    DriverStatusStore, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
-};
 #[cfg(feature = "langfuse")]
 #[doc(hidden)]
 pub use langfuse::{clean_nulls, iso_ms};
 pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs};
+pub use status::{
+    DriverStatusStore, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
+};
 pub use types::*;
 
 use std::collections::HashMap;

@@ -36,7 +36,11 @@ async fn write_is_content_addressed_deduped_and_readable() {
     assert_eq!(mime, "image/png");
     assert_eq!(bytes.len() as u64, first.len);
     assert_eq!(
-        s.read_data_uri("abc123").await.unwrap().as_deref().map(|u| u.starts_with("data:image/png")),
+        s.read_data_uri("abc123")
+            .await
+            .unwrap()
+            .as_deref()
+            .map(|u| u.starts_with("data:image/png")),
         Some(true)
     );
     let index = s.build_index().await.unwrap();
@@ -62,7 +66,10 @@ async fn an_attachment_larger_than_the_cap_is_rejected_before_any_write() {
     s.write("small", &image_uri(1, 5)).await.unwrap();
     assert!(s.write("big", &image_uri(2, 50)).await.is_err());
     assert!(s.read("big").await.unwrap().is_none());
-    assert!(s.read("small").await.unwrap().is_some(), "nothing was evicted");
+    assert!(
+        s.read("small").await.unwrap().is_some(),
+        "nothing was evicted"
+    );
 }
 
 #[tokio::test]
@@ -76,7 +83,10 @@ async fn cap_evicts_least_recently_used_first() {
     s.write("old", &image_uri(1, 100)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(5)).await;
     s.write("new", &image_uri(3, 100)).await.unwrap();
-    assert!(s.read("mid").await.unwrap().is_none(), "least recently used goes");
+    assert!(
+        s.read("mid").await.unwrap().is_none(),
+        "least recently used goes"
+    );
     assert!(s.read("old").await.unwrap().is_some());
     assert!(s.read("new").await.unwrap().is_some());
 }
@@ -96,7 +106,11 @@ async fn sweep_removes_only_attachments_older_than_the_ttl() {
 #[tokio::test]
 async fn tenants_do_not_see_each_others_attachments() {
     let storage = MemoryStorage::new();
-    let alice = stash_on(&scoped(&storage, "alice"), u64::MAX, Duration::from_secs(60));
+    let alice = stash_on(
+        &scoped(&storage, "alice"),
+        u64::MAX,
+        Duration::from_secs(60),
+    );
     let bob = stash_on(&scoped(&storage, "bob"), u64::MAX, Duration::from_secs(60));
     alice.write("shared-id", TINY_PNG).await.unwrap();
     assert!(bob.read("shared-id").await.unwrap().is_none());
@@ -109,12 +123,20 @@ async fn attachments_survive_a_reopened_sqlite_file() {
     let path = dir.path().join("stash.sqlite");
     {
         let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-        stash_on(&scoped(&storage, "local"), u64::MAX, Duration::from_secs(60))
-            .write("persisted", TINY_PNG)
-            .await
-            .unwrap();
+        stash_on(
+            &scoped(&storage, "local"),
+            u64::MAX,
+            Duration::from_secs(60),
+        )
+        .write("persisted", TINY_PNG)
+        .await
+        .unwrap();
     }
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
-    let reopened = stash_on(&scoped(&storage, "local"), u64::MAX, Duration::from_secs(60));
+    let reopened = stash_on(
+        &scoped(&storage, "local"),
+        u64::MAX,
+        Duration::from_secs(60),
+    );
     assert!(reopened.read("persisted").await.unwrap().is_some());
 }

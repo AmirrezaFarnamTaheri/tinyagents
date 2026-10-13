@@ -33,7 +33,10 @@ async fn round_trips_expires_and_counts(cache: DriverResponseCache) {
         cache.get("short").await.unwrap().is_none(),
         "an expired entry reads as a miss"
     );
-    assert!(cache.get("short").await.unwrap().is_none(), "and stays gone");
+    assert!(
+        cache.get("short").await.unwrap().is_none(),
+        "and stays gone"
+    );
     // A rewrite revives the key.
     cache
         .put("short", ModelResponse::assistant("fresh"))
@@ -52,8 +55,11 @@ async fn round_trips_expires_and_counts(cache: DriverResponseCache) {
 
 #[tokio::test]
 async fn memory_backend_round_trips_expires_and_counts() {
-    round_trips_expires_and_counts(DriverResponseCache::new(docs(&MemoryStorage::new(), "local")))
-        .await;
+    round_trips_expires_and_counts(DriverResponseCache::new(docs(
+        &MemoryStorage::new(),
+        "local",
+    )))
+    .await;
 }
 
 #[tokio::test]
@@ -77,7 +83,10 @@ async fn entries_survive_a_dropped_handle_and_a_reopened_file() {
     }
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = DriverResponseCache::new(docs(&storage, "local"));
-    assert_eq!(reopened.get("k").await.unwrap().unwrap().text(), "persisted");
+    assert_eq!(
+        reopened.get("k").await.unwrap().unwrap().text(),
+        "persisted"
+    );
 }
 
 #[tokio::test]

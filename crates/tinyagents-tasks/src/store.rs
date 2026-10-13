@@ -396,7 +396,10 @@ pub(crate) fn orchestration_not_found(task_id: &TaskId) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("orchestration task `{task_id}` does not exist"))
 }
 
-pub(crate) fn require_live(record: &OrchestrationTaskRecord, next: OrchestrationTaskStatus) -> Result<()> {
+pub(crate) fn require_live(
+    record: &OrchestrationTaskRecord,
+    next: OrchestrationTaskStatus,
+) -> Result<()> {
     if record.status.is_live() {
         Ok(())
     } else {

@@ -262,9 +262,9 @@ impl DriverNamespacedStore {
                 updated_at_ms: now,
                 expires_at_ms: expiry_at(now, ttl),
             };
-            let precondition = previous
-                .as_ref()
-                .map_or(Precondition::Absent, |row| Precondition::Version(row.version));
+            let precondition = previous.as_ref().map_or(Precondition::Absent, |row| {
+                Precondition::Version(row.version)
+            });
             match self
                 .docs
                 .put(&self.collection, &id, Self::doc(&item), precondition)
@@ -306,7 +306,11 @@ impl DriverNamespacedStore {
             .collect())
     }
 
-    async fn list_namespace_items(&self, query: &ListNamespacesQuery, now: u64) -> Result<Vec<Namespace>> {
+    async fn list_namespace_items(
+        &self,
+        query: &ListNamespacesQuery,
+        now: u64,
+    ) -> Result<Vec<Namespace>> {
         // A wildcard first segment cannot narrow by root.
         let narrow: Vec<String> = query
             .prefix
@@ -370,7 +374,11 @@ impl NamespacedStore for DriverNamespacedStore {
             }
             match self
                 .docs
-                .delete(&self.collection, &row.id, Precondition::Version(row.version))
+                .delete(
+                    &self.collection,
+                    &row.id,
+                    Precondition::Version(row.version),
+                )
                 .await
             {
                 Ok(removed) => reclaimed += usize::from(removed),

@@ -107,8 +107,8 @@ fn subagent_correlates_by_ledger_parent_call_id_over_the_heuristic() {
     // The run ledger knows which call spawned `sub-exact-1`.
     let lookup = |task_id: &str| (task_id == "sub-exact-1").then(|| "call-real".to_string());
 
-    let projected = project_thread_scoped_with(dir.path(), thread_id, None, &lookup)
-        .expect("project thread");
+    let projected =
+        project_thread_scoped_with(dir.path(), thread_id, None, &lookup).expect("project thread");
     let subagent_call_id = projected.items.iter().find_map(|item| match item {
         DisplayItem::Subagent { call_id, .. } => Some(call_id.clone()),
         _ => None,

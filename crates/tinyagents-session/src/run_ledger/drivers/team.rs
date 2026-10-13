@@ -184,11 +184,10 @@ impl DriverRunLedger {
                 .filter(|dep| !dep.done)
                 .map(|dep| format!("dependency {} is not done", dep.id))
                 .collect();
-            if let Some(owner) = task
-                .doc
-                .owner_member_id
-                .as_ref()
-                .filter(|owner| Some(owner.as_str()) != task.doc.claimed_by_member_id.as_deref())
+            if let Some(owner) =
+                task.doc.owner_member_id.as_ref().filter(|owner| {
+                    Some(owner.as_str()) != task.doc.claimed_by_member_id.as_deref()
+                })
             {
                 reasons.push(format!(
                     "task is owned by {owner} but claimed by {}",

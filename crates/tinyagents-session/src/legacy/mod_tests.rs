@@ -117,7 +117,14 @@ async fn a_full_database_imports_every_family_with_its_ids() {
         .import_legacy_database(&source_for(&path, &ledger))
         .await
         .unwrap();
-    assert_eq!(report.sessions, ImportCounts { read: 2, imported: 2, already_present: 0 });
+    assert_eq!(
+        report.sessions,
+        ImportCounts {
+            read: 2,
+            imported: 2,
+            already_present: 0
+        }
+    );
     assert_eq!(report.messages.imported, 3);
     assert_eq!(report.tool_calls.imported, 2);
     assert_eq!(report.agent_runs.imported, 1);
@@ -146,7 +153,10 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     assert_eq!(kids[0].id, "s-child");
     let messages = ledger.list_messages("s-root", None).await.unwrap();
     assert_eq!(messages.iter().map(|m| m.id).collect::<Vec<_>>(), [1, 2]);
-    assert_eq!(messages[1].reasoning_content.as_deref(), Some("thinking hard"));
+    assert_eq!(
+        messages[1].reasoning_content.as_deref(),
+        Some("thinking hard")
+    );
     assert_eq!(messages[1].model.as_deref(), Some("gpt-5"));
     let calls = ledger.list_tool_calls("s-root", None).await.unwrap();
     assert_eq!((calls[0].id, calls[0].message_id), (3, Some(2)));
@@ -159,7 +169,14 @@ async fn a_full_database_imports_every_family_with_its_ids() {
         })
         .await
         .unwrap();
-    assert_eq!(found.sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s-child"]);
+    assert_eq!(
+        found
+            .sessions
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        ["s-child"]
+    );
     let by_tool = ledger
         .search_sessions(&SessionSearchParams {
             tool_name: Some("grep".into()),
@@ -203,7 +220,10 @@ async fn a_full_database_imports_every_family_with_its_ids() {
         })
         .await
         .unwrap();
-    assert_eq!(events.events.iter().map(|e| e.sequence).collect::<Vec<_>>(), [3, 4]);
+    assert_eq!(
+        events.events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        [3, 4]
+    );
     // The event counter continues past the imported sequences.
     let appended = ledger
         .append_run_event(RunEventAppend {
@@ -221,7 +241,14 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     let tasks = ledger.list_agent_team_tasks("team-1").await.unwrap();
     assert_eq!(tasks[0].claimed_by_member_id.as_deref(), Some("m-1"));
     assert_eq!(tasks[0].evidence, ["pr#1"]);
-    assert_eq!(ledger.list_agent_team_members("team-1").await.unwrap().len(), 1);
+    assert_eq!(
+        ledger
+            .list_agent_team_members("team-1")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     let unresolved = ledger.list_unresolved_tool_effects("run-1").await.unwrap();
     assert_eq!(unresolved.len(), 1);
     assert_eq!(unresolved[0].idempotency_key.as_deref(), Some("idem-1"));
@@ -259,7 +286,12 @@ async fn a_second_run_changes_nothing_and_never_overwrites_edits() {
         .await
         .unwrap();
     ledger
-        .transition_agent_run_status("run-1", crate::run_ledger::AgentRunStatus::Failed, Some("x"), None)
+        .transition_agent_run_status(
+            "run-1",
+            crate::run_ledger::AgentRunStatus::Failed,
+            Some("x"),
+            None,
+        )
         .await
         .unwrap();
 
@@ -282,7 +314,11 @@ async fn a_second_run_changes_nothing_and_never_overwrites_edits() {
         assert_eq!(counts.already_present, counts.read);
     }
     let child = ledger.get_session("s-child").await.unwrap().unwrap();
-    assert_eq!(child.status, crate::types::SessionStatus::Failed, "edit survives");
+    assert_eq!(
+        child.status,
+        crate::types::SessionStatus::Failed,
+        "edit survives"
+    );
     assert_eq!(child.turn_count, 9);
     let run = ledger.get_agent_run("run-1").await.unwrap().unwrap();
     assert_eq!(run.status, crate::run_ledger::AgentRunStatus::Failed);
@@ -309,7 +345,14 @@ async fn an_interrupted_pass_is_finished_by_running_again() {
         .import_legacy_database(&source_for(&path, &ledger))
         .await
         .unwrap();
-    assert_eq!(report.sessions, ImportCounts { read: 2, imported: 1, already_present: 1 });
+    assert_eq!(
+        report.sessions,
+        ImportCounts {
+            read: 2,
+            imported: 1,
+            already_present: 1
+        }
+    );
     assert_eq!(report.messages.imported, 3);
 }
 
@@ -367,8 +410,10 @@ async fn a_source_must_belong_to_the_target_scope_and_be_checkpointed() {
         SourceOwner::asserted_by_trusted_host(Scope::new("someone-else").unwrap()),
     );
     let error = ledger.import_legacy_database(&foreign).await.unwrap_err();
-    assert!(matches!(error, crate::run_ledger::LedgerError::Driver(ref e)
-        if e.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput));
+    assert!(
+        matches!(error, crate::run_ledger::LedgerError::Driver(ref e)
+        if e.kind() == tinystoragedrivers_core::ErrorKind::InvalidInput)
+    );
 
     // A database with committed data still in its WAL is refused, never guessed at.
     let wal = dir.path().join("wal.db");
@@ -382,7 +427,10 @@ async fn a_source_must_belong_to_the_target_scope_and_be_checkpointed() {
         .import_legacy_database(&source_for(&wal, &ledger))
         .await
         .unwrap_err();
-    assert!(matches!(error, crate::run_ledger::LedgerError::SourceRequiresSnapshot { .. }));
+    assert!(matches!(
+        error,
+        crate::run_ledger::LedgerError::SourceRequiresSnapshot { .. }
+    ));
     drop(conn);
 
     // Something that is not a classic database is refused up front.
@@ -391,10 +439,12 @@ async fn a_source_must_belong_to_the_target_scope_and_be_checkpointed() {
         .unwrap()
         .execute_batch("CREATE TABLE unrelated (x INTEGER);")
         .unwrap();
-    assert!(ledger
-        .import_legacy_database(&source_for(&other, &ledger))
-        .await
-        .is_err());
+    assert!(
+        ledger
+            .import_legacy_database(&source_for(&other, &ledger))
+            .await
+            .is_err()
+    );
     // And nothing reached the target.
     assert!(ledger.get_session("s-root").await.unwrap().is_none());
 }
@@ -415,10 +465,12 @@ async fn a_row_that_does_not_decode_refuses_the_pass_before_any_write() {
     });
     let backend = MemoryStorage::new();
     let ledger = ledger_on(&backend, "agent");
-    assert!(ledger
-        .import_legacy_database(&source_for(&path, &ledger))
-        .await
-        .is_err());
+    assert!(
+        ledger
+            .import_legacy_database(&source_for(&path, &ledger))
+            .await
+            .is_err()
+    );
     assert!(
         ledger.get_session("s-root").await.unwrap().is_none(),
         "everything is read before the first write"

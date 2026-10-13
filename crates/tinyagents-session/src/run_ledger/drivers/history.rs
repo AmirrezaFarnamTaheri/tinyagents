@@ -156,9 +156,9 @@ fn bounded_output(output: &str) -> String {
 }
 
 fn condition<T>(found: &Option<Versioned<T>>) -> Precondition {
-    found
-        .as_ref()
-        .map_or(Precondition::Absent, |row| Precondition::Version(row.version))
+    found.as_ref().map_or(Precondition::Absent, |row| {
+        Precondition::Version(row.version)
+    })
 }
 
 impl DriverRunLedger {
@@ -167,11 +167,7 @@ impl DriverRunLedger {
     }
 
     /// Commit `writes` guarded by `checks`, retrying only version conflicts.
-    async fn commit_history(
-        &self,
-        checks: Vec<ReadCheck>,
-        writes: Vec<WriteOp>,
-    ) -> Result<bool> {
+    async fn commit_history(&self, checks: Vec<ReadCheck>, writes: Vec<WriteOp>) -> Result<bool> {
         match self
             .scoped
             .documents()
@@ -538,7 +534,13 @@ impl SessionHistoryStore for DriverRunLedger {
         let offset = u64::from(params.offset.unwrap_or(0));
         let Some(allowed) = allowed else {
             let (sessions, total) = self
-                .page_sorted(HIST_SESSIONS, filter, Sort::desc("startedUs"), limit, offset)
+                .page_sorted(
+                    HIST_SESSIONS,
+                    filter,
+                    Sort::desc("startedUs"),
+                    limit,
+                    offset,
+                )
                 .await?;
             return Ok(SessionSearchResult { sessions, total });
         };
@@ -548,11 +550,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .sort(Sort::desc("startedUs"))
             .limit(256);
         loop {
-            let page = self
-                .scoped
-                .documents()
-                .query(HIST_SESSIONS, &query)
-                .await?;
+            let page = self.scoped.documents().query(HIST_SESSIONS, &query).await?;
             for row in page.items {
                 let session: SessionRecord = decode(row.doc)?;
                 if allowed.contains(&session.id) {

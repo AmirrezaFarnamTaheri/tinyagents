@@ -154,7 +154,6 @@ async fn driver_checkpointer_state_history_walks_lineage_newest_first() {
         .expect("limited history");
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].values, 2);
-
 }
 
 #[tokio::test]

@@ -3,9 +3,9 @@
 use super::*;
 use crate::port::{DriverSessionStores, TurnStates};
 use crate::transcript::{
-    MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage,
-    append_interrupted_partial, append_tools_record, append_transcript_turn, read_transcript,
-    read_transcript_display, write_transcript,
+    MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage, append_interrupted_partial,
+    append_tools_record, append_transcript_turn, read_transcript, read_transcript_display,
+    write_transcript,
 };
 use crate::turn_state::{TurnLifecycle, TurnState, TurnStateStore};
 use std::path::{Path, PathBuf};
@@ -100,7 +100,11 @@ fn a_transcript_replays_with_compaction_partials_usage_and_tools() {
     assert_eq!(report.read, 1);
     assert_eq!(report.imported, 1);
     assert_eq!(report.already_present, 0);
-    assert_eq!(std::fs::read(&path).unwrap(), before, "the source is untouched");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "the source is untouched"
+    );
 
     // The model-context replay equals the file's.
     let source = read_transcript(&path).unwrap();
@@ -122,7 +126,10 @@ fn a_transcript_replays_with_compaction_partials_usage_and_tools() {
             .collect::<Vec<_>>()
     );
     assert_eq!(imported.messages.len(), 2, "the compaction took effect");
-    assert_eq!(imported.tools, source.tools, "recorded tool declarations survive");
+    assert_eq!(
+        imported.tools, source.tools,
+        "recorded tool declarations survive"
+    );
     assert_eq!(imported.meta.thread_id.as_deref(), Some("thread-1"));
 
     // Idempotent: a second pass finds it and leaves it alone.
@@ -139,19 +146,40 @@ fn generations_subagents_and_date_directories_keep_their_stems() {
     let dir = tempfile::tempdir().unwrap();
     let raw = raw(dir.path());
     let m = meta("thread-2", 1);
-    let rows = |text: &str| vec![TranscriptMessage::user(text), TranscriptMessage::assistant("ok")];
+    let rows = |text: &str| {
+        vec![
+            TranscriptMessage::user(text),
+            TranscriptMessage::assistant("ok"),
+        ]
+    };
     for stem in ["root", "root.g1", "root__child"] {
         write_transcript(&raw.join(format!("{stem}.jsonl")), &rows(stem), &m, None).unwrap();
     }
     // The pre-flat layout: a date directory with the same stem as a flat file
     // is a stale duplicate, and a stem only the date directory has is kept.
     std::fs::create_dir_all(raw.join("01012026")).unwrap();
-    write_transcript(&raw.join("01012026").join("root.jsonl"), &rows("stale"), &m, None).unwrap();
-    write_transcript(&raw.join("01012026").join("dated.jsonl"), &rows("dated"), &m, None).unwrap();
+    write_transcript(
+        &raw.join("01012026").join("root.jsonl"),
+        &rows("stale"),
+        &m,
+        None,
+    )
+    .unwrap();
+    write_transcript(
+        &raw.join("01012026").join("dated.jsonl"),
+        &rows("dated"),
+        &m,
+        None,
+    )
+    .unwrap();
     std::fs::write(raw.join("notes.txt"), "not a transcript").unwrap();
     // A markdown session from the oldest layout is counted, not converted.
     std::fs::create_dir_all(dir.path().join("sessions").join("01012026")).unwrap();
-    std::fs::write(dir.path().join("sessions").join("01012026").join("old.md"), "# old").unwrap();
+    std::fs::write(
+        dir.path().join("sessions").join("01012026").join("old.md"),
+        "# old",
+    )
+    .unwrap();
 
     let provider = provider();
     let stores = provider.try_for_agent("agent").unwrap();
@@ -235,11 +263,18 @@ fn state(thread: &str, request: &str, lifecycle: TurnLifecycle) -> TurnState {
 fn turn_states_keep_their_ids_including_the_flat_legacy_form() {
     let dir = tempfile::tempdir().unwrap();
     let store = TurnStateStore::new(dir.path().to_path_buf());
-    store.put(&state("thread-a", "req-1", TurnLifecycle::Completed)).unwrap();
-    store.put(&state("thread-a", "req-2", TurnLifecycle::Streaming)).unwrap();
-    store.put(&state("thread-b", "req-9", TurnLifecycle::Started)).unwrap();
+    store
+        .put(&state("thread-a", "req-1", TurnLifecycle::Completed))
+        .unwrap();
+    store
+        .put(&state("thread-a", "req-2", TurnLifecycle::Streaming))
+        .unwrap();
+    store
+        .put(&state("thread-b", "req-9", TurnLifecycle::Started))
+        .unwrap();
     // The flat form older cores wrote: <hex(thread)>.json at the root.
-    let flat = turn_states::turn_state_dir(dir.path()).join(format!("{}.json", hex::encode("thread-c")));
+    let flat =
+        turn_states::turn_state_dir(dir.path()).join(format!("{}.json", hex::encode("thread-c")));
     std::fs::write(
         &flat,
         serde_json::to_string(&state("thread-c", "req-7", TurnLifecycle::Interrupted)).unwrap(),
@@ -259,17 +294,28 @@ fn turn_states_keep_their_ids_including_the_flat_legacy_form() {
     assert_eq!(report.imported, 4);
     assert_eq!(report.unreadable, 1);
     // Nothing under the source moved: the flat file was NOT migrated in place.
-    assert_eq!(walk(&turn_states::turn_state_dir(dir.path())), snapshot_before);
+    assert_eq!(
+        walk(&turn_states::turn_state_dir(dir.path())),
+        snapshot_before
+    );
     assert!(flat.exists());
 
     let turns: Arc<dyn TurnStates> = stores.turn_states.clone();
     assert_eq!(turns.list_thread("thread-a").unwrap().len(), 2);
     assert_eq!(
-        turns.get_turn("thread-a", "req-1").unwrap().unwrap().lifecycle,
+        turns
+            .get_turn("thread-a", "req-1")
+            .unwrap()
+            .unwrap()
+            .lifecycle,
         TurnLifecycle::Completed
     );
     assert_eq!(
-        turns.get_turn("thread-c", "req-7").unwrap().unwrap().lifecycle,
+        turns
+            .get_turn("thread-c", "req-7")
+            .unwrap()
+            .unwrap()
+            .lifecycle,
         TurnLifecycle::Interrupted
     );
 
@@ -279,7 +325,14 @@ fn turn_states_keep_their_ids_including_the_flat_legacy_form() {
     turns.put(&edited).unwrap();
     let again = import_turn_states(dir.path(), turns.as_ref()).unwrap();
     assert_eq!((again.imported, again.already_present), (0, 4));
-    assert_eq!(turns.get_turn("thread-b", "req-9").unwrap().unwrap().iteration, 3);
+    assert_eq!(
+        turns
+            .get_turn("thread-b", "req-9")
+            .unwrap()
+            .unwrap()
+            .iteration,
+        3
+    );
 }
 
 fn walk(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
@@ -319,7 +372,9 @@ async fn a_whole_workspace_imports_into_one_agents_stores() {
     });
 
     let provider = provider();
-    let report = import_workspace(&provider, "agent", dir.path()).await.unwrap();
+    let report = import_workspace(&provider, "agent", dir.path())
+        .await
+        .unwrap();
     let database = report.database.expect("the database was imported");
     assert_eq!(database.messages.imported, 1);
     assert_eq!(database.fts_rows, 2);
@@ -335,7 +390,9 @@ async fn a_whole_workspace_imports_into_one_agents_stores() {
     // Another agent saw none of it; a repeat changes nothing.
     let other = provider.try_for_agent("someone-else").unwrap();
     assert!(other.transcripts.root_for_thread("thread-1").is_none());
-    let again = import_workspace(&provider, "agent", dir.path()).await.unwrap();
+    let again = import_workspace(&provider, "agent", dir.path())
+        .await
+        .unwrap();
     assert_eq!(again.transcripts.imported, 0);
     assert_eq!(again.turn_states.imported, 0);
     assert_eq!(again.database.unwrap().messages.imported, 0);

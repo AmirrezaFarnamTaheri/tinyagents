@@ -8,7 +8,11 @@ fn a_long_multibyte_message_is_cut_on_a_character_boundary() {
     assert!(content.len() > DEFAULT_FTS_SNIPPET_BYTES);
     assert!(!content.is_char_boundary(DEFAULT_FTS_SNIPPET_BYTES));
     let cut = snippet(&content, DEFAULT_FTS_SNIPPET_BYTES);
-    assert_eq!(cut.len(), 1998, "the largest whole-character prefix under the cap");
+    assert_eq!(
+        cut.len(),
+        1998,
+        "the largest whole-character prefix under the cap"
+    );
     assert!(cut.chars().all(|c| c == '€'));
 }
 

@@ -2,8 +2,8 @@ use super::history::message_fts_id;
 use super::storage::{HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS};
 use super::*;
 use crate::run_ledger::history::{
-    MAX_TOOL_OUTPUT_BYTES,
-    NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore, SessionStart,
+    MAX_TOOL_OUTPUT_BYTES, NewSessionMessage, NewSessionToolCall, SessionEnd, SessionHistoryStore,
+    SessionStart,
 };
 use crate::types::{SessionSearchParams, SessionStatus};
 use chrono::Duration;
@@ -142,10 +142,16 @@ async fn records_and_queries(backend: &dyn StorageBackend) {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content, "build the parser");
     let kids = ledger.list_children("s1").await.unwrap();
-    assert_eq!(kids.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["s2"]);
+    assert_eq!(
+        kids.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+        ["s2"]
+    );
 
     // Newest first, with the total independent of the page.
-    let page = ledger.list_sessions(Some(1), None, None, None).await.unwrap();
+    let page = ledger
+        .list_sessions(Some(1), None, None, None)
+        .await
+        .unwrap();
     assert_eq!(page.total, 2);
     assert_eq!(page.sessions[0].id, "s2");
     let running = ledger
@@ -159,7 +165,10 @@ async fn records_and_queries(backend: &dyn StorageBackend) {
     assert_eq!(search(&ledger, "parser").await, ["s1"]);
     assert_eq!(search(&ledger, "refactor").await, ["s2"]);
     assert_eq!(search(&ledger, "edit_file").await, ["s2"]);
-    assert_eq!(search(&ledger, "refactor parser").await, Vec::<String>::new());
+    assert_eq!(
+        search(&ledger, "refactor parser").await,
+        Vec::<String>::new()
+    );
     assert_eq!(search(&ledger, "nothing-here").await, Vec::<String>::new());
     // Structured filters compose with text.
     let by_tool = ledger
@@ -231,11 +240,7 @@ async fn sqlite_history_records_and_answers_queries() {
 }
 
 /// Rewrite a session's timestamps so retention has something to age out.
-async fn age_session(
-    ledger: &DriverRunLedger,
-    id: &str,
-    ended: Option<chrono::DateTime<Utc>>,
-) {
+async fn age_session(ledger: &DriverRunLedger, id: &str, ended: Option<chrono::DateTime<Utc>>) {
     let found = ledger.read_session(id).await.unwrap().unwrap();
     let mut session = found.doc;
     session.ended_at = ended;
@@ -286,7 +291,13 @@ async fn retention_removes_only_what_is_stale(backend: &dyn StorageBackend) {
     assert_eq!(ledger.prune_sessions_before(cutoff).await.unwrap(), 1);
     assert!(ledger.get_session("old").await.unwrap().is_none());
     assert!(ledger.list_messages("old", None).await.unwrap().is_empty());
-    assert!(ledger.list_tool_calls("old", None).await.unwrap().is_empty());
+    assert!(
+        ledger
+            .list_tool_calls("old", None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(search(&ledger, "old").await.is_empty());
     assert_eq!(search(&ledger, "recent").await, ["recent"]);
     assert_eq!(search(&ledger, "live").await, ["live"]);
@@ -362,7 +373,11 @@ async fn tool_call_and_event_pruning_respect_the_cutoff() {
     );
     assert_eq!(ledger.prune_tool_calls_before(after).await.unwrap(), 2);
     assert!(ledger.list_tool_calls("s", None).await.unwrap().is_empty());
-    assert_eq!(count(&ledger, HIST_FTS).await, 1, "only the session row stays indexed");
+    assert_eq!(
+        count(&ledger, HIST_FTS).await,
+        1,
+        "only the session row stays indexed"
+    );
 
     for n in 0..3 {
         ledger
@@ -507,6 +522,12 @@ async fn indexing_truncates_long_non_ascii_content_on_a_character_boundary() {
     // Two-byte characters straddle the default 2000-byte cap exactly.
     let content = format!("{} tail", "é".repeat(1500));
     say(&ledger, "s", &content).await;
-    assert!(search(&ledger, "tail").await.is_empty(), "past the snippet cap");
-    assert_eq!(ledger.list_messages("s", None).await.unwrap()[0].content, content);
+    assert!(
+        search(&ledger, "tail").await.is_empty(),
+        "past the snippet cap"
+    );
+    assert_eq!(
+        ledger.list_messages("s", None).await.unwrap()[0].content,
+        content
+    );
 }

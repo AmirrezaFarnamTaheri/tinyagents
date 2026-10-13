@@ -76,7 +76,8 @@ async fn driver_backend_interrupt_then_restart_then_resume() {
     // Write phase: a fresh `DriverCheckpointer` opened on the temp directory
     // runs the graph to its interrupt point.
     {
-        let cp: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+        let cp: Arc<dyn Checkpointer<i32>> =
+            Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
         let graph = approve_graph().with_checkpointer(cp);
         let paused = graph.run_with_thread("hitl", 10).await.unwrap();
         assert!(paused.is_interrupted());
@@ -88,7 +89,8 @@ async fn driver_backend_interrupt_then_restart_then_resume() {
 
     // Read/resume phase: a brand-new `DriverCheckpointer` instance, opened
     // fresh against the same directory, resumes the run from disk.
-    let cp2: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+    let cp2: Arc<dyn Checkpointer<i32>> =
+        Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
     let graph2 = approve_graph().with_checkpointer(cp2);
     let resumed = graph2
         .resume("hitl", Command::resume(json!({ "bump": 5 })))
@@ -107,7 +109,8 @@ async fn driver_backend_failure_then_restart_then_retry() {
     // Write phase: the node fails once and the run aborts, leaving a
     // resumable failure checkpoint on disk.
     {
-        let cp: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+        let cp: Arc<dyn Checkpointer<i32>> =
+            Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
         let graph = flaky_graph(1, attempts.clone()).with_checkpointer(cp);
         let err = graph.run_with_thread("net", 100).await.unwrap_err();
         assert!(matches!(err, TinyAgentsError::Model(_)), "got {err:?}");
@@ -119,7 +122,8 @@ async fn driver_backend_failure_then_restart_then_retry() {
     // Read/retry phase: a fresh `DriverCheckpointer` instance, opened against
     // the same directory, retries the failed node from disk. The transient
     // condition has cleared by the time this attempt runs.
-    let cp2: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
+    let cp2: Arc<dyn Checkpointer<i32>> =
+        Arc::new(crate::test_support::dir_checkpointer::<i32>(dir.path()));
     let graph2 = flaky_graph(1, attempts.clone()).with_checkpointer(cp2);
     let resumed = graph2.retry("net").await.unwrap();
     assert_eq!(resumed.state, 101);

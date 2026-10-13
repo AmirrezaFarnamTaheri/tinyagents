@@ -43,8 +43,9 @@ fn map_error(error: StorageError) -> TinyAgentsError {
 }
 
 fn millis(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+    time.duration_since(UNIX_EPOCH).map_or(0, |elapsed| {
+        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+    })
 }
 
 fn decode(record: &Value) -> Option<CompletionRecord> {
@@ -197,9 +198,8 @@ impl CompletionStore for DriverCompletionStore {
 
     fn compact(&self, retain: Duration) -> Result<usize> {
         let this = self.clone();
-        let cutoff = millis(SystemTime::now()).saturating_sub(
-            u64::try_from(retain.as_millis()).unwrap_or(u64::MAX),
-        );
+        let cutoff = millis(SystemTime::now())
+            .saturating_sub(u64::try_from(retain.as_millis()).unwrap_or(u64::MAX));
         self.run(async move {
             this.declare().await?;
             // Settled means anything but pending. `lt` on the millisecond
@@ -228,12 +228,15 @@ impl CompletionStore for DriverCompletionStore {
                 // Only the version we saw: a record refreshed since is live again.
                 match this
                     .docs
-                    .delete(&this.collection, &row.id, Precondition::Version(row.version))
+                    .delete(
+                        &this.collection,
+                        &row.id,
+                        Precondition::Version(row.version),
+                    )
                     .await
                 {
                     Ok(removed) => dropped += usize::from(removed),
-                    Err(error)
-                        if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
                     Err(error) => return Err(map_error(error)),
                 }
             }

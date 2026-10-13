@@ -55,7 +55,10 @@ async fn branches_forks_and_context(backend: &dyn StorageBackend) {
         copy,
         "a tree fork copies root and main as entries 4 and 5"
     );
-    assert_eq!(peer.entry_head("session").await.unwrap(), Some(copy.clone()));
+    assert_eq!(
+        peer.entry_head("session").await.unwrap(),
+        Some(copy.clone())
+    );
     assert_eq!(
         native.entry_tips("session").await.unwrap(),
         vec![main.clone(), label.clone(), copy.clone()]
@@ -83,7 +86,12 @@ async fn branches_forks_and_context(backend: &dyn StorageBackend) {
         ["root", "main"]
     );
     assert_eq!(
-        texts(native.entry_ancestor_chain("session", &label).await.unwrap()),
+        texts(
+            native
+                .entry_ancestor_chain("session", &label)
+                .await
+                .unwrap()
+        ),
         ["root", "branch", "label:named"]
     );
     assert_eq!(

@@ -29,8 +29,10 @@ async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
 #[tokio::test(flavor = "current_thread")]
 async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
     let workspace = tempfile::tempdir().unwrap();
-    let first = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
-    let second = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
+    let first =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
+    let second =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
     let initial = first.upsert(row()).await.unwrap();
     assert_eq!(initial.revision, 0);
     let WorkflowLeaseClaim::Acquired(claimed) = first
@@ -125,7 +127,8 @@ mod refusal_tests;
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let workspace = tempfile::tempdir().unwrap();
-    let store = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
+    let store =
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
     let lease = Duration::MAX;
     assert!(matches!(
         store.claim("workflow", "owner", lease).await,

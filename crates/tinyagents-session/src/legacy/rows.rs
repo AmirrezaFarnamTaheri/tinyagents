@@ -74,7 +74,9 @@ fn time(row: &Row<'_>, index: usize) -> rusqlite::Result<DateTime<Utc>> {
     let raw: String = row.get(index)?;
     DateTime::parse_from_rfc3339(&raw)
         .map(|time| time.with_timezone(&Utc))
-        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error)))
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+        })
 }
 
 fn time_opt(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<DateTime<Utc>>> {
@@ -254,7 +256,11 @@ pub(crate) fn agent_runs(snapshot: &LegacySourceSnapshot) -> LedgerResult<Vec<Ag
             for index in [9, 12] {
                 if let Some(raw) = row.get::<_, Option<String>>(index)? {
                     serde_json::from_str::<Value>(&raw).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(index, Type::Text, Box::new(error))
+                        rusqlite::Error::FromSqlConversionFailure(
+                            index,
+                            Type::Text,
+                            Box::new(error),
+                        )
                     })?;
                 }
             }
@@ -591,7 +597,11 @@ pub(crate) fn entry_trees(
     let labels = read_all(
         snapshot,
         "entry_tree_labels",
-        &[("session_id", "NULL"), ("name", "NULL"), ("entry_id", "NULL")],
+        &[
+            ("session_id", "NULL"),
+            ("name", "NULL"),
+            ("entry_id", "NULL"),
+        ],
         "session_id, name",
         |row| {
             Ok((

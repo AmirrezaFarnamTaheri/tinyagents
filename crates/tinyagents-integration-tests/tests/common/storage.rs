@@ -6,9 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tinyagents_graph::checkpoint::DriverCheckpointer;
-use tinystoragedrivers_core::{
-    DocumentStore, MemoryStorage, Scope, ScopedStorage, StorageBackend,
-};
+use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, ScopedStorage, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 /// A fresh in-memory scope.

@@ -79,7 +79,10 @@ async fn vectors_round_trip_exactly_including_full_width_keys() {
     }
     // Repeating a store is idempotent and a disjoint delta merges.
     cache.store(SIGNATURE, &values).await.unwrap();
-    cache.store(SIGNATURE, &[(7, vec![9.0, 9.0, 9.0])]).await.unwrap();
+    cache
+        .store(SIGNATURE, &[(7, vec![9.0, 9.0, 9.0])])
+        .await
+        .unwrap();
     assert_eq!(cache.load(SIGNATURE, &[7, 0]).await.unwrap().len(), 2);
 }
 
@@ -100,7 +103,11 @@ async fn non_finite_vectors_are_not_persisted() {
     cache
         .store(
             SIGNATURE,
-            &[(1, vec![f32::NAN, 0.0]), (2, vec![f32::INFINITY]), (3, vec![1.0])],
+            &[
+                (1, vec![f32::NAN, 0.0]),
+                (2, vec![f32::INFINITY]),
+                (3, vec![1.0]),
+            ],
         )
         .await
         .unwrap();

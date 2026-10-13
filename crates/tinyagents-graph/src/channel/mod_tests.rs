@@ -514,8 +514,9 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
 
     let dir = tempfile::tempdir().unwrap();
     {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(crate::test_support::dir_checkpointer::<ChannelState>(dir.path()));
+        let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
+            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+        );
         let g = graph().with_checkpointer(cp);
         let paused = g.run_with_thread("ch-thread", initial).await.unwrap();
         assert!(paused.is_interrupted());
@@ -525,8 +526,9 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
     // process-wide registered) `"sum"` reducer and the resumed run must
     // merge through it correctly.
     {
-        let cp: Arc<dyn Checkpointer<ChannelState>> =
-            Arc::new(crate::test_support::dir_checkpointer::<ChannelState>(dir.path()));
+        let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
+            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+        );
         let g = graph().with_checkpointer(cp);
         let exec = g
             .resume("ch-thread", Command::resume(json!({ "bump": 7 })))

@@ -7,12 +7,10 @@
 //! that owns them, so an interrupted pass never leaves a record whose children
 //! vanished while the parent still claims them as live data.
 use super::history::{
-    FtsRow, fts_doc, message_fts_id, message_fts_row, session_fts_id, session_fts_row,
-    tool_fts_id, tool_fts_row,
+    FtsRow, fts_doc, message_fts_id, message_fts_row, session_fts_id, session_fts_row, tool_fts_id,
+    tool_fts_row,
 };
-use super::storage::{
-    EVENTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, decode,
-};
+use super::storage::{EVENTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, decode};
 use super::*;
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use serde_json::Value;
@@ -177,7 +175,10 @@ impl DriverRunLedger {
         Ok(removed)
     }
 
-    pub(super) async fn history_prune_tool_calls(&self, older_than: DateTime<Utc>) -> Result<usize> {
+    pub(super) async fn history_prune_tool_calls(
+        &self,
+        older_than: DateTime<Utc>,
+    ) -> Result<usize> {
         tracing::debug!("{LOG_PREFIX} prune_tool_calls_before.entry cutoff={older_than}");
         let filter = Filter::lt("createdUs", older_than.timestamp_micros() + 1);
         let mut ops = Vec::new();

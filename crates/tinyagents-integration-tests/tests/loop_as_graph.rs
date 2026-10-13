@@ -17,10 +17,10 @@ use std::sync::Arc;
 
 use serde_json::json;
 
+use tinyagents_graph::InMemoryCheckpointer;
 use tinyagents_graph::agent_loop::{
     AgentLoopGraphExt, GraphLoopDriver, LoopRuntime, LoopState, compile_loop, node,
 };
-use tinyagents_graph::InMemoryCheckpointer;
 
 mod common;
 use common::storage;

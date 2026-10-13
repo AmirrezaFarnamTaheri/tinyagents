@@ -324,9 +324,11 @@ async fn scoped_workflow_documents_survive_sqlite_reopen() {
             .unwrap(),
     );
     assert!(other.get_workflow_run("workflow").await.unwrap().is_none());
-    let sql =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap();
+    let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+        path,
+        tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
     assert_eq!(sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs', 'sessions', 'workflow_runs')", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
 }
 

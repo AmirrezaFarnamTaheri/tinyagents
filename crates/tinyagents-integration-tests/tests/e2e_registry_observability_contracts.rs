@@ -456,9 +456,9 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     );
     assert_eq!(observations[0].root_run_id.as_str(), "root-run");
 
-    let jsonl_store: std::sync::Arc<dyn AppendStore> = std::sync::Arc::new(
-        DriverAppendStore::new(std::sync::Arc::clone(storage::memory().streams())),
-    );
+    let jsonl_store: std::sync::Arc<dyn AppendStore> = std::sync::Arc::new(DriverAppendStore::new(
+        std::sync::Arc::clone(storage::memory().streams()),
+    ));
     let jsonl_sink = JsonlSink::new(jsonl_store.clone(), "events");
     jsonl_sink.on_event(&secret_record);
     jsonl_sink.flush();
@@ -466,5 +466,4 @@ async fn fanout_redaction_journal_and_jsonl_sinks_forward_best_effort_events() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].0, 0);
     assert_eq!(rows[0].1["event"]["key"], "prefix-api-key-123-suffix");
-
 }

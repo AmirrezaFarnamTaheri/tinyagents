@@ -38,7 +38,10 @@ async fn entries_persist_across_handles_and_reopened_files() {
     {
         let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
         let cache = DriverTaskCache::new(docs(&storage, "local"));
-        cache.put(&key("g", "n", "h"), json!(7), None).await.unwrap();
+        cache
+            .put(&key("g", "n", "h"), json!(7), None)
+            .await
+            .unwrap();
     }
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = DriverTaskCache::new(docs(&storage, "local"));
@@ -54,16 +57,16 @@ async fn scopes_and_collections_keep_entries_apart() {
     let alice = DriverTaskCache::new(docs(&storage, "alice"));
     let bob = DriverTaskCache::new(docs(&storage, "bob"));
     let other = DriverTaskCache::with_collection(docs(&storage, "alice"), "other_cache");
-    alice.put(&key("g", "n", "h"), json!(1), None).await.unwrap();
+    alice
+        .put(&key("g", "n", "h"), json!(1), None)
+        .await
+        .unwrap();
     assert_eq!(bob.get(&key("g", "n", "h")).await.unwrap(), None);
     assert_eq!(other.get(&key("g", "n", "h")).await.unwrap(), None);
     // Clearing one tenant's graph never reaches another tenant's entry.
     bob.put(&key("g", "n", "h"), json!(2), None).await.unwrap();
     alice.clear(&GraphId::new("g")).await.unwrap();
-    assert_eq!(
-        bob.get(&key("g", "n", "h")).await.unwrap(),
-        Some(json!(2))
-    );
+    assert_eq!(bob.get(&key("g", "n", "h")).await.unwrap(), Some(json!(2)));
 }
 
 #[tokio::test]

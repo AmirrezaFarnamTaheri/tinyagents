@@ -16,7 +16,10 @@ use super::*;
 
 fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
     TeamService::new(
-        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(dir.path()))).unwrap(),
+        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
+            dir.path(),
+        )))
+        .unwrap(),
     )
 }
 

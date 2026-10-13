@@ -63,16 +63,27 @@ pub(super) fn specs() -> Vec<CollectionSpec> {
         CollectionSpec::new(super::entry_tree::INDEXES)
             .index(IndexSpec::new("session", ["record.sessionId"])),
         CollectionSpec::new(HIST_SESSIONS)
-            .index(IndexSpec::new("status_started", ["record.status", "startedUs"]))
-            .index(IndexSpec::new("parent", ["record.parent_session_id", "startedUs"]))
+            .index(IndexSpec::new(
+                "status_started",
+                ["record.status", "startedUs"],
+            ))
+            .index(IndexSpec::new(
+                "parent",
+                ["record.parent_session_id", "startedUs"],
+            ))
             .index(IndexSpec::new("agent", ["record.agent_definition_id"]))
             .index(IndexSpec::new("thread", ["record.thread_id"]))
             .index(IndexSpec::new("channel", ["record.source_channel"]))
             .index(IndexSpec::new("started", ["startedUs"])),
-        CollectionSpec::new(HIST_MESSAGES)
-            .index(IndexSpec::new("session_id", ["record.session_id", "record.id"])),
+        CollectionSpec::new(HIST_MESSAGES).index(IndexSpec::new(
+            "session_id",
+            ["record.session_id", "record.id"],
+        )),
         CollectionSpec::new(HIST_TOOL_CALLS)
-            .index(IndexSpec::new("session_id", ["record.session_id", "record.id"]))
+            .index(IndexSpec::new(
+                "session_id",
+                ["record.session_id", "record.id"],
+            ))
             .index(IndexSpec::new("tool", ["record.tool_name"]))
             .index(IndexSpec::new("created", ["createdUs"])),
         CollectionSpec::new(HIST_FTS)

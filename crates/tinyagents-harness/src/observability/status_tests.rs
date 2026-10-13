@@ -18,7 +18,9 @@ fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinystoragedrivers_core:
 }
 
 fn status_store() -> DriverStatusStore {
-    DriverStatusStore::new(Arc::clone(scoped(&MemoryStorage::new(), "local").documents()))
+    DriverStatusStore::new(Arc::clone(
+        scoped(&MemoryStorage::new(), "local").documents(),
+    ))
 }
 
 fn journal_store(storage: &dyn StorageBackend) -> Arc<dyn AppendStore> {
@@ -149,14 +151,14 @@ async fn any_run_id_is_a_valid_key_and_overwrites_in_place() {
         let read = store.get_status(id).await.unwrap().expect("written");
         assert_eq!(read.status, ExecutionStatus::Running);
     }
-    assert_eq!(store.list_active().await.unwrap().len(), 5, "one record each");
+    assert_eq!(
+        store.list_active().await.unwrap().len(),
+        5,
+        "one record each"
+    );
 }
 
-async fn read_all(
-    storage: &dyn StorageBackend,
-    run_id: &str,
-    from: u64,
-) -> Vec<AgentObservation> {
+async fn read_all(storage: &dyn StorageBackend, run_id: &str, from: u64) -> Vec<AgentObservation> {
     StoreEventJournal::new(journal_store(storage))
         .read_from(run_id, from)
         .await

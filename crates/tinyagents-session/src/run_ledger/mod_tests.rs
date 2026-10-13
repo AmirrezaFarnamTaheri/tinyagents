@@ -34,7 +34,11 @@ async fn run_ledger_tool_effects_implements_the_harness_ledger_trait() {
 
     let unresolved = ledger.unresolved("run-1").await.unwrap();
     assert_eq!(unresolved.len(), 2, "only the run's own calls");
-    assert!(unresolved.iter().all(|e| e.status == HarnessStatus::Started));
+    assert!(
+        unresolved
+            .iter()
+            .all(|e| e.status == HarnessStatus::Started)
+    );
     let call_one = unresolved.iter().find(|e| e.call_id == "call-1").unwrap();
     assert_eq!(call_one.tool, "send_email");
     assert_eq!(call_one.idempotency_key.as_deref(), Some("key-call-1"));
@@ -79,7 +83,11 @@ async fn tool_effects_survive_a_reopened_sqlite_file_and_stay_per_scope() {
     let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
     let unresolved = reopened.unresolved("run-1").await.unwrap();
-    assert_eq!(unresolved.len(), 1, "the in-flight call is still there after a restart");
+    assert_eq!(
+        unresolved.len(),
+        1,
+        "the in-flight call is still there after a restart"
+    );
     let peer = RunLedgerToolEffects::new(ledger_on(&backend, "peer"));
     assert!(peer.unresolved("run-1").await.unwrap().is_empty());
 }

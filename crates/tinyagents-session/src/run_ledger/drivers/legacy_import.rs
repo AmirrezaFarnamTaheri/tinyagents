@@ -88,7 +88,9 @@ impl DriverRunLedger {
             .await
         {
             Ok(_) => Ok(true),
-            Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+            {
                 Ok(false)
             }
             Err(error) => Err(error.into()),
@@ -115,7 +117,11 @@ impl DriverRunLedger {
         self.change(EVENT_HEADS, run_id, |previous: Option<EventHead>| {
             Ok(match previous {
                 // A terminal head (`None`) is already past every sequence.
-                Some(head) if head.next.is_none_or(|have| wanted.is_some_and(|w| have >= w)) => {
+                Some(head)
+                    if head
+                        .next
+                        .is_none_or(|have| wanted.is_some_and(|w| have >= w)) =>
+                {
                     (None, ())
                 }
                 _ => (Some(EventHead { next: wanted }), ()),
@@ -186,8 +192,12 @@ impl DriverRunLedger {
         for message in &loaded.messages {
             highest = highest.max(u64::try_from(message.id).unwrap_or(0));
             imported += usize::from(
-                self.put_if_absent(HIST_MESSAGES, &message_id(message.id), message_doc(message)?)
-                    .await?,
+                self.put_if_absent(
+                    HIST_MESSAGES,
+                    &message_id(message.id),
+                    message_doc(message)?,
+                )
+                .await?,
             );
         }
         self.raise_counter(MESSAGE_COUNTER, highest + 1).await?;
@@ -198,8 +208,12 @@ impl DriverRunLedger {
         for call in &loaded.tool_calls {
             highest = highest.max(u64::try_from(call.id).unwrap_or(0));
             imported += usize::from(
-                self.put_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id), tool_call_doc(call)?)
-                    .await?,
+                self.put_if_absent(
+                    HIST_TOOL_CALLS,
+                    &tool_call_id(call.id),
+                    tool_call_doc(call)?,
+                )
+                .await?,
             );
         }
         self.raise_counter(TOOL_CALL_COUNTER, highest + 1).await?;
@@ -238,8 +252,7 @@ impl DriverRunLedger {
             );
         }
         for (run_id, highest) in heads {
-            self.raise_event_head(run_id, highest + 1)
-                .await?;
+            self.raise_event_head(run_id, highest + 1).await?;
         }
         report.events = ImportCounts::tally(loaded.events.len(), imported);
 

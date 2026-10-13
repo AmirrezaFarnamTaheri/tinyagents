@@ -96,7 +96,8 @@ pub struct SessionWorkflowStore {
 
 impl std::fmt::Debug for SessionWorkflowStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SessionWorkflowStore").finish_non_exhaustive()
+        f.debug_struct("SessionWorkflowStore")
+            .finish_non_exhaustive()
     }
 }
 

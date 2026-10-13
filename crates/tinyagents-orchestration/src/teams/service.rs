@@ -14,10 +14,10 @@ use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
 use tinyagents_session::run_ledger::{
-    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
-    AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask,
-    AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome,
-    RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
+    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember, AgentTeamMemberStatus,
+    AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskStatus,
+    AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome, RunEvent,
+    RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
 use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
@@ -166,7 +166,11 @@ impl TeamLedger for SessionTeamLedger {
             member_id.to_owned(),
             claim_token.to_owned(),
         );
-        self.run(async move { ledger.claim_agent_team_task(&team, &task, &member, &token).await })
+        self.run(async move {
+            ledger
+                .claim_agent_team_task(&team, &task, &member, &token)
+                .await
+        })
     }
     fn complete_task(
         &self,

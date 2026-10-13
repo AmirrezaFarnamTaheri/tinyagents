@@ -74,7 +74,6 @@ async fn in_memory_namespaces_are_isolated() {
     assert_eq!(store.list("a").await.unwrap(), vec!["k"]);
 }
 
-
 #[tokio::test]
 async fn store_registry_default_store_is_stable() {
     let reg = StoreRegistry::new();

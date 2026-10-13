@@ -65,7 +65,11 @@ async fn items_survive_a_reopened_file_with_their_timestamps() {
         .put(&ns(&["users", "alice"]), "k", json!({"v": 2}))
         .await
         .unwrap();
-    let again = store.get(&ns(&["users", "alice"]), "k").await.unwrap().unwrap();
+    let again = store
+        .get(&ns(&["users", "alice"]), "k")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(again.created_at_ms, created);
     assert!(again.updated_at_ms >= item.updated_at_ms);
 }
@@ -79,7 +83,10 @@ async fn expired_items_are_invisible_and_reclaimed_by_a_sweep() {
         .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))
         .await
         .unwrap();
-    store.put_with_ttl(&n, "keep", json!(2), None).await.unwrap();
+    store
+        .put_with_ttl(&n, "keep", json!(2), None)
+        .await
+        .unwrap();
     store
         .put_with_ttl(&n, "also-gone", json!(3), Some(f64::MIN_POSITIVE))
         .await
@@ -105,12 +112,11 @@ async fn expired_items_are_invisible_and_reclaimed_by_a_sweep() {
 
 #[tokio::test]
 async fn default_ttl_applies_and_a_sliding_window_extends_on_read() {
-    let sliding = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local")).with_ttl(
-        TtlConfig {
+    let sliding =
+        DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local")).with_ttl(TtlConfig {
             default_ttl_minutes: Some(60.0),
             refresh_on_read: true,
-        },
-    );
+        });
     assert_eq!(sliding.ttl_config().default_ttl_minutes, Some(60.0));
     let n = ns(&["cache"]);
     sliding.put(&n, "k", json!(1)).await.unwrap();
@@ -205,10 +211,18 @@ async fn scopes_and_collections_keep_items_apart() {
             .is_empty()
     );
     // Segments and keys that would collide under naive joining stay distinct.
-    alice.put(&ns(&["a", "b"]), "c", json!("one")).await.unwrap();
+    alice
+        .put(&ns(&["a", "b"]), "c", json!("one"))
+        .await
+        .unwrap();
     alice.put(&ns(&["a"]), "b/c", json!("two")).await.unwrap();
     assert_eq!(
-        alice.get(&ns(&["a", "b"]), "c").await.unwrap().unwrap().value,
+        alice
+            .get(&ns(&["a", "b"]), "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
         json!("one")
     );
     assert_eq!(
@@ -249,9 +263,16 @@ async fn expiry_is_enforced_on_read_and_swept_when_the_backend_has_no_native_ttl
         .put_with_ttl(&n, "swept", json!(2), Some(f64::MIN_POSITIVE))
         .await
         .unwrap();
-    store.put_with_ttl(&n, "keep", json!(3), None).await.unwrap();
+    store
+        .put_with_ttl(&n, "keep", json!(3), None)
+        .await
+        .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     assert!(store.get(&n, "gone").await.unwrap().is_none());
-    assert_eq!(store.sweep_expired().await.unwrap(), 1, "only `swept` is left");
+    assert_eq!(
+        store.sweep_expired().await.unwrap(),
+        1,
+        "only `swept` is left"
+    );
     assert!(store.get(&n, "keep").await.unwrap().is_some());
 }

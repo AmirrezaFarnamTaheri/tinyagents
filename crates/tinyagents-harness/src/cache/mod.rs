@@ -56,13 +56,13 @@ pub(crate) use layout::{
     promote_tools_after_zero_prefix_marker,
 };
 
+pub use drivers::DriverResponseCache;
 pub use key::{
     PROMPT_CACHE_KEY_OPTION, apply_prompt_cache_breakpoints, cache_key, credential_fingerprint,
     model_cache_identity, prompt_cache_key, scoped_cache_key,
 };
 pub use miss::{DEFAULT_CACHE_MISS_NOISE_FLOOR_TOKENS, PromptCacheMiss, PromptCacheTracker};
 pub use singleflight::SingleFlight;
-pub use drivers::DriverResponseCache;
 pub use types::*;
 
 #[cfg(test)]

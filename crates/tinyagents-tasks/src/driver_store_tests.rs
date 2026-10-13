@@ -36,7 +36,11 @@ fn lifecycle_matches_the_in_memory_state_machine() {
         let pending = store.insert(spec("task-a")).unwrap();
         assert_eq!(pending.status, OrchestrationTaskStatus::Pending);
         // Illegal transitions are refused identically.
-        assert!(store.complete(&id, OrchestrationTaskResult::text("x")).is_ok());
+        assert!(
+            store
+                .complete(&id, OrchestrationTaskResult::text("x"))
+                .is_ok()
+        );
         assert!(store.mark_running(&id).is_err(), "completed is terminal");
         assert!(store.insert(spec("task-a")).is_err(), "duplicate id");
         assert!(store.mark_running(&TaskId::new("missing")).is_err());
@@ -67,7 +71,10 @@ fn every_transition_lands_in_the_history_oldest_first() {
         ]
     );
     assert_eq!(history[2].error.as_deref(), Some("which branch?"));
-    assert_eq!(store.get(&id).unwrap().status, OrchestrationTaskStatus::Cancelled);
+    assert_eq!(
+        store.get(&id).unwrap().status,
+        OrchestrationTaskStatus::Cancelled
+    );
     assert!(store.history(&TaskId::new("missing")).is_empty());
 }
 
@@ -76,7 +83,10 @@ fn an_already_requested_cancellation_is_idempotent() {
     let store = store();
     let id = TaskId::new("task-a");
     store.insert(spec("task-a")).unwrap();
-    assert_eq!(store.request_cancel(&id).unwrap().message, "cancellation requested");
+    assert_eq!(
+        store.request_cancel(&id).unwrap().message,
+        "cancellation requested"
+    );
     assert_eq!(
         store.request_cancel(&id).unwrap().message,
         "cancellation was already requested"
@@ -127,7 +137,9 @@ fn list_filters_by_lineage_status_kind_and_time() {
             .with_node("spawner"),
         )
         .unwrap();
-    store.insert(spec("g2").with_lineage("run-3", "root-2")).unwrap();
+    store
+        .insert(spec("g2").with_lineage("run-3", "root-2"))
+        .unwrap();
     store.mark_running(&TaskId::new("g2")).unwrap();
 
     let ids = |filter: OrchestrationTaskFilter| -> Vec<String> {
@@ -182,9 +194,8 @@ fn list_filters_by_lineage_status_kind_and_time() {
             .is_empty()
     );
     assert_eq!(
-        ids(OrchestrationTaskFilter::default()
-            .created_between(Some(std::time::UNIX_EPOCH), None))
-        .len(),
+        ids(OrchestrationTaskFilter::default().created_between(Some(std::time::UNIX_EPOCH), None))
+            .len(),
         3
     );
 }

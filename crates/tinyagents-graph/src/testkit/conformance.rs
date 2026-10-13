@@ -776,11 +776,19 @@ where
     assert_eq!(cache.get(&k).await.unwrap(), None, "empty cache misses");
     cache.put(&k, json!({"v": [1, 2]}), None).await.unwrap();
     assert_eq!(cache.get(&k).await.unwrap(), Some(json!({"v": [1, 2]})));
-    for other in [key("g", "n", "h2"), key("g", "m", "h1"), key("x", "n", "h1")] {
+    for other in [
+        key("g", "n", "h2"),
+        key("g", "m", "h1"),
+        key("x", "n", "h1"),
+    ] {
         assert_eq!(cache.get(&other).await.unwrap(), None, "keys are distinct");
     }
     cache.put(&k, json!("new"), None).await.unwrap();
-    assert_eq!(cache.get(&k).await.unwrap(), Some(json!("new")), "overwrite");
+    assert_eq!(
+        cache.get(&k).await.unwrap(),
+        Some(json!("new")),
+        "overwrite"
+    );
 
     let short = key("g", "n", "short");
     cache
@@ -798,7 +806,10 @@ where
         "re-put revives an expired key"
     );
 
-    cache.put(&key("other", "n", "h"), json!(9), None).await.unwrap();
+    cache
+        .put(&key("other", "n", "h"), json!(9), None)
+        .await
+        .unwrap();
     cache.clear(&GraphId::new("g")).await.unwrap();
     assert_eq!(cache.get(&k).await.unwrap(), None, "clear drops the graph");
     assert_eq!(cache.get(&short).await.unwrap(), None);

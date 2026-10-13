@@ -150,7 +150,10 @@ impl DriverTaskStore {
             .get_or_try_init(|| async {
                 let prefix = self.tasks.trim_end_matches("_tasks");
                 for spec in Self::collection_specs(prefix) {
-                    self.docs.ensure_collection(&spec).await.map_err(map_error)?;
+                    self.docs
+                        .ensure_collection(&spec)
+                        .await
+                        .map_err(map_error)?;
                 }
                 Ok::<(), TinyAgentsError>(())
             })
@@ -198,17 +201,11 @@ impl DriverTaskStore {
             this.declare().await?;
             let id = hashed_id(&[task_id.as_str()]);
             for _ in 0..CAS_ATTEMPTS {
-                let Some(found) = this
-                    .docs
-                    .get(&this.tasks, &id)
-                    .await
-                    .map_err(map_error)?
-                else {
+                let Some(found) = this.docs.get(&this.tasks, &id).await.map_err(map_error)? else {
                     return Err(orchestration_not_found(&task_id));
                 };
                 let rev = found.doc.get("rev").and_then(Value::as_u64).unwrap_or(0);
-                let mut record =
-                    decode(found.doc.get("record").cloned().unwrap_or(Value::Null))?;
+                let mut record = decode(found.doc.get("record").cloned().unwrap_or(Value::Null))?;
                 let outcome = change(&mut record)?;
                 let next = rev + 1;
                 let writes = vec![
@@ -285,8 +282,14 @@ impl crate::store::TaskStore for DriverTaskStore {
             this.declare().await?;
             let mut query_filter = Filter::default();
             for (field, value) in [
-                ("rootRunId", filter.root_run_id.as_ref().map(|id| id.as_str())),
-                ("parentRunId", filter.parent_run_id.as_ref().map(|id| id.as_str())),
+                (
+                    "rootRunId",
+                    filter.root_run_id.as_ref().map(|id| id.as_str()),
+                ),
+                (
+                    "parentRunId",
+                    filter.parent_run_id.as_ref().map(|id| id.as_str()),
+                ),
                 ("threadId", filter.thread_id.as_ref().map(|id| id.as_str())),
                 ("nodeId", filter.node_id.as_ref().map(|id| id.as_str())),
                 ("kind", filter.kind.as_deref()),

@@ -32,6 +32,7 @@ pub use completions::{
     DriverCompletionStore, InMemoryCompletionStore, NeutralCompletionFormatter, NotifyMode,
     RecordOutcome, TombstoneOutcome,
 };
+pub use driver_store::DriverTaskStore;
 pub use reconcile::{
     ReconcileOutcome, ReconcileReport, ReconciledTask, reconcile_orphaned_tasks, task_status_label,
 };
@@ -40,7 +41,6 @@ pub use recovery::{
     build_restart_recovery_note, recovery_children,
 };
 pub use runtime::DetachedTaskRegistry;
-pub use driver_store::DriverTaskStore;
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,

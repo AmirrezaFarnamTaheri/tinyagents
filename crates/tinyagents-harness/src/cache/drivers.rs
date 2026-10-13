@@ -31,9 +31,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use crate::driver_ids::hashed_id;
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use crate::driver_ids::hashed_id;
 use tinyinference_llm::model::ModelResponse;
 use tinystoragedrivers_core::{
     Capability, CollectionSpec, DocumentStore, ErrorKind, Filter, IndexSpec, Precondition,
@@ -166,11 +166,10 @@ impl ResponseCache for DriverResponseCache {
             self.counters.misses.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
-        let value = found
-            .doc
-            .get("value")
-            .cloned()
-            .ok_or_else(|| TinyAgentsError::Storage("response cache entry has no value".into()))?;
+        let value =
+            found.doc.get("value").cloned().ok_or_else(|| {
+                TinyAgentsError::Storage("response cache entry has no value".into())
+            })?;
         let response: ModelResponse = serde_json::from_value(value)
             .map_err(|e| TinyAgentsError::Storage(format!("decode response cache entry: {e}")))?;
         self.counters.hits.fetch_add(1, Ordering::Relaxed);

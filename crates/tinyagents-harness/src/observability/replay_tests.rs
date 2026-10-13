@@ -16,9 +16,9 @@ fn storage() -> ScopedStorage {
 }
 
 fn journal_over(storage: &ScopedStorage) -> StoreEventJournal<Arc<dyn AppendStore>> {
-    StoreEventJournal::new(Arc::new(DriverAppendStore::new(Arc::clone(
-        storage.streams(),
-    ))) as Arc<dyn AppendStore>)
+    StoreEventJournal::new(
+        Arc::new(DriverAppendStore::new(Arc::clone(storage.streams()))) as Arc<dyn AppendStore>,
+    )
 }
 
 fn status_over(storage: &ScopedStorage) -> DriverStatusStore {
@@ -27,8 +27,7 @@ fn status_over(storage: &ScopedStorage) -> DriverStatusStore {
 
 fn seed_run_events(storage: &ScopedStorage, count: usize) -> String {
     let run_id = mint_run_id();
-    let journal: Arc<dyn HarnessEventJournal> =
-        Arc::new(journal_over(storage));
+    let journal: Arc<dyn HarnessEventJournal> = Arc::new(journal_over(storage));
     let sink = EventSink::with_stream_id(run_id.as_str());
     let journal_sink = Arc::new(JournalSink::new(journal, run_id.clone()));
     sink.subscribe(Arc::new(FanOutSink::new().with(journal_sink.clone())));

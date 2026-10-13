@@ -231,7 +231,9 @@ struct CountedState(i32);
 static STATE_DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl<'de> serde::Deserialize<'de> for CountedState {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         STATE_DECODES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         i32::deserialize(deserializer).map(CountedState)
     }

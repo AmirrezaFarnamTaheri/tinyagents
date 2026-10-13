@@ -117,7 +117,13 @@ async fn claim_and_complete_lifecycle(backend: &dyn StorageBackend) {
     assert_eq!(failed.status, AgentTeamTaskStatus::InProgress);
 
     let CompletionOutcome::Completed(done) = ledger
-        .complete_agent_team_task("team", "base", "alice", &["pr#1".into(), "pr#1".into()], true)
+        .complete_agent_team_task(
+            "team",
+            "base",
+            "alice",
+            &["pr#1".into(), "pr#1".into()],
+            true,
+        )
         .await
         .unwrap()
     else {

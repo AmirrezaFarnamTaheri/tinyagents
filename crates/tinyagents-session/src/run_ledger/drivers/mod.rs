@@ -18,17 +18,15 @@ mod retention;
 mod storage;
 mod team;
 #[cfg(feature = "legacy-import")]
+pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
+#[cfg(feature = "legacy-import")]
 pub use import::AgentImportReport;
 #[cfg(feature = "legacy-import")]
 pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
-#[cfg(feature = "legacy-import")]
-pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
 
 use std::sync::Arc;
 use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
-use tinystoragedrivers_core::{
-    Filter, Query, Scope, ScopedStorage, Sort, StorageError,
-};
+use tinystoragedrivers_core::{Filter, Query, Scope, ScopedStorage, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -36,9 +34,9 @@ use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
-use super::types::RunTransition;
 use super::port::RunLedgerStore;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
+use super::types::RunTransition;
 use super::types::*;
 use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
 use crate::retention::RetentionReport;

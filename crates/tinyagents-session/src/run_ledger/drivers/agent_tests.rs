@@ -476,9 +476,11 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
     );
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
     assert_eq!(ledger.reconcile_run_events("run").await.unwrap(), 1);
-    let sql =
-        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap();
+    let sql = tinystoragedrivers_sqlite::rusqlite::Connection::open_with_flags(
+        &path,
+        tinystoragedrivers_sqlite::rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
     let classic: i64 = sql.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('agent_runs','run_events','sessions')", [], |row| row.get(0)).unwrap();
     assert_eq!(classic, 0);
 }
