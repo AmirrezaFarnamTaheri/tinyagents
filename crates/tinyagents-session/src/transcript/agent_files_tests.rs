@@ -49,11 +49,13 @@ fn new_sessions_are_written_under_the_agents_directory() {
 
     let own = workspace.path().join("agents/alpha/session_raw");
     assert!(std::fs::read_dir(&own).expect("own dir").next().is_some());
-    assert!(!workspace
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session)))
-        .exists());
+    assert!(
+        !workspace
+            .path()
+            .join("session_raw")
+            .join(format!("{}.jsonl", session_stem(&session)))
+            .exists()
+    );
 }
 
 #[test]
@@ -107,8 +109,43 @@ fn another_agent_does_not_adopt_a_session_scoped_to_someone_else() {
         .expect("write");
 
     let beta = AgentTranscriptFiles::new(workspace.path(), "beta");
-    assert!(beta
-        .read_session_transcript(&SessionRef::scoped("thread-1", "beta"))
-        .is_none());
+    assert!(
+        beta.read_session_transcript(&SessionRef::scoped("thread-1", "beta"))
+            .is_none()
+    );
     assert!(beta.read_session_transcript(&alpha_session).is_none());
+}
+
+#[test]
+fn fixture_workspace_resumes_by_stem_without_readoption_or_renaming() {
+    // A workspace laid out before per-agent directories: the transcript sits in
+    // the shared `session_raw/` under its deterministic, timestamp-free stem.
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let session = SessionRef::scoped("thread-9", "alpha");
+    let stem = session_stem(&session);
+    FileTranscriptLocator::new(workspace.path())
+        .open_session(&session, meta())
+        .expect("bind shared")
+        .replace(&[TranscriptMessage::user("old turn")])
+        .expect("write shared");
+    let shared = workspace
+        .path()
+        .join("session_raw")
+        .join(format!("{stem}.jsonl"));
+    assert!(shared.is_file(), "stem names the shared file unchanged");
+
+    let files = AgentTranscriptFiles::new(workspace.path(), "alpha");
+    assert!(files.session_exists(&session));
+    let resumed = files.read_session_transcript(&session).expect("resumes");
+    assert_eq!(messages(resumed.as_ref()), ["old turn"]);
+
+    // The copy keeps the very same file name, so a second process resolves it
+    // by the same stem.
+    let own = workspace
+        .path()
+        .join("agents/alpha/session_raw")
+        .join(format!("{stem}.jsonl"));
+    assert!(own.is_file());
+    let again = AgentTranscriptFiles::new(workspace.path(), "alpha");
+    assert!(again.session_exists(&session));
 }
