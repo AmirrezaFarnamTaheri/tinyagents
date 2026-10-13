@@ -105,7 +105,7 @@ pub use shell_turn_budget::{
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget,
     clamp_shell_timeout, install_time_notes,
 };
-pub use stop_latch::{HaltSummarySlot, StopLatch};
+pub use stop_latch::StopLatch;
 pub use unmet_deliverable::{
     UnmetDeliverableMiddleware, candidate_paths, install as install_unmet_deliverable,
     notice as unmet_deliverable_notice, wrap_harness_instruction,

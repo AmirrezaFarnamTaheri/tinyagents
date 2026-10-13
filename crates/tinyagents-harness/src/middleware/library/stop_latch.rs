@@ -17,15 +17,13 @@
 //! the batch shows progress.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use crate::steering::{SteeringCommand, SteeringHandle};
 
 use super::repeat_loop_stop::{is_correctable_class, repeat_loop_halt_summary, RepeatLoopWitness};
 
-/// The stop-note slot shared by the failure breaker, the repeat guard and the
-/// stop hooks.
-pub type HaltSummarySlot = Arc<Mutex<Option<String>>>;
+use super::repeat_progress::HaltSummarySlot;
 
 /// The failure breaker's side of the shared stop-note slot.
 pub struct StopLatch {

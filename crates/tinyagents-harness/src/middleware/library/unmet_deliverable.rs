@@ -444,7 +444,7 @@ impl<C: Send + Sync> Middleware<(), C> for UnmetDeliverableMiddleware {
         &self,
         ctx: &mut RunContext<C>,
         _state: &(),
-        _run: &mut tinyagents_harness::middleware::AgentRun,
+        _run: &mut crate::middleware::AgentRun,
     ) -> Result<()> {
         if let Ok(mut runs) = self.runs.lock() {
             runs.remove(&ctx.instance_id());
