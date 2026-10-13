@@ -10,12 +10,31 @@
 //! behind it, so a fast-path `try_send` can never overtake an earlier spilled
 //! item and scramble start/completed ordering. A closed channel means the
 //! receiver is gone, where dropping is correct.
+//!
+//! Nothing is lost silently. The overflow queue is bounded
+//! ([`DEFAULT_MAX_OVERFLOW`]), and when an item cannot be queued (the bound is
+//! reached, or the channel is full and there is no Tokio runtime to drain it)
+//! [`OrderedSender::send`] hands it back in a [`SendFailure`] so the caller
+//! decides what to do.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::error::TrySendError;
+
+/// Default bound on items spilled behind a full channel.
+pub const DEFAULT_MAX_OVERFLOW: usize = 4096;
+
+/// Why [`OrderedSender::send`] did not accept an item; carries it back.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SendFailure<T> {
+    /// The receiver is gone; dropping is correct.
+    Closed(T),
+    /// The channel is full and the item could not be queued: the overflow
+    /// bound was reached, or there is no Tokio runtime to drain a spill.
+    Backpressure(T),
+}
 
 struct OverflowState<T> {
     queue: VecDeque<T>,
@@ -35,6 +54,7 @@ impl<T> Default for OverflowState<T> {
 pub struct OrderedSender<T> {
     tx: Option<Sender<T>>,
     overflow: Arc<Mutex<OverflowState<T>>>,
+    max_overflow: usize,
 }
 
 impl<T: Send + 'static> OrderedSender<T> {
@@ -43,7 +63,15 @@ impl<T: Send + 'static> OrderedSender<T> {
         Self {
             tx,
             overflow: Arc::default(),
+            max_overflow: DEFAULT_MAX_OVERFLOW,
         }
+    }
+
+    /// Bound the spill queue at `max` items (default [`DEFAULT_MAX_OVERFLOW`]).
+    #[must_use]
+    pub fn with_max_overflow(mut self, max: usize) -> Self {
+        self.max_overflow = max;
+        self
     }
 
     /// Whether a channel is attached.
@@ -52,26 +80,40 @@ impl<T: Send + 'static> OrderedSender<T> {
     }
 
     /// Forward `item` without blocking and without reordering.
-    pub fn send(&self, item: T) {
+    ///
+    /// Returns the item in a [`SendFailure`] when it was not accepted. With no
+    /// channel attached it is a no-op that reports success.
+    pub fn send(&self, item: T) -> Result<(), SendFailure<T>> {
         let Some(tx) = &self.tx else {
-            return;
+            return Ok(());
         };
         // Hold the lock across the ordering decision so "are we draining?" and
         // the queue mutation are atomic (`try_send` never blocks).
         let mut ov = self.overflow.lock().unwrap_or_else(|p| p.into_inner());
         if ov.draining {
+            if ov.queue.len() >= self.max_overflow {
+                tracing::warn!(
+                    max = self.max_overflow,
+                    "[ordered-sender] overflow queue full; rejecting one item"
+                );
+                return Err(SendFailure::Backpressure(item));
+            }
             ov.queue.push_back(item);
-            return;
+            return Ok(());
         }
         match tx.try_send(item) {
-            Ok(()) | Err(TrySendError::Closed(_)) => {}
+            Ok(()) => Ok(()),
+            Err(TrySendError::Closed(item)) => Err(SendFailure::Closed(item)),
             Err(TrySendError::Full(item)) => {
                 let Ok(handle) = tokio::runtime::Handle::try_current() else {
-                    tracing::debug!(
-                        "[ordered-sender] channel full and no runtime to defer send; dropping one item"
+                    tracing::warn!(
+                        "[ordered-sender] channel full and no runtime to defer send; rejecting one item"
                     );
-                    return;
+                    return Err(SendFailure::Backpressure(item));
                 };
+                if self.max_overflow == 0 {
+                    return Err(SendFailure::Backpressure(item));
+                }
                 ov.queue.push_back(item);
                 ov.draining = true;
                 let overflow = Arc::clone(&self.overflow);
@@ -97,6 +139,7 @@ impl<T: Send + 'static> OrderedSender<T> {
                         }
                     }
                 });
+                Ok(())
             }
         }
     }
