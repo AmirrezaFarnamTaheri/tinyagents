@@ -7,7 +7,7 @@ pub trait MemoryPackSource<Ctx>: Send + Sync {
     fn injection(&self, data: &Ctx) -> Option<String>;
 }
 
-/// Host decision for [`PackedToolRouteMiddleware`]: which pack owns a tool name
+/// Host decision for [`PackedToolRouteMiddleware`](super::PackedToolRouteMiddleware): which pack owns a tool name
 /// and whether this turn may run it.
 pub trait PackedToolRouter<Ctx>: Send + Sync {
     /// The pack id to route `tool` through, or `None` to leave the call alone
