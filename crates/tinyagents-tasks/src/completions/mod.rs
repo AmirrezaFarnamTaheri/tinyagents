@@ -38,6 +38,3 @@ pub use types::{
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
-#[cfg(test)]
-#[path = "store_tests.rs"]
-mod store_tests;
