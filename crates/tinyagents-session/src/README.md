@@ -48,17 +48,13 @@ Re-exported from the crate root (see `src/lib.rs`); the full surface stays
 reachable under `session::`, `session::run_ledger::`, and
 `session::transcript::`.
 
-- **Recording** — `record_session_start`, `record_message`,
-  `record_message_with_reasoning`, `record_tool_call`, `record_session_end`.
-  Use `record_message_with_reasoning` when an assistant response has hidden
-  reasoning that must remain separate from its visible content;
-  `record_message` remains the compatibility wrapper for content-only callers.
-- **Querying** — `get_session`, `list_sessions`, `search_sessions`,
-  `list_messages`, `list_tool_calls`, `list_children`
-- **Recovery** — `mark_interrupted`
+- **Session history** — the `SessionHistoryStore` trait on `DriverRunLedger`:
+  `record_session_start`, `record_message`, `record_tool_call`,
+  `record_session_end`, `get_session`, `list_sessions`, `search_sessions`,
+  `list_messages`, `list_tool_calls`, `list_children`, `mark_interrupted`
 - **Retention** — `apply_retention`, `prune_sessions_before`,
   `prune_tool_calls_before`, `prune_run_events_before`,
-  `prune_run_telemetry_before`, `trim_session_messages`, `reindex_fts`
+  `prune_run_telemetry_before`, `trim_session_messages`, `history_reindex`
 - **Run ledger** — agent runs, workflow runs, teams, members, tasks, run events,
   and telemetry, with the claim/completion coordination primitives — see its
   own [README](./run_ledger/README.md)
@@ -69,11 +65,10 @@ reachable under `session::`, `session::run_ledger::`, and
   the root), plus the free functions and channel subscriber under
   `session::threads` — see its own [README](./threads/README.md)
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
-  `InMemorySessionStores`, and with feature `storage-drivers`
-  `DriverSessionStores` over a `tinystoragedrivers` backend — see
+  `InMemorySessionStores`, and `DriverSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
-- **Connections** — `with_connection` (autocommit) and `with_transaction`
-  (`BEGIN IMMEDIATE`)
+- **Legacy import** — `legacy::import_workspace` and
+  `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
   ledger workspace or a `TranscriptHistory` implementation behaves like the
