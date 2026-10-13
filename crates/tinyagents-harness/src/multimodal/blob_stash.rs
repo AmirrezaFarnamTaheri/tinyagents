@@ -28,7 +28,7 @@ use tinystoragedrivers_core::{
 };
 use tokio::sync::{Mutex, OnceCell};
 
-use super::{data_uri, mime};
+use super::data_uri;
 use crate::ids::now_ms;
 
 /// Where a stashed attachment lives and what it is.
