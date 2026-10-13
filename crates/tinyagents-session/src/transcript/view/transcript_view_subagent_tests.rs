@@ -1,4 +1,5 @@
 use super::*;
+use crate::transcript::view::project_thread_scoped_with;
 
 #[test]
 fn subagent_anchors_to_parent_turn_by_spawn_timestamp() {

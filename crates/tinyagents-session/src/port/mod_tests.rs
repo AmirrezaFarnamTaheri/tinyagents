@@ -149,7 +149,8 @@ fn checked_accessor_arc_forwards_native_refusal() {
 /// Providers opt into a ledger explicitly; an Arc forwards the selected handle.
 #[test]
 fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
-    use crate::run_ledger::{RunLedgerStore, SqliteRunLedger};
+    use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
     struct LedgerProvider {
         sessions: InMemorySessionStores,
         ledger: Arc<dyn RunLedgerStore>,
@@ -171,8 +172,9 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
             Ok((id == "allowed").then(|| self.ledger.clone()))
         }
     }
-    let dir = tempfile::tempdir().unwrap();
-    let ledger: Arc<dyn RunLedgerStore> = Arc::new(SqliteRunLedger::new(dir.path()));
+    let ledger: Arc<dyn RunLedgerStore> = Arc::new(DriverRunLedger::new(
+        MemoryStorage::new().for_scope(&Scope::local()).unwrap(),
+    ));
     let provider = Arc::new(LedgerProvider {
         sessions: InMemorySessionStores::new(),
         ledger: ledger.clone(),
