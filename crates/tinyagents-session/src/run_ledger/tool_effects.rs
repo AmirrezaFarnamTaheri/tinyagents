@@ -3,19 +3,19 @@
 //!
 //! A tool call that mutates external state is dangerous to blindly re-run
 //! after a process restart. This module gives the agent loop a durable
-//! `started` → `completed`/`failed`/`interrupted` row per call, written to
-//! the `tool_effects` table added by migration 7 (see `crate::migrations`),
-//! so a resumed run can tell an in-flight call apart from one that never
-//! started or one that already settled.
+//! `started` → `completed`/`failed`/`interrupted` row per call, stored by the
+//! run ledger, so a resumed run can tell an in-flight call apart from one that
+//! never started or one that already settled.
 //!
 //! # Layout
 //!
-//! [`record_tool_started`], [`settle_tool_effect`],
-//! [`list_unresolved_tool_effects`], and [`mark_interrupted`] are the plain,
-//! synchronous, workspace-scoped operations, matching every other function
-//! in [`super::ops`]. [`RunLedgerToolEffects`] wraps them behind the
-//! `async` `tinyagents_harness::tool::ToolEffectLedger` trait so a harness
-//! run can attach this ledger via
+//! The row types ([`ToolEffectRow`], [`ToolEffectStart`], [`ToolEffectSettle`],
+//! [`ToolEffectStatus`]) are the vocabulary of the ledger's
+//! `record_tool_started`, `settle_tool_effect`, `list_unresolved_tool_effects`
+//! and `mark_tool_effect_interrupted` operations on [`RunLedgerStore`].
+//! [`RunLedgerToolEffects`] wraps a ledger handle behind the `async`
+//! `tinyagents_harness::tool::ToolEffectLedger` trait so a harness run can
+//! attach it via
 //! [`tinyagents_harness::context::RunContext::with_tool_effect_ledger`]
 //! without either crate depending on the other's concrete storage type.
 //!
