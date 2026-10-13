@@ -97,7 +97,7 @@ pub use observability::{
 };
 pub use orchestration::{
     CancelledDetachedTask, DetachedTaskRegistry, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskWaitOutcome, InMemoryTaskStore, JsonlTaskStore, OrchestrationControlOutcome,
+    DetachedTaskWaitOutcome, DriverTaskStore, InMemoryTaskStore, OrchestrationControlOutcome,
     OrchestrationTaskFilter, OrchestrationTaskKind, OrchestrationTaskRecord,
     OrchestrationTaskResult, OrchestrationTaskSpec, OrchestrationTaskStatus, OrchestrationTool,
     OrchestrationToolKind, SteeringRegistry, TaskStore, orchestration_tool_schema,

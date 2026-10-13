@@ -1,7 +1,7 @@
 //! The old graph paths must keep resolving after the move to `tinyagents-tasks`.
 
 use crate::orchestration::{
-    DetachedTaskRegistry, InMemoryTaskStore, JsonlTaskStore, OrchestrationTaskStatus,
+    DetachedTaskRegistry, DriverTaskStore, InMemoryTaskStore, OrchestrationTaskStatus,
     SteeringRegistry, TaskStore, TaskStoreRegistry, reconcile_orphaned_tasks,
 };
 
@@ -22,7 +22,7 @@ fn old_graph_paths_are_the_tasks_crate_types() {
     );
     let _ = std::marker::PhantomData::<(
         InMemoryTaskStore,
-        JsonlTaskStore,
+        DriverTaskStore,
         TaskStoreRegistry<u8>,
         DetachedTaskRegistry<(), ()>,
         Box<dyn TaskStore>,
