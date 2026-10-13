@@ -3,7 +3,7 @@
 //!
 //! A host that runs a turn under an outer backstop (a web-chat timeout that
 //! drops the turn future) loses everything the turn did when the backstop
-//! fires. [`TurnDeadline`] describes the two deadlines the host derives from its
+//! fires. [`TurnDeadline`] describes the two points derived from its
 //! backstop; the middleware reacts to the first, [`install`] to the second:
 //!
 //! * **wind-down**: once elapsed time passes it, the middleware sends
@@ -15,7 +15,7 @@
 //!   so a single tool call that runs across the wind-down point ends in the
 //!   harness's own typed `Timeout` rather than a dropped turn.
 //!
-//! The thresholds (how far before the backstop each deadline sits) are host
+//! The thresholds (how far before the backstop each point sits) are host
 //! policy: the host builds the [`TurnDeadline`]. [`TurnClockMiddleware`]
 //! (`turn_clock`) tells the model about the same budget; this middleware is
 //! what acts on it.
