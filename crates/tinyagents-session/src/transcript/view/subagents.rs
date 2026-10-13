@@ -27,6 +27,8 @@
 
 use std::path::{Path, PathBuf};
 
+use super::SpawnCallLookup;
+
 use crate::transcript::{self, DisplayRecord};
 
 use super::project::{native_tool_round, project_records};
@@ -81,10 +83,10 @@ pub(super) fn attach(
     sub_paths: &[PathBuf],
     segments: &[(String, i64)],
     root_thread_id: Option<&str>,
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) {
-    let children = build_children(sub_paths, None, root_thread_id, 0, workspace_dir);
-    place(items, children, segments, workspace_dir);
+    let children = build_children(sub_paths, None, root_thread_id, 0, lookup);
+    place(items, children, segments, lookup);
 }
 
 /// Project the direct children of `parent_stem` (or of the roots, when
@@ -94,7 +96,7 @@ fn build_children(
     parent_stem: Option<&str>,
     parent_thread_id: Option<&str>,
     depth: usize,
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) -> Vec<ChildRun> {
     if depth >= MAX_SUBAGENT_DEPTH {
         return Vec::new();
@@ -141,7 +143,7 @@ fn build_children(
             parent_thread_id.or(stem_parent_thread_id),
             sub_paths,
             depth,
-            workspace_dir,
+            lookup,
         ) {
             children.push(child);
         }
@@ -162,7 +164,7 @@ fn build_child(
     parent_thread_id: Option<&str>,
     sub_paths: &[PathBuf],
     depth: usize,
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) -> Option<ChildRun> {
     let display = match transcript::read_transcript_display(path) {
         Ok(display) => display,
@@ -181,13 +183,13 @@ fn build_child(
         Some(stem),
         display.meta.thread_id.as_deref(),
         depth + 1,
-        workspace_dir,
+        lookup,
     );
     place(
         &mut items,
         grandchildren,
         &turn_segments(&display.records),
-        workspace_dir,
+        lookup,
     );
 
     let task_id = display.meta.task_id.clone().filter(|id| !id.is_empty());
@@ -319,13 +321,14 @@ fn find_explicit_spawning_call(
     })
 }
 
-/// Exact correlation: the run ledger's `AgentRunUpsert.metadata.parentCallId`
-/// for this task (stamped by `progress_bridge`'s `SubagentSpawned` handling),
-/// resolved to the unclaimed [`DisplayItem::ToolCall`] with that `call_id`.
+/// Exact correlation: the spawning call id a [`SpawnCallLookup`] reports for
+/// this task (the run ledger's `AgentRunUpsert.metadata.parentCallId`,
+/// stamped by `progress_bridge`'s `SubagentSpawned` handling), resolved to the
+/// unclaimed [`DisplayItem::ToolCall`] with that `call_id`.
 ///
 /// Preferred over [`find_spawning_call`]'s timestamp/target-argument
 /// heuristic whenever it resolves — the ledger has the actual call id, no
-/// guessing required. `None` on any miss (no workspace, no task id, no
+/// guessing required. `None` on any miss (no lookup, no task id, no
 /// ledger row, no matching/unclaimed call), so callers fall back to the
 /// heuristic unconditionally.
 fn find_exact_spawning_call(
@@ -334,15 +337,11 @@ fn find_exact_spawning_call(
     start: usize,
     end: usize,
     task_id: Option<&str>,
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) -> Option<usize> {
-    let workspace_dir = workspace_dir?;
     let task_id = task_id?;
-    let run = crate::run_ledger::get_agent_run(workspace_dir, task_id)
-        .ok()
-        .flatten()?;
-    let parent_call_id = run.metadata.get("parentCallId")?.as_str()?;
-    let matching = |index: usize| matches!(&items[index], DisplayItem::ToolCall { call_id, .. } if call_id == parent_call_id);
+    let parent_call_id = lookup?.parent_call_id(task_id)?;
+    let matching = |index: usize| matches!(&items[index], DisplayItem::ToolCall { call_id, .. } if *call_id == parent_call_id);
     let end = end.min(items.len());
     let start = start.min(end);
     // Providers may reuse call ids across turns, so prefer the anchored turn.
@@ -386,7 +385,7 @@ fn place(
     items: &mut Vec<DisplayItem>,
     children: Vec<ChildRun>,
     segments: &[(String, i64)],
-    workspace_dir: Option<&Path>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) {
     if children.is_empty() {
         return;
@@ -411,7 +410,7 @@ fn place(
                     start,
                     end,
                     child.task_id.as_deref(),
-                    workspace_dir,
+                    lookup,
                 )
             })
             .or_else(|| find_spawning_call(items, &claimed, start, end, child.agent_id.as_deref()));
