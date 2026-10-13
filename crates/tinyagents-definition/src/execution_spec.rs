@@ -112,22 +112,48 @@ impl<'de> Deserialize<'de> for ModelSpec {
     }
 }
 impl<'de> Deserialize<'de> for ToolScope {
+    /// Accepts the canonical `"wildcard"` / `{ named = [..] }` forms, a bare
+    /// list (legacy), and the legacy TOML table form `wildcard = {}` that
+    /// OpenHuman definitions on disk already use.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum Tagged {
-            Wildcard,
-            Named(Vec<String>),
+        use serde::de::{Error, IgnoredAny, MapAccess, SeqAccess, Visitor};
+        struct ScopeVisitor;
+        impl<'de> Visitor<'de> for ScopeVisitor {
+            type Value = ToolScope;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("`wildcard`, `{ named = [..] }`, or a list of tool names")
+            }
+            fn visit_str<E: Error>(self, v: &str) -> Result<ToolScope, E> {
+                match v {
+                    "wildcard" => Ok(ToolScope::Wildcard),
+                    other => Err(E::unknown_variant(other, &["wildcard", "named"])),
+                }
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ToolScope, A::Error> {
+                let mut names = Vec::new();
+                while let Some(name) = seq.next_element::<String>()? {
+                    names.push(name);
+                }
+                Ok(ToolScope::Named(names))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ToolScope, A::Error> {
+                let key: String = map
+                    .next_key()?
+                    .ok_or_else(|| A::Error::custom("empty tool scope table"))?;
+                let scope = match key.as_str() {
+                    "wildcard" => {
+                        map.next_value::<IgnoredAny>()?;
+                        ToolScope::Wildcard
+                    }
+                    "named" => ToolScope::Named(map.next_value()?),
+                    other => return Err(A::Error::unknown_variant(other, &["wildcard", "named"])),
+                };
+                if map.next_key::<IgnoredAny>()?.is_some() {
+                    return Err(A::Error::custom("tool scope table has more than one key"));
+                }
+                Ok(scope)
+            }
         }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Tagged(Tagged),
-            Legacy(Vec<String>),
-        }
-        Ok(match Wire::deserialize(deserializer)? {
-            Wire::Tagged(Tagged::Wildcard) => Self::Wildcard,
-            Wire::Tagged(Tagged::Named(names)) | Wire::Legacy(names) => Self::Named(names),
-        })
+        deserializer.deserialize_any(ScopeVisitor)
     }
 }
