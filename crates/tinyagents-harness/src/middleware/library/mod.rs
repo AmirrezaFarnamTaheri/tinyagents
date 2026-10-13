@@ -80,9 +80,9 @@ mod repeat_progress;
 mod repeat_progress_state;
 mod research_budget;
 mod resilience;
+mod response_shape;
 mod shell_turn_budget;
 mod stop_hooks;
-mod response_shape;
 mod stop_latch;
 mod tool_policy;
 mod turn_clock;
@@ -100,23 +100,23 @@ pub use call_effect::{
     CallEffect, DispatchTarget, ToolEffectFacts, ToolFactsLookup, call_effect, dispatch_target,
     facts_for_tool, name_effect, tool_sets_lookup,
 };
-pub use credential_scrub::{
-    CredentialScrubMiddleware, REDACTION_PLACEHOLDER, ToolScrubber, redaction_notice,
-    scrub_with_notice,
-};
 pub use context_ladder::{
     COMPACTION_TAIL_WINDOW_FRACTION, ContextLadder, UNKNOWN_WINDOW_FALLBACK_TOKENS,
     compression_policy, microcompact_for_window, with_turn_aware_tail,
 };
-pub use lifecycle_hooks::{
-    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
-    PackedToolRouter,
+pub use credential_scrub::{
+    CredentialScrubMiddleware, REDACTION_PLACEHOLDER, ToolScrubber, redaction_notice,
+    scrub_with_notice,
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
+};
+pub use lifecycle_hooks::{
+    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
+    PackedToolRouter,
 };
 pub use loop_guards::{
     LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
@@ -146,6 +146,10 @@ pub use research_budget::{
     DIRECT_WEB_READ_LIMIT, RESEARCH_CLOSE_INSTRUCTION, ResearchBudgetMiddleware, WEB_BLOCKED_NOTE,
     WEB_BUDGET_EXHAUSTED_INSTRUCTION,
 };
+pub use response_shape::{
+    FinalResponse, ResponseShape, ResponseShapeScope, ResponseUsage, ResponseValidator,
+    install_response_shape,
+};
 pub use shell_turn_budget::{
     DEFAULT_MAX_TIMEOUT_SECS, SHELL_TIMEOUT_RESERVE, ShellTimeoutClamp,
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget, clamp_shell_timeout,
@@ -154,16 +158,9 @@ pub use shell_turn_budget::{
 pub use stop_hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
-pub use response_shape::{
-    FinalResponse, ResponseShape, ResponseShapeScope, ResponseUsage, ResponseValidator,
-    install_response_shape,
-};
 pub use stop_latch::StopLatch;
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
-pub use wind_down::{
-    WindDownCallback, WindDownMiddleware, install as install_wind_down,
-};
 pub use unmet_deliverable::{
     UnmetDeliverableMiddleware, candidate_paths, install as install_unmet_deliverable,
     notice as unmet_deliverable_notice, wrap_harness_instruction,
@@ -172,16 +169,11 @@ pub use verify_before_finish::{
     DEFAULT_MIN_REMAINING_WALL_CLOCK, FinishActivity, FinishCheckTrigger,
     MIN_REMAINING_MODEL_CALLS, VerifyBeforeFinishMiddleware,
 };
+pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
 
-#[cfg(test)]
-#[path = "context_ladder_tests.rs"]
-mod context_ladder_test;
-#[cfg(test)]
-#[path = "lifecycle_hooks_tests.rs"]
-mod lifecycle_hooks_test;
 #[cfg(test)]
 #[path = "arg_recovery_tests.rs"]
 mod arg_recovery_test;
@@ -191,6 +183,9 @@ mod artifact_toc_test;
 #[cfg(test)]
 #[path = "context_fold_tests.rs"]
 mod context_fold_test;
+#[cfg(test)]
+#[path = "context_ladder_tests.rs"]
+mod context_ladder_test;
 #[cfg(test)]
 #[path = "context_loop_tests.rs"]
 mod context_loop_test;
@@ -206,6 +201,9 @@ mod credential_scrub_test;
 #[cfg(test)]
 #[path = "image_trim_tests.rs"]
 mod image_trim_test;
+#[cfg(test)]
+#[path = "lifecycle_hooks_tests.rs"]
+mod lifecycle_hooks_test;
 #[cfg(test)]
 #[path = "policy_gate_tests.rs"]
 mod policy_gate_test;

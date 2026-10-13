@@ -22,11 +22,11 @@ pub mod staging;
 pub mod workers;
 
 pub use collect::{BranchReport, Collected, OverlapWarning, overlap_warnings};
+pub use hooks::{RunHooks, resolve_concurrency, run_with_hooks};
 pub use staging::{
     AdmissionPolicy, AdmissionVerdict, Plan, Preflight, Rejection, RejectionKind, Task, Worker,
     WorkerDispatchMode, with_ownership_boundary,
 };
-pub use hooks::{RunHooks, resolve_concurrency, run_with_hooks};
 pub use workers::run;
 
 #[cfg(test)]
