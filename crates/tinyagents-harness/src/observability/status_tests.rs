@@ -1,5 +1,6 @@
-//! Tests for [`FileStatusStore`], run-id minting and the env redaction seed.
+//! Tests for [`DriverStatusStore`], run-id minting and the env redaction seed.
 
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
@@ -9,11 +10,21 @@ use crate::observability::{
     AgentObservation, FanOutSink, HarnessEventJournal, JournalSink, RedactingSink,
     StoreEventJournal,
 };
-use crate::store::{JsonlAppendStore, Store};
-use std::sync::Arc;
+use crate::store::{AppendStore, DriverAppendStore};
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
-fn tmp_root(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("ta-file-status-{tag}-{}", uuid::Uuid::new_v4()))
+fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinystoragedrivers_core::ScopedStorage {
+    storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
+}
+
+fn status_store() -> DriverStatusStore {
+    DriverStatusStore::new(Arc::clone(scoped(&MemoryStorage::new(), "local").documents()))
+}
+
+fn journal_store(storage: &dyn StorageBackend) -> Arc<dyn AppendStore> {
+    Arc::new(DriverAppendStore::new(Arc::clone(
+        scoped(storage, "local").streams(),
+    )))
 }
 
 #[test]
@@ -40,12 +51,11 @@ fn secrets_from_vars_masks_only_long_secretish_values() {
     );
 }
 
-/// On-disk format contract: one pretty JSON file per run at
-/// `<kv>/run_status/<run_id>.json`, decoded back through the store.
+/// A status written through the store reads back field for field, including
+/// the timestamps and the optional thread link.
 #[tokio::test]
-async fn on_disk_record_matches_literal_fixture() {
-    let root = tmp_root("fixture");
-    let store = FileStatusStore::new(FileStore::new(&root));
+async fn status_round_trips_field_for_field() {
+    let store = status_store();
     let mut status = HarnessRunStatus::new(
         RunId::new("run.fixture"),
         ComponentId::new("mock-model".to_string()),
@@ -53,26 +63,21 @@ async fn on_disk_record_matches_literal_fixture() {
     .with_thread(ThreadId::new("thread-1"));
     status.started_at = UNIX_EPOCH + Duration::from_secs(100);
     status.updated_at = UNIX_EPOCH + Duration::from_secs(100);
-    store.put_status(status).await.unwrap();
+    store.put_status(status.clone()).await.unwrap();
 
-    let raw = std::fs::read(root.join("run_status").join("run.fixture.json")).unwrap();
-    let on_disk: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-    let expected: serde_json::Value = serde_json::from_str(FIXTURE).unwrap();
-    assert_eq!(on_disk, expected);
-
-    // And a record in that exact shape reads back through the store.
     let back = store.get_status("run.fixture").await.unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&back).unwrap(),
+        serde_json::to_value(&status).unwrap()
+    );
     assert_eq!(back.thread_id.as_ref().unwrap().as_str(), "thread-1");
     assert_eq!(back.status, ExecutionStatus::Pending);
-    let _ = std::fs::remove_dir_all(&root);
+    assert!(store.get_status("run.other").await.unwrap().is_none());
 }
-
-const FIXTURE: &str = r#"{"active_tool_calls":[],"component":"mock-model","cost":{"cache_cost":0.0,"input_cost":0.0,"output_cost":0.0,"reasoning_cost":0.0,"total_cost":0.0},"current_phase":"idle","metadata":null,"model_calls":0,"root_run_id":"run.fixture","run_id":"run.fixture","started_at":100,"status":"pending","thread_id":"thread-1","tool_calls":0,"updated_at":100,"usage":{"calls":0,"usage":{"cache_creation_tokens":0,"cache_read_tokens":0,"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"total_tokens":0}}}"#;
 
 #[tokio::test]
 async fn status_store_round_trips_and_answers_queries() {
-    let root = tmp_root("queries");
-    let store = FileStatusStore::new(FileStore::new(&root));
+    let store = status_store();
     let run_id = mint_run_id();
     let mut status =
         HarnessRunStatus::new(run_id.clone(), ComponentId::new("mock-model".to_string()))
@@ -92,33 +97,67 @@ async fn status_store_round_trips_and_answers_queries() {
     assert_eq!(by_root.len(), 1);
     assert_eq!(by_root[0].status, ExecutionStatus::Completed);
     assert!(store.list_active().await.unwrap().is_empty());
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[tokio::test]
-async fn undecodable_record_is_skipped() {
-    let root = tmp_root("corrupt");
-    let store = FileStatusStore::new(FileStore::new(&root));
-    std::fs::create_dir_all(root.join("run_status")).unwrap();
-    std::fs::write(root.join("run_status").join("bad.json"), "{\"nope\":1}").unwrap();
-    assert!(store.list_active().await.unwrap().is_empty());
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-#[tokio::test]
-async fn malformed_json_record_does_not_hide_valid_runs() {
-    let root = tmp_root("malformed");
-    let store = FileStatusStore::new(FileStore::new(&root));
+async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
+    use tinystoragedrivers_core::{DocumentStore, Precondition};
+    let storage = MemoryStorage::new();
+    let docs = Arc::clone(scoped(&storage, "local").documents());
+    let store = DriverStatusStore::new(docs.clone());
     let mut status = HarnessRunStatus::new(mint_run_id(), ComponentId::new("m".to_string()));
     status.mark_running(HarnessPhase::Model);
     store.put_status(status).await.unwrap();
-    std::fs::write(root.join("run_status").join("broken.json"), "{not json").unwrap();
+    // A record from an incompatible build: right projections, wrong body.
+    docs.put(
+        DriverStatusStore::DEFAULT_COLLECTION,
+        "bad",
+        serde_json::json!({"runId": "bad", "rootRunId": "bad", "threadId": null, "active": true, "record": {"nope": 1}}),
+        Precondition::None,
+    )
+    .await
+    .unwrap();
     assert_eq!(store.list_active().await.unwrap().len(), 1);
-    let _ = std::fs::remove_dir_all(&root);
 }
 
-async fn read_all(root: &std::path::Path, run_id: &str, from: u64) -> Vec<AgentObservation> {
-    StoreEventJournal::new(JsonlAppendStore::new(root))
+#[tokio::test]
+async fn runs_of_different_tenants_and_collections_never_meet() {
+    let storage = MemoryStorage::new();
+    let alice = DriverStatusStore::new(Arc::clone(scoped(&storage, "alice").documents()));
+    let bob = DriverStatusStore::new(Arc::clone(scoped(&storage, "bob").documents()));
+    let other = DriverStatusStore::with_collection(
+        Arc::clone(scoped(&storage, "alice").documents()),
+        "other_status",
+    );
+    let mut status = HarnessRunStatus::new(RunId::new("run.shared"), ComponentId::new("m"));
+    status.mark_running(HarnessPhase::Model);
+    alice.put_status(status).await.unwrap();
+    assert!(bob.get_status("run.shared").await.unwrap().is_none());
+    assert!(bob.list_active().await.unwrap().is_empty());
+    assert!(other.get_status("run.shared").await.unwrap().is_none());
+    assert_eq!(alice.list_active().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn any_run_id_is_a_valid_key_and_overwrites_in_place() {
+    let store = status_store();
+    for id in ["legacy/run", "with space", "ünï", "..", &"x".repeat(5000)] {
+        let mut status = HarnessRunStatus::new(RunId::new(id), ComponentId::new("m"));
+        store.put_status(status.clone()).await.unwrap();
+        status.mark_running(HarnessPhase::Model);
+        store.put_status(status).await.unwrap();
+        let read = store.get_status(id).await.unwrap().expect("written");
+        assert_eq!(read.status, ExecutionStatus::Running);
+    }
+    assert_eq!(store.list_active().await.unwrap().len(), 5, "one record each");
+}
+
+async fn read_all(
+    storage: &dyn StorageBackend,
+    run_id: &str,
+    from: u64,
+) -> Vec<AgentObservation> {
+    StoreEventJournal::new(journal_store(storage))
         .read_from(run_id, from)
         .await
         .unwrap()
@@ -127,10 +166,10 @@ async fn read_all(root: &std::path::Path, run_id: &str, from: u64) -> Vec<AgentO
 /// Journal persists, masks secrets and replays with stable ids.
 #[tokio::test]
 async fn journal_persists_masks_and_replays_run() {
-    let root = tmp_root("journal");
+    let storage = MemoryStorage::new();
     let run_id = mint_run_id();
     let journal: Arc<dyn HarnessEventJournal> =
-        Arc::new(StoreEventJournal::new(JsonlAppendStore::new(&root)));
+        Arc::new(StoreEventJournal::new(journal_store(&storage)));
     let sink = EventSink::with_stream_id(run_id.as_str());
     let journal_sink = Arc::new(JournalSink::new(journal, run_id.clone()));
     let redacting = RedactingSink::new(journal_sink.clone(), vec!["sk-super-secret".into()]);
@@ -148,7 +187,7 @@ async fn journal_persists_masks_and_replays_run() {
     });
     journal_sink.flush();
 
-    let replayed = read_all(&root, run_id.as_str(), 0).await;
+    let replayed = read_all(&storage, run_id.as_str(), 0).await;
     assert_eq!(replayed.len(), 2);
     for (offset, obs) in replayed.iter().enumerate() {
         assert_eq!(obs.offset, offset as u64);
@@ -163,22 +202,21 @@ async fn journal_persists_masks_and_replays_run() {
     } else {
         panic!("expected ModelStarted first");
     }
-    let tail = read_all(&root, run_id.as_str(), 1).await;
+    let tail = read_all(&storage, run_id.as_str(), 1).await;
     assert_eq!(tail.len(), 1);
     assert!(matches!(tail[0].event, AgentEvent::ToolStarted { .. }));
-    let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Multi-byte UTF-8 straddling the 4096-byte lookback window (#5599).
+/// Multi-byte UTF-8 payloads round-trip through the driver journal at every
+/// padding around the old 4096-byte tail-read window (#5599), and offsets stay
+/// dense.
 #[tokio::test]
-async fn journal_sink_handles_multibyte_utf8_spanning_window_boundary() {
-    const WINDOW: usize = 4096;
-    let mut torn = Vec::new();
+async fn journal_sink_handles_multibyte_utf8_payloads_at_every_padding() {
     for pad in 0..20usize {
-        let root = tmp_root(&format!("utf8-{pad}"));
+        let storage = MemoryStorage::new();
         let run_id = mint_run_id();
         let journal: Arc<dyn HarnessEventJournal> =
-            Arc::new(StoreEventJournal::new(JsonlAppendStore::new(&root)));
+            Arc::new(StoreEventJournal::new(journal_store(&storage)));
         let sink = EventSink::with_stream_id(run_id.as_str());
         let journal_sink = Arc::new(JournalSink::new(journal, run_id.clone()));
         sink.subscribe(Arc::new(FanOutSink::new().with(journal_sink.clone())));
@@ -192,16 +230,6 @@ async fn journal_sink_handles_multibyte_utf8_spanning_window_boundary() {
             call_id: "call-10".into(),
             model: "x".repeat(pad),
         });
-        journal_sink.flush();
-
-        let raw = std::fs::read(root.join(format!("{}.jsonl", run_id.as_str())))
-            .expect("read stream file");
-        if raw.len() > WINDOW {
-            let start = raw.len() - WINDOW;
-            if !String::from_utf8_lossy(&raw).is_char_boundary(start) {
-                torn.push(pad);
-            }
-        }
         sink.emit(AgentEvent::ToolStarted {
             parent_call_id: None,
             call_id: "call-11".into(),
@@ -210,69 +238,35 @@ async fn journal_sink_handles_multibyte_utf8_spanning_window_boundary() {
         });
         journal_sink.flush();
 
-        let replayed = read_all(&root, run_id.as_str(), 0).await;
+        let replayed = read_all(&storage, run_id.as_str(), 0).await;
         assert_eq!(replayed.len(), 12, "pad {pad}");
         for (i, obs) in replayed.iter().enumerate() {
             assert_eq!(obs.offset, i as u64, "pad {pad}");
         }
-        let _ = std::fs::remove_dir_all(&root);
+        if let AgentEvent::ModelStarted { model, .. } = &replayed[0].event {
+            assert_eq!(model, &"🦀".repeat(50), "pad {pad}");
+        } else {
+            panic!("expected ModelStarted first");
+        }
     }
-    assert!(
-        !torn.is_empty(),
-        "no pad induced a torn multi-byte boundary"
-    );
 }
 
 #[tokio::test]
-async fn a_status_store_over_any_store_reads_back_what_it_wrote() {
-    // A host's own store, injected as a trait object rather than a FileStore.
-    let kv: Arc<dyn Store> = Arc::new(crate::store::InMemoryStore::new());
-    let store = FileStatusStore::over(kv.clone());
-    let run_id = RunId::new("run.host-store");
-    let mut status = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"))
-        .with_thread(ThreadId::new("thread-1"));
-    status.mark_running(HarnessPhase::Model);
-    store.put_status(status).await.unwrap();
-    let read = store
-        .get_status(run_id.as_str())
-        .await
-        .unwrap()
-        .expect("written");
-    assert_eq!(read.run_id.as_str(), "run.host-store");
-    // The record lives in the injected store, keyed as on disk.
-    assert_eq!(kv.list(STATUS_NS).await.unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn unsafe_run_ids_read_and_migrate_legacy_raw_keys() {
-    let kv: Arc<dyn Store> = Arc::new(crate::store::InMemoryStore::new());
-    let store = FileStatusStore::over(kv.clone());
-    let run_id = RunId::new("legacy/run");
-    let status = HarnessRunStatus::new(run_id.clone(), ComponentId::new("model"));
-    kv.put(
-        STATUS_NS,
-        run_id.as_str(),
-        serde_json::to_value(&status).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        store
-            .get_status(run_id.as_str())
-            .await
-            .unwrap()
-            .map(|status| status.run_id),
-        Some(run_id.clone())
-    );
-    store.put_status(status).await.unwrap();
-    assert!(kv.get(STATUS_NS, run_id.as_str()).await.unwrap().is_none());
-    assert!(
-        kv.get(STATUS_NS, &status_key(run_id.as_str()))
-            .await
-            .unwrap()
-            .is_some()
-    );
+async fn a_status_store_survives_a_reopened_sqlite_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("status.sqlite");
+    {
+        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let store = DriverStatusStore::new(Arc::clone(scoped(&storage, "local").documents()));
+        let mut status = HarnessRunStatus::new(RunId::new("run.durable"), ComponentId::new("m"))
+            .with_thread(ThreadId::new("thread-d"));
+        status.mark_running(HarnessPhase::Model);
+        store.put_status(status).await.unwrap();
+    }
+    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let store = DriverStatusStore::new(Arc::clone(scoped(&storage, "local").documents()));
+    assert_eq!(store.list_by_thread("thread-d").await.unwrap().len(), 1);
+    assert_eq!(store.list_active().await.unwrap().len(), 1);
 }
 
 #[tokio::test]
