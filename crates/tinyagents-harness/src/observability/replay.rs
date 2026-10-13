@@ -4,7 +4,7 @@
 //! own storage layout into a [`HarnessEventJournal`] / [`HarnessStatusStore`]
 //! and delegates here.
 
-use super::{AgentObservation, HarnessEventJournal, HarnessStatusStore, file_status::is_active};
+use super::{AgentObservation, HarnessEventJournal, HarnessStatusStore, status::is_active};
 use crate::error::Result;
 use crate::events::HarnessRunStatus;
 
