@@ -7,7 +7,7 @@ use storage::EFFECTS;
 /// Store status strings so unknown persisted values retain the classic conservative parse fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct EffectRecord {
+pub(super) struct EffectRecord {
     run_id: String,
     call_id: String,
     tool: String,
@@ -19,6 +19,21 @@ struct EffectRecord {
 }
 
 impl EffectRecord {
+    /// The stored form of a classic row, status string preserved verbatim.
+    #[cfg(feature = "legacy-import")]
+    pub(super) fn from_row(row: &ToolEffectRow) -> Self {
+        Self {
+            run_id: row.run_id.clone(),
+            call_id: row.call_id.clone(),
+            tool: row.tool.clone(),
+            status: row.status.as_str().into(),
+            idempotency_key: row.idempotency_key.clone(),
+            effect_summary: row.effect_summary.clone(),
+            started_at: row.started_at,
+            settled_at: row.settled_at,
+        }
+    }
+
     fn into_row(self) -> ToolEffectRow {
         ToolEffectRow {
             run_id: self.run_id,

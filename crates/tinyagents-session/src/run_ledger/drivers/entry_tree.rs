@@ -190,11 +190,15 @@ impl Tree {
         }
     }
 
-    pub(super) fn import(&mut self, entries: &[Entry]) -> Result<()> {
+    /// Add `entries` not already present, preserving their ids and ordinals;
+    /// returns how many were new.
+    pub(super) fn import(&mut self, entries: &[Entry]) -> Result<usize> {
+        let mut added = 0;
         for entry in entries {
             if self.entries.contains_key(&entry.id) {
                 continue;
             }
+            added += 1;
             if entry.ordinal > i64::MAX as u64 {
                 return Err(StorageError::invalid_input(
                     "imported ordinal exceeds native signed integer range",
@@ -214,7 +218,19 @@ impl Tree {
             self.entries.insert(entry.id.clone(), entry.clone());
             self.added.push(entry.clone());
         }
-        Ok(())
+        Ok(added)
+    }
+
+    /// Record a named branch label unless the tree already has one by that name.
+    /// Returns whether it was new.
+    #[cfg(feature = "legacy-import")]
+    pub(super) fn import_label(&mut self, name: &str, tip: &EntryId) -> bool {
+        if self.labels.contains_key(name) {
+            return false;
+        }
+        self.labels.insert(name.into(), tip.clone());
+        self.named.insert(name.into());
+        true
     }
 
     pub(super) fn rebuild_index(&mut self) -> Result<()> {

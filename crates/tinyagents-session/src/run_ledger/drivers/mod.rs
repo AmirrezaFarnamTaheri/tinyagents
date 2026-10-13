@@ -797,7 +797,7 @@ impl RunLedgerStore for DriverRunLedger {
             .map_err(Into::into)
     }
     async fn entry_import_legacy(&self, session_id: &str, entries: &[Entry]) -> Result<()> {
-        self.tree_mutate(session_id, |tree| tree.import(entries))
+        self.tree_mutate(session_id, |tree| tree.import(entries).map(drop))
             .await
             .map_err(Into::into)
     }
