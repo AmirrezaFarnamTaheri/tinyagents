@@ -82,6 +82,7 @@ mod research_budget;
 mod resilience;
 mod shell_turn_budget;
 mod stop_hooks;
+mod response_shape;
 mod stop_latch;
 mod tool_policy;
 mod turn_clock;
@@ -152,6 +153,10 @@ pub use shell_turn_budget::{
 };
 pub use stop_hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
+};
+pub use response_shape::{
+    FinalResponse, ResponseShape, ResponseShapeScope, ResponseUsage, ResponseValidator,
+    install_response_shape,
 };
 pub use stop_latch::StopLatch;
 pub(crate) use turn_clock::is_json_document;
