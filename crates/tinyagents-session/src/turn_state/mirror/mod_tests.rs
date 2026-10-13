@@ -8,13 +8,74 @@ use crate::transcript::{
 };
 use crate::turn_state::types::{SubagentActivity, ToolTimelineEntry, ToolTimelineStatus};
 use crate::turn_state::types::{TranscriptItem, TurnLifecycle};
+use crate::port::InMemoryTurnStates;
+use crate::transcript::FileTranscriptLocator;
 use tempfile::tempdir;
 
-fn fresh(thread_id: &str) -> (tempfile::TempDir, TurnStateMirror) {
-    let dir = tempdir().expect("tempdir");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mirror = TurnStateMirror::new(store, thread_id, "req-1");
-    (dir, mirror)
+fn memory_store() -> Arc<InMemoryTurnStates> {
+    Arc::new(InMemoryTurnStates::default())
+}
+
+fn fresh(thread_id: &str) -> (Arc<InMemoryTurnStates>, TurnStateMirror) {
+    let store = memory_store();
+    let mirror = TurnStateMirror::new(store.clone(), thread_id, "req-1");
+    (store, mirror)
+}
+
+/// A mirror whose interrupted partials land in the transcripts under `dir`.
+fn mirror_over(
+    dir: &std::path::Path,
+    store: Arc<dyn TurnStates>,
+    thread_id: &str,
+    request_id: &str,
+) -> TurnStateMirror {
+    TurnStateMirror::new(store, thread_id, request_id)
+        .with_transcripts(Arc::new(FileTranscriptLocator::new(dir)), None)
+}
+
+/// A store whose conditional write cannot read the stored outcome.
+struct UnreadableOutcome(InMemoryTurnStates);
+
+impl TurnStates for UnreadableOutcome {
+    fn put(&self, state: &TurnState) -> Result<(), String> {
+        self.0.put(state)
+    }
+    fn put_unless_completed(&self, _: &TurnState) -> Result<bool, String> {
+        Err("stored snapshot is unreadable".into())
+    }
+    fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> {
+        self.0.get(thread_id)
+    }
+    fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> {
+        self.0.get_turn(thread_id, request_id)
+    }
+    fn delete(&self, thread_id: &str) -> Result<bool, String> {
+        self.0.delete(thread_id)
+    }
+    fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
+        self.0.delete_turn(thread_id, request_id)
+    }
+    fn list(&self) -> Result<Vec<TurnState>, String> {
+        self.0.list()
+    }
+    fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> {
+        self.0.list_thread(thread_id)
+    }
+    fn clear_all(&self) -> Result<usize, String> {
+        self.0.clear_all()
+    }
+    fn mark_all_interrupted(&self, now: &str) -> Result<usize, String> {
+        self.0.mark_all_interrupted(now)
+    }
+    fn settle_turn(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        lifecycle: TurnLifecycle,
+        now: &str,
+    ) -> Result<bool, String> {
+        self.0.settle_turn(thread_id, request_id, lifecycle, now)
+    }
 }
 
 fn seed_root_transcript(workspace: &std::path::Path, thread_id: &str) -> std::path::PathBuf {
@@ -52,12 +113,12 @@ fn seed_root_transcript(workspace: &std::path::Path, thread_id: &str) -> std::pa
 
 #[test]
 fn new_flushes_a_started_snapshot() {
-    let (dir, mirror) = fresh("thr_new");
+    let (store, mirror) = fresh("thr_new");
     assert_eq!(mirror.snapshot().lifecycle, TurnLifecycle::Started);
-    let stored = TurnStateStore::new(dir.path().to_path_buf())
+    let stored = store
         .get("thr_new")
         .expect("get")
-        .expect("snapshot on disk right after new()");
+        .expect("snapshot in the store right after new()");
     assert_eq!(stored.request_id, "req-1");
     assert_eq!(stored.lifecycle, TurnLifecycle::Started);
 }
@@ -169,8 +230,7 @@ fn finish_marks_an_unfinished_turn_interrupted() {
 fn finish_appends_interrupted_partial_to_existing_transcript() {
     let dir = tempdir().expect("tempdir");
     let path = seed_root_transcript(dir.path(), "thr_abc");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store, "thr_abc", "req-9");
+    let mut m = mirror_over(dir.path(), memory_store(), "thr_abc", "req-9");
     m.state.iteration = 2;
     m.state.thinking = "hmm".into();
     m.state.streaming_text = "half an answer".into();
@@ -203,8 +263,7 @@ fn finish_appends_interrupted_partial_to_existing_transcript() {
 fn finish_after_completion_writes_no_partial() {
     let dir = tempdir().expect("tempdir");
     let path = seed_root_transcript(dir.path(), "thr_done");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store, "thr_done", "req-done");
+    let mut m = mirror_over(dir.path(), memory_store(), "thr_done", "req-done");
     m.state.streaming_text = "final answer".into();
     m.turn_completed = true;
     m.finish();
@@ -222,8 +281,8 @@ fn finish_after_completion_writes_no_partial() {
 fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
     let dir = tempdir().expect("tempdir");
     let path = seed_root_transcript(dir.path(), "thr_settled");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store.clone(), "thr_settled", "req-s");
+    let store = memory_store();
+    let mut m = mirror_over(dir.path(), store.clone(), "thr_settled", "req-s");
     m.state.streaming_text = "delivered reply".into();
     // The turn driver settles the snapshot as completed behind the mirror's back.
     let mut settled = m.state.clone();
@@ -246,15 +305,14 @@ fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
 fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
     let dir = tempdir().expect("tempdir");
     let path = seed_root_transcript(dir.path(), "thr_corrupt");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    let mut m = TurnStateMirror::new(store.clone(), "thr_corrupt", "req-c");
+    let store = Arc::new(UnreadableOutcome(InMemoryTurnStates::default()));
+    let mut m = mirror_over(dir.path(), store.clone(), "thr_corrupt", "req-c");
     m.state.streaming_text = "maybe delivered".into();
-    let snapshot = store.turn_path("thr_corrupt", "req-c");
-    std::fs::write(&snapshot, b"{not json").expect("corrupt snapshot");
     m.finish();
+    let stored = store.get_turn("thr_corrupt", "req-c").unwrap().unwrap();
     assert_eq!(
-        std::fs::read(&snapshot).expect("snapshot still there"),
-        b"{not json",
+        stored.lifecycle,
+        TurnLifecycle::Started,
         "an outcome that cannot be read must not be overwritten"
     );
     let display = read_transcript_display(&path).expect("read display");
@@ -269,8 +327,7 @@ fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
 
 #[test]
 fn late_boundary_flush_keeps_a_snapshot_the_driver_settled() {
-    let dir = tempdir().expect("tempdir");
-    let store = TurnStateStore::new(dir.path().to_path_buf());
+    let store = memory_store();
     let mut m = TurnStateMirror::new(store.clone(), "thr_late", "req-l");
     let mut settled = m.state.clone();
     settled.lifecycle = TurnLifecycle::Completed;
@@ -279,4 +336,39 @@ fn late_boundary_flush_keeps_a_snapshot_the_driver_settled() {
     m.flush();
     let stored = store.get_turn("thr_late", "req-l").unwrap().unwrap();
     assert_eq!(stored.lifecycle, TurnLifecycle::Completed);
+}
+
+#[test]
+fn finish_without_a_transcript_locator_keeps_the_partial_in_the_snapshot_only() {
+    let store = memory_store();
+    let mut m = TurnStateMirror::new(store.clone(), "thr_bare", "req-b");
+    m.state.streaming_text = "orphan partial".into();
+    m.finish();
+    let stored = store.get_turn("thr_bare", "req-b").unwrap().unwrap();
+    assert_eq!(stored.lifecycle, TurnLifecycle::Interrupted);
+    assert_eq!(stored.streaming_text, "orphan partial");
+}
+
+#[test]
+fn finish_appends_the_partial_through_an_in_memory_locator() {
+    use crate::transcript::TranscriptLocator;
+    let locator = Arc::new(crate::port::InMemoryTranscriptLocator::new("agent"));
+    let session = crate::transcript::SessionRef::new("agent", "thr_mem");
+    let seed = TranscriptMeta {
+        thread_id: Some("thr_mem".into()),
+        agent_name: "agent".into(),
+        agent_type: Some("root".into()),
+        ..seed_meta()
+    };
+    let history = locator
+        .open_stem(&crate::transcript::session_stem(&session), seed)
+        .expect("open");
+    history
+        .write_turn(&[TranscriptMessage::new("user", "hi")], &[])
+        .ok();
+    let store = memory_store();
+    let mut m = TurnStateMirror::new(store, "thr_mem", "req-m")
+        .with_transcripts(locator.clone(), Some("agent".into()));
+    m.state.streaming_text = "half".into();
+    m.finish();
 }
