@@ -15,6 +15,10 @@ use crate::{
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
+/// How long a cancelled turn waits for its driver to return the rounds it
+/// completed before the driver is dropped. Short, so Stop still feels instant.
+const CANCELLED_DRIVER_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Host-neutral mutable state for one conversation session.
 pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
@@ -610,17 +614,37 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             // non-System rows. Keep conservative request construction there.
             run_context
         };
-        let driver_result = tokio::select! {
-            _ = cancellation.cancelled() => return Err(RuntimeError::Cancelled),
-            result = self.driver.execute(DriverRequest { history: input, tools, run_context, stream }) => result,
+        // The driver is polled first so a cancellation-aware driver can hand
+        // back the rounds it completed. One that does not answer within
+        // `CANCELLED_DRIVER_GRACE` is dropped and nothing is persisted. The
+        // block ends the driver future's borrow of `self` before persistence.
+        let driver_result = {
+            let driver = self.driver.execute(DriverRequest {
+                history: input,
+                tools,
+                run_context,
+                stream,
+            });
+            tokio::pin!(driver);
+            tokio::select! {
+                biased;
+                result = &mut driver => result,
+                _ = cancellation.cancelled() => {
+                    match tokio::time::timeout(CANCELLED_DRIVER_GRACE, &mut driver).await {
+                        Ok(result) => result,
+                        Err(_) => return Err(RuntimeError::Cancelled),
+                    }
+                }
+            }
         };
         let mut outcome = match driver_result {
             Ok(outcome) => outcome,
             Err(failure) => {
+                // A stopped turn keeps its accepted partial like a failed one,
+                // so its prompt and completed rounds stay in the model's
+                // history; it still ends as `Cancelled`.
+                let cancelled = cancellation.is_cancelled();
                 if let Some(partial) = failure.partial {
-                    if cancellation.is_cancelled() {
-                        return Err(RuntimeError::Cancelled);
-                    }
                     let partial_history = Self::with_prefix_snapshot(&prefix, partial.history);
                     let raw = self.encode(&previous_history, &partial_history, &codec_options)?;
                     let turn_usage = self.turn_usage(&codec_options)?;
@@ -639,6 +663,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     if receipt.is_some() {
                         self.committed_turns += 1;
                     }
+                }
+                if cancelled {
+                    return Err(RuntimeError::Cancelled);
                 }
                 terminal_guard.set_outcome(failure.outcome);
                 return Err(failure.error);

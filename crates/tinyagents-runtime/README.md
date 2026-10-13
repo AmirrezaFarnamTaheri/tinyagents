@@ -78,8 +78,13 @@ When all frozen tiers are System messages, the session also carries their
 count into the harness run context, so a later System compaction summary stays
 in history when the next driver invocation rebuilds its request.
 `Session::seed_history(history, raw)` is the explicit, lossless
-resume/seed boundary; a host must not keep a second shadow history. Cancellation before the commit point leaves no durable mutation;
-once it succeeds, the turn remains successful. `after_commit` and terminal
+resume/seed boundary; a host must not keep a second shadow history. Cancellation before the commit point leaves no durable mutation,
+with one exception: a cancelled turn whose driver returns a `DriverFailure`
+partial within a short grace (2 s) persists that partial exactly as a failed
+turn would, so a stopped turn keeps its prompt and completed rounds. The turn
+still ends as `RuntimeError::Cancelled` and no `after_commit` runs. A driver
+that does not answer in the grace is dropped and nothing is written. Once a
+commit succeeds, the turn remains successful. `after_commit` and terminal
 hooks get the committed outcome, but their error or a cooperative cancellation
 cannot relabel it.
 
