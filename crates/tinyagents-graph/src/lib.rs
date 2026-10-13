@@ -46,6 +46,9 @@ pub mod todos;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
+#[cfg(test)]
+mod test_support;
+
 // --- Durable execution model ---
 pub use builder::{
     END, ForkId, GraphBuilder, GraphDefaults, IdleClock, NodeCachePolicy, NodeContext, NodeFuture,
