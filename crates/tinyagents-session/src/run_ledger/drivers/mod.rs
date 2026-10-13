@@ -9,6 +9,7 @@ mod effects;
 mod entry_tree;
 mod events;
 mod history;
+mod history_retention;
 mod import;
 mod retention;
 mod storage;
@@ -177,14 +178,6 @@ fn apply_workflow(
     row.completed_at = upsert.completed_at.or(row.completed_at);
     row.revision = next_revision(row.revision)?;
     Ok(())
-}
-
-fn unsupported(operation: &str) -> super::LedgerError {
-    StorageError::unsupported(
-        Capability::ValidatedBatch,
-        format!("run-ledger {operation} requires its native validated transaction implementation"),
-    )
-    .into()
 }
 
 #[async_trait::async_trait]
@@ -814,23 +807,23 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::prune_sessions_before`] without a weaker fallback.
-    async fn prune_sessions_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_sessions_before"))
+    async fn prune_sessions_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_sessions(older_than).await
     }
 
     /// Implement [`RunLedgerStore::trim_session_messages`] without a weaker fallback.
-    async fn trim_session_messages(&self, _session_id: &str, _keep_last: usize) -> Result<usize> {
-        Err(unsupported("trim_session_messages"))
+    async fn trim_session_messages(&self, session_id: &str, keep_last: usize) -> Result<usize> {
+        self.history_trim_messages(session_id, keep_last).await
     }
 
     /// Implement [`RunLedgerStore::prune_tool_calls_before`] without a weaker fallback.
-    async fn prune_tool_calls_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_tool_calls_before"))
+    async fn prune_tool_calls_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_tool_calls(older_than).await
     }
 
     /// Implement [`RunLedgerStore::prune_run_events_before`] without a weaker fallback.
-    async fn prune_run_events_before(&self, _older_than: DateTime<Utc>) -> Result<usize> {
-        Err(unsupported("prune_run_events_before"))
+    async fn prune_run_events_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
+        self.history_prune_events(older_than).await
     }
 
     async fn prune_run_telemetry_before(&self, older_than: DateTime<Utc>) -> Result<usize> {
@@ -838,13 +831,13 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     /// Implement [`RunLedgerStore::apply_retention`] without a weaker fallback.
-    async fn apply_retention(&self, _older_than: DateTime<Utc>) -> Result<RetentionReport> {
-        Err(unsupported("apply_retention"))
+    async fn apply_retention(&self, older_than: DateTime<Utc>) -> Result<RetentionReport> {
+        self.history_apply_retention(older_than).await
     }
 
     /// Implement [`RunLedgerStore::reindex_fts`] without a weaker fallback.
     async fn reindex_fts(&self) -> Result<usize> {
-        Err(unsupported("reindex_fts"))
+        self.history_reindex().await
     }
 
     /// Implement [`RunLedgerStore::list_agent_work`] without a weaker fallback.
