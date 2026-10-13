@@ -1,16 +1,16 @@
 //! Storage conformance: the same contract suite applied to every built-in
 //! backend, proving they behave interchangeably (gap #17).
 
-use tinyagents_graph::checkpoint::{FileCheckpointer, InMemoryCheckpointer};
-use tinyagents_graph::orchestration::{InMemoryTaskStore, JsonlTaskStore};
-use tinyagents_graph::testkit::conformance::{
-    checkpointer_concurrent_contract, checkpointer_contract, taskstore_concurrent_contract,
-    taskstore_contract, taskstore_replay_contract,
-};
+mod common;
 
-fn temp_path(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("tinyagents-conformance-{tag}"))
-}
+use common::storage;
+use tinyagents_graph::checkpoint::{DriverCheckpointer, InMemoryCheckpointer};
+use tinyagents_graph::orchestration::{DriverTaskStore, InMemoryTaskStore};
+use tinyagents_graph::testkit::conformance::{
+    checkpointer_concurrent_contract, checkpointer_contract, task_cache_contract,
+    taskstore_concurrent_contract, taskstore_contract, taskstore_replay_contract,
+};
+use tinyagents_graph::{DriverTaskCache, InMemoryTaskCache};
 
 #[tokio::test]
 async fn in_memory_checkpointer_satisfies_contract() {
@@ -18,18 +18,17 @@ async fn in_memory_checkpointer_satisfies_contract() {
 }
 
 #[tokio::test]
-async fn file_checkpointer_satisfies_contract() {
-    let dir = temp_path("file-checkpointer");
-    let _ = std::fs::remove_dir_all(&dir);
-    checkpointer_contract(FileCheckpointer::<i32>::new(&dir)).await;
-    let _ = std::fs::remove_dir_all(&dir);
+async fn memory_driver_checkpointer_satisfies_contract() {
+    checkpointer_contract(DriverCheckpointer::<i32>::new(storage::docs(
+        &storage::memory(),
+    )))
+    .await;
 }
 
-#[cfg(feature = "sqlite")]
 #[tokio::test]
-async fn sqlite_checkpointer_satisfies_contract() {
-    use tinyagents_graph::checkpoint::SqliteCheckpointer;
-    checkpointer_contract(SqliteCheckpointer::<i32>::in_memory().unwrap()).await;
+async fn sqlite_driver_checkpointer_satisfies_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    checkpointer_contract(storage::checkpointer::<i32>(dir.path())).await;
 }
 
 #[test]
@@ -38,11 +37,16 @@ fn in_memory_task_store_satisfies_contract() {
 }
 
 #[test]
-fn jsonl_task_store_satisfies_contract() {
-    let path = temp_path("jsonl-taskstore.jsonl");
-    let _ = std::fs::remove_file(&path);
-    taskstore_contract(JsonlTaskStore::open(&path).unwrap());
-    let _ = std::fs::remove_file(&path);
+fn memory_driver_task_store_satisfies_contract() {
+    taskstore_contract(DriverTaskStore::new(storage::docs(&storage::memory())).unwrap());
+}
+
+#[test]
+fn sqlite_driver_task_store_satisfies_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        DriverTaskStore::new(storage::docs(&storage::sqlite(dir.path(), "tasks.sqlite"))).unwrap();
+    taskstore_contract(store);
 }
 
 #[tokio::test]
@@ -51,11 +55,12 @@ async fn in_memory_checkpointer_handles_concurrent_writes() {
 }
 
 #[tokio::test]
-async fn file_checkpointer_handles_concurrent_writes() {
-    let dir = temp_path("file-checkpointer-concurrent");
-    let _ = std::fs::remove_dir_all(&dir);
-    checkpointer_concurrent_contract(std::sync::Arc::new(FileCheckpointer::<i32>::new(&dir))).await;
-    let _ = std::fs::remove_dir_all(&dir);
+async fn sqlite_driver_checkpointer_handles_concurrent_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    checkpointer_concurrent_contract(std::sync::Arc::new(storage::checkpointer::<i32>(
+        dir.path(),
+    )))
+    .await;
 }
 
 #[test]
@@ -64,17 +69,29 @@ fn in_memory_task_store_handles_concurrent_writes() {
 }
 
 #[test]
-fn jsonl_task_store_handles_concurrent_writes() {
-    let path = temp_path("jsonl-taskstore-concurrent.jsonl");
-    let _ = std::fs::remove_file(&path);
-    taskstore_concurrent_contract(std::sync::Arc::new(JsonlTaskStore::open(&path).unwrap()));
-    let _ = std::fs::remove_file(&path);
+fn sqlite_driver_task_store_handles_concurrent_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store =
+        DriverTaskStore::new(storage::docs(&storage::sqlite(dir.path(), "tasks.sqlite"))).unwrap();
+    taskstore_concurrent_contract(std::sync::Arc::new(store));
 }
 
 #[test]
-fn jsonl_task_store_replays_after_restart() {
-    let path = temp_path("jsonl-taskstore-replay.jsonl");
-    let _ = std::fs::remove_file(&path);
-    taskstore_replay_contract(|| JsonlTaskStore::open(&path).unwrap());
-    let _ = std::fs::remove_file(&path);
+fn sqlite_driver_task_store_replays_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    taskstore_replay_contract(|| {
+        DriverTaskStore::new(storage::docs(&storage::sqlite(dir.path(), "tasks.sqlite"))).unwrap()
+    });
+}
+
+#[tokio::test]
+async fn task_caches_satisfy_the_contract() {
+    task_cache_contract(InMemoryTaskCache::new()).await;
+    task_cache_contract(DriverTaskCache::new(storage::docs(&storage::memory()))).await;
+    let dir = tempfile::tempdir().unwrap();
+    task_cache_contract(DriverTaskCache::new(storage::docs(&storage::sqlite(
+        dir.path(),
+        "cache.sqlite",
+    ))))
+    .await;
 }
