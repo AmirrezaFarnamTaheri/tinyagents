@@ -231,9 +231,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
 
 #[test]
 fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence() {
-    use crate::threads::{
-        ConversationPersistence, ConversationResult, DriverConversationStore,
-    };
+    use crate::threads::{ConversationPersistence, ConversationResult, DriverConversationStore};
     struct Provider {
         sessions: InMemorySessionStores,
         conversations: Arc<dyn ConversationPersistence>,
