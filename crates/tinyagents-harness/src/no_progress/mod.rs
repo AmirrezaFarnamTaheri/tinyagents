@@ -66,6 +66,7 @@ mod fingerprint;
 mod loop_patterns;
 mod monitor;
 mod post_compaction;
+mod recoverable;
 mod stream_text;
 mod successful_repeat;
 mod types;
@@ -78,6 +79,11 @@ pub use loop_patterns::{
     DEFAULT_CHURN_CALLS_PER_VARIANT, DEFAULT_CHURN_VARIANTS, DEFAULT_PING_PONG_ALTERNATIONS,
 };
 pub use post_compaction::DEFAULT_POST_COMPACTION_WINDOW;
+pub use recoverable::{
+    ARGUMENT_SCHEMA_RECOVERY, COMMAND_EXIT_REPORT_PREFIX, FailurePolicy, RecoverableFailureLadder,
+    RecoveryDecision, RecoveryPolicy, first_error_line, is_argument_rejection,
+    is_command_exit_report, is_pre_execution_failure,
+};
 pub use stream_text::StreamTextStallDetector;
 pub use successful_repeat::{DEFAULT_REPEAT_CALL_THRESHOLD, DEFAULT_REPEAT_OUTPUT_THRESHOLD};
 use types::LadderState;
