@@ -60,6 +60,35 @@ impl SessionDriver for WaitingDriver {
     }
 }
 
+/// Waits for the turn's cancellation, then returns a failure carrying the
+/// rounds it completed (when `.2`), the way a cancellation-aware host driver does.
+struct CancelAwareDriver(
+    tinyagents_harness::CancellationToken,
+    Arc<tokio::sync::Notify>,
+    bool,
+);
+
+#[async_trait]
+impl SessionDriver for CancelAwareDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        self.1.notify_one();
+        self.0.cancelled().await;
+        let mut history = request.history;
+        history.push(Message::assistant("completed round"));
+        Err(DriverFailure {
+            outcome: None,
+            error: RuntimeError::Driver("stopped".into()),
+            partial: self.2.then_some(DriverOutcome {
+                outcome: None,
+                history,
+                output: None,
+                partial: None,
+                interrupted: true,
+            }),
+        })
+    }
+}
+
 struct RegisteredTool;
 
 #[async_trait]
@@ -935,6 +964,53 @@ async fn cancellation_while_the_driver_is_waiting_has_one_cancelled_terminal() {
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Cancelled]
     ));
+}
+
+/// A cancelled turn persists the partial its driver hands back (and nothing
+/// when there is none); either way the caller and the hooks see `Cancelled`,
+/// never the driver's own error.
+#[tokio::test]
+async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
+    for (returns_partial, expected) in [
+        (true, &["stop me", "completed round"][..]),
+        (false, &[][..]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+        let options = TurnOptions::default();
+        let cancellation = options.cancellation.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let (hook, events) = hook(vec![]);
+        let driver = CancelAwareDriver(cancellation.clone(), started.clone(), returns_partial);
+        let mut session = SessionBuilder::new(Arc::new(driver))
+            .codec(Arc::new(Codec::default()))
+            .hooks(hook)
+            .transcript(locator, "agent", meta())
+            .build()
+            .unwrap();
+        let turn = tokio::spawn(async move {
+            let result = session
+                .turn(SessionTurnRequest::new(Message::user("stop me")), options)
+                .await;
+            (result, session)
+        });
+        started.notified().await;
+        cancellation.cancel();
+        let (result, session) = turn.await.unwrap();
+
+        assert_eq!(result, Err(RuntimeError::Cancelled));
+        assert!(matches!(
+            events.terminal.lock().unwrap().as_slice(),
+            [SessionTerminal::Cancelled]
+        ));
+        assert!(events.receipts.lock().unwrap().is_empty());
+        let path = directory.path().join("session_raw/agent.jsonl");
+        let persisted: Vec<String> = read_transcript(&path)
+            .map(|transcript| transcript.messages.into_iter().map(|m| m.content).collect())
+            .unwrap_or_default();
+        assert_eq!(persisted, expected, "returns_partial={returns_partial}");
+        assert_eq!(session.history().len(), expected.len());
+    }
 }
 
 #[tokio::test]
