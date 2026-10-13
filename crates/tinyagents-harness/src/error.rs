@@ -466,17 +466,6 @@ impl TinyAgentsError {
     }
 }
 
-/// Converts a raw `rusqlite` failure into [`TinyAgentsError::Storage`] so the
-/// session store and run ledger can use `?` on driver calls directly. Call
-/// sites that have useful context to add should still map explicitly rather
-/// than relying on this bare conversion.
-#[cfg(feature = "sqlite")]
-impl From<rusqlite::Error> for TinyAgentsError {
-    fn from(err: rusqlite::Error) -> Self {
-        Self::Storage(err.to_string())
-    }
-}
-
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod tests;

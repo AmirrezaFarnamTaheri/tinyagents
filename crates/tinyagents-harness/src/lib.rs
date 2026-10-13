@@ -12,7 +12,7 @@
 //!
 //! # Cargo features
 //!
-//! - `sqlite` — durable, file-backed stores (`rusqlite`).
+//! - `sqlite` — retained as a no-op for compatibility; durable stores are the `Driver*` types over `tinystoragedrivers`.
 //! - `builtin-tools` — the bundled [`tools`] (currently the time tool). The
 //!   old name `tools` is kept as a deprecated alias.
 //! - `multimodal` — image/audio/binary content resolution ([`multimodal`]),

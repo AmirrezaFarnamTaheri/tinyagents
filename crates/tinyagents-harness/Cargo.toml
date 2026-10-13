@@ -25,7 +25,6 @@ futures = { workspace = true }
 regex = "1"
 rustix = { version = "1", features = ["fs"] }
 reqwest = { workspace = true, features = ["stream", "http2"], optional = true }
-rusqlite = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = "0.11"
@@ -51,7 +50,7 @@ uuid = { workspace = true }
 
 [features]
 default = ["claude-code", "langfuse"]
-sqlite = ["dep:rusqlite"]
+sqlite = []
 # `store::DriverStore` / `store::DriverAppendStore` over tinystoragedrivers
 # ports, so a host's chosen backend (SQLite, MongoDB, memory) holds harness
 # data.
