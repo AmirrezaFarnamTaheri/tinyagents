@@ -31,7 +31,7 @@ use tinytools::{PermissionLevel, Tool};
 
 /// What a failed call may have done to the world.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum CallEffect {
+pub enum CallEffect {
     /// Reads, lists, searches: safe to retry.
     ReadOnly,
     /// May have changed state outside the conversation.
@@ -43,23 +43,23 @@ pub(crate) enum CallEffect {
 
 /// What a registered tool declares about one call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ToolEffectFacts {
+pub struct ToolEffectFacts {
     /// From a classified `ToolPolicy`, when its side effects decide the
     /// question (`None` for an unclassified tool, or one declaring only
     /// network access).
-    pub(crate) classified: Option<CallEffect>,
+    pub classified: Option<CallEffect>,
     /// `external_effect_with_args`: the approval gate's signal.
-    pub(crate) external: bool,
+    pub external: bool,
     /// `permission_level_with_args` above `ReadOnly`.
-    pub(crate) elevated: bool,
+    pub elevated: bool,
 }
 
 /// Looks up the declarations of a registered tool by name, for these args.
-pub(crate) type ToolFactsLookup =
+pub type ToolFactsLookup =
     Arc<dyn Fn(&str, &Value) -> Option<ToolEffectFacts> + Send + Sync>;
 
 /// The facts `tool` declares for a call with `args`.
-pub(crate) fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
+pub fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
     let policy = tool.policy();
     let effects = &policy.side_effects;
     let classified = if !policy.classified {
@@ -83,7 +83,7 @@ pub(crate) fn facts_for_tool(tool: &dyn Tool, args: &Value) -> ToolEffectFacts {
 }
 
 /// A lookup over the turn's registered tool sets.
-pub(crate) fn tool_sets_lookup(tool_sets: Vec<Arc<Vec<Box<dyn Tool>>>>) -> ToolFactsLookup {
+pub fn tool_sets_lookup(tool_sets: Vec<Arc<Vec<Box<dyn Tool>>>>) -> ToolFactsLookup {
     let mut index: HashMap<String, (usize, usize)> = HashMap::new();
     for (set_idx, set) in tool_sets.iter().enumerate() {
         for (tool_idx, tool) in set.iter().enumerate() {
@@ -101,13 +101,13 @@ pub(crate) fn tool_sets_lookup(tool_sets: Vec<Arc<Vec<Box<dyn Tool>>>>) -> ToolF
 
 /// The tool a dispatcher call actually reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DispatchTarget<'a> {
+pub struct DispatchTarget<'a> {
     /// The skill (tool pack) named by the call, when the dispatcher has one.
-    pub(crate) skill: Option<&'a str>,
+    pub skill: Option<&'a str>,
     /// The target tool or action name.
-    pub(crate) tool: &'a str,
+    pub tool: &'a str,
     /// The arguments passed through to the target.
-    pub(crate) args: Option<&'a Value>,
+    pub args: Option<&'a Value>,
 }
 
 /// The connector dispatcher whose `tool` argument is a Composio action slug.
@@ -116,8 +116,8 @@ const COMPOSIO_EXECUTE: &str = "composio_execute";
 /// The target of a dispatcher tool call: `use_skill` (`skill`, `tool`,
 /// `args`) or `composio_execute` (`tool`, `arguments`). `None` for any other
 /// tool, or when the call names no target.
-pub(crate) fn dispatch_target<'a>(tool: &str, args: &'a Value) -> Option<DispatchTarget<'a>> {
-    let (args_field, skill) = if tool == tinyagents_harness::tool::packs::USE_SKILL {
+pub fn dispatch_target<'a>(tool: &str, args: &'a Value) -> Option<DispatchTarget<'a>> {
+    let (args_field, skill) = if tool == crate::tool::packs::USE_SKILL {
         ("args", args.get("skill").and_then(Value::as_str))
     } else if tool == COMPOSIO_EXECUTE {
         ("arguments", None)
@@ -220,7 +220,7 @@ const MUTATING_VERBS: &[&str] = &[
 /// The effect the operation verbs in `name` imply: `Unknown` when it carries
 /// none. Names are split on anything that is not a letter or digit, so
 /// `composio_list_tools` and `GMAIL_FETCH_EMAILS` both read as reads.
-pub(crate) fn name_effect(name: &str) -> CallEffect {
+pub fn name_effect(name: &str) -> CallEffect {
     let mut reads = false;
     for token in name
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -264,7 +264,7 @@ fn leaf_effect(facts: Option<ToolEffectFacts>, name: &str) -> CallEffect {
 /// A dispatcher is judged by its target, unless the dispatcher itself already
 /// declares an external effect for these arguments (`composio_execute` does
 /// for a mutating action slug).
-pub(crate) fn call_effect(
+pub fn call_effect(
     lookup: Option<&ToolFactsLookup>,
     tool: &str,
     args: &Value,

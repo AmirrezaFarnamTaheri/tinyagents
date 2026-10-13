@@ -1,8 +1,7 @@
 //! Loop-guard thresholds and the repeat-call exemption shared by the
-//! repeated-failure and repeat-progress breakers (issue #4463), ported verbatim
-//! from the deleted `agent/harness/tool_loop.rs`. The halt-summary wording and
-//! the terminal-inference recogniser live in the host copy table
-//! (`inference::failure_copy`); the recoverable-failure marker list in
+//! repeated-failure and repeat-progress breakers (issue #4463), shared defaults;
+//! halt-summary wording and the terminal-inference recogniser stay in the host
+//! copy table, the recoverable-failure marker list in
 //! `tinyinference_llm::failure`.
 
 // ── Loop-guard restorations (issue #4463) ────────────────────────────────────
@@ -20,11 +19,11 @@
 /// deterministic default: a flaky network call or a timeout can succeed on a
 /// later attempt once the model adapts (longer timeout, smaller batch, retry).
 /// Mirrors the legacy `RECOVERABLE_REPEAT_FAILURE_THRESHOLD`.
-pub(crate) const RECOVERABLE_REPEAT_FAILURE_THRESHOLD: u32 = 8;
+pub const RECOVERABLE_REPEAT_FAILURE_THRESHOLD: u32 = 8;
 /// Recoverable failures also get a larger *consecutive* (varied-args) no-progress
 /// headroom before the breaker halts. Mirrors the legacy
 /// `RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD`.
-pub(crate) const RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD: u32 = 12;
+pub const RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD: u32 = 12;
 
 /// Tools whose contract is to be re-invoked with identical arguments, so an
 /// identical repeat is legitimate progress — not a no-progress loop. Today this
@@ -34,6 +33,6 @@ pub(crate) const RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD: u32 = 12;
 /// outlives two wait windows would have its third identical `wait_subagent`
 /// halted by the no-progress breakers before it could collect the eventual
 /// result. Ported from legacy `tool_loop::is_repeat_call_exempt` (Codex P1 on #4230).
-pub(crate) fn is_repeat_call_exempt(tool: &str) -> bool {
+pub fn is_repeat_call_exempt(tool: &str) -> bool {
     matches!(tool, "wait_subagent")
 }

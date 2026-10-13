@@ -34,14 +34,14 @@ const CORRECTABLE_CLASSES: &[&str] = &[
 ];
 
 /// Whether a classified stop of `class` may be explained by a repeat loop.
-pub(super) fn is_correctable_class(class: &str) -> bool {
+pub fn is_correctable_class(class: &str) -> bool {
     CORRECTABLE_CLASSES.contains(&class)
 }
 
 /// What the failure breaker has seen of the repeat guard and of repeated
 /// failing calls in the current run.
 #[derive(Default)]
-pub(super) struct RepeatLoopWitness {
+pub struct RepeatLoopWitness {
     /// `tool\u{1f}argument-fingerprint\u{1f}outcome-hash` of every failure so
     /// far.
     failed_calls: Mutex<HashSet<String>>,
@@ -51,18 +51,18 @@ pub(super) struct RepeatLoopWitness {
 
 impl RepeatLoopWitness {
     /// A call ran and succeeded: the run is no longer only repeating itself.
-    pub(super) fn record_success(&self) {
+    pub fn record_success(&self) {
         self.refusals_since_progress.store(0, Ordering::SeqCst);
     }
 
     /// The repeat guard refused a call. Returns the refusals since the last
     /// success, this one included.
-    pub(super) fn record_refusal(&self) -> usize {
+    pub fn record_refusal(&self) -> usize {
         self.refusals_since_progress.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// Calls the repeat guard refused since the last success.
-    pub(super) fn refusals(&self) -> usize {
+    pub fn refusals(&self) -> usize {
         self.refusals_since_progress.load(Ordering::SeqCst)
     }
 
@@ -72,14 +72,14 @@ impl RepeatLoopWitness {
     /// volatile spans (timestamps, durations, request ids) normalised away; a
     /// retry that fails differently (a task that got further, a different
     /// error) is new evidence, not a repeat.
-    pub(super) fn record_failure(
+    pub fn record_failure(
         &self,
         tool: &str,
         arg_fingerprint: &str,
         failure_text: &str,
     ) -> bool {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        tinyagents_harness::no_progress::normalize_volatile(failure_text).hash(&mut hasher);
+        crate::no_progress::normalize_volatile(failure_text).hash(&mut hasher);
         let key = format!("{tool}\u{1f}{arg_fingerprint}\u{1f}{:x}", hasher.finish());
         let Ok(mut failed) = self.failed_calls.lock() else {
             return false;
@@ -99,9 +99,9 @@ impl RepeatLoopWitness {
 ///
 /// It names the repeating as the cause (the note maps to the
 /// "kept repeating the same step" reason, see
-/// `session_host::stop_summary::StopReasonKind::from_stop_note`) and still
+/// the host's stop-summary classifier) and still
 /// tells the model which call failed and how.
-pub(super) fn repeat_loop_halt_summary(tool: &str, refusals: usize, error_line: &str) -> String {
+pub fn repeat_loop_halt_summary(tool: &str, refusals: usize, error_line: &str) -> String {
     format!(
         "Stopping: the run kept re-issuing tool calls it already had results for — the repeat \
          guard refused {refusals} identical successful call(s) — and `{tool}` was re-run with \

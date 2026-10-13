@@ -3,11 +3,11 @@
 //! The stop-note slot ([`HaltSummarySlot`]) is shared by the failure breaker,
 //! the repeat guard (`RepeatProgressMiddleware`) and the stop hooks, and the
 //! user-facing stop summary is derived from whatever note it holds when the
-//! run ends (`session_host::stop_summary`). A stop only takes effect at the
+//! run ends (the host's stop-summary classifier). A stop only takes effect at the
 //! top of the next iteration, so every remaining result of the batch still
 //! reaches the breakers after one of them stopped the run. The first breaker
 //! to stop the run is its cause, so no breaker replaces a note already there
-//! (the repeat guard follows the same contract in `tinyagents`). The failure
+//! (the repeat guard follows the same contract). The failure
 //! breaker used to overwrite it: the repeat guard stopping a run while
 //! admitting a batch of re-reads, then a mistyped path in that batch failing
 //! again, was summarised as "something this needs could not be found".
@@ -17,15 +17,18 @@
 //! the batch shows progress.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
+use crate::steering::{SteeringCommand, SteeringHandle};
 
 use super::repeat_loop_stop::{is_correctable_class, repeat_loop_halt_summary, RepeatLoopWitness};
-use crate::agent::tinyagents::HaltSummarySlot;
+
+/// The stop-note slot shared by the failure breaker, the repeat guard and the
+/// stop hooks.
+pub type HaltSummarySlot = Arc<Mutex<Option<String>>>;
 
 /// The failure breaker's side of the shared stop-note slot.
-pub(super) struct StopLatch {
+pub struct StopLatch {
     handle: SteeringHandle,
     slot: HaltSummarySlot,
     /// The note this breaker latched in the current run.
@@ -47,7 +50,7 @@ pub(super) struct StopLatch {
 
 impl StopLatch {
     /// A latch that pauses runs through `handle` and records notes in `slot`.
-    pub(super) fn new(handle: SteeringHandle, slot: HaltSummarySlot) -> Self {
+    pub fn new(handle: SteeringHandle, slot: HaltSummarySlot) -> Self {
         Self {
             handle,
             slot,
@@ -60,19 +63,19 @@ impl StopLatch {
     }
 
     /// What has been seen of the repeat guard and of repeated failures.
-    pub(super) fn witness(&self) -> &RepeatLoopWitness {
+    pub fn witness(&self) -> &RepeatLoopWitness {
         &self.witness
     }
 
     /// Stop the run, recording `summary` as its stop note unless another
     /// breaker already stopped it. The pause is sent either way; it is
     /// idempotent. Returns whether `summary` became the stop note.
-    pub(super) fn halt(&self, summary: String) -> bool {
+    pub fn halt(&self, summary: String) -> bool {
         let latched = match self.slot.lock() {
             Ok(mut slot) => match slot.as_deref() {
                 Some(existing) => {
                     tracing::debug!(
-                        existing = %crate::util::truncate_with_ellipsis(existing, 80),
+                        existing = %truncate_for_log(existing, 80),
                         "[tinyagents::mw] run already stopped by an earlier breaker; keeping its stop note"
                     );
                     false
@@ -98,7 +101,7 @@ impl StopLatch {
     /// last success, the run was looping, and the note says so. With no
     /// refusal yet, a refusal later in the batch can still relabel it
     /// ([`Self::record_refusal`]).
-    pub(super) fn halt_classified(
+    pub fn halt_classified(
         &self,
         summary: String,
         class: &str,
@@ -128,7 +131,7 @@ impl StopLatch {
 
     /// The repeat guard refused a call. Relabels this breaker's classified
     /// stop as a repeat loop if it is waiting for that evidence.
-    pub(super) fn record_refusal(&self) {
+    pub fn record_refusal(&self) {
         let refusals = self.witness.record_refusal();
         let Some((tool, error_line)) = self.candidate.lock().ok().and_then(|mut c| c.take()) else {
             return;
@@ -140,7 +143,7 @@ impl StopLatch {
     /// refusals around it nor a stop latched earlier in its batch can be
     /// explained as a repeat loop: a pending relabel is dropped and a relabel
     /// already made is taken back.
-    pub(super) fn record_success(&self) {
+    pub fn record_success(&self) {
         self.batch_progress.store(true, Ordering::SeqCst);
         self.witness.record_success();
         if let Ok(mut candidate) = self.candidate.lock() {
@@ -157,12 +160,12 @@ impl StopLatch {
 
     /// A model response asked for a new tool batch: nothing in it has
     /// succeeded yet.
-    pub(super) fn start_batch(&self) {
+    pub fn start_batch(&self) {
         self.batch_progress.store(false, Ordering::SeqCst);
     }
 
     /// End of a run: forget its latch state.
-    pub(super) fn finish_run(&self) {
+    pub fn finish_run(&self) {
         for state in [&self.own, &self.relabelled_from] {
             if let Ok(mut state) = state.lock() {
                 *state = None;
@@ -203,5 +206,13 @@ impl StopLatch {
         }
         *slot = Some(summary.clone());
         own.replace(summary)
+    }
+}
+
+/// `text` cut to at most `max` characters, for log lines.
+fn truncate_for_log(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => format!("{}...", &text[..end]),
+        None => text.to_string(),
     }
 }
