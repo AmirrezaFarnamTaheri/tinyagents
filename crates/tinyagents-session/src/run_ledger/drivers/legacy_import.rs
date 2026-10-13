@@ -15,7 +15,7 @@ use super::history::{
     tool_call_doc, tool_call_id,
 };
 use super::storage::{
-    AGENTS, CAS_ATTEMPTS, EFFECTS, EVENT_HEADS, EVENTS, HIST_COUNTERS, HIST_MESSAGES, HIST_SESSIONS,
+    AGENTS, EFFECTS, EVENT_HEADS, EVENTS, HIST_COUNTERS, HIST_MESSAGES, HIST_SESSIONS,
     HIST_TOOL_CALLS, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, encode, key,
 };
 use super::*;
@@ -238,7 +238,7 @@ impl DriverRunLedger {
             );
         }
         for (run_id, highest) in heads {
-            self.raise_event_head(&key(&[run_id]).clone(), highest + 1)
+            self.raise_event_head(run_id, highest + 1)
                 .await?;
         }
         report.events = ImportCounts::tally(loaded.events.len(), imported);
@@ -342,6 +342,3 @@ struct Loaded {
     effects: Vec<ToolEffectRow>,
     trees: std::collections::BTreeMap<String, rows::LegacyEntryTree>,
 }
-
-#[allow(dead_code)]
-const _: usize = CAS_ATTEMPTS;
