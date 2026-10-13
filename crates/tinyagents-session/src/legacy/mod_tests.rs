@@ -77,7 +77,7 @@ fn populate(db: &Connection) {
          VALUES ('run-1', 'call-1', 'send_email', 'started', 'idem-1', 'to bob', '{T0}', NULL);
          INSERT INTO entry_tree_entries (session_id, id, parent_id, ordinal, kind, payload_json, ts)
          VALUES ('s-root', 's-root:0', NULL, 0, 'custom',
-                 '{{\"type\":\"custom\",\"kind\":\"note\",\"data\":{{\"a\":1}}}}', '{T0}'),
+                 '{{\"type\":\"custom\",\"kind\":\"note\",\"payload\":{{\"a\":1}}}}', '{T0}'),
                 ('s-root', 's-root:1', 's-root:0', 1, 'label',
                  '{{\"type\":\"label\",\"name\":\"keep\"}}', '{T1}');
          INSERT INTO entry_tree_labels (session_id, name, entry_id)
