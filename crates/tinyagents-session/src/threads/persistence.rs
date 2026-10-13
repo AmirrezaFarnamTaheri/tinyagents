@@ -5,7 +5,7 @@
 //! unsupported authoritative operations refuse.
 
 use super::{
-    ConversationPurgeStats, ConversationThread, CreateConversationThread, CrossThreadHit,
+    ConversationThread, CreateConversationThread, CrossThreadHit,
     ThreadMessage, ThreadMessagePatch,
 };
 use async_trait::async_trait;

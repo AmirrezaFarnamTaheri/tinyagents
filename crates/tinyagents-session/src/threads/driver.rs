@@ -16,6 +16,7 @@ use tinystoragedrivers_core::{
 mod append;
 mod pending;
 mod reader;
+mod rewrite;
 
 const COLLECTION: &str = "conversation_threads_v1";
 const PAGE_SIZE: usize = 64;
@@ -74,6 +75,24 @@ impl DriverConversationStore {
             validate_only: true,
             ..Self::new(scoped)
         }
+    }
+
+    /// A process-lifetime store over the memory driver, for library hosts that
+    /// have no storage backend. Nothing is written to disk and nothing survives
+    /// the process; plain append is fully prepared.
+    ///
+    /// # Panics
+    /// Never in practice: the memory driver accepts every declaration.
+    pub async fn in_memory() -> Self {
+        use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+        let backend = MemoryStorage::new();
+        let scoped = backend
+            .for_scope(&Scope::new("local").expect("static scope"))
+            .expect("memory scope");
+        Self::prepare_append_schema(scoped.documents().as_ref())
+            .await
+            .expect("memory driver accepts declarations");
+        Self::new(scoped)
     }
 
     /// Existing metadata declaration; streams retain their schema1 layout.
@@ -190,7 +209,7 @@ impl DriverConversationStore {
                 next.thread.parent_thread_id = Some(parent.clone());
             }
             if let Some(labels) = &request.labels {
-                next.thread.labels = store::normalize_labels(labels.clone());
+                next.thread.labels = super::labels::normalize_labels(labels.clone());
             }
             if let Some(personality) = &request.personality_id {
                 next.thread.personality_id = Some(personality.clone());
@@ -217,8 +236,8 @@ impl DriverConversationStore {
                     labels: request
                         .labels
                         .clone()
-                        .map(store::normalize_labels)
-                        .unwrap_or_else(|| store::infer_labels(&request.id)),
+                        .map(super::labels::normalize_labels)
+                        .unwrap_or_else(|| super::labels::infer_labels(&request.id)),
                     personality_id: request.personality_id.clone(),
                     working_dir: request.working_dir.clone().filter(|dir| !dir.is_empty()),
                 },
@@ -287,7 +306,7 @@ impl ConversationPersistence for DriverConversationStore {
         self.admit().await?;
         self.change(thread_id, |current| {
             let mut doc = Self::live(current)?;
-            doc.thread.labels = store::normalize_labels(labels.clone());
+            doc.thread.labels = super::labels::normalize_labels(labels.clone());
             Ok(doc)
         })
         .await
@@ -360,30 +379,24 @@ impl ConversationPersistence for DriverConversationStore {
     }
     async fn update_message(
         &self,
-        _thread_id: &str,
-        _message_id: &str,
-        _patch: ThreadMessagePatch,
+        thread_id: &str,
+        message_id: &str,
+        patch: ThreadMessagePatch,
     ) -> ConversationResult<ThreadMessage> {
         self.admit().await?;
-        Err(ConversationError::Unsupported {
-            operation: "update_message",
-        })
+        self.update_message_native(thread_id, message_id, patch).await
     }
     async fn delete_messages_from(
         &self,
-        _thread_id: &str,
-        _message_id: &str,
+        thread_id: &str,
+        message_id: &str,
     ) -> ConversationResult<Option<usize>> {
         self.admit().await?;
-        Err(ConversationError::Unsupported {
-            operation: "delete_messages_from",
-        })
+        self.delete_messages_from_native(thread_id, message_id).await
     }
     async fn purge_threads(&self) -> ConversationResult<ConversationPurgeStats> {
         self.admit().await?;
-        Err(ConversationError::Unsupported {
-            operation: "purge_threads",
-        })
+        self.purge_native().await
     }
 }
 fn timestamp(value: &str) -> i64 {

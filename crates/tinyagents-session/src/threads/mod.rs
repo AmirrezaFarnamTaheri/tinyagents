@@ -31,7 +31,6 @@ mod labels;
 mod tokenize;
 mod types;
 
-use labels as store;
 pub use types::{
     ConversationThread, CreateConversationThread, CrossThreadHit, DETERMINISTIC_MESSAGE_ID_PREFIX,
     ThreadMessage, ThreadMessagePatch, is_deterministic_message_id, reply_run_id,
