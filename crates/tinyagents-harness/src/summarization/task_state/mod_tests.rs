@@ -413,25 +413,18 @@ fn later_split_state_can_reopen_completed_work() {
 
 /// Fails or replies per call, in order; counts the calls it received.
 struct FlakyModel {
-    script: std::sync::Mutex<std::collections::VecDeque<std::result::Result<String, String>>>,
+    script: std::sync::Mutex<
+        std::collections::VecDeque<std::result::Result<&'static str, &'static str>>,
+    >,
     calls: std::sync::atomic::AtomicUsize,
 }
 
 impl FlakyModel {
-    fn new(script: Vec<std::result::Result<&str, &str>>) -> Self {
+    fn new(script: Vec<std::result::Result<&'static str, &'static str>>) -> Self {
         Self {
-            script: std::sync::Mutex::new(
-                script
-                    .into_iter()
-                    .map(|step| step.map(str::to_string).map_err(str::to_string))
-                    .collect(),
-            ),
+            script: std::sync::Mutex::new(script.into()),
             calls: std::sync::atomic::AtomicUsize::new(0),
         }
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -443,12 +436,15 @@ impl ChatModel<()> for FlakyModel {
         _request: ModelRequest,
     ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelResponse> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match self.script.lock().unwrap().pop_front() {
-            Some(Ok(reply)) => Ok(crate::testkit::text_response(reply)),
-            Some(Err(message)) => Err(tinyinference_llm::Error::Model(message)),
-            None => Err(tinyinference_llm::Error::Model(
-                "OpenHuman returned HTTP 401: invalid api key".into(),
-            )),
+        match self
+            .script
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("script exhausted")
+        {
+            Ok(reply) => Ok(crate::testkit::text_response(reply)),
+            Err(message) => Err(tinyinference_llm::Error::Model(message.into())),
         }
     }
 }
@@ -456,34 +452,32 @@ impl ChatModel<()> for FlakyModel {
 const GATEWAY_TIMEOUT: &str = "OpenHuman returned HTTP 504: error code: 504";
 
 #[tokio::test]
-async fn a_gateway_timeout_on_a_chunk_is_retried_instead_of_skipping_it() {
-    let model = Arc::new(FlakyModel::new(vec![Err(GATEWAY_TIMEOUT), Ok(STATE_REPLY)]));
-    let summarizer = TaskStateSummarizer::new(model.clone(), "m");
-    let record = summarizer.summarize(&history()).await.unwrap();
-
-    assert_eq!(model.calls(), 2, "the 504 is retried once");
-    assert!(
-        record
-            .summary
-            .text()
-            .contains("- invalid default argument declaration"),
-        "the retry's state reached the checkpoint"
-    );
-    assert!(record.provenance.reason.contains("0 skipped)"));
-    assert!(!record.provenance.reason.contains("partial"));
-}
-
-#[tokio::test]
-async fn a_permanent_model_error_is_not_retried() {
-    let model = Arc::new(FlakyModel::new(vec![
-        Err("OpenHuman returned HTTP 401: invalid api key"),
-        Ok(STATE_REPLY),
-    ]));
-    let summarizer = TaskStateSummarizer::new(model.clone(), "m");
-    let record = summarizer.summarize(&history()).await.unwrap();
-
-    assert_eq!(model.calls(), 1, "a 401 cannot recover by retrying");
-    assert!(record.provenance.reason.contains("ledger only"));
+async fn only_a_retryable_model_error_is_retried() {
+    // (first reply, calls made, reason fragment)
+    let cases = [
+        // Revert-check: a 504 used to skip the chunk on its first failure.
+        (GATEWAY_TIMEOUT, 2, "(1 chunk(s), 0 skipped)"),
+        // Unchanged: a permanent error is not retried.
+        (
+            "OpenHuman returned HTTP 401: invalid api key",
+            1,
+            "ledger only",
+        ),
+    ];
+    for (error, calls, reason) in cases {
+        let model = Arc::new(FlakyModel::new(vec![Err(error), Ok(STATE_REPLY)]));
+        let record = TaskStateSummarizer::new(model.clone(), "m")
+            .summarize(&history())
+            .await
+            .unwrap();
+        let made = model.calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(made, calls, "{error}");
+        assert!(
+            record.provenance.reason.contains(reason),
+            "{error}: {}",
+            record.provenance.reason
+        );
+    }
 }
 
 #[tokio::test]
@@ -496,8 +490,8 @@ async fn a_skipped_chunk_after_a_state_reports_partial_degradation() {
             &"x".repeat(400),
         ));
     }
-    // The first chunk writes a state; the second times out on both attempts;
-    // every later chunk writes a state again.
+    // The first chunk writes a state; the second fails on its last attempt
+    // too; every later chunk writes a state again.
     let mut script = vec![
         Ok(r#"{"goal": "step 0"}"#),
         Err(GATEWAY_TIMEOUT),

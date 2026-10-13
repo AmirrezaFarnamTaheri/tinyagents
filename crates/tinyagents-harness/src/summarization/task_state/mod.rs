@@ -267,9 +267,8 @@ impl TaskStateSummarizer {
                 Ok(response) => response,
                 Err(e) => {
                     let message = e.to_string();
-                    // A transient failure (a gateway 504, a 429, a timeout) on
-                    // one ~100k-token chunk would otherwise drop that chunk's
-                    // state; spend the remaining attempt on it.
+                    // A transient failure (504, 429, timeout) would otherwise
+                    // drop this chunk's state; spend the remaining attempt.
                     let retryable = crate::retry::is_retryable(&TinyAgentsError::from(e));
                     tracing::warn!(
                         error = %message,
@@ -380,13 +379,6 @@ impl Summarizer for TaskStateSummarizer {
                 model = %self.model_id,
                 "[tinyagents::task_state] no model state; checkpoint carries the ledger only"
             );
-        } else if skipped > 0 {
-            tracing::warn!(
-                model = %self.model_id,
-                chunks = chunks.len(),
-                chunks_skipped = skipped,
-                "[tinyagents::task_state] partial model state; skipped chunks carry the ledger only"
-            );
         }
         let body = render_task_state(&state.unwrap_or_default().bounded(), &ledger);
         let summary_token_estimate = estimate_tokens(&body);
@@ -411,17 +403,12 @@ impl Summarizer for TaskStateSummarizer {
                         "TaskStateSummarizer via {} (ledger only: model state unavailable)",
                         self.model_id
                     )
-                } else if skipped > 0 {
-                    format!(
-                        "TaskStateSummarizer via {} ({} chunk(s), {skipped} skipped: partial state)",
-                        self.model_id,
-                        chunks.len()
-                    )
                 } else {
                     format!(
-                        "TaskStateSummarizer via {} ({} chunk(s), {skipped} skipped)",
+                        "TaskStateSummarizer via {} ({} chunk(s), {skipped} skipped{})",
                         self.model_id,
-                        chunks.len()
+                        chunks.len(),
+                        if skipped > 0 { ": partial state" } else { "" }
                     )
                 },
             },
