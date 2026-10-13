@@ -37,5 +37,7 @@ mirror never flushes per streaming delta.
   unreadable snapshot is left alone, and only a turn actually marked
   interrupted gets its partial answer appended to the session transcript
   (display-only; the model-context reader skips it).
-- The partial is appended only when the thread's root transcript already
+- The partial is carried over only when the host attached a `TranscriptLocator`
+  with `TurnStateMirror::with_transcripts` (`new` leaves it unset, so no partial
+  is appended). It is appended only when the thread's root transcript already
   exists. An interrupted first turn keeps its partial in the snapshot only.

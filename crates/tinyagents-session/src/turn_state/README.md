@@ -1,6 +1,6 @@
 # Turn state
 
-This module persists restart-survivable snapshots of active and recently
+This module persists snapshots of active and recently
 completed agent turns. It is separate from transcript storage: snapshots hold
 live progress and UI-oriented tool/sub-agent state, while transcript JSONL
 remains the durable conversation history.
@@ -16,7 +16,8 @@ types from its turn-state module.
 ## Persistence and lifecycle
 
 Each request has one snapshot in the store the host installed (memory by
-default, or any `tinystoragedrivers` backend). Conditional writes are
+default, or any `tinystoragedrivers` backend). Snapshots survive a restart only
+with a durable driver-backed store; the in-memory default does not. Conditional writes are
 compare-and-swap operations on the snapshot document. Startup recovery
 marks leftover non-terminal turns interrupted. Completed snapshots are pruned
 to the newest retention window per thread; active snapshots are retained.
