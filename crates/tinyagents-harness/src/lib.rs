@@ -100,12 +100,12 @@ pub mod summarization;
 pub mod terminal;
 pub mod testkit;
 pub mod title;
-pub mod turn_deadline;
-pub mod turn_stop;
 pub mod token_estimation;
 pub mod tool;
 #[cfg(feature = "builtin-tools")]
 pub mod tools;
+pub mod turn_deadline;
+pub mod turn_stop;
 pub mod workspace;
 
 #[cfg(feature = "media")]

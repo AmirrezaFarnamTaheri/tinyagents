@@ -23,13 +23,13 @@ pub use builder::SessionBuilder;
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
 pub use hooks::{NoopSessionHooks, SessionHooks};
-pub use prefix::PrefixSnapshot;
 pub use managed_tools::{refresh_prefix, reject_synthesized_collisions};
 pub use permanent_tool::PermanentTool;
+pub use prefix::PrefixSnapshot;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
 pub use tool_registration::{
-    plan_registration, register_admitted, RegistrationPlan, ToolAdmission, ToolRegistration,
+    RegistrationPlan, ToolAdmission, ToolRegistration, plan_registration, register_admitted,
 };
 pub use tools::ToolSnapshot;
 pub use types::{

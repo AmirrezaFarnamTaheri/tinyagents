@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tinyagents_graph::parallel::{
-    plan_shared_workspace_dispatch, ClaimConflict, DispatchMode, WorkspaceClaim,
+    ClaimConflict, DispatchMode, WorkspaceClaim, plan_shared_workspace_dispatch,
 };
 
 /// One branch requested by the caller. `P` is the host's own payload.

@@ -38,8 +38,8 @@ mod host_ext;
 mod stats;
 mod types;
 
-pub use host_ext::HostExtensions;
 pub use depth::{current_run_depth, with_run_depth};
+pub use host_ext::HostExtensions;
 pub use stats::*;
 pub use types::*;
 

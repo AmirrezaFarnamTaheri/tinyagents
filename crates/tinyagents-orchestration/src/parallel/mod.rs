@@ -20,10 +20,10 @@ pub mod collect;
 pub mod staging;
 pub mod workers;
 
-pub use collect::{overlap_warnings, BranchReport, Collected, OverlapWarning};
+pub use collect::{BranchReport, Collected, OverlapWarning, overlap_warnings};
 pub use staging::{
-    with_ownership_boundary, AdmissionPolicy, AdmissionVerdict, Plan, Preflight, Rejection,
-    RejectionKind, Task, Worker, WorkerDispatchMode,
+    AdmissionPolicy, AdmissionVerdict, Plan, Preflight, Rejection, RejectionKind, Task, Worker,
+    WorkerDispatchMode, with_ownership_boundary,
 };
 pub use workers::run;
 

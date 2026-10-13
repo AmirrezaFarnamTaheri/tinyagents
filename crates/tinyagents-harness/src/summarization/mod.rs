@@ -24,8 +24,8 @@
 //! choose when to call, what to pass, and how to handle the result.
 
 mod checkpoint;
-mod compaction_carry;
 pub mod compaction;
+mod compaction_carry;
 pub(crate) mod dispatch;
 mod file_ops;
 mod model_summarizer;
@@ -38,12 +38,12 @@ pub mod task_state;
 mod trim;
 mod types;
 
-pub use compaction_carry::{CompactionCarry, last_user_message};
 pub use checkpoint::{CHECKPOINT_PREFIX, checkpoint_body, checkpoint_message, is_checkpoint};
 pub use compaction::{
     CompactionContext, CompactionDecision, CutPoint, OverflowClassifier, OverflowInfo,
     OverflowProbe, find_cut_point, summarize_kind_with_split, summarize_with_split,
 };
+pub use compaction_carry::{CompactionCarry, last_user_message};
 pub use file_ops::{
     DefaultFileOpExtractor, FileOpExtractor, FileOperations, MAX_LISTED_FILES,
     append_file_sections, extract_file_operations, split_file_sections,

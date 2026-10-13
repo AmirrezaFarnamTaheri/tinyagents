@@ -3,7 +3,7 @@
 
 use std::future::Future;
 
-use tinyagents_graph::parallel::{map_reduce, FailurePolicy, ParallelOptions};
+use tinyagents_graph::parallel::{FailurePolicy, ParallelOptions, map_reduce};
 use tinyagents_harness::{CancellationToken, Result, TinyAgentsError};
 
 use super::staging::{Worker, WorkerDispatchMode};
@@ -72,7 +72,7 @@ where
                 return Err(TinyAgentsError::Graph(format!(
                     "parallel fan-out: worker {} failed: {err}",
                     item.index
-                )))
+                )));
             }
         }
     }
