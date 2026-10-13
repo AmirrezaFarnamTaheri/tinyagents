@@ -36,7 +36,7 @@ use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
-use super::ops::RunTransition;
+use super::types::RunTransition;
 use super::port::RunLedgerStore;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;

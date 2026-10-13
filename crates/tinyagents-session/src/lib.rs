@@ -1,9 +1,14 @@
-//! Durable session database and run ledger.
+//! Durable session history and run ledger.
 //!
-//! SQLite-backed store (WAL + FTS5) for sessions, messages, tool calls, cost
-//! metadata, and parent/child lineage, plus a [`run_ledger`] for background
-//! agent/workflow execution state. This is the runtime's *history* layer: what
-//! ran, what it cost, what it called, and how runs nest.
+//! Everything this crate persists goes through the `tinystoragedrivers` ports:
+//! session history (sessions, messages, tool calls, with full-text search), a
+//! [`run_ledger`] for background agent and workflow execution state, the
+//! conversation [`entry_tree`], transcripts, turn-state snapshots and chat
+//! threads. A host opens one storage backend (SQLite on a desktop, MongoDB in
+//! the cloud, memory in tests), hands it to [`DriverSessionStores`], and gets
+//! every agent's stores in that backend, each under its own tenant scope. This
+//! is the runtime's *history* layer: what ran, what it cost, what it called,
+//! and how runs nest.
 //!
 //! # Why this is a top-level module
 //!
@@ -20,79 +25,100 @@
 //!   runtime data. It is a substrate runs read and write during execution.
 //! - `tinyagents_graph::checkpoint` is durability for *resuming* an interrupted
 //!   graph run.
-//! - This module is queryable history. Nothing resumes from it; it answers
+//! - This crate is queryable history. Nothing resumes from it; it answers
 //!   "what happened", supports cross-session search, and lets a host recover
 //!   orchestration state after a restart.
 //!
-//! A host that keeps its own transcript files (the source of truth for
-//! KV-cache resume) still wants this module for indexing and search over them.
+//! # Session history and the run ledger
+//!
+//! [`run_ledger::DriverRunLedger`] is the one implementation of both
+//! [`run_ledger::RunLedgerStore`] (runs, workflows, teams and tasks with atomic
+//! claim/complete/shutdown, events, telemetry, tool effects, entry trees,
+//! retention) and [`run_ledger::SessionHistoryStore`] (the session, message and
+//! tool-call history and its full-text index). Retention, trimming and
+//! `reindex_fts` bound and repair exactly the records those writers produce.
 //!
 //! # The entry tree
 //!
-//! [`entry_tree`] adds a second, opt-in shape over the same session
-//! database: an append-only, branchable tree of entries (`id`/`parent_id`)
-//! rather than a flat list. It exists alongside the linear
-//! `record_message`/[`transcript`] paths above, not in place of them — a
-//! host that never forks a conversation can ignore it entirely, and the
-//! linear JSONL/SQLite writers are unchanged. See
+//! [`entry_tree`] adds a second, opt-in shape over the same ledger: an
+//! append-only, branchable tree of entries (`id`/`parent_id`) rather than a
+//! flat list. It exists alongside the linear transcript paths, not in place of
+//! them — a host that never forks a conversation can ignore it entirely. See
 //! `docs/modules/session/README.md` for the full design (entry kinds, the
-//! context-projection rule, fork semantics) and [`entry_tree::legacy`] for
-//! how pre-tree data is deterministically read into the same model.
+//! context-projection rule, fork semantics) and [`entry_tree::legacy`] for how
+//! pre-tree data is deterministically read into the same model.
 //!
 //! # Chat threads
 //!
-//! [`threads`] is the product-facing chat log: JSONL threads and messages
-//! under `{workspace_dir}/memory/conversations/` with a cross-thread inverted
-//! index. It shares no files with the session database or transcripts; see
-//! `src/threads/README.md`.
+//! [`threads`] is the product-facing chat log: threads and messages with a
+//! cross-thread inverted index. See `src/threads/README.md`.
 //!
-//! # Layout
+//! # Migrating a classic workspace
 //!
-//! Every entry point takes the workspace root and derives the database path,
-//! so a host chooses only where its workspace lives:
-//!
-//! ```text
-//! {workspace_dir}/session_db/sessions.db
-//! ```
+//! Workspaces written before the storage-port migration kept a SQLite
+//! `sessions.db`, JSONL transcripts and turn-state JSON files.
+//! [`legacy::import_workspace`] (feature `legacy-import`, on by default) moves
+//! all of it into the ports, read-only, id-preserving and only-if-absent.
 //!
 //! # Example
 //!
-//! ```no_run
-//! use std::path::Path;
-//! use tinyagents_session::{self as session, SessionStatus};
+//! ```
+//! use std::sync::Arc;
+//! use tinyagents_session::run_ledger::{
+//!     DriverRunLedger, NewSessionMessage, SessionEnd, SessionHistoryStore, SessionStart,
+//! };
+//! use tinyagents_session::SessionStatus;
+//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! # fn main() -> tinyagents_session::Result<()> {
-//! let workspace = Path::new("/tmp/workspace");
+//! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+//! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
+//! let ledger = DriverRunLedger::new(storage);
 //!
-//! session::record_session_start(
-//!     workspace, "sess-1", "researcher", "Researcher", "sess-1",
-//!     None, None, None, Some("gpt-5"), None,
-//! )?;
-//! session::record_message(
-//!     workspace, "sess-1", "user", "summarize the repo", None, None, None, None,
-//! )?;
-//! session::record_session_end(
-//!     workspace, "sess-1", SessionStatus::Completed, 1, 120, 340, 0, 0.004,
-//! )?;
-//! # Ok(())
-//! # }
+//! ledger
+//!     .record_session_start(SessionStart {
+//!         id: "sess-1".into(),
+//!         agent_definition_id: "researcher".into(),
+//!         agent_definition_name: "Researcher".into(),
+//!         session_key: "sess-1".into(),
+//!         ..Default::default()
+//!     })
+//!     .await?;
+//! ledger
+//!     .record_message(NewSessionMessage {
+//!         session_id: "sess-1".into(),
+//!         role: "user".into(),
+//!         content: "summarize the repo".into(),
+//!         ..Default::default()
+//!     })
+//!     .await?;
+//! ledger
+//!     .record_session_end(
+//!         "sess-1",
+//!         SessionEnd {
+//!             status: SessionStatus::Completed,
+//!             turn_count: 1,
+//!             input_tokens: 120,
+//!             output_tokens: 340,
+//!             cached_input_tokens: 0,
+//!             cost_usd: 0.004,
+//!         },
+//!     )
+//!     .await?;
+//! # let _ = Arc::new(());
+//! # Ok::<(), tinyagents_session::LedgerError>(())
+//! # }).unwrap();
 //! ```
 //!
-//! See [`README.md`](./README.md) for the schema, the FTS behaviour, and the
+//! See [`README.md`](./README.md) for the layout, the FTS behaviour, and the
 //! coordination guarantees.
 
-mod context;
+pub mod entry_tree;
 pub mod fts;
 #[cfg(feature = "legacy-import")]
 pub mod legacy;
-pub mod entry_tree;
-mod migrations;
-pub mod ops;
-mod paging;
 pub mod port;
 pub mod retention;
 pub mod run_ledger;
-mod store;
 pub mod testkit;
 pub mod threads;
 pub mod transcript;
@@ -102,15 +128,10 @@ pub mod types;
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
 pub use entry_tree::{
-    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, EntryTree,
-    Fork, ForkPosition, ForkScope, LabelEntry, SessionCompactionSink,
+    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, Fork,
+    ForkPosition, ForkScope, LabelEntry, SessionCompactionSink,
 };
-pub use ops::{
-    DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, get_session, list_children, list_messages,
-    list_sessions, list_tool_calls, mark_interrupted, record_message,
-    record_message_with_reasoning, record_session_end, record_session_start, record_tool_call,
-    search_sessions, set_fts_snippet_bytes,
-};
+pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
 pub use port::{
     AgentStores, InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates,
     SessionStoreProvider, TurnStates,
@@ -118,16 +139,10 @@ pub use port::{
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
 };
-pub use retention::{
-    RetentionReport, apply_retention, prune_run_events_before, prune_run_telemetry_before,
-    prune_sessions_before, prune_tool_calls_before, reindex_fts, trim_session_messages,
-};
+pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;
-pub use run_ledger::command_center::{
-    CommandCenterView, ControlError, ControlVerb, apply_control, build_view, list_agent_work,
-};
-pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SqliteRunLedger};
-pub use store::{db_path, with_connection, with_transaction};
+pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};
+pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{
     ConversationPurgeStats, ConversationStore, ConversationThread, CreateConversationThread,
     CrossThreadHit, ThreadMessage, ThreadMessagePatch,
