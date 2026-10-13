@@ -612,7 +612,7 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
     // Reopen the SAME store as the current state type and resume: the
     // undecodable record is expired and a fresh run completes.
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -655,7 +655,7 @@ async fn checkpoint_below_current_schema_version_expires_to_fresh_run() {
         .expect("seed old-schema checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -706,7 +706,7 @@ async fn checkpoint_above_current_schema_version_also_expires_to_fresh_run() {
         .expect("seed future-schema checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -790,7 +790,7 @@ async fn cancelled_checkpoint_still_scheduling_finalize_is_resumed_not_terminal(
         .expect("seed cancelled-but-not-finalized checkpoint");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),
@@ -1011,7 +1011,7 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
         .expect("seed future-schema checkpoint parked on approval");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         require_review_approval: true,
@@ -1160,7 +1160,7 @@ async fn terminal_checkpoint_with_a_pending_interrupt_surfaces_it() {
     seed.put(checkpoint).await.expect("seed terminal+interrupt");
 
     let cp: Arc<dyn Checkpointer<DelegationState>> = Arc::new(
-        crate::checkpoint::crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
+        crate::test_support::dir_checkpointer::<DelegationState>(dir.path()),
     );
     let config = DelegationConfig {
         checkpointer: Some(cp),

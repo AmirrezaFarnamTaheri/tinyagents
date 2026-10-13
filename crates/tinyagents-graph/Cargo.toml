@@ -12,7 +12,6 @@ description = "Durable typed state graphs for TinyAgents."
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
-rusqlite = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tinyagents-tasks = { path = "../tinyagents-tasks", version = "2.1.4", default-features = false }
@@ -30,7 +29,9 @@ sha2 = "0.11"
 
 [features]
 default = []
-sqlite = ["dep:rusqlite"]
+# Retained as a no-op: SQLite persistence moved to the tinystoragedrivers
+# SQLite driver, which a host passes to `DriverCheckpointer` / `DriverTaskCache`.
+sqlite = []
 # `DriverCheckpointer`: checkpoints, pending writes and leases on any
 # tinystoragedrivers backend the host opened.
 storage-drivers = []
@@ -40,6 +41,7 @@ storage-drivers = []
 tracing = ["tinyagents-harness/tracing"]
 
 [dev-dependencies]
+tinystoragedrivers-sqlite = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
