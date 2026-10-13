@@ -38,7 +38,6 @@ async fn the_file_building_blocks_meet_the_session_store_contract() {
 
 #[test]
 fn the_in_memory_turn_states_serve_the_port() {
-    let dir = tempfile::tempdir().unwrap();
     let turns: Arc<dyn TurnStates> = Arc::new(InMemoryTurnStates::default());
     let state = TurnState::started("t", "r", 4, "2026-01-01T00:00:00Z");
     turns.put(&state).unwrap();

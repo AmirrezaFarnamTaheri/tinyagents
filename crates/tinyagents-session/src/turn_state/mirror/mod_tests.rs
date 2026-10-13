@@ -214,11 +214,13 @@ fn subagent_prose_coalesces_per_kind_and_iteration() {
 
 #[test]
 fn finish_marks_an_unfinished_turn_interrupted() {
-    let (dir, mut m) = fresh("thr_new");
+    let dir = tempdir().expect("tempdir");
+    let store = memory_store();
+    let mut m = mirror_over(dir.path(), store.clone(), "thr_new", "req-1");
     m.state.streaming_text = "orphan partial".into();
     // No transcript exists yet: must not panic, snapshot keeps the partial.
     m.finish();
-    let stored = TurnStateStore::new(dir.path().to_path_buf())
+    let stored = store
         .get("thr_new")
         .expect("get")
         .expect("snapshot present");

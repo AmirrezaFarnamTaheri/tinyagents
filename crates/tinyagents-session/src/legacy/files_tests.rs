@@ -7,7 +7,7 @@ use crate::transcript::{
     append_tools_record, append_transcript_turn, read_transcript, read_transcript_display,
     write_transcript,
 };
-use crate::turn_state::{TurnLifecycle, TurnState, TurnStateStore};
+use crate::turn_state::{TurnLifecycle, TurnState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tinystoragedrivers_core::{MemoryStorage, StorageBackend};
@@ -259,19 +259,24 @@ fn state(thread: &str, request: &str, lifecycle: TurnLifecycle) -> TurnState {
     state
 }
 
+/// Writes one snapshot in the classic per-turn layout
+/// (`turn_states/<hex(thread)>/<hex(request)>.json`), the shape the importer reads.
+fn write_snapshot(workspace: &std::path::Path, state: &TurnState) {
+    let thread_dir = turn_states::turn_state_dir(workspace).join(hex::encode(&state.thread_id));
+    std::fs::create_dir_all(&thread_dir).unwrap();
+    std::fs::write(
+        thread_dir.join(format!("{}.json", hex::encode(&state.request_id))),
+        serde_json::to_string_pretty(state).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn turn_states_keep_their_ids_including_the_flat_legacy_form() {
     let dir = tempfile::tempdir().unwrap();
-    let store = TurnStateStore::new(dir.path().to_path_buf());
-    store
-        .put(&state("thread-a", "req-1", TurnLifecycle::Completed))
-        .unwrap();
-    store
-        .put(&state("thread-a", "req-2", TurnLifecycle::Streaming))
-        .unwrap();
-    store
-        .put(&state("thread-b", "req-9", TurnLifecycle::Started))
-        .unwrap();
+    write_snapshot(dir.path(), &state("thread-a", "req-1", TurnLifecycle::Completed));
+    write_snapshot(dir.path(), &state("thread-a", "req-2", TurnLifecycle::Streaming));
+    write_snapshot(dir.path(), &state("thread-b", "req-9", TurnLifecycle::Started));
     // The flat form older cores wrote: <hex(thread)>.json at the root.
     let flat =
         turn_states::turn_state_dir(dir.path()).join(format!("{}.json", hex::encode("thread-c")));
@@ -354,9 +359,10 @@ async fn a_whole_workspace_imports_into_one_agents_stores() {
     let dir = tempfile::tempdir().unwrap();
     // Transcripts and turn states from the file stores...
     write_compacted_conversation(&raw(dir.path()).join("1700000000_agent.jsonl"));
-    TurnStateStore::new(dir.path().to_path_buf())
-        .put(&state("thread-1", "req-1", TurnLifecycle::Interrupted))
-        .unwrap();
+    write_snapshot(
+        dir.path(),
+        &state("thread-1", "req-1", TurnLifecycle::Interrupted),
+    );
     // ...and the database.
     let db_dir = dir.path().join("session_db");
     std::fs::create_dir_all(&db_dir).unwrap();
