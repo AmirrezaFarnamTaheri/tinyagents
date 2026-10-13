@@ -17,26 +17,17 @@
 //! run rather than only the children of a live session. They persist the new
 //! status (via [`transition_agent_run_status_from`], which can clear `error` /
 //! `completed_at` — the upsert path cannot) and append a `run_event` recording
-//! the action for the run's timeline, in one transaction that only applies if
-//! the run is still in the status the verb was checked against.
+//! the action for the run's timeline, in one atomic commit that only applies
+//! if the run is still in the status the verb was checked against. The verbs
+//! are applied through
+//! [`RunLedgerStore::apply_control`](crate::run_ledger::RunLedgerStore::apply_control).
 //!
 //! The allowed-transition matrix lives in the pure [`plan_transition`], which is
 //! unit-tested without a database, mirroring [`super::view::build_view`].
-//!
-//! [`transition_agent_run_status_from`]: crate::run_ledger::transition_agent_run_status_from
 
-use chrono::{DateTime, Utc};
-use serde_json::json;
 use thiserror::Error;
 
-use std::path::Path;
-
-use crate::run_ledger::{
-    AgentRunStatus, RunEventAppend, RunTransition, get_agent_run, transition_agent_run_status_from,
-};
-
-use super::types::AgentWorkRow;
-use super::view::project_row;
+use crate::run_ledger::AgentRunStatus;
 
 /// A control action a reviewer can take on a command-center row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,120 +169,4 @@ pub(super) fn plan_transition(
             event_type: "control_follow_up",
         }),
     }
-}
-
-/// Apply a control verb to one background agent run.
-///
-/// Validates the message requirement, loads the run, checks the transition is
-/// legal for its current status, persists the new status (clearing or setting
-/// `error` / `completed_at` per verb), and appends a `run_event` capturing the
-/// action. Returns the freshly re-projected [`AgentWorkRow`] (`display_name` resolves
-/// agent ids to names, as in [`super::view::build_view`]).
-///
-/// Errors: [`ControlError::MessageRequired`] when a message-bearing verb has no
-/// message, [`ControlError::RunNotFound`] for an unknown run id,
-/// [`ControlError::InvalidTransition`] for an illegal move, or
-/// [`ControlError::Storage`] for a ledger failure.
-pub fn apply_control(
-    workspace_dir: &Path,
-    run_id: &str,
-    verb: ControlVerb,
-    message: Option<&str>,
-    reason: Option<&str>,
-    display_name: &dyn Fn(&str) -> Option<String>,
-) -> Result<AgentWorkRow, ControlError> {
-    let message = message.map(str::trim).filter(|s| !s.is_empty());
-    let reason = reason.map(str::trim).filter(|s| !s.is_empty());
-    tracing::debug!(
-        target: "command_center",
-        "[command_center] apply_control.entry run_id={run_id} verb={} has_message={} has_reason={}",
-        verb.as_str(),
-        message.is_some(),
-        reason.is_some()
-    );
-
-    if verb.requires_message() && message.is_none() {
-        tracing::debug!(
-            target: "command_center",
-            "[command_center] apply_control.message_required run_id={run_id} verb={}",
-            verb.as_str()
-        );
-        return Err(ControlError::MessageRequired(verb.as_str()));
-    }
-
-    let mut run = get_agent_run(workspace_dir, run_id)?
-        .ok_or_else(|| ControlError::RunNotFound(run_id.to_string()))?;
-    // Another writer (the run's own worker, the host progress bridge) can move
-    // the run between this read and the write. The write is a compare-and-set
-    // on the status the plan was made for; when it lost the race, re-plan
-    // against the status that won, a bounded number of times.
-    const MAX_ATTEMPTS: usize = 3;
-    let mut attempt = 0;
-    let (updated, from_status, plan) = loop {
-        attempt += 1;
-        let from_status = run.status;
-        let plan = plan_transition(from_status, verb)?;
-
-        // Verb-specific error / completion handling. The transition op writes
-        // both columns verbatim, so `None` clears them.
-        let (next_error, next_completed_at): (Option<String>, Option<DateTime<Utc>>) = match verb {
-            // Stopping records the optional reason and stamps completion now.
-            ControlVerb::Stop => (reason.map(str::to_string), Some(Utc::now())),
-            // Re-queuing drops the stale failure reason and completion time.
-            ControlVerb::Retry | ControlVerb::Continue => (None, None),
-            // Follow-up leaves the run as-is.
-            ControlVerb::FollowUp => (run.error.clone(), run.completed_at),
-        };
-
-        // The action's timeline entry commits with the status change or not
-        // at all.
-        let event = RunEventAppend {
-            run_id: run_id.to_string(),
-            event_type: plan.event_type.to_string(),
-            payload: json!({
-                "verb": verb.as_str(),
-                "fromStatus": from_status.as_str(),
-                "toStatus": plan.target_status.as_str(),
-                "message": message,
-                "reason": reason,
-            }),
-        };
-        match transition_agent_run_status_from(
-            workspace_dir,
-            run_id,
-            from_status,
-            plan.target_status,
-            next_error.as_deref(),
-            next_completed_at,
-            Some(event),
-        )? {
-            RunTransition::Applied(updated) => break (updated, from_status, plan),
-            RunTransition::NotFound => return Err(ControlError::RunNotFound(run_id.to_string())),
-            RunTransition::StatusChanged(current) => {
-                tracing::debug!(
-                    target: "command_center",
-                    "[command_center] apply_control.status_changed run_id={run_id} verb={} planned_from={} now={} attempt={attempt}",
-                    verb.as_str(),
-                    from_status.as_str(),
-                    current.status.as_str()
-                );
-                if attempt >= MAX_ATTEMPTS {
-                    return Err(ControlError::InvalidTransition {
-                        verb: verb.as_str(),
-                        status: current.status.as_str(),
-                    });
-                }
-                run = current;
-            }
-        }
-    };
-
-    tracing::debug!(
-        target: "command_center",
-        "[command_center] apply_control.done run_id={run_id} verb={} from={} to={}",
-        verb.as_str(),
-        from_status.as_str(),
-        plan.target_status.as_str()
-    );
-    Ok(project_row(updated, display_name))
 }

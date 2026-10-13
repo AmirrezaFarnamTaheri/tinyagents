@@ -1,22 +1,14 @@
 //! Read-only command-center projection over the durable run ledger.
 //!
-//! [`list_agent_work`] fetches recent background agent runs and projects them
-//! into a [`CommandCenterView`] grouped by normalized [`AgentWorkBucket`]. The
-//! grouping logic ([`build_view`]) is unit-testable without a database, while
-//! [`list_agent_work`] owns the one ledger read. Agent display names come from
-//! a host-supplied closure so this crate needs no agent registry.
+//! [`RunLedgerStore::list_agent_work`](crate::run_ledger::RunLedgerStore::list_agent_work)
+//! fetches recent background agent runs and projects them into a
+//! [`CommandCenterView`] grouped by normalized [`AgentWorkBucket`]. The grouping
+//! logic ([`build_view`]) is unit-testable without a database. Agent display
+//! names come from a host-supplied closure so this crate needs no agent registry.
 
-use std::path::Path;
-
-use crate::Result;
-use crate::run_ledger::{AgentRun, AgentRunListRequest, AgentRunStatus, list_agent_runs};
+use crate::run_ledger::{AgentRun, AgentRunStatus};
 
 use super::types::{AgentWorkBucket, AgentWorkRow, CommandCenterGroup, CommandCenterView};
-
-/// Default number of recent runs scanned for the command center.
-const DEFAULT_LIMIT: u32 = 200;
-/// Hard ceiling, mirroring the ledger's own `list_agent_runs` cap.
-const MAX_LIMIT: u32 = 500;
 
 /// Map a fine-grained ledger status to its command-center bucket.
 ///
@@ -32,38 +24,6 @@ pub fn bucket_for(status: AgentRunStatus) -> AgentWorkBucket {
         AgentRunStatus::Failed => AgentWorkBucket::Failed,
         AgentRunStatus::Cancelled | AgentRunStatus::Interrupted => AgentWorkBucket::Stopped,
     }
-}
-
-/// List recent background agent work, grouped by command-center bucket.
-///
-/// Reads at most `limit` (default 200, capped 500) most-recently-updated runs
-/// across every parent thread and projects them. Read-only: no ledger writes.
-pub fn list_agent_work(
-    workspace_dir: &Path,
-    limit: Option<u32>,
-    display_name: &dyn Fn(&str) -> Option<String>,
-) -> Result<CommandCenterView> {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
-    tracing::debug!(
-        target: "command_center",
-        "[command_center] list_agent_work.entry limit={limit}"
-    );
-    let request = AgentRunListRequest {
-        status: None,
-        kind: None,
-        parent_run_id: None,
-        parent_thread_id: None,
-        limit: Some(limit),
-        offset: None,
-    };
-    let response = list_agent_runs(workspace_dir, &request)?;
-    let view = build_view(response.runs, display_name);
-    tracing::debug!(
-        target: "command_center",
-        "[command_center] list_agent_work.done total={}",
-        view.total
-    );
-    Ok(view)
 }
 
 /// Project + group a set of ledger runs into the command-center view.
