@@ -14,17 +14,9 @@
 //! node from its start.
 
 mod drivers;
-mod file;
-#[cfg(feature = "sqlite")]
-mod sqlite;
 mod types;
 
 pub use drivers::DriverCheckpointer;
-pub use file::FileCheckpointer;
-#[cfg(feature = "sqlite")]
-pub use sqlite::SqliteCheckpointer;
-#[cfg(feature = "sqlite")]
-pub(crate) use sqlite::prepare_connection;
 pub use types::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, CompletedTask, DURABLE_TASK_CHANNEL_PREFIX, DurabilityMode,
