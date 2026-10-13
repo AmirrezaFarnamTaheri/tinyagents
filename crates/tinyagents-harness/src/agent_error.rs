@@ -245,5 +245,5 @@ impl TurnTimeoutBound {
 }
 
 #[cfg(test)]
-#[path = "error_tests.rs"]
+#[path = "agent_error_tests.rs"]
 mod tests;
