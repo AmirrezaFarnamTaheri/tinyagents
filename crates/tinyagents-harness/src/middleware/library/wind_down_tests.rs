@@ -117,8 +117,10 @@ fn install_without_a_handle_still_clamps() {
 
 #[test]
 fn install_skips_the_middleware_when_the_handle_cannot_pause() {
-    let mut harness = crate::runtime::AgentHarness::<(), ()>::new_for_test();
+    let mut harness: crate::runtime::AgentHarness<(), ()> = crate::runtime::AgentHarness::new();
     let refuses = SteeringHandle::new(SteeringPolicy::new());
     let deadline = Some(point_started(Duration::from_secs(1), Instant::now()));
-    assert!(install_wind_down(&mut harness, deadline, Some(&refuses), false).is_none());
+    assert!(install(&mut harness, Some(&refuses), deadline, false).is_none());
+    let allows = handle();
+    assert!(install(&mut harness, Some(&allows), deadline, false).is_some());
 }
