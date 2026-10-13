@@ -16,8 +16,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventListener, EventRecord};
-use crate::steering::{SteeringCommand, SteeringHandle};
+use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle};
 
 /// Callback run with `(completed, cap)` immediately *before* the pause command
 /// is sent, so a host can record the pause where a later dispatch must observe
@@ -37,7 +38,16 @@ pub struct CapPauser {
 
 impl CapPauser {
     /// Pause `handle` once `cap` of run `run_id`'s own model calls complete.
-    pub fn new(handle: SteeringHandle, cap: usize, run_id: impl Into<String>) -> Arc<Self> {
+    ///
+    /// Fails when `cap` is zero (a pause is only observed after a model call
+    /// completes, so it cannot prevent the first call) or when the handle's
+    /// steering policy does not permit [`SteeringCommandKind::Pause`] (the
+    /// command would be queued and then skipped, so the cap would never hold).
+    pub fn new(
+        handle: SteeringHandle,
+        cap: usize,
+        run_id: impl Into<String>,
+    ) -> Result<Arc<Self>> {
         Self::with_recorder(handle, cap, run_id, None)
     }
 
@@ -48,14 +58,24 @@ impl CapPauser {
         cap: usize,
         run_id: impl Into<String>,
         on_pause: Option<PauseRecorder>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Result<Arc<Self>> {
+        if cap == 0 {
+            return Err(TinyAgentsError::Config(
+                "cap pauser: a zero model-call cap cannot be enforced by pausing".into(),
+            ));
+        }
+        if !handle.policy().is_allowed(SteeringCommandKind::Pause) {
+            return Err(TinyAgentsError::Steering(
+                "cap pauser: the steering policy does not permit Pause".into(),
+            ));
+        }
+        Ok(Arc::new(Self {
             handle,
             cap: u32::try_from(cap).unwrap_or(u32::MAX),
             run_id: run_id.into(),
             completed: AtomicU32::new(0),
             on_pause,
-        })
+        }))
     }
 
     /// Number of the run's own model calls observed so far.
