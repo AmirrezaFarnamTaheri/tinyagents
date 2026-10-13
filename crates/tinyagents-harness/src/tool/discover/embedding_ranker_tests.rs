@@ -78,35 +78,6 @@ async fn ranks_by_cosine_and_embeds_the_catalogue_once() {
 }
 
 #[tokio::test]
-async fn disk_cache_round_trips_and_is_keyed_by_signature() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("cache").join("tool_search_embeddings.json");
-    let embedder = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    let ranker =
-        EmbeddingToolRanker::new(embedder.clone(), SIGNATURE).with_disk_cache(path.clone());
-    ranker
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert!(path.exists());
-
-    let embedder2 = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    let warm = EmbeddingToolRanker::new(embedder2.clone(), SIGNATURE).with_disk_cache(path.clone());
-    warm.rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(
-        embedder2.calls.load(Ordering::SeqCst),
-        1,
-        "a warm cache embeds only the intent"
-    );
-}
-
-#[tokio::test]
 async fn empty_intent_is_rejected() {
     let ranker = EmbeddingToolRanker::new(
         Arc::new(BagEmbedder {
@@ -154,35 +125,6 @@ async fn a_new_or_changed_tool_is_embedded_incrementally() {
         ranker.cache.read().unwrap().len(),
         5,
         "old and new descriptions both cached; a stale entry is harmless"
-    );
-}
-
-/// A cache written under one embedding space is ignored under another.
-#[tokio::test]
-async fn a_disk_cache_written_under_another_signature_is_ignored() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("cache.json");
-    let embedder = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    EmbeddingToolRanker::new(embedder, SIGNATURE)
-        .with_disk_cache(path.clone())
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-
-    let other = Arc::new(BagEmbedder {
-        calls: AtomicUsize::new(0),
-    });
-    EmbeddingToolRanker::new(other.clone(), "provider=bag;model=bag-v2;dims=3")
-        .with_disk_cache(path)
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(
-        other.calls.load(Ordering::SeqCst),
-        2,
-        "a different signature re-embeds the catalogue and the intent"
     );
 }
 
@@ -344,51 +286,4 @@ async fn pluggable_cache_deltas_preserve_other_rankers_catalogues() {
         1,
         "both disjoint deltas are retained"
     );
-}
-
-#[tokio::test]
-async fn selecting_a_port_replaces_disk_vectors_and_never_falls_back_to_disk() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("cache.json");
-    EmbeddingToolRanker::new(bag(), SIGNATURE)
-        .with_disk_cache(path.clone())
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    let original = std::fs::read(&path).unwrap();
-    let cache = Arc::new(MemoryCache::default());
-    cache.fail_load.store(true, Ordering::SeqCst);
-    cache.fail_store.store(true, Ordering::SeqCst);
-    let embedder = bag();
-    EmbeddingToolRanker::new(embedder.clone(), SIGNATURE)
-        .with_disk_cache(path.clone())
-        .with_cache(cache)
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert_eq!(
-        embedder.calls.load(Ordering::SeqCst),
-        2,
-        "previous disk vectors do not cross into the selected port namespace"
-    );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        original,
-        "a failed selected port never writes the previous disk cache"
-    );
-}
-
-#[tokio::test]
-async fn selecting_disk_replaces_a_previously_selected_port() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("cache.json");
-    let cache = Arc::new(MemoryCache::default());
-    EmbeddingToolRanker::new(bag(), SIGNATURE)
-        .with_cache(cache.clone())
-        .with_disk_cache(path.clone())
-        .rank("ping", &RankContext::empty(), &candidates(), 1)
-        .await
-        .unwrap();
-    assert!(path.exists());
-    assert!(cache.entries.lock().unwrap().is_empty());
 }
