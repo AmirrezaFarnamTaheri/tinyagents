@@ -60,23 +60,22 @@ where
         cancel,
         |i| (i, branch_ctx(i)),
         |w, (idx, c)| {
-            let denial = hooks.approve(idx, &w);
-            let denied_result = match denial {
+            // Exactly one of `ready` (denied) or `fut` (approved) is set.
+            let (ready, fut) = match hooks.approve(idx, &w) {
                 Ok(()) => {
                     hooks.on_start(idx, &w);
-                    None
+                    (None, Some(exec(w, c)))
                 }
                 Err(reason) => {
                     tracing::debug!(index = idx, "[parallel] worker denied by approval hook");
-                    Some(denied(w.clone_for_denial(), reason))
+                    (Some(denied(w, reason)), None)
                 }
             };
-            let fut = denied_result.is_none().then(|| exec(w, c));
             async move {
-                let r = match (denied_result, fut) {
+                let r = match (ready, fut) {
                     (Some(r), _) => r,
                     (None, Some(fut)) => fut.await,
-                    (None, None) => unreachable!("one of denied/exec is always set"),
+                    (None, None) => unreachable!("approved or denied"),
                 };
                 hooks.on_finish(idx, &r);
                 r
