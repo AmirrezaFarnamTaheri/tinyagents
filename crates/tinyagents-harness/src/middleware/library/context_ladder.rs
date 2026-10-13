@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::middleware::{ContextCompressionMiddleware, Middleware, MicrocompactMiddleware};
+use crate::middleware::{ContextCompressionMiddleware, MicrocompactMiddleware, Middleware};
 use crate::runtime::AgentHarness;
 use crate::summarization::{
     DEFAULT_SUMMARIZE_KEEP_LAST, SummarizationPolicy, summarization_policy,

@@ -33,10 +33,7 @@ fn microcompact_without_a_window_uses_the_fallback_budget() {
         Some(legacy_max_input_tokens(UNKNOWN_WINDOW_FALLBACK_TOKENS).max(1))
     );
     let known = microcompact_for_window(5, "[cleared]", Some(200_000));
-    assert_eq!(
-        known.token_budget(),
-        Some(legacy_max_input_tokens(200_000))
-    );
+    assert_eq!(known.token_budget(), Some(legacy_max_input_tokens(200_000)));
     assert_eq!(known.keep_recent(), 5);
 }
 

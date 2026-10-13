@@ -209,7 +209,10 @@ impl<Ctx: Send + Sync + 'static> Middleware<(), Ctx> for BudgetParityObserver {
         run: &mut AgentRun,
     ) -> TaResult<()> {
         if self.matches(run) {
-            tracing::debug!(calls = run.usage.calls, "[budget_parity] token accounting matches");
+            tracing::debug!(
+                calls = run.usage.calls,
+                "[budget_parity] token accounting matches"
+            );
         } else {
             tracing::warn!(
                 local_calls = run.usage.calls,
