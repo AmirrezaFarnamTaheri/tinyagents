@@ -112,7 +112,8 @@ fn task_store_handles_concurrent_writes() {
 #[test]
 fn driver_task_store_replays_after_restart() {
     // `open` returns a `DriverTaskStore` over the same SQLite file each call.
-    taskstore_replay_contract(|| open_driver_task_store(&path));
+    let dir = tempfile::tempdir().unwrap();
+    taskstore_replay_contract(|| open_driver_task_store(dir.path()));
 }
 ```
 

@@ -457,7 +457,7 @@ Initial store backends:
 - `DriverAppendStore`: append-only event streams on any driver backend, replayable event logs, and cheap
   debugging.
 - `DriverStore`: durable keyed values (artifacts such as tool outputs, provider payload snapshots,
-  and prompt fixtures.
+  and prompt fixtures).
 - `MongoStore`: durable application/runtime records for server deployments.
 
 Later store backends:
