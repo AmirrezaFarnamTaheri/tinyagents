@@ -1,23 +1,24 @@
 //! Object-safe durable run-ledger storage contract.
 //!
-//! Every method mirrors an existing SQLite operation with its workspace bound
-//! to the handle. Return values, partial-update rules, event sequences (starting
-//! at one), and claim/lifecycle fencing retain their original meaning.
+//! Every method is bound to one tenant/agent scope by the handle that carries
+//! it. Return values, partial-update rules, event sequences (starting at one),
+//! and claim/lifecycle fencing are part of the contract.
 //! Implementations must preserve transaction boundaries: a status CAS and its
 //! optional event commit together, task dependency checks and claims are atomic,
 //! and workflow writes validate revision, live owner and lease expiry together.
 //!
-//! This port does not supply a driver implementation or migrate any data.
-//! In particular, retention includes the original session/message tables and
-//! must not silently omit them. An implementation that cannot meet a method's
-//! contract must return an error instead of using another backend.
+//! [`DriverRunLedger`](super::DriverRunLedger) implements the port over the
+//! storage ports, so any backend a host opened holds the ledger. Retention
+//! includes the classic session, message and tool-call history
+//! ([`SessionHistoryStore`](super::SessionHistoryStore)) and must not silently
+//! omit it. An implementation that cannot meet a method's contract must return
+//! an error instead of using another backend.
 
 use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
 use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
-use super::types::RunTransition;
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
 use crate::entry_tree::{Branch, Entry, EntryId, EntryKind, Fork};
@@ -448,7 +449,7 @@ pub trait RunLedgerStore: Send + Sync {
     /// The repair path the database never had. Any row whose FTS entry was lost —
     /// to a failure between the two old autocommit statements, to a retention pass
     /// that trimmed messages, or to a change of the
-    /// [snippet cap](super::ops::set_fts_snippet_bytes) — becomes searchable again.
+    /// [snippet cap](crate::fts::set_fts_snippet_bytes) — becomes searchable again.
     /// The whole rebuild runs in one transaction, so search is never left with a
     /// half-built index.
     async fn reindex_fts(&self) -> Result<usize>;
