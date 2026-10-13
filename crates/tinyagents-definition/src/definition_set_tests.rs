@@ -105,4 +105,7 @@ fn load_dirs_overrides_in_order_skips_missing_and_validates_merge() {
         .load_dirs(&[second.path()], DefinitionValidation::Diagnostics)
         .unwrap_err();
     assert!(err.to_string().contains("bad"));
+    // A failed load leaves the set untouched.
+    assert!(set.get("bad").is_none());
+    assert_eq!(set.len(), 2);
 }

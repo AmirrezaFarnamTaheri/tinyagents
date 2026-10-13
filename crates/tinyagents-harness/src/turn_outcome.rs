@@ -19,7 +19,7 @@ use tinyinference_llm::model::ModelResponse;
 #[must_use]
 pub fn ended_out_of_output_budget(final_response: Option<&ModelResponse>) -> bool {
     final_response.is_some_and(|response| {
-        response.finish_reason.as_deref() == Some("length")
+        crate::finish_reason::is_length_stop(response.finish_reason.as_deref())
             && response.message.tool_calls.is_empty()
             && response.text().trim().is_empty()
     })
@@ -79,7 +79,9 @@ pub fn drain_tool_outcomes(sink: &ToolOutcomeSink) -> Vec<ToolCallOutcome> {
 /// Take the breaker's halt summary, if it tripped.
 #[must_use]
 pub fn take_halt_summary(slot: &HaltSummarySlot) -> Option<String> {
-    slot.lock().ok().and_then(|mut guard| guard.take())
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
 }
 
 #[cfg(test)]
