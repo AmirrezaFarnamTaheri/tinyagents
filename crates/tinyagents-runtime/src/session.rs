@@ -603,23 +603,26 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             // non-System rows. Keep conservative request construction there.
             run_context
         };
-        let driver = self.driver.execute(DriverRequest {
-            history: input,
-            tools,
-            run_context,
-            stream,
-        });
-        tokio::pin!(driver);
         // The driver is polled first so a cancellation-aware driver can hand
         // back the rounds it completed. One that does not answer within
-        // `CANCELLED_DRIVER_GRACE` is dropped and nothing is persisted.
-        let driver_result = tokio::select! {
-            biased;
-            result = &mut driver => result,
-            _ = cancellation.cancelled() => {
-                match tokio::time::timeout(CANCELLED_DRIVER_GRACE, &mut driver).await {
-                    Ok(result) => result,
-                    Err(_) => return Err(RuntimeError::Cancelled),
+        // `CANCELLED_DRIVER_GRACE` is dropped and nothing is persisted. The
+        // block ends the driver future's borrow of `self` before persistence.
+        let driver_result = {
+            let driver = self.driver.execute(DriverRequest {
+                history: input,
+                tools,
+                run_context,
+                stream,
+            });
+            tokio::pin!(driver);
+            tokio::select! {
+                biased;
+                result = &mut driver => result,
+                _ = cancellation.cancelled() => {
+                    match tokio::time::timeout(CANCELLED_DRIVER_GRACE, &mut driver).await {
+                        Ok(result) => result,
+                        Err(_) => return Err(RuntimeError::Cancelled),
+                    }
                 }
             }
         };
