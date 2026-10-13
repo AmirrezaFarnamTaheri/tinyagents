@@ -499,9 +499,10 @@ async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
         native.entry_tips("s").await.unwrap(),
         vec![EntryId::from("z-first"), EntryId::from("a-last")]
     );
+    // The later insertion at an equal ordinal is the head (`rowid DESC`).
     assert_eq!(
         native.entry_head("s").await.unwrap(),
-        Some(EntryId::from("z-first"))
+        Some(EntryId::from("a-last"))
     );
 }
 
