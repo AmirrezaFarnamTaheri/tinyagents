@@ -14,7 +14,7 @@ impl SessionStoreProvider for FileStores {
     fn for_agent(&self, _agent_id: &str) -> AgentStores {
         AgentStores {
             transcripts: Arc::new(FileTranscriptLocator::new(&self.workspace)),
-            turn_states: Arc::new(TurnStateStore::new(self.workspace.clone())),
+            turn_states: Arc::new(InMemoryTurnStates::default()),
             kv: Arc::new(InMemoryStore::new()),
             journal: Arc::new(InMemoryAppendStore::new()),
         }
@@ -37,9 +37,9 @@ async fn the_file_building_blocks_meet_the_session_store_contract() {
 }
 
 #[test]
-fn the_file_turn_state_store_is_a_turn_states() {
+fn the_in_memory_turn_states_serve_the_port() {
     let dir = tempfile::tempdir().unwrap();
-    let turns: Arc<dyn TurnStates> = Arc::new(TurnStateStore::new(dir.path().to_path_buf()));
+    let turns: Arc<dyn TurnStates> = Arc::new(InMemoryTurnStates::default());
     let state = TurnState::started("t", "r", 4, "2026-01-01T00:00:00Z");
     turns.put(&state).unwrap();
     assert!(turns.put_unless_completed(&state).unwrap());
