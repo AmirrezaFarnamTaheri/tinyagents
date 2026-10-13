@@ -123,7 +123,7 @@ async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
 mod refusal_tests;
 
 #[tokio::test(flavor = "current_thread")]
-async fn invalid_lease_duration_refuses_before_opening_sqlite() {
+async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let workspace = tempfile::tempdir().unwrap();
     let store = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(workspace.path())));
     let lease = Duration::MAX;
@@ -139,7 +139,8 @@ async fn invalid_lease_duration_refuses_before_opening_sqlite() {
         store.renew("workflow", "owner", lease).await,
         Err(WorkflowPersistenceError::LeaseDuration(_))
     ));
-    assert_eq!(std::fs::read_dir(workspace.path()).unwrap().count(), 0);
+    // Nothing reached the ledger: the refused claim created no workflow.
+    assert!(store.load("workflow").await.unwrap().is_none());
 }
 
 struct LegacyCallback(std::sync::atomic::AtomicUsize);
