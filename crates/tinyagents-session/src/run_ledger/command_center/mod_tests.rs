@@ -1,14 +1,12 @@
-use std::path::Path;
-
 use chrono::{TimeZone, Utc};
 use serde_json::json;
-use tempfile::TempDir;
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 use super::control::plan_transition;
 use super::*;
 use crate::run_ledger::{
-    AgentRun, AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventListRequest, get_agent_run,
-    list_recent_run_events, upsert_agent_run,
+    AgentRun, AgentRunKind, AgentRunStatus, AgentRunUpsert, DriverRunLedger, RunEventAppend,
+    RunEventListRequest, RunLedgerStore, RunTransition,
 };
 
 fn no_names(_: &str) -> Option<String> {
@@ -142,10 +140,17 @@ fn project_row_defaults_telemetry_to_zero_when_absent() {
     assert_eq!(row.kind, "subagent");
 }
 
-fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
-    upsert_agent_run(
-        workspace_dir,
-        AgentRunUpsert {
+fn ledger() -> DriverRunLedger {
+    DriverRunLedger::new(
+        MemoryStorage::new()
+            .for_scope(&Scope::local())
+            .expect("local scope"),
+    )
+}
+
+async fn seed_run(ledger: &DriverRunLedger, id: &str, status: AgentRunStatus) {
+    ledger
+        .upsert_agent_run(AgentRunUpsert {
             id: id.to_string(),
             kind: AgentRunKind::Subagent,
             parent_run_id: None,
@@ -169,9 +174,40 @@ fn seed_run(workspace_dir: &Path, id: &str, status: AgentRunStatus) {
             } else {
                 None
             },
-        },
-    )
-    .unwrap();
+        })
+        .await
+        .unwrap();
+}
+
+async fn control(
+    ledger: &DriverRunLedger,
+    run_id: &str,
+    verb: ControlVerb,
+    message: Option<&str>,
+    reason: Option<&str>,
+) -> Result<AgentWorkRow, crate::run_ledger::LedgerError> {
+    ledger
+        .apply_control(run_id, verb, message, reason, &no_names)
+        .await
+}
+
+fn control_error(error: crate::run_ledger::LedgerError) -> ControlError {
+    match error {
+        crate::run_ledger::LedgerError::Control(error) => *error,
+        other => panic!("expected a control error, got {other:?}"),
+    }
+}
+
+async fn events_of(ledger: &DriverRunLedger, run_id: &str) -> Vec<crate::run_ledger::RunEvent> {
+    ledger
+        .list_recent_run_events(&RunEventListRequest {
+            run_id: run_id.into(),
+            after_sequence: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .events
 }
 
 // ---- pure planner -----------------------------------------------------
@@ -282,130 +318,103 @@ fn follow_up_keeps_status_from_any_state() {
 
 // ---- ledger-backed apply ---------------------------------------------
 
-#[test]
-fn stop_cancels_a_running_run_and_records_an_event() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::Running);
+#[tokio::test]
+async fn stop_cancels_a_running_run_and_records_an_event() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::Running).await;
 
-    let row = apply_control(
-        &config,
-        "run-1",
-        ControlVerb::Stop,
-        None,
-        Some("manual"),
-        &no_names,
-    )
-    .unwrap();
+    let row = control(&ledger, "run-1", ControlVerb::Stop, None, Some("manual"))
+        .await
+        .unwrap();
     assert_eq!(row.status, "cancelled");
     assert_eq!(row.bucket.as_str(), "stopped");
     assert_eq!(row.error.as_deref(), Some("manual"));
 
-    let events = list_recent_run_events(
-        &config,
-        &RunEventListRequest {
-            run_id: "run-1".into(),
-            after_sequence: None,
-            limit: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(events.events.len(), 1);
-    assert_eq!(events.events[0].event_type, "control_stopped");
-    assert_eq!(events.events[0].payload["toStatus"], "cancelled");
+    let events = events_of(&ledger, "run-1").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_type, "control_stopped");
+    assert_eq!(events[0].payload["toStatus"], "cancelled");
 }
 
-#[test]
-fn retry_requeues_a_failed_run_and_clears_error() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::Failed);
+#[tokio::test]
+async fn retry_requeues_a_failed_run_and_clears_error() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::Failed).await;
 
-    let row = apply_control(&config, "run-1", ControlVerb::Retry, None, None, &no_names).unwrap();
+    let row = control(&ledger, "run-1", ControlVerb::Retry, None, None)
+        .await
+        .unwrap();
     assert_eq!(row.status, "pending");
     assert_eq!(row.bucket.as_str(), "working");
     // The stale failure reason is dropped (upsert COALESCE could not do this).
     assert_eq!(row.error, None);
 }
 
-#[test]
-fn continue_resumes_an_awaiting_user_run() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::AwaitingUser);
+#[tokio::test]
+async fn continue_resumes_an_awaiting_user_run() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::AwaitingUser).await;
 
-    let row = apply_control(
-        &config,
+    let row = control(
+        &ledger,
         "run-1",
         ControlVerb::Continue,
         Some("use the staging bucket"),
         None,
-        &no_names,
     )
+    .await
     .unwrap();
     assert_eq!(row.status, "running");
     assert_eq!(row.bucket.as_str(), "working");
 }
 
-#[test]
-fn continue_without_message_is_rejected_before_touching_the_ledger() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::AwaitingUser);
+#[tokio::test]
+async fn continue_without_message_is_rejected_before_touching_the_ledger() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::AwaitingUser).await;
 
-    let err = apply_control(
-        &config,
-        "run-1",
-        ControlVerb::Continue,
-        Some("   "),
-        None,
-        &no_names,
-    )
-    .unwrap_err();
+    let err = control_error(
+        control(&ledger, "run-1", ControlVerb::Continue, Some("   "), None)
+            .await
+            .unwrap_err(),
+    );
     assert!(matches!(err, ControlError::MessageRequired("continue")));
     // Status untouched.
-    let run = get_agent_run(&config, "run-1").unwrap().unwrap();
+    let run = ledger.get_agent_run("run-1").await.unwrap().unwrap();
     assert_eq!(run.status, AgentRunStatus::AwaitingUser);
 }
 
-#[test]
-fn follow_up_records_an_event_without_changing_status() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::Completed);
+#[tokio::test]
+async fn follow_up_records_an_event_without_changing_status() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::Completed).await;
 
-    let row = apply_control(
-        &config,
+    let row = control(
+        &ledger,
         "run-1",
         ControlVerb::FollowUp,
         Some("now summarize it"),
         None,
-        &no_names,
     )
+    .await
     .unwrap();
     assert_eq!(row.status, "completed");
 
-    let events = list_recent_run_events(
-        &config,
-        &RunEventListRequest {
-            run_id: "run-1".into(),
-            after_sequence: None,
-            limit: None,
-        },
-    )
-    .unwrap();
-    assert_eq!(events.events[0].event_type, "control_follow_up");
-    assert_eq!(events.events[0].payload["message"], "now summarize it");
+    let events = events_of(&ledger, "run-1").await;
+    assert_eq!(events[0].event_type, "control_follow_up");
+    assert_eq!(events[0].payload["message"], "now summarize it");
 }
 
-#[test]
-fn invalid_transition_is_rejected() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    seed_run(&config, "run-1", AgentRunStatus::Completed);
+#[tokio::test]
+async fn invalid_transition_is_rejected() {
+    let ledger = ledger();
+    seed_run(&ledger, "run-1", AgentRunStatus::Completed).await;
 
-    let err =
-        apply_control(&config, "run-1", ControlVerb::Stop, None, None, &no_names).unwrap_err();
+    let err = control_error(
+        control(&ledger, "run-1", ControlVerb::Stop, None, None)
+            .await
+            .unwrap_err(),
+    );
     assert!(matches!(
         err,
         ControlError::InvalidTransition {
@@ -415,68 +424,83 @@ fn invalid_transition_is_rejected() {
     ));
 }
 
-#[test]
-fn unknown_run_is_not_found() {
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
-    let err =
-        apply_control(&config, "ghost", ControlVerb::Stop, None, None, &no_names).unwrap_err();
+#[tokio::test]
+async fn unknown_run_is_not_found() {
+    let ledger = ledger();
+    let err = control_error(
+        control(&ledger, "ghost", ControlVerb::Stop, None, None)
+            .await
+            .unwrap_err(),
+    );
     assert!(matches!(err, ControlError::RunNotFound(id) if id == "ghost"));
 }
 
-#[test]
-fn stale_transition_does_not_overwrite_a_status_another_writer_recorded() {
-    use crate::run_ledger::{RunEventAppend, RunTransition, transition_agent_run_status_from};
-
-    let dir = TempDir::new().unwrap();
-    let config = dir.path().to_path_buf();
+#[tokio::test]
+async fn stale_transition_does_not_overwrite_a_status_another_writer_recorded() {
+    let ledger = ledger();
     // A stop was planned against `running`, but the worker recorded
     // `completed` first.
-    seed_run(&config, "run-race", AgentRunStatus::Completed);
+    seed_run(&ledger, "run-race", AgentRunStatus::Completed).await;
 
-    let outcome = transition_agent_run_status_from(
-        &config,
-        "run-race",
-        AgentRunStatus::Running,
-        AgentRunStatus::Cancelled,
-        Some("manual"),
-        Some(Utc::now()),
-        Some(RunEventAppend {
-            run_id: "run-race".into(),
-            event_type: "control_stopped".into(),
-            payload: json!({}),
-        }),
-    )
-    .unwrap();
+    let outcome = ledger
+        .transition_agent_run_status_from(
+            "run-race",
+            AgentRunStatus::Running,
+            AgentRunStatus::Cancelled,
+            Some("manual"),
+            Some(Utc::now()),
+            Some(RunEventAppend {
+                run_id: "run-race".into(),
+                event_type: "control_stopped".into(),
+                payload: json!({}),
+            }),
+        )
+        .await
+        .unwrap();
     match outcome {
         RunTransition::StatusChanged(run) => assert_eq!(run.status, AgentRunStatus::Completed),
         other => panic!("expected StatusChanged, got {other:?}"),
     }
-    let stored = get_agent_run(&config, "run-race").unwrap().unwrap();
+    let stored = ledger.get_agent_run("run-race").await.unwrap().unwrap();
     assert_eq!(stored.status, AgentRunStatus::Completed);
     assert!(stored.error.is_none());
-    let events = list_recent_run_events(
-        &config,
-        &RunEventListRequest {
-            run_id: "run-race".into(),
-            after_sequence: None,
-            limit: None,
-        },
-    )
-    .unwrap();
-    assert!(events.events.is_empty(), "no event without its transition");
+    assert!(
+        events_of(&ledger, "run-race").await.is_empty(),
+        "no event without its transition"
+    );
 
     assert!(matches!(
-        transition_agent_run_status_from(
-            &config,
-            "missing",
-            AgentRunStatus::Running,
-            AgentRunStatus::Cancelled,
-            None,
-            None,
-            None,
-        )
-        .unwrap(),
+        ledger
+            .transition_agent_run_status_from(
+                "missing",
+                AgentRunStatus::Running,
+                AgentRunStatus::Cancelled,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap(),
         RunTransition::NotFound
     ));
+}
+
+#[tokio::test]
+async fn list_agent_work_groups_the_ledgers_runs() {
+    let ledger = ledger();
+    seed_run(&ledger, "working", AgentRunStatus::Running).await;
+    seed_run(&ledger, "done", AgentRunStatus::Completed).await;
+    seed_run(&ledger, "broken", AgentRunStatus::Failed).await;
+    let view = ledger.list_agent_work(None, &no_names).await.unwrap();
+    assert_eq!(view.total, 3);
+    let count = |bucket: AgentWorkBucket| {
+        view.groups
+            .iter()
+            .find(|group| group.bucket == bucket)
+            .map(|group| group.count)
+    };
+    assert_eq!(count(AgentWorkBucket::Working), Some(1));
+    assert_eq!(count(AgentWorkBucket::Completed), Some(1));
+    assert_eq!(count(AgentWorkBucket::Failed), Some(1));
+    assert_eq!(count(AgentWorkBucket::NeedsInput), Some(0));
 }
