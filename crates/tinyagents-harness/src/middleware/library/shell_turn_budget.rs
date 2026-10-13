@@ -27,20 +27,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::error::Result as TaResult;
-use tinyagents_harness::middleware::{
-    Middleware, ToolInvocationIdentity, TurnClock, TurnClockMiddleware,
-};
-use tinyagents_harness::runtime::AgentHarness;
-
-use crate::agent::tinyagents::host::OpenHumanRunContext;
+use crate::context::RunContext;
+use crate::error::Result as TaResult;
+use crate::middleware::{Middleware, ToolInvocationIdentity, TurnClock, TurnClockMiddleware};
+use crate::runtime::AgentHarness;
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
 
 /// Time kept back from a shell command for the model to read its result and
 /// answer.
-pub(crate) const SHELL_TIMEOUT_RESERVE: Duration = Duration::from_secs(90);
+pub const SHELL_TIMEOUT_RESERVE: Duration = Duration::from_secs(90);
+
+/// Upper bound for a shell deadline unless the host passes its own.
+pub const DEFAULT_MAX_TIMEOUT_SECS: u64 = 3600;
 
 /// The tool whose deadline this governs.
 const SHELL_TOOL: &str = "shell";
@@ -50,7 +49,7 @@ const SHELL_TIMED_OUT: &str = "Command timed out after";
 
 /// One clamp applied to a shell call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ShellTimeoutClamp {
+pub struct ShellTimeoutClamp {
     /// The model's `timeout_secs`, or `None` when it asked for no deadline.
     pub requested: Option<u64>,
     /// The deadline the command runs under.
@@ -61,7 +60,7 @@ pub(crate) struct ShellTimeoutClamp {
 
 impl ShellTimeoutClamp {
     /// The line appended to the call's result.
-    pub(crate) fn note(&self) -> String {
+    pub fn note(&self) -> String {
         let (clamped, remaining) = (self.clamped_secs, self.remaining_secs);
         match self.requested {
             Some(requested) => format!(
@@ -82,16 +81,17 @@ impl ShellTimeoutClamp {
 /// the answer split it. It is never below one second, because `0` means
 /// unbounded to the shell. A missing or `0` request is unbounded and always
 /// exceeds the cap.
-pub(crate) fn clamp_shell_timeout(
+pub fn clamp_shell_timeout(
     requested: Option<u64>,
     remaining: Duration,
+    max_timeout_secs: u64,
 ) -> Option<ShellTimeoutClamp> {
     let requested = requested.filter(|secs| *secs > 0);
     let cap = remaining
         .saturating_sub(SHELL_TIMEOUT_RESERVE)
         .max(remaining / 2)
         .as_secs()
-        .clamp(1, crate::tools::timeout::MAX_TIMEOUT_SECS);
+        .clamp(1, max_timeout_secs.max(1));
     if requested.is_some_and(|secs| secs <= cap) {
         return None;
     }
@@ -104,28 +104,37 @@ pub(crate) fn clamp_shell_timeout(
 
 /// Shared state: the turn's budget and the clamps waiting to be reported,
 /// keyed by call id.
-pub(crate) struct ShellTurnBudget {
+pub struct ShellTurnBudget {
     /// The harness policy's wall-clock budget for the turn (see
     /// [`TurnClock::of`]).
     budget: Option<Duration>,
+    /// Largest deadline the shell tool accepts.
+    max_timeout_secs: u64,
     pending: Mutex<HashMap<String, ShellTimeoutClamp>>,
 }
 
 impl ShellTurnBudget {
-    pub(crate) fn new(budget: Option<Duration>) -> Arc<Self> {
+    pub fn new(budget: Option<Duration>) -> Arc<Self> {
+        Self::with_max_timeout(budget, DEFAULT_MAX_TIMEOUT_SECS)
+    }
+
+    /// A budget whose clamped deadline never exceeds `max_timeout_secs` (the
+    /// shell tool's schema maximum).
+    pub fn with_max_timeout(budget: Option<Duration>, max_timeout_secs: u64) -> Arc<Self> {
         Arc::new(Self {
             budget,
+            max_timeout_secs,
             pending: Mutex::default(),
         })
     }
 
     /// The `before_tool` half, which rewrites the call's `timeout_secs`.
-    pub(crate) fn clamp(self: &Arc<Self>) -> ShellTimeoutClampMiddleware {
+    pub fn clamp(self: &Arc<Self>) -> ShellTimeoutClampMiddleware {
         ShellTimeoutClampMiddleware(Arc::clone(self))
     }
 
     /// The `after_tool` half, which reports a clamp on the call's result.
-    pub(crate) fn notes(self: &Arc<Self>) -> ShellTimeoutNoteMiddleware {
+    pub fn notes(self: &Arc<Self>) -> ShellTimeoutNoteMiddleware {
         ShellTimeoutNoteMiddleware(Arc::clone(self))
     }
 
@@ -137,7 +146,7 @@ impl ShellTurnBudget {
 }
 
 /// Clamps a `shell` call's `timeout_secs` to the turn's remainder.
-pub(crate) struct ShellTimeoutClampMiddleware(Arc<ShellTurnBudget>);
+pub struct ShellTimeoutClampMiddleware(Arc<ShellTurnBudget>);
 
 #[async_trait]
 impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutClampMiddleware {
@@ -171,7 +180,7 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutClampMiddleware {
             }
             None => None,
         };
-        let Some(clamp) = clamp_shell_timeout(requested, clock.remaining()) else {
+        let Some(clamp) = clamp_shell_timeout(requested, clock.remaining(), self.0.max_timeout_secs) else {
             return Ok(());
         };
         tracing::debug!(
@@ -189,7 +198,7 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutClampMiddleware {
 }
 
 /// Reports a clamp on the clamped call's result.
-pub(crate) struct ShellTimeoutNoteMiddleware(Arc<ShellTurnBudget>);
+pub struct ShellTimeoutNoteMiddleware(Arc<ShellTurnBudget>);
 
 #[async_trait]
 impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutNoteMiddleware {
@@ -207,7 +216,7 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutNoteMiddleware {
         let Some(clamp) = self.0.pending().remove(invocation.call_id().as_str()) else {
             return Ok(());
         };
-        let fired = result.is_error && super::tool_result_text(result).starts_with(SHELL_TIMED_OUT);
+        let fired = result.is_error && result.output().starts_with(SHELL_TIMED_OUT);
         if clamp.requested.is_none() && !fired {
             return Ok(());
         }
@@ -216,7 +225,10 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutNoteMiddleware {
             fired,
             "[tinyagents::mw] shell_turn_budget: reporting the clamped timeout to the model"
         );
-        super::append_tool_result_text(result, format!("\n{}", clamp.note()));
+        result.content.push(tinytools::ToolContent::Text {
+            text: format!("\n{}", clamp.note()),
+        });
+        result.markdown_formatted = None;
         Ok(())
     }
 }
@@ -230,8 +242,8 @@ impl<C: Send + Sync> Middleware<(), C> for ShellTimeoutNoteMiddleware {
 /// these notes are appended after every output cap (they survive truncation)
 /// and after the guard has fingerprinted the result (a changing note does not
 /// make two identical results look different).
-pub(crate) fn install_time_notes(
-    harness: &mut AgentHarness<(), OpenHumanRunContext>,
+pub fn install_time_notes<C: Send + Sync + 'static>(
+    harness: &mut AgentHarness<(), C>,
 ) -> Arc<ShellTurnBudget> {
     let budget = harness
         .policy()

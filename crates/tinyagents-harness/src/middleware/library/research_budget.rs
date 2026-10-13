@@ -7,20 +7,19 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::error::Result as TaResult;
-use tinyagents_harness::middleware::{Middleware, ToolInvocationIdentity};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ToolChoice};
 use tinytools::ToolResult;
 
-use crate::agent::tinyagents::host::OpenHumanRunContext;
+use crate::context::RunContext;
+use crate::error::Result as TaResult;
+use crate::middleware::{Middleware, ToolInvocationIdentity};
 
 /// Direct web reads allowed before the web tools are withdrawn.
-/// This bounds the master agent's exploratory search while leaving room to read
+/// This bounds the root agent's exploratory search while leaving room to read
 /// primary sources; broad research belongs in one deep `web_answer_tool` call or
 /// a batched `web_contents_tool` read, each of which counts once.
-pub(super) const DIRECT_WEB_READ_LIMIT: usize = 8;
+pub const DIRECT_WEB_READ_LIMIT: usize = 8;
 
 /// The instruction appended when the budget is spent and no non-web tool
 /// remains, so every tool is withdrawn. It says outright that tools are gone
@@ -31,18 +30,18 @@ pub(super) const DIRECT_WEB_READ_LIMIT: usize = 8;
 /// bench request that hit this budget, the old wording leaked a call 6 times in
 /// 8 and this wording 0 times in 8. The harness also withholds and re-prompts
 /// any call that still arrives (tinyagents `TextRecovery::withholding`).
-pub(crate) const RESEARCH_CLOSE_INSTRUCTION: &str = "The direct web research budget for this turn is exhausted, and tools are no longer available for this reply: any tool call you write now will not run. Answer the user's latest request now in plain text, using only the results already available. State any remaining uncertainty. Do not search again, repeat a page fetch, or merely describe what you plan to read.";
+pub const RESEARCH_CLOSE_INSTRUCTION: &str = "The direct web research budget for this turn is exhausted, and tools are no longer available for this reply: any tool call you write now will not run. Answer the user's latest request now in plain text, using only the results already available. State any remaining uncertainty. Do not search again, repeat a page fetch, or merely describe what you plan to read.";
 
 /// The instruction appended when the budget is spent but the run still has
 /// non-web tools: only web access is exhausted, not the task (#6959).
-pub(crate) const WEB_BUDGET_EXHAUSTED_INSTRUCTION: &str = "The direct web research budget for this turn is exhausted, so the web tools have been removed. Continue the task with your remaining tools, using the web results already available. Do not try to search or fetch pages again.";
+pub const WEB_BUDGET_EXHAUSTED_INSTRUCTION: &str = "The direct web research budget for this turn is exhausted, so the web tools have been removed. Continue the task with your remaining tools, using the web results already available. Do not try to search or fetch pages again.";
 
 /// Consecutive failed web calls after which web access looks blocked.
 const BLOCKED_AFTER_FAILURES: usize = 2;
 
 /// The one-time note sent after [`BLOCKED_AFTER_FAILURES`] failed web calls in a
 /// row (a blocked network, an offline sandbox).
-pub(crate) const WEB_BLOCKED_NOTE: &str = "Web access looks blocked: the last web calls failed. Do not keep retrying web tools; continue the task with your other tools and the information already available.";
+pub const WEB_BLOCKED_NOTE: &str = "Web access looks blocked: the last web calls failed. Do not keep retrying web tools; continue the task with your other tools and the information already available.";
 
 /// The direct web-read tools this budget governs: the `web_search` family
 /// (`tools::user_filter`) plus `web_fetch`.
@@ -53,8 +52,9 @@ fn is_web_research_tool(name: &str) -> bool {
     )
 }
 
-#[derive(Default)]
-pub(crate) struct ResearchBudgetMiddleware {
+pub struct ResearchBudgetMiddleware {
+    /// Successful web reads allowed before the web tools are withdrawn.
+    limit: usize,
     /// Successful web reads. A failed call read nothing and is not counted.
     completed_reads: AtomicUsize,
     /// Failed web calls since the last successful one.
@@ -65,21 +65,39 @@ pub(crate) struct ResearchBudgetMiddleware {
     blocked_note_sent: AtomicBool,
 }
 
+impl Default for ResearchBudgetMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResearchBudgetMiddleware {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    /// A budget of [`DIRECT_WEB_READ_LIMIT`] reads.
+    pub fn new() -> Self {
+        Self::with_limit(DIRECT_WEB_READ_LIMIT)
+    }
+
+    /// A budget of `limit` successful web reads.
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            limit,
+            completed_reads: AtomicUsize::new(0),
+            consecutive_failures: AtomicUsize::new(0),
+            blocked_note_pending: AtomicBool::new(false),
+            blocked_note_sent: AtomicBool::new(false),
+        }
     }
 }
 
 #[async_trait]
-impl Middleware<(), OpenHumanRunContext> for ResearchBudgetMiddleware {
+impl<C: Send + Sync + 'static> Middleware<(), C> for ResearchBudgetMiddleware {
     fn name(&self) -> &str {
         "research_budget"
     }
 
     async fn after_tool(
         &self,
-        _ctx: &mut RunContext<OpenHumanRunContext>,
+        _ctx: &mut RunContext<C>,
         _state: &(),
         invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
@@ -113,12 +131,12 @@ impl Middleware<(), OpenHumanRunContext> for ResearchBudgetMiddleware {
 
     async fn before_model(
         &self,
-        _ctx: &mut RunContext<OpenHumanRunContext>,
+        _ctx: &mut RunContext<C>,
         _state: &(),
         request: &mut ModelRequest,
     ) -> TaResult<()> {
         let reads = self.completed_reads.load(Ordering::Relaxed);
-        if reads < DIRECT_WEB_READ_LIMIT {
+        if reads < self.limit {
             if self.blocked_note_pending.swap(false, Ordering::Relaxed) {
                 request
                     .messages
@@ -157,3 +175,7 @@ impl Middleware<(), OpenHumanRunContext> for ResearchBudgetMiddleware {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "research_budget_tests.rs"]
+mod tests;

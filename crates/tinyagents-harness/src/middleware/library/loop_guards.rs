@@ -36,3 +36,22 @@ pub const RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD: u32 = 12;
 pub fn is_repeat_call_exempt(tool: &str) -> bool {
     matches!(tool, "wait_subagent")
 }
+
+/// Loop-guard thresholds as constructor config. [`Default`] carries the
+/// values above; a host passes its own to the breakers it builds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoopGuardThresholds {
+    /// Identical-retry headroom for recoverable failures.
+    pub recoverable_repeat_failure: u32,
+    /// Consecutive varied-args headroom for recoverable failures.
+    pub recoverable_no_progress_failure: u32,
+}
+
+impl Default for LoopGuardThresholds {
+    fn default() -> Self {
+        Self {
+            recoverable_repeat_failure: RECOVERABLE_REPEAT_FAILURE_THRESHOLD,
+            recoverable_no_progress_failure: RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
+        }
+    }
+}
