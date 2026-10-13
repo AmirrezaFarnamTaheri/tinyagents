@@ -45,3 +45,6 @@ mod fixtures;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "files_tests.rs"]
+mod files_tests;
