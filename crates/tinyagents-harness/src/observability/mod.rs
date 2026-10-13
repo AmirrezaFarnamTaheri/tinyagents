@@ -34,6 +34,7 @@ pub mod reaper;
 pub mod replay;
 pub mod status;
 pub mod trace_export;
+pub mod turn_observer;
 
 #[doc(hidden)]
 pub use worker::{AppendWorker, DEFAULT_DRAIN_CAPACITY};
