@@ -1,10 +1,119 @@
-use tempfile::TempDir;
+use std::sync::Arc;
+
+use tinyagents_harness::tinyinference_llm::Message;
+use tinystoragedrivers_core::{Blocking, MemoryStorage, Scope, StorageBackend};
 
 use super::*;
+use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
 use crate::transcript::TranscriptMessage;
 
-fn workspace() -> TempDir {
-    tempfile::tempdir().expect("tempdir")
+/// A synchronous view of one session's tree on a memory-backed run ledger, so
+/// the tree's behaviour is tested through the same operations a host uses.
+struct Workspace;
+
+fn workspace() -> Workspace {
+    Workspace
+}
+
+impl Workspace {
+    fn path(&self) -> &Workspace {
+        self
+    }
+}
+
+struct EntryTree {
+    ledger: Arc<DriverRunLedger>,
+    session: String,
+    bridge: Blocking,
+}
+
+type Result<T> = std::result::Result<T, crate::run_ledger::LedgerError>;
+
+impl EntryTree {
+    fn new(_workspace: &Workspace, session: &str) -> Self {
+        let ledger = Arc::new(DriverRunLedger::new(
+            MemoryStorage::new()
+                .for_scope(&Scope::local())
+                .expect("local scope"),
+        ));
+        Self {
+            ledger,
+            session: session.to_owned(),
+            bridge: Blocking::new().expect("bridge"),
+        }
+    }
+
+    fn ledger(&self) -> Arc<dyn RunLedgerStore> {
+        self.ledger.clone()
+    }
+
+    fn run<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(Arc<DriverRunLedger>, String) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<T>> + Send>,
+        >,
+    ) -> Result<T> {
+        self.bridge
+            .run(work(self.ledger.clone(), self.session.clone()))
+            .expect("bridge")
+    }
+
+    fn append(&self, parent: Option<&EntryId>, kind: EntryKind) -> Result<EntryId> {
+        let parent = parent.cloned();
+        self.run(move |l, s| {
+            Box::pin(async move { l.entry_append(&s, parent.as_ref(), kind).await })
+        })
+    }
+
+    fn append_to_head(&self, kind: EntryKind) -> Result<EntryId> {
+        self.run(move |l, s| Box::pin(async move { l.entry_append_to_head(&s, kind).await }))
+    }
+
+    fn head(&self) -> Result<Option<EntryId>> {
+        self.run(|l, s| Box::pin(async move { l.entry_head(&s).await }))
+    }
+
+    fn get(&self, id: &EntryId) -> Result<Option<Entry>> {
+        let id = id.clone();
+        self.run(move |l, s| Box::pin(async move { l.entry_get(&s, &id).await }))
+    }
+
+    fn ancestor_chain(&self, tip: &EntryId) -> Result<Vec<Entry>> {
+        let tip = tip.clone();
+        self.run(move |l, s| Box::pin(async move { l.entry_ancestor_chain(&s, &tip).await }))
+    }
+
+    fn tips(&self) -> Result<Vec<EntryId>> {
+        self.run(|l, s| Box::pin(async move { l.entry_tips(&s).await }))
+    }
+
+    fn branches(&self) -> Result<Vec<Branch>> {
+        self.run(|l, s| Box::pin(async move { l.entry_branches(&s).await }))
+    }
+
+    fn label(&self, tip: &EntryId, name: &str) -> Result<EntryId> {
+        let (tip, name) = (tip.clone(), name.to_owned());
+        self.run(move |l, s| Box::pin(async move { l.entry_label(&s, &tip, &name).await }))
+    }
+
+    fn fork(&self, tip: &EntryId, fork: Fork) -> Result<EntryId> {
+        let tip = tip.clone();
+        self.run(move |l, s| Box::pin(async move { l.entry_fork(&s, &tip, fork).await }))
+    }
+
+    fn rebuild_index(&self) -> Result<()> {
+        self.run(|l, s| Box::pin(async move { l.entry_rebuild_index(&s).await }))
+    }
+
+    fn import_legacy(&self, entries: &[Entry]) -> Result<()> {
+        let entries = entries.to_vec();
+        self.run(move |l, s| Box::pin(async move { l.entry_import_legacy(&s, &entries).await }))
+    }
+
+    fn build_context(&self, tip: &EntryId) -> Result<Vec<Message>> {
+        let tip = tip.clone();
+        self.run(move |l, s| Box::pin(async move { l.entry_build_context(&s, &tip).await }))
+    }
 }
 
 fn message_kind(role: &str, content: &str) -> EntryKind {
@@ -488,7 +597,7 @@ fn compaction_sink_persists_a_record_anchored_at_the_tip() {
         .unwrap();
     let tip = tree.append_to_head(message_kind("user", "three")).unwrap();
 
-    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-1").expect("sink");
     assert_eq!(sink.tip(), Some(tip.clone()));
 
     let record = CompactionRecord {
@@ -531,7 +640,7 @@ fn compaction_sink_restores_a_pinned_user_message_after_the_summary() {
     tree.append_to_head(message_kind("assistant", "step three"))
         .unwrap();
 
-    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-1").expect("sink");
     let record = CompactionRecord {
         summary: "steps one and two".to_string(),
         placement: tinyagents_harness::summarization::SummaryPlacement::System,
@@ -562,7 +671,7 @@ fn compaction_sink_restores_user_checkpoint_role() {
     tree.append(None, message_kind("user", "the task")).unwrap();
     tree.append_to_head(message_kind("assistant", "work"))
         .unwrap();
-    let sink = SessionCompactionSink::new(ws.path(), "sess-1").unwrap();
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-1").unwrap();
     sink.persist(&CompactionRecord {
         summary: "reference checkpoint".into(),
         placement: SummaryPlacement::User,
@@ -605,7 +714,7 @@ fn compaction_sink_advances_its_tip_across_repeated_compactions() {
     tree.append_to_head(message_kind("assistant", "b")).unwrap();
     tree.append_to_head(message_kind("user", "c")).unwrap();
 
-    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-1").expect("sink");
 
     sink.persist(&CompactionRecord {
         summary: "first summary".to_string(),
@@ -649,7 +758,7 @@ fn compaction_sink_is_a_no_op_on_an_empty_session() {
     use tinyagents_harness::summarization::{CompactionReason, CompactionRecord, CompactionSink};
 
     let ws = workspace();
-    let sink = SessionCompactionSink::new(ws.path(), "sess-empty").expect("sink");
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-empty").expect("sink");
     assert_eq!(sink.tip(), None);
 
     sink.persist(&CompactionRecord {
@@ -675,7 +784,7 @@ fn compaction_sink_skips_an_out_of_range_index_rather_than_corrupting_the_tree()
     let tree = EntryTree::new(ws.path(), "sess-1");
     let tip = tree.append(None, message_kind("user", "only one")).unwrap();
 
-    let sink = SessionCompactionSink::new(ws.path(), "sess-1").expect("sink");
+    let sink = SessionCompactionSink::new(tree.ledger(), "sess-1").expect("sink");
 
     sink.persist(&CompactionRecord {
         summary: "bogus".to_string(),
