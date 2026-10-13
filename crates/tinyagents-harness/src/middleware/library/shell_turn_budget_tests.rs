@@ -1,13 +1,13 @@
 use super::*;
 use serde_json::json;
-use tinyagents_harness::context::RunConfig;
-use tinyagents_harness::middleware::ToolInvocationIdentity;
+use crate::context::RunConfig;
+use crate::middleware::ToolInvocationIdentity;
 
 const SECS: fn(u64) -> Duration = Duration::from_secs;
 
 #[test]
 fn a_timeout_past_the_turn_remainder_is_reduced_to_leave_a_reserve() {
-    let clamp = clamp_shell_timeout(Some(660), SECS(260)).expect("660s does not fit in 260s");
+    let clamp = clamp_shell_timeout(Some(660), SECS(260), 3600).expect("660s does not fit in 260s");
     assert_eq!(clamp.requested, Some(660));
     assert_eq!(clamp.clamped_secs, 170);
     assert_eq!(

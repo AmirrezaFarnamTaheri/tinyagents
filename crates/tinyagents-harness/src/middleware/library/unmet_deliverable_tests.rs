@@ -2,13 +2,13 @@ use super::*;
 
 use std::sync::Arc;
 
-use tinyagents_harness::context::{RunConfig, RunContext};
-use tinyagents_harness::limits::RunLimits;
-use tinyagents_harness::middleware::Middleware;
-use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
-use tinyagents_harness::testkit::{FakeTool, ScriptedModel};
-use tinyagents_harness::tinyinference_llm::model::ModelRequest;
-use tinyagents_harness::tinyinference_llm::tool::ToolCall;
+use crate::context::{RunConfig, RunContext};
+use crate::limits::RunLimits;
+use crate::middleware::Middleware;
+use crate::runtime::{AgentHarness, RunPolicy};
+use crate::testkit::{FakeTool, ScriptedModel};
+use tinyinference_llm::model::ModelRequest;
+use tinyinference_llm::tool::ToolCall;
 
 /// The real request this middleware was built for names three inputs and one
 /// output. Extraction deliberately cannot tell them apart -- that is the
@@ -118,9 +118,9 @@ fn the_notice_names_the_paths_and_asks_for_a_partial_file() {
     assert!(two.contains("`/a/x.json`, `/b/y.csv`"));
 }
 
-fn tool_round(id: &str, name: &str) -> tinyagents_harness::tinyinference_llm::model::ModelResponse {
+fn tool_round(id: &str, name: &str) -> tinyinference_llm::model::ModelResponse {
     let mut response =
-        tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(String::new());
+        tinyinference_llm::model::ModelResponse::assistant(String::new());
     response.message.content = Vec::new();
     response.message.tool_calls = vec![ToolCall::new(id, name, serde_json::json!({}))];
     response.finish_reason = Some("tool_calls".to_string());
@@ -141,14 +141,14 @@ async fn an_unwritten_deliverable_holds_the_answer_once_and_permits_a_fix() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "here is what I found".to_string(),
             ),
             tool_round("c1", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "written and answered".to_string(),
             ),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "must not be reached".to_string(),
             ),
         ])),
@@ -188,10 +188,10 @@ async fn a_request_naming_no_missing_file_is_left_alone() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "done".to_string(),
             ),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "must not be reached".to_string(),
             ),
         ])),
@@ -210,62 +210,38 @@ async fn a_request_naming_no_missing_file_is_left_alone() {
     assert_eq!(run.text().as_deref(), Some("done"));
 }
 
-/// `install` puts the check on a root orchestrator turn with the policy's wall
-/// clock, and on nothing else: a sub-agent's answer goes to its parent.
+/// `install` puts the check on the harness with the policy's wall clock.
 #[tokio::test]
-async fn install_covers_root_orchestrator_turns_only() {
+async fn install_holds_a_final_answer_while_the_named_file_is_missing() {
     let missing =
         std::env::temp_dir().join(format!("oh-unmet-install-{}.json", std::process::id()));
     let _ = std::fs::remove_file(&missing);
     let request = format!("Do the work and write it to {}", missing.display());
-    let script = || {
-        Arc::new(ScriptedModel::new(vec![
-            tool_round("c0", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
-                "here is what I found".to_string(),
-            ),
-            tool_round("c1", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
-                "written and answered".to_string(),
-            ),
-        ]))
-    };
-    let policy = || RunPolicy {
+    let script = Arc::new(ScriptedModel::new(vec![
+        tool_round("c0", "writer"),
+        ModelResponse::assistant("here is what I found".to_string()),
+        tool_round("c1", "writer"),
+        ModelResponse::assistant("written and answered".to_string()),
+    ]));
+    let mut root: AgentHarness<()> = AgentHarness::new();
+    root.register_model("mock", script);
+    root.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
+    root.with_policy(RunPolicy {
         limits: RunLimits::default()
             .with_max_model_calls(20)
             .with_max_tool_calls(20)
             .with_max_wall_clock_ms(Some(600_000)),
         ..RunPolicy::default()
-    };
-
-    let mut root: AgentHarness<()> = AgentHarness::new();
-    root.register_model("mock", script());
-    root.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
-    root.with_policy(policy());
-    install(&mut root, false, Some("orchestrator"));
+    });
+    install(&mut root);
     let run = root
-        .invoke_default(&(), vec![Message::user(request.clone())])
-        .await
-        .expect("run succeeds");
-    assert_eq!(
-        run.text().as_deref(),
-        Some("written and answered"),
-        "a root orchestrator turn is held for the file it never wrote"
-    );
-
-    let mut sub: AgentHarness<()> = AgentHarness::new();
-    sub.register_model("mock", script());
-    sub.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
-    sub.with_policy(policy());
-    install(&mut sub, true, Some("orchestrator"));
-    let run = sub
         .invoke_default(&(), vec![Message::user(request)])
         .await
         .expect("run succeeds");
     assert_eq!(
         run.text().as_deref(),
-        Some("here is what I found"),
-        "a sub-agent turn is not checked"
+        Some("written and answered"),
+        "a turn is held for the file it never wrote"
     );
 }
 
@@ -283,10 +259,10 @@ async fn candidates_come_from_the_current_turns_request() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "first answer".to_string(),
             ),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "second answer".to_string(),
             ),
         ])),
@@ -363,7 +339,7 @@ async fn the_half_time_and_late_notes_ride_a_tool_result_once_each() {
         .await
         .expect("before_model");
     async fn run(middleware: &UnmetDeliverableMiddleware, ctx: &mut RunContext<()>) -> String {
-        let identity = tinyagents_harness::middleware::ToolInvocationIdentity::new("c0", "shell");
+        let identity = crate::middleware::ToolInvocationIdentity::new("c0", "shell");
         let mut result = TaToolResult::success("output");
         Middleware::<(), ()>::after_tool(middleware, ctx, &(), &identity, &mut result)
             .await
@@ -432,7 +408,7 @@ async fn a_late_first_observation_skips_the_half_time_note() {
         .await
         .expect("before_model");
     std::thread::sleep(std::time::Duration::from_millis(5));
-    let identity = tinyagents_harness::middleware::ToolInvocationIdentity::new("c0", "shell");
+    let identity = crate::middleware::ToolInvocationIdentity::new("c0", "shell");
     let mut first = TaToolResult::success("output");
     Middleware::<(), ()>::after_tool(&middleware, &mut ctx, &(), &identity, &mut first)
         .await
@@ -461,10 +437,10 @@ async fn the_runs_state_is_dropped_when_the_turn_ends() {
         "mock",
         Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "first answer".to_string(),
             ),
-            tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant(
+            tinyinference_llm::model::ModelResponse::assistant(
                 "second answer".to_string(),
             ),
         ])),

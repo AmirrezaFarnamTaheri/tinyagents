@@ -34,17 +34,23 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinyagents_harness::middleware::library::TurnClock;
-use tinyagents_harness::middleware::Middleware;
-use tinyagents_harness::middleware::ToolInvocationIdentity;
-use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::tinyinference_llm::message::Message;
-use tinyagents_harness::tinyinference_llm::model::{ModelRequest, ModelResponse};
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinytools::{ToolContent, ToolResult as TaToolResult};
 
-use crate::agent::session_host::turn_checkpoint::wrap_harness_instruction;
+use super::TurnClock;
+use crate::context::RunContext;
+use crate::error::{Result, TinyAgentsError};
+use crate::middleware::{Middleware, ToolInvocationIdentity};
+use crate::runtime::AgentHarness;
+
+/// Frame a harness directive so the model can tell it from operator content.
+pub fn wrap_harness_instruction(instruction: &str) -> String {
+    format!(
+        "<harness_instruction>\n{}\n</harness_instruction>",
+        instruction.trim()
+    )
+}
 
 /// Leave the model room to act on the notice. Below this the turn cannot both
 /// write a file and answer, so the notice would only cost a call.
@@ -88,7 +94,7 @@ fn has_extension(segment: &str) -> bool {
 /// required for the same reason — it is what separates a file the request asks
 /// for from a directory or a sentence fragment. Both limits mean this reports
 /// nothing rather than guessing when a request is written loosely.
-pub(crate) fn candidate_paths(text: &str) -> Vec<String> {
+pub fn candidate_paths(text: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let bytes: Vec<char> = text.chars().collect();
@@ -146,7 +152,7 @@ pub(crate) fn candidate_paths(text: &str) -> Vec<String> {
 }
 
 /// The notice, naming every candidate that does not exist.
-pub(crate) fn notice(missing: &[String]) -> String {
+pub fn notice(missing: &[String]) -> String {
     let list = missing
         .iter()
         .map(|path| format!("`{path}`"))
@@ -247,7 +253,7 @@ fn append_note(result: &mut TaToolResult, note: &str) {
 
 /// Holds a turn's first final answer once, when the request named an output
 /// file that nothing has created. See the module docs.
-pub(crate) struct UnmetDeliverableMiddleware {
+pub struct UnmetDeliverableMiddleware {
     runs: Mutex<HashMap<u64, RunState>>,
     /// The turn\'s wall-clock budget, handed over at construction like the
     /// other time-note middlewares: the run context does not carry it.
@@ -255,7 +261,7 @@ pub(crate) struct UnmetDeliverableMiddleware {
 }
 
 impl UnmetDeliverableMiddleware {
-    pub(crate) fn new(budget: Option<std::time::Duration>) -> Self {
+    pub fn new(budget: Option<std::time::Duration>) -> Self {
         Self {
             runs: Mutex::default(),
             budget,
@@ -454,24 +460,11 @@ impl<C: Send + Sync> Middleware<(), C> for UnmetDeliverableMiddleware {
     }
 }
 
-/// Install the check on `harness` on the same scope as the requirements check
-/// (`verify_before_finish::applies`): root orchestrator turns only, since a
-/// sub-agent answers to its parent and the parent's own request is the one
-/// that names a file. The policy-level wall clock is handed over because the
-/// middleware cannot read `RunPolicy` from the run context.
-pub(crate) fn install<C: Send + Sync + 'static>(
-    harness: &mut AgentHarness<(), C>,
-    is_subagent: bool,
-    agent_definition_id: Option<&str>,
-) {
-    if !crate::agent::tinyagents::verify_before_finish::applies(is_subagent, agent_definition_id) {
-        tracing::debug!(
-            is_subagent,
-            agent = agent_definition_id.unwrap_or("<none>"),
-            "[unmet_deliverable] not installed for this turn"
-        );
-        return;
-    }
+/// Install the check on `harness`. The policy-level wall clock is handed over
+/// because the middleware cannot read `RunPolicy` from the run context. Which
+/// turns get the check (the host installs it on root turns only, since a
+/// sub-agent answers to its parent) is the caller's decision.
+pub fn install<C: Send + Sync + 'static>(harness: &mut AgentHarness<(), C>) {
     let turn_budget = harness
         .policy()
         .limits
