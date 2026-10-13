@@ -229,7 +229,7 @@ README.
 | `runtime.rs` | `DetachedTaskRegistry<Metadata, Status>` — process-local executor handles keyed by task id. |
 | `reconcile.rs` | `reconcile_orphaned_tasks` and its report types, for settling orphans left by a dead executor. |
 | `recovery.rs` | `recovery_children` / `build_restart_recovery_note`: the parent-facing roster of interrupted children after a reconcile sweep (tests in `recovery_tests.rs`). |
-| `completions/` | `types.rs`, `store.rs`, `router.rs`, `format.rs`: the completion router (tests in `router_tests.rs`, `store_tests.rs`). |
+| `completions/` | `types.rs`, `store.rs`, `driver.rs`, `router.rs`, `format.rs`: the completion router (tests in `router_tests.rs`, `driver_tests.rs`). |
 | `lib_tests.rs` | Unit tests (spawn/await/cancel/timeout/race semantics, store round-trips, filters, reconciliation, detached-task registry). |
 
 ## Operational constraints
@@ -238,13 +238,10 @@ README.
   `SteeringRegistry` populated with that task's `SteeringHandle`; without one,
   those controls only affect terminal-state bookkeeping in the `TaskStore`,
   not the in-flight task itself.
-- `JsonlTaskStore` is append-only: task-record updates are appended, not
-  rewritten in place, so a long-lived store grows monotonically. Compact or
-  rotate externally if that matters for your deployment. Each transition
-  appends one line; inside a multi-thread tokio runtime the write runs under
-  `block_in_place` so the blocking file I/O does not stall other tasks on
-  that worker (`TaskStore` is a synchronous trait, so it cannot await a
-  `spawn_blocking` handle).
+- `TaskStore` is a synchronous trait, so `DriverTaskStore` bridges the async
+  driver ports with `tinystoragedrivers_core::Blocking`; build it from a
+  multi-thread runtime or outside one. History snapshots grow one per
+  transition, so prune old records through the backend if that matters.
 - `OrchestrationTaskFilter::matches` is evaluated in-process against loaded
   records; a `TaskStore` backend is not required to push the filter down, so
   `list` cost scales with total record count unless a given implementation

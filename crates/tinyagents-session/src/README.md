@@ -107,8 +107,7 @@ recent committed transactions can be rolled back. The database itself stays
 consistent and opens normally; what is lost is the tail of recent writes
 (the last turns' history rows, run-ledger updates). Anything that must
 survive power loss byte-for-byte belongs in the transcript files, which
-remain the source of truth for resume. FTS5 comes from `rusqlite`'s `bundled`
-build — there is no separate `fts5` cargo feature at 0.40, so do not add one.
+remain the source of truth for resume. The session history is a driver-backed `SessionHistoryStore` (`DriverRunLedger`); full-text search uses the backend's native index where it has one. The classic SQLite store is gone; `legacy::` imports an old `sessions.db`.
 
 ## Operational constraints
 
