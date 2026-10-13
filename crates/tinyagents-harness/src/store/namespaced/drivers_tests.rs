@@ -232,3 +232,26 @@ async fn the_flat_store_surface_works_over_the_driver() {
     FlatStore::delete(&store, "events", "e1").await.unwrap();
     assert!(store.list("events").await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn expiry_is_enforced_on_read_and_swept_when_the_backend_has_no_native_ttl() {
+    let docs: Arc<dyn DocumentStore> = Arc::new(crate::testkit::WithoutNativeTtl(docs(
+        &MemoryStorage::new(),
+        "local",
+    )));
+    let store = DriverNamespacedStore::new(docs);
+    let n = ns(&["cache"]);
+    store
+        .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))
+        .await
+        .unwrap();
+    store
+        .put_with_ttl(&n, "swept", json!(2), Some(f64::MIN_POSITIVE))
+        .await
+        .unwrap();
+    store.put_with_ttl(&n, "keep", json!(3), None).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert!(store.get(&n, "gone").await.unwrap().is_none());
+    assert_eq!(store.sweep_expired().await.unwrap(), 1, "only `swept` is left");
+    assert!(store.get(&n, "keep").await.unwrap().is_some());
+}

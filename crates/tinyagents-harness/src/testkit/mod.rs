@@ -25,7 +25,10 @@
 //! | [`Trajectory`] | Structural assertions over a sequence of events |
 //! | [`text_response`], [`tool_call_response`] | Canned model responses for scripted doubles |
 
+mod no_native_ttl;
 mod types;
+
+pub use no_native_ttl::WithoutNativeTtl;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

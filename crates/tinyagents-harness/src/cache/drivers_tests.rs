@@ -115,3 +115,33 @@ async fn scopes_and_collections_keep_entries_apart_and_long_keys_fit() {
     assert!(bob.get(&long).await.unwrap().is_none());
     assert!(other.get(&long).await.unwrap().is_none());
 }
+
+/// A backend without native TTL declares no expiry field, so the cache itself
+/// must hide, count and remove an expired entry.
+#[tokio::test]
+async fn expiry_is_enforced_on_read_when_the_backend_has_no_native_ttl() {
+    let docs: Arc<dyn DocumentStore> = Arc::new(crate::testkit::WithoutNativeTtl(docs(
+        &MemoryStorage::new(),
+        "local",
+    )));
+    let cache = DriverResponseCache::new(docs.clone());
+    cache
+        .put_with_ttl(
+            "short",
+            ModelResponse::assistant("stale"),
+            Some(Duration::from_millis(20)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.get("short").await.unwrap().unwrap().text(), "stale");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(cache.get("short").await.unwrap().is_none());
+    assert_eq!(cache.stats().expirations, 1);
+    // The expired document was removed, not merely skipped.
+    assert_eq!(
+        docs.count(DriverResponseCache::DEFAULT_COLLECTION, &Filter::default())
+            .await
+            .unwrap(),
+        0
+    );
+}

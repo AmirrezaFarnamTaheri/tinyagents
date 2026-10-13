@@ -74,3 +74,12 @@ async fn long_input_hashes_fit_the_document_id_limit() {
     cache.put(&long, json!("big"), None).await.unwrap();
     assert_eq!(cache.get(&long).await.unwrap(), Some(json!("big")));
 }
+
+#[tokio::test]
+async fn expired_entries_are_hidden_when_the_backend_has_no_native_ttl() {
+    let storage = MemoryStorage::new();
+    let wrapped: Arc<dyn DocumentStore> = Arc::new(tinyagents_harness::testkit::WithoutNativeTtl(
+        docs(&storage, "local"),
+    ));
+    task_cache_contract(DriverTaskCache::new(wrapped)).await;
+}
