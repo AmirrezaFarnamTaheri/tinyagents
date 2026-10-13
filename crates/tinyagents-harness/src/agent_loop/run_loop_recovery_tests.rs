@@ -128,3 +128,79 @@ fn only_the_last_and_invalid_calls_are_possibly_truncated() {
     );
     assert!(super::truncated_call_positions(&[]).is_empty());
 }
+
+/// #6733: the stream scrubber obeys `text_dialect_recovery` exactly like the
+/// unary path. Each row is (policy, the profile's `tool_calling`, or `None` for
+/// a model with no profile, reply, streamed, whether the markup runs as a call).
+#[tokio::test]
+async fn streamed_and_unary_replies_apply_the_same_recovery_policy() {
+    use crate::limits::{LimitBehavior, RunLimits};
+    use crate::runtime::TextDialectRecovery::{Auto, Off, On};
+    use crate::runtime::{AgentHarness, RunPolicy};
+    use crate::testkit::{FakeTool, StreamingMock};
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelProfile;
+
+    const PROSE: &str =
+        r#"Wrap it like <tool_call>{"name": "lookup", "arguments": {}}</tool_call> in your reply."#;
+    const BARE_FENCE: &str =
+        "```\n<tool_call>{\"name\": \"lookup\", \"arguments\": {}}</tool_call>\n```";
+    const XML_FENCE: &str =
+        "```xml\n<tool_call>{\"name\": \"lookup\", \"arguments\": {}}</tool_call>\n```";
+
+    for (policy, native, reply, streamed, runs) in [
+        // The fix: `Auto` is off for a native model, on the stream too.
+        (Auto, Some(true), PROSE, true, false),
+        (Auto, Some(true), BARE_FENCE, true, false),
+        // `Off` is off for every model.
+        (Off, None, PROSE, true, false),
+        // Unchanged: `Auto` still recovers for a model not known to call
+        // natively.
+        (Auto, None, PROSE, true, true),
+        // Unchanged: `On` recovers for a native model, streamed too.
+        (On, Some(true), PROSE, true, true),
+        // Unchanged: a language-tagged fence is a quoted example even when
+        // recovery is on.
+        (On, Some(true), XML_FENCE, true, false),
+        // Control, unchanged: the unary path.
+        (Auto, Some(true), BARE_FENCE, false, false),
+        (On, Some(true), PROSE, false, true),
+    ] {
+        let tool = Arc::new(FakeTool::new("lookup"));
+        let mut model = StreamingMock::from_text_chunks([reply]);
+        if let Some(tool_calling) = native {
+            model = model.with_profile(ModelProfile {
+                tool_calling,
+                ..ModelProfile::default()
+            });
+        }
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model("mock", Arc::new(model));
+        harness.register_tool(tool.clone());
+        harness.with_policy(RunPolicy {
+            text_dialect_recovery: policy,
+            limits: RunLimits {
+                max_model_calls: 1,
+                behavior: LimitBehavior::StopWithPartial,
+                ..RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+        let input = vec![Message::user("go")];
+        // The one-call cap stops the run cleanly after a dispatched call, so a
+        // row that runs nothing cannot pass on a failed run.
+        let result = if streamed {
+            harness
+                .invoke_streaming(&(), (), RunConfig::new("policy-row"), input)
+                .await
+        } else {
+            harness.invoke_default(&(), input).await
+        };
+        assert!(result.is_ok(), "run failed: {:?}", result.err());
+        assert_eq!(
+            !tool.calls().is_empty(),
+            runs,
+            "policy {policy:?}, tool_calling {native:?}, streamed {streamed}: {reply}"
+        );
+    }
+}
