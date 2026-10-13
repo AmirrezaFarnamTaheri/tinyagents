@@ -1,9 +1,10 @@
 use super::*;
 use crate::testkit::conformance::session_store_conformance;
 use crate::transcript::FileTranscriptLocator;
-use tinyagents_harness::store::{FileStore, JsonlAppendStore};
+use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
-/// The on-disk building blocks, assembled the way a desktop host's provider
+/// The file-backed transcript and turn-state building blocks (with in-memory
+/// key-value and journal stores), assembled the way a desktop host's provider
 /// assembles them: everything under one workspace, shared by every agent.
 struct FileStores {
     workspace: std::path::PathBuf,
@@ -14,8 +15,8 @@ impl SessionStoreProvider for FileStores {
         AgentStores {
             transcripts: Arc::new(FileTranscriptLocator::new(&self.workspace)),
             turn_states: Arc::new(TurnStateStore::new(self.workspace.clone())),
-            kv: Arc::new(FileStore::new(self.workspace.join("kv"))),
-            journal: Arc::new(JsonlAppendStore::new(self.workspace.join("journal"))),
+            kv: Arc::new(InMemoryStore::new()),
+            journal: Arc::new(InMemoryAppendStore::new()),
         }
     }
 }
