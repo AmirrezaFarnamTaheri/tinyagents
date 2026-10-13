@@ -19,7 +19,7 @@ pub use import::{AgentImportReport, LegacySourceSnapshot, QuiescentSource, Sourc
 use std::sync::Arc;
 use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
 use tinystoragedrivers_core::{
-    Capability, Filter, Query, Scope, ScopedStorage, Sort, StorageError,
+    Filter, Query, Scope, ScopedStorage, Sort, StorageError,
 };
 use tokio::sync::OnceCell;
 
