@@ -1,16 +1,12 @@
 use std::sync::atomic::AtomicUsize;
+use std::time::Duration;
 
 use super::*;
 use crate::steering::SteeringPolicy;
 
-/// Host-style thresholds: 900s backstop, wind-down 780s, hard stop 840s.
-fn point_started(ago: Duration, now: Instant) -> WindDownPoint {
-    WindDownPoint::new(
-        now - ago,
-        Duration::from_secs(900),
-        Duration::from_secs(780),
-        Duration::from_secs(840),
-    )
+/// 900s backstop: wind-down at 780s, hard stop at 840s.
+fn point_started(ago: Duration, now: Instant) -> TurnDeadline {
+    TurnDeadline::new(now - ago, Duration::from_secs(900))
 }
 
 fn handle() -> SteeringHandle {
