@@ -44,3 +44,7 @@ pub fn summary_child_config(
         .with_max_depth(parent_ctx.config.max_depth())
         .with_max_turn_output_tokens(max_output_tokens)
 }
+
+#[cfg(test)]
+#[path = "payload_summarizer_tests.rs"]
+mod tests;

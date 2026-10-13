@@ -19,15 +19,15 @@
 
 use std::sync::Arc;
 
-use crate::middleware::Middleware;
+use crate::middleware::{ContextCompressionMiddleware, Middleware, MicrocompactMiddleware};
 use crate::runtime::AgentHarness;
 use crate::summarization::{
     DEFAULT_SUMMARIZE_KEEP_LAST, SummarizationPolicy, summarization_policy,
 };
 
 use super::{
-    ArtifactIndexTocMiddleware, ContextCompressionMiddleware, FinalCallWrapUpMiddleware,
-    ImageAwareMessageTrimMiddleware, MicrocompactMiddleware, legacy_max_input_tokens,
+    ArtifactIndexTocMiddleware, FinalCallWrapUpMiddleware, ImageAwareMessageTrimMiddleware,
+    legacy_max_input_tokens,
 };
 
 /// Window assumed for sizing microcompact when the model's context window is
