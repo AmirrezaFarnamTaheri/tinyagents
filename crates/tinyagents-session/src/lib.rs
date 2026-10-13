@@ -144,8 +144,8 @@ pub use run_ledger::DriverRunLedger;
 pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};
 pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{
-    ConversationPurgeStats, ConversationStore, ConversationThread, CreateConversationThread,
-    CrossThreadHit, ThreadMessage, ThreadMessagePatch,
+    ConversationPurgeStats, ConversationThread, CreateConversationThread, CrossThreadHit,
+    ThreadMessage, ThreadMessagePatch,
 };
 pub use transcript::spend::{ThreadSpend, TranscriptSpend, thread_spend, transcript_spend};
 pub use turn_state::TurnStateMirror;

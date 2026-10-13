@@ -69,7 +69,7 @@ pub struct ThreadMessage {
 }
 
 /// Input payload to create-or-update a thread via
-/// [`ConversationStore::ensure_thread`](super::store::ConversationStore::ensure_thread).
+/// [`ConversationPersistence::ensure_thread`](super::ConversationPersistence::ensure_thread).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateConversationThread {
@@ -105,7 +105,7 @@ pub struct ThreadMessagePatch {
 }
 
 /// A single match returned by
-/// [`ConversationStore::search_cross_thread_messages`](super::store::ConversationStore::search_cross_thread_messages).
+/// [`ConversationPersistence::search_cross_thread_messages`](super::ConversationPersistence::search_cross_thread_messages).
 /// Carries the source `thread_id` so the caller can render provenance into the
 /// `[Cross-chat context]` block (issue #1505).
 #[derive(Debug, Clone, PartialEq)]

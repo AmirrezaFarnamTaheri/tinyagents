@@ -8,6 +8,20 @@ implementations are removed and `rusqlite` is no longer a dependency of
 session, graph, harness or tasks. Tests may dev-depend on the memory and SQLite
 drivers.
 
+### Chat thread store: JSONL removed
+
+- `ConversationStore`, `FileConversationStore` and the `threads::` free
+  functions (`append_message`, `list_threads`, ...) are removed.
+  `DriverConversationStore` is the only `ConversationPersistence`
+  implementation, and now implements `update_message`, `delete_messages_from`
+  and `purge_threads` by rewriting the log onto a fresh incarnation and
+  swapping the metadata with a compare-and-swap.
+- `DriverConversationStore::in_memory()` is the default for library hosts with
+  no storage backend.
+- `ConversationPurgeStats` moves to `threads::persistence` (same re-exports);
+  `ConversationError::Legacy` and `::Worker` are removed.
+- Classic `memory/conversations/` files are no longer read by this crate.
+
 ### Removed, with the replacement
 
 | Removed | Use instead |
@@ -86,13 +100,9 @@ let report = import_workspace(&provider, "agent-id", workspace_dir).await?;
 ### Not yet moved
 
 These still use files and are migrated in follow-ups (tracked in
-tinyhumansai/openhuman#7688):
+tinyhumansai/openhuman#7688 and #7768):
 
 - the JSONL transcript writer, reader and `FileTranscriptLocator`
   (path-bound; `session_raw/` adoption, spend and view helpers read them);
-- the JSONL thread store (`ConversationStore`, `FileConversationStore`):
-  `DriverConversationStore` does not yet implement `update_message`,
-  `delete_messages_from` or `purge_threads`, so the file store stays until it
-  does;
 - the artifact offload (`artifacts::ArtifactOffload`) and media outputs, which
   write files the model later opens by path.
