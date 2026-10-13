@@ -204,6 +204,7 @@ pub fn turn_retry_policy() -> RetryPolicy {
 /// because the loop clamps `max_attempts` to it, so raising one alone would
 /// change nothing.
 #[must_use]
+#[allow(clippy::field_reassign_with_default)]
 pub fn run_policy(options: &TurnPolicyOptions) -> RunPolicy {
     let overrides = &options.overrides;
     let mut policy = RunPolicy::default();
