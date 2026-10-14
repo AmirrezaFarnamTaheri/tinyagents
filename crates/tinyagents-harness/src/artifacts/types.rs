@@ -3,8 +3,6 @@
 //! Dependency-free by design (std + `thiserror` only) so a host can build
 //! against these without pulling the engine — RFC §2 rule 2.
 
-use std::path::PathBuf;
-
 /// Deliverables directory under the artifact root. Artifacts here are meant to
 /// outlive the step that produced them and to be handed to a parent agent or a
 /// later step **by path**, not by value.
@@ -61,16 +59,15 @@ impl ArtifactKind {
     }
 }
 
-/// A worker artifact that was successfully written to disk.
+/// A worker artifact that was successfully stored as a blob.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffloadedArtifact {
     /// Which convention directory it landed in.
     pub kind: ArtifactKind,
-    /// Path relative to the render root, always `/`-separated so it can be
-    /// pasted straight into a file-read call on any platform.
+    /// The blob key, `/`-separated (`outputs/<name>`). It is what a pointer
+    /// hands the reader and what [`ArtifactOffload::read`](super::ArtifactOffload::read)
+    /// takes back.
     pub relative_path: String,
-    /// Absolute path on disk.
-    pub absolute_path: PathBuf,
     /// Bytes actually stored (post-redaction).
     pub stored_bytes: usize,
     /// Bytes of the caller's original payload (pre-redaction).
@@ -126,21 +123,7 @@ pub enum OffloadError {
         path: String,
     },
 
-    /// The parent directory that actually materialised on disk resolves,
-    /// through symlinks, to somewhere outside the convention root.
-    ///
-    /// The lexical checks in
-    /// [`resolve_artifact_path`](super::resolve_artifact_path) cannot see this,
-    /// because the target does not exist yet when they run.
-    #[error("artifact parent escapes its root through a symlink: {path} resolves to {resolved}")]
-    SymlinkEscape {
-        /// The parent directory as requested.
-        path: String,
-        /// Where it actually resolves to.
-        resolved: String,
-    },
-
-    /// Creating the parent directory or writing the file failed.
-    #[error("artifact write failed: {0}")]
-    Io(#[from] std::io::Error),
+    /// The blob store refused or failed the write.
+    #[error("artifact storage failed: {0}")]
+    Storage(#[from] tinystoragedrivers_core::StorageError),
 }
