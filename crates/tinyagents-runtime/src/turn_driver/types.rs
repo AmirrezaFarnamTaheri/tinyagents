@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use tinyagents_harness::steering::{SteeringCommandKind, SteeringPolicy};
-pub use tinyagents_harness::tool::EarlyExit;
+use tinyagents_harness::tool::EarlyExit;
 
 use super::steering::{SteeringFeed, SteeringRegistrar};
 use super::tool_set::ToolSetReport;

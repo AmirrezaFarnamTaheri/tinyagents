@@ -27,6 +27,5 @@ pub use driver::{
 pub use steering::{FeedGuard, RunQueueFeed, SteeringFeed, SteeringRegistrar};
 pub use tool_set::{DispatchSelector, SharedToolSet, ToolSetBuilder, ToolSetReport};
 pub use types::{
-    EarlyExit, SubagentScope, TurnCompletionSink, TurnControls, TurnReport, TurnReportSlot,
-    TurnScope,
+    SubagentScope, TurnCompletionSink, TurnControls, TurnReport, TurnReportSlot, TurnScope,
 };
