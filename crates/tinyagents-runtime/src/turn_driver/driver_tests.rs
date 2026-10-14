@@ -824,7 +824,7 @@ async fn a_split_turn_is_driven_by_the_host_and_settled_by_its_tail() {
     let request = DriverRequest {
         history: vec![Message::user("go")],
         tools: snapshot,
-        run_context: RunContext::new(tinyagents_harness::config::RunConfig::new("split-run"), ()),
+        run_context: RunContext::new(tinyagents_harness::context::RunConfig::new("split-run"), ()),
         stream: false,
         controls,
     };

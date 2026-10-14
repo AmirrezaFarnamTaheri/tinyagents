@@ -20,16 +20,16 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tinyagents_harness::agent_loop::PartialRunOutcome;
+use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::EventListener;
+use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::middleware::{
     ApprovalResolver, Middleware, ToolCallPolicy, ToolPolicyGateMiddleware,
 };
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_harness::tool::EarlyExitHook;
-use tinyagents_harness::agent_loop::PartialRunOutcome;
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ChatModel;
