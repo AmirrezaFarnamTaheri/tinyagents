@@ -319,6 +319,7 @@ pub struct HarnessParts<State: Send + Sync + 'static, C: Send + Sync + 'static> 
 impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C> {
     /// Plans and wires one turn without running it. Failures before the harness
     /// would run publish their [`TurnReport`] and return as a [`DriverFailure`].
+    #[allow(clippy::result_large_err)] // `DriverFailure` is the session driver's own error type
     pub async fn prepare(
         &self,
         mut request: DriverRequest<C>,
