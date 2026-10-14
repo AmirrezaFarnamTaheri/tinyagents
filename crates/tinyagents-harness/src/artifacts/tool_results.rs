@@ -2,37 +2,44 @@
 //!
 //! Tool results enter the model context before the provider has seen them, so
 //! this is the last cheap point to replace large raw output with a bounded
-//! preview. The full, redacted body is written to disk so the host's
-//! file-reading tool can inspect it later.
+//! preview. The full, redacted body is written to a tinystoragedrivers
+//! [`BlobStore`] under `tool-results/<session>/<tool>/<call>.txt`, and the
+//! pointer the model receives is that blob key.
 //!
-//! Where it is written is the host's choice, through the two constructors:
+//! The store takes a blob handle, never a filesystem path:
 //!
-//! * [`ToolResultArtifactStore::new`] writes under
-//!   `<action_dir>/artifacts/tool-results/` and hands the model a path relative
-//!   to `action_dir`. Simple, but the files land in the directory the agent is
-//!   working in: a coding agent editing a git checkout adds them to the
-//!   project, and they show up in its diff.
-//! * [`ToolResultArtifactStore::detached`] writes under a storage directory the
-//!   host keeps outside the working tree and hands the model the **absolute**
-//!   path. Use it whenever the action directory is someone's project.
+//! * [`ToolResultArtifactStore::new`] writes to a host-supplied scoped blob
+//!   store (SQLite, MongoDB, files, ...).
+//! * [`ToolResultArtifactStore::in_memory`] is the default for library users
+//!   with no storage backend; nothing outlives the process.
+//!
+//! Nothing lands in the agent's working tree. A host that lets the model open
+//! the pointer must serve the key from the blob store in its read tool (see
+//! [`ToolResultArtifactStore::read`]); that wiring is policy and therefore the
+//! host's, not this crate's.
 //!
 //! Distinct from [`offload_oversized_result`](super::offload_oversized_result),
 //! which offloads a *worker's final result* under `outputs/`: this handles each
-//! *tool result* mid-turn under `artifacts/tool-results/<session>/<tool>/`.
+//! *tool result* mid-turn under `tool-results/<session>/<tool>/`.
 //!
 //! What the host supplies, because the crate cannot decide it: the
 //! [`ArtifactRedactor`] every body passes through before it is stored, the name
-//! of its file-reading tool, the wrapper tool a read may arrive inside, and the
+//! of its reading tool, the wrapper tool a read may arrive inside, and the
 //! largest body its reader will open.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
+use tinystoragedrivers_core::{BlobStore, Capability, MemoryStorage, Scope, StorageBackend};
 
 use super::policy::{ArtifactRedactor, Redacted};
 
-const ARTIFACT_ROOT: &str = "artifacts/tool-results";
+/// The blob namespace every tool-result artifact lives under.
+const ARTIFACT_ROOT: &str = "tool-results";
+/// Pointers a host wrote before the store moved onto blobs
+/// (`artifacts/tool-results/...`) still page: a transcript outlives the store.
+const LEGACY_ARTIFACT_ROOT: &str = "artifacts/tool-results";
 
 /// A read of a persisted artifact, recognised from a tool call's arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,9 +63,8 @@ pub struct ArtifactRead {
 /// wrapped tool's result — is followed into the tool it runs (#6284). Any
 /// other tool that happens to carry `tool`/`args` fields is not a wrapper.
 ///
-/// This recognises the relative `artifacts/tool-results/…` pointer of a store
-/// built with [`ToolResultArtifactStore::new`]. A detached store hands out
-/// absolute paths; use [`ToolResultArtifactStore::read_target`] for it.
+/// This recognises the `tool-results/…` blob key a [`ToolResultArtifactStore`]
+/// hands out (and the legacy `artifacts/tool-results/…` form).
 pub fn artifact_read_target(
     tool_name: &str,
     args: &Value,
@@ -70,44 +76,19 @@ pub fn artifact_read_target(
         args,
         read_tool,
         wrapper_tool,
-        &is_relative_artifact_path,
+        &is_artifact_key,
     )
 }
 
-/// A path component match: `artifacts/tool-results-backup/…` shares the
-/// prefix but is not the artifact directory.
-fn is_relative_artifact_path(path: &str) -> bool {
-    path.trim_start_matches("./")
-        .strip_prefix(ARTIFACT_ROOT)
-        .is_some_and(|rest| rest.starts_with('/'))
-}
-
-/// Whether `path` is absolute and lexically inside `dir`. A `..` component
-/// disqualifies it outright: the read tool would resolve it somewhere else,
-/// and the bytes it returns would not be this store's.
-fn is_absolute_path_under(path: &str, dir: &Path) -> bool {
-    let path = Path::new(path);
-    path.is_absolute()
-        && !path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        && path.starts_with(dir)
-        && path != dir
-}
-
-/// Remove lexical `.` and `..` components without requiring the path to exist.
-fn normalize_absolute_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
+/// A path component match: `tool-results-backup/…` shares the prefix but is
+/// not the artifact namespace. The legacy `artifacts/tool-results/…` form is
+/// recognised too, so a transcript written before the move keeps paging.
+fn is_artifact_key(path: &str) -> bool {
+    let path = path.trim_start_matches("./");
+    [ARTIFACT_ROOT, LEGACY_ARTIFACT_ROOT].iter().any(|root| {
+        path.strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 fn read_target_matching(
@@ -291,38 +272,36 @@ pub(super) fn apply_tool_result_budget(
     )
 }
 
-/// Writes oversized tool results to disk: under
-/// `<action_dir>/artifacts/tool-results/` ([`Self::new`]), or under a storage
-/// directory outside the working tree ([`Self::detached`]). Detached artifacts
-/// live in a dedicated `tool-results` child namespace so pruning cannot touch
-/// other host state.
+/// Writes oversized tool results to a [`BlobStore`].
+///
+/// Each body is stored under `tool-results/<session>/<tool>/<call>.txt` and the
+/// model is handed that key as `artifact_path`.
 ///
 /// The host supplies what the crate cannot decide: the redactor every body
-/// passes through before it is stored (an artifact on disk is exactly as
-/// readable as the result it replaces), the name of its file-reading tool
-/// (quoted in the envelope so the model knows how to open the file), and the
-/// largest body that tool will open.
-#[derive(Debug, Clone)]
+/// passes through before it is stored (an artifact is exactly as readable as
+/// the result it replaces), the name of its reading tool (quoted in the
+/// envelope so the model knows how to open the artifact), and the largest body
+/// that tool will open.
+#[derive(Clone)]
 pub struct ToolResultArtifactStore {
-    /// `action_dir` for [`StoreLayout::ActionRelative`], the storage directory
-    /// itself for [`StoreLayout::Detached`].
-    root: PathBuf,
-    layout: StoreLayout,
+    blobs: Arc<dyn BlobStore>,
     session_key: String,
     redactor: Arc<dyn ArtifactRedactor>,
     read_tool: String,
     max_readable_bytes: u64,
+    retention: Option<Duration>,
 }
 
-/// Where a store keeps its files and how it names them to the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StoreLayout {
-    /// `<root>/artifacts/tool-results/…`, named relative to `root` (the
-    /// action directory). The original layout.
-    ActionRelative,
-    /// `<root>/…`, named by absolute path. `root` is a host-owned storage
-    /// directory outside the working tree.
-    Detached,
+impl std::fmt::Debug for ToolResultArtifactStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolResultArtifactStore")
+            .field("blobs", &self.blobs)
+            .field("session_key", &self.session_key)
+            .field("read_tool", &self.read_tool)
+            .field("max_readable_bytes", &self.max_readable_bytes)
+            .field("retention", &self.retention)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -355,225 +334,110 @@ impl ToolResultArtifactOutcome {
 }
 
 impl ToolResultArtifactStore {
-    /// `read_tool` is the host's file-reading tool and `max_readable_bytes` the
+    /// A store over `blobs` (a scoped tinystoragedrivers blob handle).
+    ///
+    /// `read_tool` is the host's reading tool and `max_readable_bytes` the
     /// largest body it will open; a body whose redacted form exceeds it is
     /// never stored, because the model could not read it back.
-    ///
-    /// Files go under `<action_dir>/artifacts/tool-results/` and the model is
-    /// given a path relative to `action_dir`. When `action_dir` is a project
-    /// the agent edits, prefer [`Self::detached`]: these files would otherwise
-    /// become part of the project.
     pub fn new(
-        action_dir: PathBuf,
-        session_key: impl Into<String>,
-        redactor: Arc<dyn ArtifactRedactor>,
-        read_tool: impl Into<String>,
-        max_readable_bytes: u64,
-    ) -> Self {
-        Self::with_layout(
-            action_dir,
-            StoreLayout::ActionRelative,
-            session_key,
-            redactor,
-            read_tool,
-            max_readable_bytes,
-        )
-    }
-
-    /// A store that keeps its files in `storage_dir`, outside the working
-    /// tree, and names each one to the model by its absolute path.
-    ///
-    /// The working tree is the agent's to change and, for a coding agent, the
-    /// thing it is graded or reviewed on: an artifact written there is a stray
-    /// file in the user's project, picked up by `git add -A` and shipped in the
-    /// diff. A detached store never writes there. The absolute pointer resolves
-    /// the same way from any working directory, so it stays readable when a
-    /// turn's action directory changes, and a shell can open it as readily as
-    /// the host's read tool can.
-    ///
-    /// Artifacts are kept under `storage_dir/tool-results/`, an owned namespace
-    /// that pruning may remove stale session directories from. The host must
-    /// let its read tool open paths under that namespace; that grant is policy
-    /// and therefore the host's, not this crate's.
-    pub fn detached(
-        storage_dir: PathBuf,
-        session_key: impl Into<String>,
-        redactor: Arc<dyn ArtifactRedactor>,
-        read_tool: impl Into<String>,
-        max_readable_bytes: u64,
-    ) -> Self {
-        Self::try_detached(
-            storage_dir,
-            session_key,
-            redactor,
-            read_tool,
-            max_readable_bytes,
-        )
-        .expect("detached artifact storage directory must be absolute and UTF-8 representable")
-    }
-
-    /// Fallible form of [`Self::detached`]. Returns an error when a relative
-    /// root cannot be made absolute or when the root cannot be represented in
-    /// the UTF-8 path string passed to the model's read tool.
-    pub fn try_detached(
-        storage_dir: PathBuf,
-        session_key: impl Into<String>,
-        redactor: Arc<dyn ArtifactRedactor>,
-        read_tool: impl Into<String>,
-        max_readable_bytes: u64,
-    ) -> anyhow::Result<Self> {
-        // The pointer is this path, so it must be absolute: a relative one would
-        // resolve against whatever directory the reading tool works in.
-        let storage_dir = if storage_dir.is_absolute() {
-            storage_dir
-        } else {
-            std::env::current_dir()?.join(&storage_dir)
-        };
-        let storage_dir = normalize_absolute_path(&storage_dir.join("tool-results"));
-        if storage_dir.to_str().is_none() {
-            anyhow::bail!("detached artifact storage path is not valid UTF-8");
-        }
-        Ok(Self::with_layout(
-            storage_dir,
-            StoreLayout::Detached,
-            session_key,
-            redactor,
-            read_tool,
-            max_readable_bytes,
-        ))
-    }
-
-    fn with_layout(
-        root: PathBuf,
-        layout: StoreLayout,
+        blobs: Arc<dyn BlobStore>,
         session_key: impl Into<String>,
         redactor: Arc<dyn ArtifactRedactor>,
         read_tool: impl Into<String>,
         max_readable_bytes: u64,
     ) -> Self {
         Self {
-            root,
-            layout,
+            blobs,
             session_key: sanitize_component(&session_key.into()),
             redactor,
             read_tool: read_tool.into(),
             max_readable_bytes,
+            retention: None,
         }
     }
 
-    /// The root artifacts are written under: the action directory for a store
-    /// from [`Self::new`], the storage directory for one from
-    /// [`Self::detached`]. A caller choosing the wrong root produces a pointer
-    /// the model cannot dereference, and that is only assertable from outside
-    /// (#6483).
-    pub fn root(&self) -> &Path {
-        &self.root
+    /// A store over a private in-memory blob store: the default for library
+    /// users with no storage backend. Nothing outlives the process.
+    pub fn in_memory(
+        session_key: impl Into<String>,
+        redactor: Arc<dyn ArtifactRedactor>,
+        read_tool: impl Into<String>,
+        max_readable_bytes: u64,
+    ) -> Self {
+        let scoped = MemoryStorage::new()
+            .for_scope(&Scope::new("local").expect("static scope"))
+            .expect("memory scope");
+        Self::new(
+            scoped.blobs().clone(),
+            session_key,
+            redactor,
+            read_tool,
+            max_readable_bytes,
+        )
     }
 
-    /// Whether this store keeps its files outside the working tree
-    /// ([`Self::detached`]).
-    pub fn is_detached(&self) -> bool {
-        self.layout == StoreLayout::Detached
-    }
-
-    /// The directory holding one subdirectory per session.
-    fn sessions_dir(&self) -> PathBuf {
-        match self.layout {
-            StoreLayout::ActionRelative => self.root.join(ARTIFACT_ROOT),
-            StoreLayout::Detached => self.root.clone(),
-        }
-    }
-
-    /// The artifact a tool call reads, if it reads one of *this* store's
-    /// artifacts.
+    /// Give every artifact a lifetime. Blobs carry no modification time, so
+    /// age-based retention is the driver's: once `retention` has passed since
+    /// the write, the blob reads as absent and the driver reclaims it.
     ///
-    /// Like [`artifact_read_target`], which it extends: a relative
-    /// `artifacts/tool-results/…` path is still recognised, so a transcript
-    /// written before a host moved to a detached store keeps paging correctly,
-    /// and a detached store additionally recognises an absolute path inside its
-    /// storage directory, which is the pointer it hands out.
+    /// A driver without [`Capability::BlobTtl`] stores the artifact without a
+    /// lifetime (logged); such a host reclaims with [`Self::purge_session`].
+    pub fn with_retention(mut self, retention: Duration) -> Self {
+        self.retention = Some(retention);
+        self
+    }
+
+    /// The blob store artifacts are written to.
+    pub fn blobs(&self) -> &Arc<dyn BlobStore> {
+        &self.blobs
+    }
+
+    /// The artifact a tool call reads, if it reads one of this store's
+    /// artifacts: a `tool-results/…` key (or the legacy
+    /// `artifacts/tool-results/…` form) passed to the read tool.
     pub fn read_target(
         &self,
         tool_name: &str,
         args: &Value,
         wrapper_tool: &str,
     ) -> Option<ArtifactRead> {
-        read_target_matching(tool_name, args, &self.read_tool, wrapper_tool, &|path| {
-            is_relative_artifact_path(path)
-                || (self.is_detached() && is_absolute_path_under(path, &self.root))
-        })
+        artifact_read_target(tool_name, args, &self.read_tool, wrapper_tool)
     }
 
-    /// The host's file-reading tool, as quoted in every envelope.
+    /// The host's reading tool, as quoted in every envelope.
     pub fn read_tool(&self) -> &str {
         &self.read_tool
     }
 
-    /// Delete artifact directories for sessions other than this one that have
-    /// not been touched within `max_age`.
+    /// Read an artifact back by the key a pointer carried. `Ok(None)` means no
+    /// such artifact (never written, expired or purged).
     ///
-    /// Nothing else removes artifacts (from the action workspace, or from a
-    /// detached store's storage directory), so without a bound the directory
-    /// grows for the life of the install — a connector returning 17-65 KB across 8-14 calls per question
-    /// (#6408) writes a file per call. Trading a token-burn bug for a
-    /// disk-growth bug is not a fix.
-    ///
-    /// Pruning on session START rather than on session end is deliberate. There
-    /// is no single point where a session host ends — cached agents are evicted
-    /// on fingerprint mismatch or poisoning, and a crash ends a session with no
-    /// hook at all — so an end-of-session sweep would miss exactly the runs most
-    /// likely to have left artifacts behind. An age sweep at start is
-    /// self-healing instead: whatever the last run did, the next one tidies it.
-    ///
-    /// The current session is never pruned, no matter its age, so a long-lived
-    /// session cannot delete artifacts the model may still be reading back.
-    ///
-    /// Best-effort by design: a failure here must not fail a turn. The caller
-    /// logs and carries on, because the worst case is disk left uncollected,
-    /// which the next session retries.
-    pub fn prune_stale_sessions(&self, max_age: std::time::Duration) -> std::io::Result<u32> {
-        let root = self.sessions_dir();
-        let entries = match std::fs::read_dir(&root) {
-            Ok(entries) => entries,
-            // No artifact root yet is the common case on a first run.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(error) => return Err(error),
-        };
-
-        let now = std::time::SystemTime::now();
-        let mut removed = 0;
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            // Never prune the directory this store is actively writing into.
-            if name.to_str() == Some(self.session_key.as_str()) {
-                continue;
-            }
-            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                continue;
-            }
-            let stale = newest_modified(&entry.path())
-                .ok()
-                .and_then(|modified| now.duration_since(modified).ok())
-                .is_some_and(|age| age > max_age);
-            if stale && std::fs::remove_dir_all(entry.path()).is_ok() {
-                removed += 1;
-            }
-        }
-        Ok(removed)
+    /// The key is checked fail-closed: it must sit under `tool-results/` (the
+    /// legacy `artifacts/tool-results/` prefix is accepted and mapped), carry
+    /// no `..`, empty or control-character component, and so a pointer a model
+    /// rewrote by hand cannot address any other blob of the scope.
+    pub async fn read(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let key = canonical_key(key)?;
+        let blob = self.blobs.get(&key).await?;
+        Ok(blob.map(|blob| String::from_utf8_lossy(&blob.bytes).into_owned()))
     }
 
-    /// The pointer the model is given for one artifact: relative to the
-    /// action directory for [`Self::new`], absolute for [`Self::detached`].
+    /// Delete every artifact of this store's session and return how many went.
+    pub async fn purge_session(&self) -> anyhow::Result<u64> {
+        let dir = format!("{ARTIFACT_ROOT}/{}", self.session_key);
+        Ok(self.blobs.delete_tree(&dir).await?)
+    }
+
+    /// The pointer the model is given for one artifact: its blob key.
     pub fn path_for_read_tool(&self, tool_name: &str, call_id: Option<&str>) -> String {
-        let relative = self.session_relative_path(tool_name, call_id);
-        match self.layout {
-            StoreLayout::ActionRelative => format!("{ARTIFACT_ROOT}/{relative}"),
-            StoreLayout::Detached => self.root.join(relative).to_string_lossy().into_owned(),
-        }
+        format!(
+            "{ARTIFACT_ROOT}/{}",
+            self.session_relative_path(tool_name, call_id)
+        )
     }
 
-    /// `<session>/<tool>/<call>.txt`, the part of an artifact's path below the
-    /// sessions directory.
+    /// `<session>/<tool>/<call>.txt`, the part of an artifact's key below the
+    /// namespace.
     fn session_relative_path(&self, tool_name: &str, call_id: Option<&str>) -> String {
         let call = call_id
             .map(sanitize_component)
@@ -610,34 +474,32 @@ impl ToolResultArtifactStore {
         )?;
         let read_tool = self.read_tool.as_str();
         let pointer = self.path_for_read_tool(tool_name, call_id);
-        let absolute_path = match self.layout {
-            StoreLayout::ActionRelative => self.root.join(&pointer),
-            StoreLayout::Detached => PathBuf::from(&pointer),
-        };
-        assert_within_root(&self.root, &absolute_path)?;
-        if let Some(parent) = absolute_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-            let canonical_root = tokio::fs::canonicalize(&self.root).await?;
-            let canonical_parent = tokio::fs::canonicalize(parent).await?;
-            if !canonical_parent.starts_with(&canonical_root) {
-                anyhow::bail!(
-                    "tool-result artifact parent escaped its root: {}",
-                    parent.display()
+        let body = sanitized.text.clone().into_bytes();
+        let content_type = Some("text/plain; charset=utf-8");
+        match self.retention {
+            Some(ttl) if self.blobs.capabilities().contains(Capability::BlobTtl) => {
+                self.blobs
+                    .put_expiring(&pointer, body, content_type, ttl)
+                    .await?;
+            }
+            Some(_) => {
+                tracing::debug!(
+                    key = %pointer,
+                    "[tool-result-artifact] blob driver cannot expire blobs; stored without a lifetime"
                 );
+                self.blobs.put(&pointer, body, content_type).await?;
+            }
+            None => {
+                self.blobs.put(&pointer, body, content_type).await?;
             }
         }
-        tokio::fs::write(&absolute_path, sanitized.text.as_bytes()).await?;
+        tracing::debug!(
+            key = %pointer,
+            stored_bytes = sanitized.text.len(),
+            "[tool-result-artifact] stored tool result on the blob store"
+        );
         let relative_path = pointer;
-        // Keeps the action-relative envelope byte-identical to what it was
-        // before detached stores existed (`contract_expected.txt`).
-        let location_note = match self.layout {
-            StoreLayout::ActionRelative => {
-                "Full scrubbed output was persisted under the action workspace."
-            }
-            StoreLayout::Detached => {
-                "Full scrubbed output was persisted outside the working tree, at the absolute artifact_path above (not part of the project)."
-            }
-        };
+        let location_note = "Full scrubbed output was persisted on the artifact store at the artifact_path above (not part of the project).";
 
         let (preview, preview_outcome) =
             apply_tool_result_budget(sanitized.text.clone(), preview_budget_bytes);
@@ -990,33 +852,26 @@ fn sanitize_component(value: &str) -> String {
     }
 }
 
-fn assert_within_root(root: &Path, path: &Path) -> anyhow::Result<()> {
-    if path.starts_with(root) {
-        return Ok(());
+/// Normalise a pointer to the blob key it names, refusing anything that is not
+/// a plain `tool-results/<…>` key.
+fn canonical_key(key: &str) -> anyhow::Result<String> {
+    let trimmed = key.trim_start_matches("./");
+    let canonical = trimmed
+        .strip_prefix("artifacts/")
+        .filter(|rest| rest.starts_with("tool-results/"))
+        .unwrap_or(trimmed);
+    let under_namespace = canonical
+        .strip_prefix(ARTIFACT_ROOT)
+        .is_some_and(|rest| rest.starts_with('/'));
+    let clean = canonical
+        .split('/')
+        .all(|part| !part.is_empty() && part != "." && part != "..")
+        && !canonical.chars().any(char::is_control)
+        && !canonical.contains('\\');
+    if !under_namespace || !clean {
+        anyhow::bail!("not a tool-result artifact key: {key}");
     }
-    anyhow::bail!(
-        "tool-result artifact path escaped its root: {}",
-        path.display()
-    );
-}
-
-/// Return the newest modification time in a session tree without following
-/// symlinks. Nested tool writes must keep their containing session alive.
-fn newest_modified(path: &Path) -> std::io::Result<std::time::SystemTime> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    let mut newest = metadata.modified()?;
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(path)? {
-            let entry = entry?;
-            if entry.file_type()?.is_symlink() {
-                continue;
-            }
-            if let Ok(modified) = newest_modified(&entry.path()) {
-                newest = newest.max(modified);
-            }
-        }
-    }
-    Ok(newest)
+    Ok(canonical.to_string())
 }
 
 #[cfg(test)]
