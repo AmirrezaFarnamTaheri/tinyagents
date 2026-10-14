@@ -129,7 +129,10 @@ async fn early_exit_tool_pauses_the_loop_and_surfaces_its_output() {
     assert_eq!(outcome.output.as_deref(), Some("Which file?"));
     assert_eq!(model.requests().len(), 1, "no model call after the exit");
     let exit = slot.get().unwrap().early_exit.unwrap();
-    assert_eq!((exit.tool.as_str(), exit.question.as_str()), ("ask_user", "Which file?"));
+    assert_eq!(
+        (exit.tool.as_str(), exit.question.as_str()),
+        ("ask_user", "Which file?")
+    );
 }
 
 #[tokio::test]
@@ -177,7 +180,11 @@ async fn turn_completed_fires_once_unless_deferred_to_the_caller() {
     turn(&mut deferred, controls).await.unwrap();
     let report = slot.get().unwrap();
     assert!(report.completion_deferred);
-    assert_eq!(sink.0.load(Ordering::SeqCst), 0, "the wrap-up is still streaming");
+    assert_eq!(
+        sink.0.load(Ordering::SeqCst),
+        0,
+        "the wrap-up is still streaming"
+    );
     assert!(report.emit_completed());
     assert!(!report.emit_completed(), "exactly once");
     assert!(!slot.get().unwrap().emit_completed(), "across every clone");
@@ -198,7 +205,10 @@ impl SteeringRegistrar for RecordingRegistrar {
             .push(format!("register:{task_id}:cancel={cancel}"));
     }
     fn deregister(&self, task_id: &str) {
-        self.events.lock().unwrap().push(format!("deregister:{task_id}"));
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("deregister:{task_id}"));
     }
 }
 
@@ -248,16 +258,27 @@ async fn subagent_scope_refuses_spawn_tools_and_registers_its_steering_handle() 
 
     assert_eq!(outcome.output.as_deref(), Some("child done"));
     let report = slot.get().unwrap();
-    assert_eq!(report.tools.plan.spawn_refused, vec!["spawn_agent".to_string()]);
+    assert_eq!(
+        report.tools.plan.spawn_refused,
+        vec!["spawn_agent".to_string()]
+    );
     assert_eq!(report.tools.registered, vec!["read_file".to_string()]);
     assert_eq!(
         *registrar.events.lock().unwrap(),
         vec!["register:task-7:cancel=true", "deregister:task-7"],
         "a child's handle accepts cancel and is gone once the run is over"
     );
-    assert_eq!(sink.0.load(Ordering::SeqCst), 0, "a child reports through its parent");
+    assert_eq!(
+        sink.0.load(Ordering::SeqCst),
+        0,
+        "a child reports through its parent"
+    );
     assert!(
-        model.requests().len() == 1 && model.requests()[0].tools.iter().all(|t| t.name != "spawn_agent")
+        model.requests().len() == 1
+            && model.requests()[0]
+                .tools
+                .iter()
+                .all(|t| t.name != "spawn_agent")
     );
 }
 
@@ -265,7 +286,12 @@ async fn subagent_scope_refuses_spawn_tools_and_registers_its_steering_handle() 
 async fn root_scope_keeps_spawn_tools_and_steering_is_not_cancelable() {
     let registrar = Arc::new(RecordingRegistrar::default());
     let model = Arc::new(ScriptedModel::replies(vec!["root done"]));
-    let mut root = session(&model, child_tools(), &["read_file", "spawn_agent"], spawn_admission());
+    let mut root = session(
+        &model,
+        child_tools(),
+        &["read_file", "spawn_agent"],
+        spawn_admission(),
+    );
     let controls = TurnControls {
         registrar: Some(registrar.clone()),
         ..TurnControls::default()
@@ -275,8 +301,15 @@ async fn root_scope_keeps_spawn_tools_and_steering_is_not_cancelable() {
     turn(&mut root, controls).await.unwrap();
 
     assert!(slot.get().unwrap().tools.plan.spawn_refused.is_empty());
-    assert!(registrar.events.lock().unwrap().is_empty(), "only children register");
-    assert!(!TurnScope::Root.steering_policy().is_allowed(SteeringCommandKind::Cancel));
+    assert!(
+        registrar.events.lock().unwrap().is_empty(),
+        "only children register"
+    );
+    assert!(
+        !TurnScope::Root
+            .steering_policy()
+            .is_allowed(SteeringCommandKind::Cancel)
+    );
 }
 
 #[derive(Debug)]
@@ -376,7 +409,11 @@ async fn tool_policy_rejection_is_returned_to_the_model_and_never_executes() {
     let outcome = turn(&mut session, TurnControls::default()).await.unwrap();
 
     assert_eq!(outcome.output.as_deref(), Some("understood"));
-    assert_eq!(executions.load(Ordering::SeqCst), 0, "the denied tool never ran");
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        0,
+        "the denied tool never ran"
+    );
     let second = all_text(&model.requests()[1]);
     assert!(
         second.contains("denied by policy 'test_policy': not on this channel"),
@@ -401,7 +438,10 @@ impl Middleware<(), ()> for Trace {
         _: &(),
         _: &mut ModelRequest,
     ) -> HarnessResult<()> {
-        self.log.lock().unwrap().push(format!("{}.before_model", self.name));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("{}.before_model", self.name));
         Ok(())
     }
     async fn after_tool(
@@ -411,7 +451,10 @@ impl Middleware<(), ()> for Trace {
         _: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> HarnessResult<()> {
-        self.log.lock().unwrap().push(format!("{}.after_tool", self.name));
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("{}.after_tool", self.name));
         if self.rewrite_result {
             *result = ToolResult::success("[capped]");
         }
@@ -460,7 +503,9 @@ async fn context_middleware_runs_in_plan_order_and_unwinds_in_reverse() {
 #[tokio::test]
 async fn early_exit_records_the_raw_result_before_context_middleware_rewrites_it() {
     let log = Arc::new(Mutex::new(Vec::new()));
-    let model = Arc::new(ScriptedModel::new(vec![tool_call_response(call("c1", "ask", 1))]));
+    let model = Arc::new(ScriptedModel::new(vec![tool_call_response(call(
+        "c1", "ask", 1,
+    ))]));
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(FakeTool::returning("ask", "raw question"))];
     let mut session = session(&model, tools, &["ask"], traced(&log, true));
     let controls = TurnControls {
@@ -471,7 +516,10 @@ async fn early_exit_records_the_raw_result_before_context_middleware_rewrites_it
 
     turn(&mut session, controls).await.unwrap();
 
-    assert_eq!(slot.get().unwrap().early_exit.unwrap().question, "raw question");
+    assert_eq!(
+        slot.get().unwrap().early_exit.unwrap().question,
+        "raw question"
+    );
 }
 
 fn looping_model() -> Arc<ScriptedModel> {
@@ -501,12 +549,21 @@ async fn pause_at_cap_ends_the_turn_with_its_partial_transcript() {
     let outcome = turn(&mut session, controls).await.unwrap();
 
     assert!(outcome.interrupted, "paused, not finished");
-    assert_eq!(model.requests().len(), 2, "exactly the capped number of calls");
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "exactly the capped number of calls"
+    );
     let report = slot.get().unwrap();
     assert!(report.hit_cap);
     assert_eq!((report.model_calls, report.max_iterations), (2, 2));
     assert!(
-        outcome.history.iter().filter(|m| matches!(m, Message::Tool(_))).count() == 2,
+        outcome
+            .history
+            .iter()
+            .filter(|m| matches!(m, Message::Tool(_)))
+            .count()
+            == 2,
         "the completed rounds stay in history"
     );
 }
@@ -541,7 +598,11 @@ async fn a_zero_iteration_cap_means_unset() {
     let slot = controls.report.clone();
 
     assert_eq!(
-        turn(&mut session, controls).await.unwrap().output.as_deref(),
+        turn(&mut session, controls)
+            .await
+            .unwrap()
+            .output
+            .as_deref(),
         Some("fine")
     );
     assert!(slot.get().unwrap().max_iterations > 0);

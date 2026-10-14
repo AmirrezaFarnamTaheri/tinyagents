@@ -75,7 +75,12 @@ fn session_deferred_tools_leave_the_direct_surface() {
         .set(set(&["a", "b"]))
         .deferred(["b".to_string()]);
     let (_, harness) = registered(&builder);
-    let direct: Vec<_> = harness.tools().schemas().into_iter().map(|s| s.name).collect();
+    let direct: Vec<_> = harness
+        .tools()
+        .schemas()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
     let deferred: Vec<_> = harness
         .tools()
         .deferred_schemas()

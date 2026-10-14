@@ -192,8 +192,8 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             .steering
             .clone()
             .unwrap_or_else(|| SteeringHandle::new(scope.steering_policy()));
-        let hook = (!controls.early_exit_tools.is_empty())
-            .then(|| EarlyExitHook::new(handle.clone()));
+        let hook =
+            (!controls.early_exit_tools.is_empty()).then(|| EarlyExitHook::new(handle.clone()));
         if scope.is_subagent() {
             tools.mark_subagent();
         }
@@ -201,8 +201,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             hook.as_ref().map(|hook| (&controls.early_exit_tools, hook));
         let tool_report = tools.register(&mut harness, early_exit_args);
 
-        if enforce_tool_snapshot
-            && !same_tools(&harness.tools().declared_specs(), snapshot.specs())
+        if enforce_tool_snapshot && !same_tools(&harness.tools().declared_specs(), snapshot.specs())
         {
             return Err(failure(RuntimeError::ToolSnapshotMismatch));
         }
@@ -315,7 +314,6 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
         outcome
     }
 }
-
 
 #[cfg(test)]
 #[path = "driver_tests.rs"]

@@ -378,3 +378,82 @@ fn adapter_advertises_admitted_hidden_tools_and_keeps_deferred_ones_deferred() {
     assert_eq!(exposure("hidden"), tinytools::ToolExposure::Direct);
     assert_eq!(exposure("deferred"), tinytools::ToolExposure::Deferred);
 }
+
+struct ExposedTool(tinytools::ToolExposure);
+
+#[async_trait]
+impl Tool for ExposedTool {
+    fn name(&self) -> &str {
+        "exposed"
+    }
+    fn description(&self) -> &str {
+        "exposure probe"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    fn exposure(&self) -> tinytools::ToolExposure {
+        self.0
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success("ok"))
+    }
+}
+
+#[test]
+fn session_deferral_only_ever_subtracts_exposure() {
+    use tinytools::ToolExposure::{Deferred, Direct, Hidden};
+    let exposure = |declared, deferred| {
+        let sets = vec![Arc::new(vec![
+            Box::new(ExposedTool(declared)) as Box<dyn Tool>
+        ])];
+        CanonicalSharedToolAdapter::for_name(sets, "exposed")
+            .unwrap()
+            .deferred(deferred)
+            .exposure()
+    };
+    assert_eq!(exposure(Direct, false), Direct);
+    assert_eq!(
+        exposure(Direct, true),
+        Deferred,
+        "a direct tool moves behind search"
+    );
+    assert_eq!(exposure(Deferred, true), Deferred);
+    assert_eq!(
+        exposure(Hidden, true),
+        Hidden,
+        "deferral never reveals a hidden tool"
+    );
+    assert_eq!(
+        exposure(Hidden, false),
+        Direct,
+        "a hand-named hidden tool is callable"
+    );
+}
+
+struct CountingScope(std::sync::atomic::AtomicUsize);
+
+impl ToolExecScope for CountingScope {
+    fn scope<'a>(
+        &'a self,
+        _: Option<&'a dyn ToolRunContext>,
+        execution: ToolExecution<'a>,
+    ) -> ToolExecution<'a> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        execution
+    }
+}
+
+#[tokio::test]
+async fn exec_scope_wraps_each_execution() {
+    let sets = vec![Arc::new(vec![
+        Box::new(ExposedTool(tinytools::ToolExposure::Direct)) as Box<dyn Tool>,
+    ])];
+    let scope = Arc::new(CountingScope(std::sync::atomic::AtomicUsize::new(0)));
+    let adapter = CanonicalSharedToolAdapter::for_name(sets, "exposed")
+        .unwrap()
+        .with_exec_scope(scope.clone());
+    adapter.execute(serde_json::json!({})).await.unwrap();
+    adapter.execute(serde_json::json!({})).await.unwrap();
+    assert_eq!(scope.0.load(Ordering::SeqCst), 2);
+}
