@@ -27,3 +27,15 @@ fn child_config_bounds_the_summary_run() {
     let tiny = summary_child_config(&ctx, "summarizer", 0, 512);
     assert_eq!(tiny.max_tool_calls, Some(8), "never below eight tool calls");
 }
+
+#[tokio::test]
+async fn unary_summary_returns_the_models_text() {
+    use crate::testkit::ScriptedModel;
+    use tinyinference_llm::model::ModelResponse;
+    let ctx = RunContext::new(RunConfig::new("summarizer-summary"), ());
+    let model: Arc<dyn ChatModel<()>> = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("short summary")]));
+    let text = run_unary_summary(ctx, "m", model, 2, "sys".into(), "prompt".into())
+        .await
+        .unwrap();
+    assert_eq!(text, "short summary");
+}
