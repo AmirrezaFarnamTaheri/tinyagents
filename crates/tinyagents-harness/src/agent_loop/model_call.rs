@@ -1222,7 +1222,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // Tool-call markup a model narrates as text is held back from live
         // consumers and turned into calls on the terminal response instead.
         // Runs for every provider: native models narrate calls often enough.
-        let mut text_scrubber = recovery.scrubber(call_id);
+        // `special_tokens_only` was decided from the run's primary model. A
+        // fallback that does not report native tool calling gets full
+        // recovery under `Auto`, like any such model (#6733).
+        let mut text_scrubber = recovery.scrubber(call_id).map(|scrubber| {
+            scrubber.special_tokens_only(
+                recovery.special_tokens_only
+                    && model.profile().is_some_and(|profile| profile.tool_calling),
+            )
+        });
         // A terminal `Completed` response usually has richer provider metadata
         // than deltas (message id, usage, tool calls, and route information),
         // but its text is still the raw provider payload.  Keep the text and
