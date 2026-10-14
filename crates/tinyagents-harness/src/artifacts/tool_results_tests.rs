@@ -48,9 +48,11 @@ async fn threshold_persists_redacted_preview_and_file() {
 
     assert!(outcome.persisted);
     assert!(out.contains("artifact_path: tool-results/session_one/shell/call-1.txt"));
-    assert!(out.contains(
-        "read_with: file_read {\"path\":\"tool-results/session_one/shell/call-1.txt\"}"
-    ));
+    assert!(
+        out.contains(
+            "read_with: file_read {\"path\":\"tool-results/session_one/shell/call-1.txt\"}"
+        )
+    );
     assert!(out.contains("original_bytes:"));
     assert!(out.contains("[preview]"));
     assert!(out.contains("Credential/PII redaction was applied"));

@@ -71,13 +71,7 @@ pub fn artifact_read_target(
     read_tool: &str,
     wrapper_tool: &str,
 ) -> Option<ArtifactRead> {
-    read_target_matching(
-        tool_name,
-        args,
-        read_tool,
-        wrapper_tool,
-        &is_artifact_key,
-    )
+    read_target_matching(tool_name, args, read_tool, wrapper_tool, &is_artifact_key)
 }
 
 /// A path component match: `tool-results-backup/…` shares the prefix but is
