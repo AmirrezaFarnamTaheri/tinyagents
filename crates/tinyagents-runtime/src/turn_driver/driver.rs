@@ -238,12 +238,11 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             run_context.events.subscribe(listener);
         }
         if controls.pause_at_cap {
-            let pauser = tinyagents_harness::events::CapPauser::new(
+            let pauser = match tinyagents_harness::events::CapPauser::new(
                 handle.clone(),
                 max_iterations,
                 run_context.run_id().as_str(),
-            )
-            {
+            ) {
                 Ok(pauser) => pauser,
                 Err(error) => {
                     publish_failed(&controls, max_iterations, tool_report);

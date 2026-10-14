@@ -622,12 +622,17 @@ async fn a_snapshot_the_plan_does_not_honour_is_refused() {
         });
     });
     let mut session = session(&model, tools, &["only"], configure);
+    let controls = TurnControls::default();
+    let slot = controls.report.clone();
 
     assert_eq!(
-        turn(&mut session, TurnControls::default()).await,
+        turn(&mut session, controls).await,
         Err(RuntimeError::ToolSnapshotMismatch)
     );
     assert!(model.requests().is_empty());
+    let report = slot.get().expect("a refused turn still reports why");
+    assert!(report.tools.registered.is_empty());
+    assert_eq!(report.tools.plan.candidates, vec!["only".to_string()]);
 }
 
 struct Stamp(Arc<Mutex<Vec<&'static str>>>);
@@ -667,4 +672,47 @@ async fn execution_scope_wraps_every_tool_call() {
     turn(&mut session, TurnControls::default()).await.unwrap();
 
     assert_eq!(*trace.lock().unwrap(), vec!["enter", "exit"]);
+}
+
+#[tokio::test]
+async fn the_pause_trips_on_the_stricter_of_config_and_policy_caps() {
+    let model = looping_model();
+    let configure: Configure = Arc::new(|plan| plan.policy.limits.max_model_calls = 2);
+    let mut session = session(&model, step_tools(), &["step"], configure);
+    // The run context asks for 100; the policy's 2 is what the harness enforces.
+    let mut options = TurnOptions {
+        controls: TurnControls {
+            pause_at_cap: true,
+            ..TurnControls::default()
+        },
+        ..TurnOptions::default()
+    };
+    options.run_context.config.max_model_calls = Some(100);
+    let slot = options.controls.report.clone();
+
+    let outcome = session
+        .turn(SessionTurnRequest::new(Message::user("go")), options)
+        .await
+        .unwrap();
+
+    assert!(outcome.interrupted, "paused gracefully, not a limit error");
+    assert_eq!(slot.get().unwrap().max_iterations, 2);
+    assert_eq!(model.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn a_planner_error_reports_the_scope_it_failed_under() {
+    let driver = TurnDriver::<(), ()>::new(
+        Arc::new(|_: &DriverRequest<()>| Err(RuntimeError::MissingDependency("model"))),
+        Arc::new(()),
+    );
+    let mut session = SessionBuilder::new(Arc::new(driver)).build().unwrap();
+    let controls = TurnControls {
+        defer_turn_completed: true,
+        ..TurnControls::default()
+    };
+    let slot = controls.report.clone();
+
+    assert!(turn(&mut session, controls).await.is_err());
+    assert!(slot.get().unwrap().completion_deferred);
 }
