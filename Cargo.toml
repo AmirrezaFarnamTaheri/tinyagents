@@ -31,10 +31,11 @@ serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
-# Storage ports from the vendored tinystoragedrivers submodule. Hosts that
-# vendor tinyagents use this same copy, so there is one set of port types.
-tinystoragedrivers-core = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-core", version = "0.11.0" }
-tinystoragedrivers-sqlite = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-sqlite", version = "0.11.0" }
+# Storage ports from tinystoragedrivers, taken by git tag: the same source every
+# module (tinyflows, tinybox, tinychannels, ...) and tinyinference names, so a
+# host's graph holds one set of port types with no [patch] to reconcile them.
+tinystoragedrivers-core = { version = "0.11.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0" }
+tinystoragedrivers-sqlite = { version = "0.11.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0" }
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]
@@ -57,11 +58,3 @@ strip = "debuginfo"
 tinytools-agent = { path = "vendor/tinytools/crates/tinytools-agent" }
 tinytools = { path = "vendor/tinytools/crates/tinytools" }
 
-
-# `tinyinference-image` and `tinyinference-providers` name the storage ports as
-# git dependencies at the same tag the vendored submodule is pinned to. Redirect
-# those onto the vendored path so the graph holds one `DocumentStore` /
-# `SecretStore` trait rather than a git and a path copy of the same version.
-[patch."https://github.com/tinyhumansai/tinystoragedrivers"]
-tinystoragedrivers-core = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-core" }
-tinystoragedrivers-secrets = { path = "vendor/tinystoragedrivers/crates/tinystoragedrivers-secrets" }
