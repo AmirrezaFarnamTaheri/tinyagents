@@ -32,7 +32,7 @@ use tinyinference_llm::model::ChatModel;
 
 use super::steering::cleanup_only_guard;
 use super::tool_set::ToolSetBuilder;
-use super::types::{TurnCompletionSink, TurnReport, TurnScope};
+use super::types::{TurnCompletionSink, TurnControls, TurnReport, TurnScope};
 use crate::driver::{outcome_from_partial, same_tools};
 use crate::{DriverFailure, DriverOutcome, DriverRequest, RuntimeError, SessionDriver};
 
