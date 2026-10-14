@@ -254,8 +254,11 @@ mod store_tests {
             }
         }
 
+        /// Flags an access made while the armed `put` is parked. Reads before
+        /// it (the mutation's own load, under the lock) are not concurrent.
         fn note_access(&self) {
-            if !self.first_put_released.load(Ordering::SeqCst) {
+            if !self.armed.load(Ordering::SeqCst) && !self.first_put_released.load(Ordering::SeqCst)
+            {
                 self.concurrent_access.store(true, Ordering::SeqCst);
             }
         }
