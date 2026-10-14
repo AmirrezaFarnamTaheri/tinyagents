@@ -461,7 +461,11 @@ pub struct RunPolicy {
     /// still answered in prose was not making a tool call — it was
     /// explaining, quoting, or documenting the format, and executing that
     /// text as a real call would silently strip visible text the caller
-    /// asked to see). See [`TextDialectRecovery`].
+    /// asked to see). One streaming exception: under `Auto` such a model's
+    /// own chat-template special-token calls (DeepSeek DSML, `<|tool_call>`)
+    /// are still run, and its other markup is scrubbed but not run. Use
+    /// [`TextDialectRecovery::Off`] to parse nothing. See
+    /// [`TextDialectRecovery`].
     pub text_dialect_recovery: TextDialectRecovery,
     /// Bounds the output-validation retry loop (A3): how many times the loop
     /// re-asks the model after the final turn's structured extraction fails
@@ -635,8 +639,9 @@ impl Default for OutputRetryPolicy {
 /// gets executed as a real tool call, with the visible text silently
 /// stripped and replaced. [`TextDialectRecovery::Auto`] (the default) closes
 /// the common case of that hazard by skipping recovery for any model whose
-/// resolved profile reports native tool calling (on the unary path; the
-/// stream scrubber does not consult this policy, see openhuman#6733). Markup
+/// resolved profile reports native tool calling (on both paths, except that
+/// the stream still runs that model's own special-token calls, see
+/// openhuman#6733). Markup
 /// inside a language-tagged fenced code block is never parsed regardless of
 /// this policy (`tinytools-agent`'s protected ranges); a bare fence is not
 /// protected, since small models wrap a genuine call in one far more often
@@ -650,7 +655,8 @@ pub enum TextDialectRecovery {
     On,
     /// Attempt recovery only when the resolved model's profile does not
     /// report native tool calling (or the profile is unknown). This is the
-    /// default.
+    /// default. On the stream, a native model's chat-template special-token
+    /// calls are still recovered; its other markup is scrubbed, not run.
     #[default]
     Auto,
 }
