@@ -79,6 +79,40 @@ impl HostExtensions {
             .and_then(|slot| slot.downcast::<X>().ok())
     }
 
+    /// Whether a value of type `X` is installed.
+    #[must_use]
+    pub fn contains<X: Any + Send + Sync>(&self) -> bool {
+        self.slots.contains_key(&TypeId::of::<X>())
+    }
+
+    /// As [`with_arc`](Self::with_arc), but keeps an `X` that is already
+    /// installed. A fork uses this to supply a default without clobbering
+    /// the value a parent set.
+    #[must_use]
+    pub fn with_arc_if_absent<X: Any + Send + Sync>(&self, value: Arc<X>) -> Self {
+        if self.contains::<X>() {
+            self.clone()
+        } else {
+            self.with_arc(value)
+        }
+    }
+
+    /// Returns a copy of this map with every slot of `other` installed over
+    /// it; on a type present in both, `other` wins. Neither input changes.
+    #[must_use]
+    pub fn overlay(&self, other: &Self) -> Self {
+        if other.is_empty() {
+            return self.clone();
+        }
+        let mut slots = (*self.slots).clone();
+        for (key, value) in other.slots.iter() {
+            slots.insert(*key, Arc::clone(value));
+        }
+        Self {
+            slots: Arc::new(slots),
+        }
+    }
+
     /// Number of installed slots.
     #[must_use]
     pub fn len(&self) -> usize {

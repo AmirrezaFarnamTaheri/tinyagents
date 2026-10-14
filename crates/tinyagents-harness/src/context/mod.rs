@@ -752,6 +752,17 @@ impl<Ctx> RunContext<Ctx> {
         self
     }
 
+    /// As [`with_host_arc`](Self::with_host_arc) but keeps an `X` already
+    /// installed (a default that never overrides a parent's value).
+    #[must_use]
+    pub fn with_host_arc_if_absent<X: std::any::Any + Send + Sync>(
+        mut self,
+        value: std::sync::Arc<X>,
+    ) -> Self {
+        self.host_ext = self.host_ext.with_arc_if_absent(value);
+        self
+    }
+
     /// Replaces the whole host extension map.
     #[must_use]
     pub fn with_host_extensions(mut self, host_ext: HostExtensions) -> Self {
