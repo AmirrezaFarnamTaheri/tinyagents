@@ -47,8 +47,9 @@ Steps run one at a time, top to bottom. Every write keeps that order:
 - A step may become `in_progress` only once every step above it is closed
   (`completed` or `cancelled`); it may become `completed` only if it was the
   step in progress or every step above it is closed. Otherwise the write is a
-  `Validation` error naming the step to finish first ("Finish or cancel step 1
-  first.") and the stored list is unchanged.
+  `Validation` error naming every open step above it ("Finish or cancel step 1
+  first.", or "Finish or cancel steps 1, 2 first, in order: ...") and the
+  stored list is unchanged.
 - With open steps and none in progress, the first open step starts. So
   writing a plan starts step 1, and `complete(N)` starts the next step.
 - A whole-list write with several `in_progress` keeps the first and sets the
@@ -83,6 +84,10 @@ inert while the thread has no plan with open steps.
   (default `DEFAULT_REMINDER_ROUNDS` = 8) with the same step in progress and
   no `todo` call, one note is appended to that round's first tool result.
   Once per step; a `todo` call restarts the count.
+- `before_tool`: an ignored reminder becomes a gate. At twice the reminder
+  rounds with no `todo` call, every other tool is refused ("Update your plan
+  first: ...") until the model calls `todo`: `{"complete": N}` if the step is
+  done, or a bare `{}` read to confirm it is still on it.
 
 ## Example
 
