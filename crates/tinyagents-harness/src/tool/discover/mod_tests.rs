@@ -417,6 +417,22 @@ fn policy_equality_and_debug_compare_ranker_kinds_only() {
     assert!(format!("{a:?}").contains("Some(\"scripted\")"));
 }
 
+#[test]
+fn policy_equality_includes_the_rank_context() {
+    let in_chat = |thread: &str| ToolDiscoveryPolicy {
+        rank_context: tinytools::RankContext::empty()
+            .with_chat(tinytools::RankChat::new(thread, "client")),
+        ..ToolDiscoveryPolicy::default()
+    };
+    assert_eq!(in_chat("a"), in_chat("a"));
+    assert_ne!(
+        in_chat("a"),
+        in_chat("b"),
+        "different chats are different policies"
+    );
+    assert_ne!(in_chat("a"), ToolDiscoveryPolicy::default());
+}
+
 /// Regression: the `tool_search` schema advertised `"minimum": 1, "maximum":
 /// policy.max_limit` verbatim, so `max_limit: 0` produced an inconsistent
 /// (and provider-invalid) `minimum > maximum` pair, and a `default_limit`

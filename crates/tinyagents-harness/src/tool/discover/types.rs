@@ -146,6 +146,7 @@ impl PartialEq for ToolDiscoveryPolicy {
             && self.default_limit == other.default_limit
             && self.max_limit == other.max_limit
             && self.rank_mode == other.rank_mode
+            && self.rank_context == other.rank_context
             && self.ranker.as_ref().map(|r| r.kind()) == other.ranker.as_ref().map(|r| r.kind())
     }
 }
