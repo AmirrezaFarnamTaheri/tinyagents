@@ -340,7 +340,7 @@ struct ExposedTool(&'static str, tinytools::ToolExposure);
 #[async_trait]
 impl Tool for ExposedTool {
     fn name(&self) -> &str {
-        self.0
+        self.exposure
     }
 
     fn description(&self) -> &str {
@@ -381,7 +381,9 @@ fn adapter_advertises_admitted_hidden_tools_and_keeps_deferred_ones_deferred() {
     assert_eq!(exposure("deferred"), tinytools::ToolExposure::Deferred);
 }
 
-struct ExposureProbe(tinytools::ToolExposure);
+struct ExposureProbe {
+    exposure: tinytools::ToolExposure,
+}
 
 #[async_trait]
 impl Tool for ExposureProbe {
@@ -395,7 +397,7 @@ impl Tool for ExposureProbe {
         serde_json::json!({"type": "object"})
     }
     fn exposure(&self) -> tinytools::ToolExposure {
-        self.0
+        self.exposure
     }
     async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success("ok"))
@@ -407,7 +409,7 @@ fn session_deferral_only_ever_subtracts_exposure() {
     use tinytools::ToolExposure::{Deferred, Direct, Hidden};
     let exposure = |declared, deferred| {
         let sets = vec![Arc::new(vec![
-            Box::new(ExposureProbe(declared)) as Box<dyn Tool>
+            Box::new(ExposureProbe { exposure: declared }) as Box<dyn Tool>
         ])];
         CanonicalSharedToolAdapter::for_name(sets, "exposed")
             .unwrap()
@@ -449,7 +451,7 @@ impl ToolExecScope for ScopeCounter {
 #[tokio::test]
 async fn exec_scope_wraps_each_execution() {
     let sets = vec![Arc::new(vec![
-        Box::new(ExposureProbe(tinytools::ToolExposure::Direct)) as Box<dyn Tool>,
+        Box::new(ExposureProbe { exposure: tinytools::ToolExposure::Direct }) as Box<dyn Tool>,
     ])];
     let scope = Arc::new(ScopeCounter(std::sync::atomic::AtomicUsize::new(0)));
     let adapter = CanonicalSharedToolAdapter::for_name(sets, "exposed")
