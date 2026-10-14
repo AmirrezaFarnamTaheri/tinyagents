@@ -13,7 +13,13 @@
 //! compression stage's wire types), so it is an associated type here and this
 //! crate stays free of that dependency. Model choice stays with the host.
 
+use std::sync::Arc;
+
+use tinyinference_llm::message::Message;
+use tinyinference_llm::model::ChatModel;
+
 use crate::context::{RunConfig, RunContext};
+use crate::runtime::{AgentHarness, InvalidArgsPolicy, RunPolicy, UnknownToolPolicy};
 
 /// Supplies the model call behind a payload summary stage.
 pub trait PayloadSummarizer<Ctx: Send + Sync>: Send + Sync {
@@ -43,6 +49,58 @@ pub fn summary_child_config(
         .with_max_tool_calls(max_iterations.saturating_mul(8).max(8))
         .with_max_depth(parent_ctx.config.max_depth())
         .with_max_turn_output_tokens(max_output_tokens)
+}
+
+/// Run one unary summary call as the already-derived `child_context` (see
+/// [`summary_child_config`] and [`RunContext::child`]) and return its text.
+///
+/// The harness is built with a single attempt and tool/argument errors
+/// returned to the model, `model` registered under `model_name`, and the
+/// run pinned to the unary path: a streaming child would put its deltas on the
+/// shared event sink as the parent's text. `max_model_calls` bounds the loop
+/// (tool calls are capped at eight per model call, at least eight).
+///
+/// The child runs on `AgentHarness<(), Ctx>`: the state is `()` because the
+/// summary run is its own harness, and `child_context` must have been derived
+/// for that pairing.
+///
+/// # Errors
+///
+/// The child run's error, or a validation error when it produced no text (an
+/// empty summary must not replace the original payload).
+pub async fn run_unary_summary<Ctx: Send + Sync + 'static>(
+    child_context: RunContext<Ctx>,
+    model_name: &str,
+    model: Arc<dyn ChatModel<()>>,
+    max_model_calls: usize,
+    system: String,
+    prompt: String,
+) -> crate::error::Result<String> {
+    let mut policy = RunPolicy::default();
+    policy.limits.max_model_calls = max_model_calls;
+    policy.limits.max_tool_calls = max_model_calls.saturating_mul(8).max(8);
+    policy.retry.max_attempts = 1;
+    policy.unknown_tool = UnknownToolPolicy::ReturnToolError;
+    policy.invalid_args = InvalidArgsPolicy::ReturnToolError;
+
+    let mut harness: AgentHarness<(), Ctx> = AgentHarness::new();
+    harness.with_policy(policy);
+    harness
+        .register_model(model_name, model)
+        .set_default_model(model_name);
+    let run = harness
+        .invoke_in_context(
+            &(),
+            child_context,
+            vec![Message::system(system), Message::user(prompt)],
+        )
+        .await?;
+    match run.text() {
+        Some(text) if !text.trim().is_empty() => Ok(text),
+        _ => Err(crate::error::TinyAgentsError::Validation(
+            "summary run produced no text".into(),
+        )),
+    }
 }
 
 #[cfg(test)]

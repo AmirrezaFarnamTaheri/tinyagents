@@ -62,6 +62,7 @@ mod arg_recovery;
 mod artifact_toc;
 mod budget;
 mod call_effect;
+mod cli_rpc_only;
 mod compaction_pressure;
 mod context;
 mod context_ladder;
@@ -85,6 +86,7 @@ mod response_shape;
 mod shell_turn_budget;
 mod stop_hooks;
 mod stop_latch;
+mod tool_exposure_shadow;
 mod tool_policy;
 mod turn_clock;
 mod unmet_deliverable;
@@ -101,6 +103,7 @@ pub use call_effect::{
     CallEffect, DispatchTarget, ToolEffectFacts, ToolFactsLookup, call_effect, dispatch_target,
     facts_for_tool, name_effect, tool_sets_lookup,
 };
+pub use cli_rpc_only::CliRpcOnlyMiddleware;
 pub use context_ladder::{
     COMPACTION_TAIL_WINDOW_FRACTION, ContextLadder, UNKNOWN_WINDOW_FALLBACK_TOKENS,
     compression_policy, microcompact_for_window, with_turn_aware_tail,
@@ -162,6 +165,7 @@ pub use stop_hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
 pub use stop_latch::StopLatch;
+pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use unmet_deliverable::{
