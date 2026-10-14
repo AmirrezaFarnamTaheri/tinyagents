@@ -180,6 +180,10 @@ pub struct TurnControls {
     pub thread_label: Option<String>,
     /// Where the driver publishes the [`TurnReport`].
     pub report: TurnReportSlot,
+    /// Told `(completed, cap)` when the cap pause fires, so a host can also
+    /// stop work it runs outside the loop (a racing delegated dispatch). Only
+    /// used with [`Self::pause_at_cap`].
+    pub cap_pause_recorder: Option<tinyagents_harness::events::PauseRecorder>,
 }
 
 impl fmt::Debug for TurnControls {
@@ -193,6 +197,7 @@ impl fmt::Debug for TurnControls {
             .field("steering", &self.steering.is_some())
             .field("registrar", &self.registrar.is_some())
             .field("thread_label", &self.thread_label)
+            .field("cap_pause_recorder", &self.cap_pause_recorder.is_some())
             .finish()
     }
 }

@@ -20,7 +20,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tinyagents_harness::agent_loop::PartialRunOutcome;
+use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::EventListener;
+use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::middleware::{
     ApprovalResolver, Middleware, ToolCallPolicy, ToolPolicyGateMiddleware,
 };
@@ -28,9 +31,10 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_harness::tool::EarlyExitHook;
 use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
+use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ChatModel;
 
-use super::steering::cleanup_only_guard;
+use super::steering::{FeedGuard, cleanup_only_guard};
 use super::tool_set::{ToolSetBuilder, ToolSetReport};
 use super::types::{TurnCompletionSink, TurnControls, TurnReport, TurnScope};
 use crate::driver::{outcome_from_partial, same_tools};
@@ -138,11 +142,200 @@ fn failure(error: RuntimeError) -> DriverFailure {
     }
 }
 
-#[async_trait]
-impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
-    for TurnDriver<State, C>
-{
-    async fn execute(&self, request: DriverRequest<C>) -> Result<DriverOutcome, DriverFailure> {
+/// A turn that has been planned and wired but not yet run.
+///
+/// [`TurnDriver::prepare`] returns it so a host that drives the harness itself
+/// (a hosted invocation, a bespoke stream) can still take the plan's models,
+/// tools, middleware and steering wiring from the driver. [`Self::run`] drives
+/// the harness directly; [`Self::split`] hands the harness and run context to
+/// the host and keeps the post-run bookkeeping in a [`TurnTail`].
+pub struct PreparedTurn<State: Send + Sync + 'static, C: Send + Sync + 'static> {
+    /// The assembled harness: models, tools, middleware and policy.
+    pub harness: AgentHarness<State, C>,
+    /// The run context, with steering, events and the cap pauser wired.
+    pub run_context: RunContext<C>,
+    /// The session's frozen history, the run's input.
+    pub history: Vec<Message>,
+    /// Whether the session asked for a streamed run.
+    pub stream: bool,
+    state: Arc<State>,
+    tail: TurnTail,
+}
+
+/// The post-run half of a [`PreparedTurn`]: it keeps steering forwarded until
+/// the run settles, then reads the early exit and publishes the [`TurnReport`].
+pub struct TurnTail {
+    guard: Option<FeedGuard>,
+    hook: Option<EarlyExitHook>,
+    controls: TurnControls,
+    max_iterations: usize,
+    tools: ToolSetReport,
+    completion: Option<Arc<dyn TurnCompletionSink>>,
+}
+
+impl TurnTail {
+    /// The model-call cap the run enforces (the stricter of config and policy).
+    pub fn max_iterations(&self) -> usize {
+        self.max_iterations
+    }
+
+    /// How tool registration resolved for this turn.
+    pub fn tools(&self) -> &ToolSetReport {
+        &self.tools
+    }
+
+    /// Stops steering forwarding, reads the early exit, publishes the report to
+    /// [`TurnControls::report`] and returns it. `run` is the finished run, or
+    /// `None` when the turn failed before producing one (no cap is detected
+    /// then).
+    pub fn finish(self, run: Option<&AgentRun>) -> TurnReport {
+        // Stop forwarding and deregister now, not at end of scope.
+        drop(self.guard);
+        let early_exit = self.hook.and_then(|hook| hook.take());
+        let hit_cap = run.is_some_and(|run| {
+            detect_hit_cap(
+                run,
+                &TurnEndInputs {
+                    max_iterations: self.max_iterations,
+                    pause_at_cap: self.controls.pause_at_cap,
+                    early_exit: early_exit.is_some(),
+                    breaker_halt: None,
+                    wrap_up_injected: false,
+                },
+            )
+        });
+        let report = TurnReport {
+            scope: self.controls.scope.clone(),
+            early_exit,
+            hit_cap,
+            model_calls: run.map_or(0, |run| run.model_calls),
+            max_iterations: self.max_iterations,
+            tools: self.tools,
+            completion_deferred: self.controls.defer_turn_completed,
+            ..TurnReport::default()
+        }
+        .with_completion(self.completion);
+        self.controls.report.set(report.clone());
+        report
+    }
+}
+
+/// A finished turn: the harness's full outcome and the driver's report.
+pub struct TurnRun {
+    /// The run and its error, exactly as the harness returned them.
+    pub partial: PartialRunOutcome,
+    /// What the driver learned about how the turn ended.
+    pub report: TurnReport,
+    /// How many history messages were the run's input.
+    pub input_len: usize,
+}
+
+impl<State: Send + Sync + 'static, C: Send + Sync + 'static> PreparedTurn<State, C> {
+    /// How tool registration resolved for this turn.
+    pub fn tools(&self) -> &ToolSetReport {
+        self.tail.tools()
+    }
+
+    /// The model-call cap the run enforces (the stricter of config and policy).
+    pub fn max_iterations(&self) -> usize {
+        self.tail.max_iterations()
+    }
+
+    /// Drives the harness over the run context and settles the turn.
+    pub async fn run(self) -> TurnRun {
+        let Self {
+            harness,
+            run_context,
+            history,
+            stream,
+            state,
+            tail,
+        } = self;
+        let input_len = history.len();
+        // Boxed: a child turn runs nested inside its parent's drive future.
+        let partial = if stream {
+            Box::pin(harness.invoke_streaming_in_context_collecting_partial(
+                state.as_ref(),
+                run_context,
+                history,
+            ))
+            .await
+        } else {
+            Box::pin(harness.invoke_in_context_collecting_partial(
+                state.as_ref(),
+                run_context,
+                history,
+            ))
+            .await
+        };
+        let succeeded = partial.error.is_none();
+        let report = tail.finish(succeeded.then_some(&partial.run));
+        TurnRun {
+            partial,
+            report,
+            input_len,
+        }
+    }
+
+    /// Hands the harness, run context and history to the caller and keeps the
+    /// steering wiring in the returned [`TurnTail`]. The caller drives the
+    /// harness itself, then calls [`TurnTail::finish`].
+    pub fn split(self) -> (HarnessParts<State, C>, TurnTail) {
+        let Self {
+            harness,
+            run_context,
+            history,
+            stream,
+            state,
+            tail,
+        } = self;
+        (
+            HarnessParts {
+                harness,
+                run_context,
+                history,
+                stream,
+                state,
+            },
+            tail,
+        )
+    }
+}
+
+/// The harness half of a split [`PreparedTurn`].
+pub struct HarnessParts<State: Send + Sync + 'static, C: Send + Sync + 'static> {
+    /// The assembled harness.
+    pub harness: AgentHarness<State, C>,
+    /// The wired run context.
+    pub run_context: RunContext<C>,
+    /// The run's input history.
+    pub history: Vec<Message>,
+    /// Whether a streamed run was requested.
+    pub stream: bool,
+    /// The immutable host state the harness runs over.
+    pub state: Arc<State>,
+}
+
+impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C> {
+    /// Plans and wires one turn without running it. Failures before the harness
+    /// would run publish their [`TurnReport`] and return as a [`DriverFailure`].
+    #[allow(clippy::result_large_err)] // `DriverFailure` is the session driver's own error type
+    pub async fn prepare(
+        &self,
+        mut request: DriverRequest<C>,
+    ) -> Result<PreparedTurn<State, C>, DriverFailure> {
+        // One steering handle per run; early exit, the cap pause, the run queue
+        // and the planner's own breakers all go through it. It is set on the
+        // context before planning so the planner can wire middleware to it.
+        let scope = request.controls.scope.clone();
+        let handle = request
+            .run_context
+            .steering
+            .clone()
+            .unwrap_or_else(|| SteeringHandle::new(scope.steering_policy()));
+        if request.run_context.steering.is_none() {
+            request.run_context = request.run_context.with_steering(handle.clone());
+        }
         let plan = match self.planner.plan(&request).await {
             Ok(plan) => plan,
             Err(error) => {
@@ -168,7 +361,6 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             completion,
             enforce_tool_snapshot,
         } = plan;
-        let scope = controls.scope.clone();
 
         // The cap: an explicit control wins over the policy default; a zero
         // means "unset". The harness takes the stricter of config and policy,
@@ -207,12 +399,6 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             harness.push_tool_middleware(Arc::new(gate));
         }
 
-        // One steering handle per run; early exit, the cap pause and the run
-        // queue all go through it.
-        let handle = run_context
-            .steering
-            .clone()
-            .unwrap_or_else(|| SteeringHandle::new(scope.steering_policy()));
         let hook =
             (!controls.early_exit_tools.is_empty()).then(|| EarlyExitHook::new(handle.clone()));
         if scope.is_subagent() {
@@ -229,19 +415,15 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
         }
 
         run_context.config.tags.push(scope.tag().to_string());
-        let run_context = if run_context.steering.is_none() {
-            run_context.with_steering(handle.clone())
-        } else {
-            run_context
-        };
         for listener in listeners {
             run_context.events.subscribe(listener);
         }
         if controls.pause_at_cap {
-            let pauser = match tinyagents_harness::events::CapPauser::new(
+            let pauser = match tinyagents_harness::events::CapPauser::with_recorder(
                 handle.clone(),
                 max_iterations,
                 run_context.run_id().as_str(),
+                controls.cap_pause_recorder.clone(),
             ) {
                 Ok(pauser) => pauser,
                 Err(error) => {
@@ -283,59 +465,45 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             (None, None) => None,
         };
 
-        let input_len = history.len();
-        // Boxed: a child turn runs nested inside its parent's drive future.
-        let partial = if stream {
-            Box::pin(harness.invoke_streaming_in_context_collecting_partial(
-                self.state.as_ref(),
-                run_context,
-                history,
-            ))
-            .await
-        } else {
-            Box::pin(harness.invoke_in_context_collecting_partial(
-                self.state.as_ref(),
-                run_context,
-                history,
-            ))
-            .await
-        };
-        // Stop forwarding and deregister now, not at end of scope.
-        drop(guard);
+        Ok(PreparedTurn {
+            harness,
+            run_context,
+            history,
+            stream,
+            state: self.state.clone(),
+            tail: TurnTail {
+                guard,
+                hook,
+                controls,
+                max_iterations,
+                tools: tool_report,
+                completion,
+            },
+        })
+    }
+}
 
-        let early_exit = hook.and_then(|hook| hook.take());
-        let succeeded = partial.error.is_none();
-        let hit_cap = succeeded
-            && detect_hit_cap(
-                &partial.run,
-                &TurnEndInputs {
-                    max_iterations,
-                    pause_at_cap: controls.pause_at_cap,
-                    early_exit: early_exit.is_some(),
-                    breaker_halt: None,
-                    wrap_up_injected: false,
-                },
-            );
-        let report = TurnReport {
-            scope: scope.clone(),
-            early_exit: early_exit.clone(),
-            hit_cap,
-            model_calls: partial.run.model_calls,
-            max_iterations,
-            tools: tool_report,
-            completion_deferred: controls.defer_turn_completed,
-            ..TurnReport::default()
-        }
-        .with_completion(completion);
-        controls.report.set(report.clone());
+#[async_trait]
+impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
+    for TurnDriver<State, C>
+{
+    async fn execute(&self, request: DriverRequest<C>) -> Result<DriverOutcome, DriverFailure> {
+        let scope = request.controls.scope.clone();
+        let defer = request.controls.defer_turn_completed;
+        let prepared = self.prepare(request).await?;
+        let TurnRun {
+            partial,
+            report,
+            input_len,
+        } = prepared.run().await;
 
         let mut outcome = outcome_from_partial(partial, input_len);
         // An early-exit tool's output stands in for the paused assistant turn,
         // which carries the call and no answer.
-        if let (Some(exit), Ok(done)) = (&early_exit, &mut outcome) {
+        if let (Some(exit), Ok(done)) = (&report.early_exit, &mut outcome) {
             done.output = Some(exit.question.clone());
         }
-        if outcome.is_ok() && !controls.defer_turn_completed && !scope.is_subagent() {
+        if outcome.is_ok() && !defer && !scope.is_subagent() {
             report.emit_completed();
         }
         outcome

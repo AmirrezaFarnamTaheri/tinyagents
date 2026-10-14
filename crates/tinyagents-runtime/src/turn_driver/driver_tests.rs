@@ -769,3 +769,102 @@ async fn a_typed_dispatch_over_the_adapter_keeps_early_exit_and_scope() {
     );
     assert_eq!(*trace.lock().unwrap(), vec!["enter", "exit"]);
 }
+
+/// The planner sees the run's steering handle, so middleware it builds (a
+/// circuit breaker, a stop hook) can pause the same handle the driver wires.
+#[tokio::test]
+async fn the_planner_receives_the_steering_handle_the_run_uses() {
+    let seen: Arc<Mutex<Option<SteeringHandle>>> = Arc::default();
+    let planner = {
+        let seen = seen.clone();
+        move |request: &DriverRequest<()>| {
+            *seen.lock().unwrap() = request.run_context.steering.clone();
+            let chat: Arc<dyn ChatModel<()>> =
+                Arc::new(ScriptedModel::new(vec![text_response("done")]));
+            Ok(TurnPlan::new(vec![("scripted".to_string(), chat)]))
+        }
+    };
+    let driver = TurnDriver::new(Arc::new(planner), Arc::new(()));
+    let mut session = SessionBuilder::new(Arc::new(driver)).build().unwrap();
+
+    turn(&mut session, TurnControls::default()).await.unwrap();
+
+    assert!(
+        seen.lock().unwrap().is_some(),
+        "the driver sets steering before it plans"
+    );
+}
+
+/// A host that drives the harness itself still gets the plan's wiring and the
+/// post-run report.
+#[tokio::test]
+async fn a_split_turn_is_driven_by_the_host_and_settled_by_its_tail() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_call_response(call("c1", "ask_user", 1)),
+        text_response("must never be requested"),
+    ]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(FakeTool::returning("ask_user", "Which file?"))];
+    let snapshot = snapshot_of(&tools, &["ask_user"]);
+    let set: SharedToolSet = Arc::new(tools);
+    let planner = {
+        let model = model.clone();
+        move |_: &DriverRequest<()>| {
+            let chat: Arc<dyn ChatModel<()>> = model.clone();
+            let mut plan = TurnPlan::new(vec![("scripted".to_string(), chat)]);
+            plan.tools = ToolSetBuilder::new().set(set.clone());
+            Ok(plan)
+        }
+    };
+    let driver = TurnDriver::new(Arc::new(planner), Arc::new(()));
+    let controls = TurnControls {
+        early_exit_tools: ["ask_user".to_string()].into(),
+        ..TurnControls::default()
+    };
+    let slot = controls.report.clone();
+    let request = DriverRequest {
+        history: vec![Message::user("go")],
+        tools: snapshot,
+        run_context: RunContext::new(tinyagents_harness::context::RunConfig::new("split-run"), ()),
+        stream: false,
+        controls,
+    };
+
+    let prepared = driver.prepare(request).await.unwrap();
+    let (parts, tail) = prepared.split();
+    assert_eq!(tail.tools().registered, vec!["ask_user".to_string()]);
+    let run = parts
+        .harness
+        .invoke_in_context(parts.state.as_ref(), parts.run_context, parts.history)
+        .await
+        .unwrap();
+    let report = tail.finish(Some(&run));
+
+    assert_eq!(report.early_exit.unwrap().question, "Which file?");
+    assert_eq!(
+        slot.get().unwrap().model_calls,
+        run.model_calls,
+        "finish publishes the report to the slot"
+    );
+    assert_eq!(model.requests().len(), 1);
+}
+
+/// The cap pause reports `(completed, cap)` to the host's recorder.
+#[tokio::test]
+async fn the_cap_pause_is_reported_to_the_recorder() {
+    let model = looping_model();
+    let mut session = session(&model, step_tools(), &["step"], no_configure());
+    let seen: Arc<Mutex<Vec<(u64, u64)>>> = Arc::default();
+    let controls = TurnControls {
+        max_iterations: Some(2),
+        pause_at_cap: true,
+        cap_pause_recorder: Some({
+            let seen = seen.clone();
+            Arc::new(move |completed, cap| seen.lock().unwrap().push((completed, cap)))
+        }),
+        ..TurnControls::default()
+    };
+
+    turn(&mut session, controls).await.unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![(2, 2)]);
+}
