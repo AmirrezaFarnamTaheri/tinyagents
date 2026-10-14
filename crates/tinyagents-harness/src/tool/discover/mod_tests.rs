@@ -417,6 +417,22 @@ fn policy_equality_and_debug_compare_ranker_kinds_only() {
     assert!(format!("{a:?}").contains("Some(\"scripted\")"));
 }
 
+#[test]
+fn policy_equality_includes_the_rank_context() {
+    let in_chat = |thread: &str| ToolDiscoveryPolicy {
+        rank_context: tinytools::RankContext::empty()
+            .with_chat(tinytools::RankChat::new(thread, "client")),
+        ..ToolDiscoveryPolicy::default()
+    };
+    assert_eq!(in_chat("a"), in_chat("a"));
+    assert_ne!(
+        in_chat("a"),
+        in_chat("b"),
+        "different chats are different policies"
+    );
+    assert_ne!(in_chat("a"), ToolDiscoveryPolicy::default());
+}
+
 /// Regression: the `tool_search` schema advertised `"minimum": 1, "maximum":
 /// policy.max_limit` verbatim, so `max_limit: 0` produced an inconsistent
 /// (and provider-invalid) `minimum > maximum` pair, and a `default_limit`
@@ -504,4 +520,58 @@ async fn search_schema_text_is_independent_of_nested_json_object_insertion_order
         answer_tool_search(&a, &policy, &args).await.result.text(),
         answer_tool_search(&b, &policy, &args).await.result.text(),
     );
+}
+
+/// Records the context of the last search it was asked.
+struct ContextRecorder(std::sync::Mutex<Option<tinytools::RankContext>>);
+
+#[async_trait::async_trait]
+impl tinytools::ToolRanker for ContextRecorder {
+    fn kind(&self) -> &'static str {
+        "recorder"
+    }
+
+    async fn rank(
+        &self,
+        _intent: &str,
+        context: &tinytools::RankContext,
+        candidates: &[tinytools::RankCandidate],
+        limit: usize,
+    ) -> Result<Vec<tinytools::RankHit>, tinytools::RankError> {
+        *self.0.lock().unwrap() = Some(context.clone());
+        Ok(candidates
+            .iter()
+            .take(limit)
+            .map(|c| tinytools::RankHit::new(c.key.clone(), 1.0))
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn tool_search_hands_the_policys_rank_context_to_the_ranker() {
+    let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
+    let policy = ToolDiscoveryPolicy {
+        ranker: Some(recorder.clone()),
+        rank_context: tinytools::RankContext::empty()
+            .with_chat(tinytools::RankChat::new("thread-1", "client-1")),
+        ..ToolDiscoveryPolicy::default()
+    };
+    answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
+    let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
+    assert_eq!(
+        seen.chat,
+        Some(tinytools::RankChat::new("thread-1", "client-1"))
+    );
+}
+
+#[tokio::test]
+async fn tool_search_without_a_chat_gives_the_ranker_an_empty_context() {
+    let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
+    let policy = ToolDiscoveryPolicy {
+        ranker: Some(recorder.clone()),
+        ..ToolDiscoveryPolicy::default()
+    };
+    answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
+    let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
+    assert_eq!(seen, tinytools::RankContext::empty());
 }

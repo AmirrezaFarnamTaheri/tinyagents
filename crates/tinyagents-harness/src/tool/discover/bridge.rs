@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 use tinyinference_llm::tool::{ToolFormat, ToolSchema};
-use tinytools::{RankContext, ToolResult};
+use tinytools::ToolResult;
 
 use super::manifest::render_manifest;
 use super::types::{DeferredCatalog, RankedSearch, ToolDiscoveryPolicy};
@@ -114,7 +114,7 @@ pub async fn answer_tool_search(
         });
 
     let ranking = catalog
-        .rank(policy, query, &RankContext::empty(), limit)
+        .rank(policy, query, &policy.rank_context, limit)
         .await;
     let matches: Vec<&ToolSchema> = ranking
         .names

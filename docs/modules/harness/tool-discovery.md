@@ -55,7 +55,7 @@ each such call so a deferred call is distinguishable from a direct one.
 `tool_search` is not a registered tool; a host that registers its own
 `tool_search` keeps it. Discovery is governed by `RunPolicy::discovery`
 (`ToolDiscoveryPolicy { enabled, manifest_token_budget, default_limit,
-max_limit }`). With `enabled: false` deferred tools are neither advertised nor
+max_limit, ranker, rank_mode, rank_context }`). With `enabled: false` deferred tools are neither advertised nor
 searchable, but a direct call by name still runs: deferral only ever subtracts
 from the wire, never from what the host registered.
 
@@ -77,8 +77,14 @@ from the wire, never from what the host registered.
 
 Every hit the ranker names is resolved through `catalog.get`, so a key the
 ranker invented never reaches the model. The catalogue is what the ranker
-sees; the model's `query` is the only intent, with an empty `RankContext` —
-the model already distilled the turn into it.
+sees; the model's `query` is the only intent, with the policy's
+`rank_context` — empty by default, since the model already distilled the turn
+into the query. A host opts in by setting `ToolDiscoveryPolicy::rank_context`
+(for example `RankContext::with_chat`), and an installed host ranker then receives
+exactly that on every `tool_search` it answers (no ranker, or `Bm25` mode, never
+sees it). That is the only metadata beyond the
+query a ranker can see, so a host that sets a chat is choosing to let an
+off-machine ranker route its disclosure there.
 
 ### Search and typed promotion
 
