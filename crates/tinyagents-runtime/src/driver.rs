@@ -122,6 +122,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
 }
 
 /// Folds a collected harness run into the session driver's result shape.
+#[allow(clippy::result_large_err)] // `DriverFailure` is the session driver trait's own error type.
 pub(crate) fn outcome_from_partial(
     partial: tinyagents_harness::agent_loop::PartialRunOutcome,
     input_len: usize,
