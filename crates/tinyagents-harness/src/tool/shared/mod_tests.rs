@@ -173,7 +173,7 @@ async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
     let adapter = CanonicalSharedToolAdapter {
         sets: Vec::new(),
         name: "missing".to_string(),
-        description: "missing".to_string(),
+        parameters_schema: serde_json::json!({"type": "object"}),
         early_exit: None,
         force_deferred: false,
         exec_scope: None,
