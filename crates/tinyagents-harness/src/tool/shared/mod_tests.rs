@@ -340,7 +340,7 @@ struct ExposedTool(&'static str, tinytools::ToolExposure);
 #[async_trait]
 impl Tool for ExposedTool {
     fn name(&self) -> &str {
-        self.1
+        self.0
     }
 
     fn description(&self) -> &str {
@@ -409,7 +409,7 @@ fn session_deferral_only_ever_subtracts_exposure() {
     use tinytools::ToolExposure::{Deferred, Direct, Hidden};
     let exposure = |declared, deferred| {
         let sets = vec![Arc::new(vec![
-            Box::new(ExposureProbe { exposure: declared }) as Box<dyn Tool>
+            Box::new(ExposureProbe { exposure: declared }) as Box<dyn Tool>,
         ])];
         CanonicalSharedToolAdapter::for_name(sets, "exposed")
             .unwrap()
@@ -450,9 +450,9 @@ impl ToolExecScope for ScopeCounter {
 
 #[tokio::test]
 async fn exec_scope_wraps_each_execution() {
-    let sets = vec![Arc::new(vec![
-        Box::new(ExposureProbe { exposure: tinytools::ToolExposure::Direct }) as Box<dyn Tool>,
-    ])];
+    let sets = vec![Arc::new(vec![Box::new(ExposureProbe {
+        exposure: tinytools::ToolExposure::Direct,
+    }) as Box<dyn Tool>])];
     let scope = Arc::new(ScopeCounter(std::sync::atomic::AtomicUsize::new(0)));
     let adapter = CanonicalSharedToolAdapter::for_name(sets, "exposed")
         .unwrap()
