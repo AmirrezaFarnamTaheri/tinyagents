@@ -1,5 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use super::*;
+use crate::turn_driver::*;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -17,8 +20,6 @@ use tinyinference_llm::model::{ChatModel, ModelRequest};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::{Tool, ToolResult};
 
-use super::*;
-use crate::turn_driver::*;
 use crate::{
     DriverRequest, RuntimeError, Session, SessionBuilder, SessionTurnOutcome, SessionTurnRequest,
     ToolSnapshot, TurnOptions,

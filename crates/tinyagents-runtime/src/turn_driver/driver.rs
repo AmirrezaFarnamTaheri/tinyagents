@@ -31,8 +31,8 @@ use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
 use tinyinference_llm::model::ChatModel;
 
 use super::steering::cleanup_only_guard;
-use super::tool_set::ToolSetBuilder;
-use super::types::{TurnCompletionSink, TurnReport, TurnScope};
+use super::tool_set::{ToolSetBuilder, ToolSetReport};
+use super::types::{TurnCompletionSink, TurnControls, TurnReport, TurnScope};
 use crate::driver::{outcome_from_partial, same_tools};
 use crate::{DriverFailure, DriverOutcome, DriverRequest, RuntimeError, SessionDriver};
 
@@ -119,6 +119,17 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
     }
 }
 
+/// Publishes what is known when a turn fails before the harness runs.
+fn publish_failed(controls: &TurnControls, max_iterations: usize, tools: ToolSetReport) {
+    controls.report.set(TurnReport {
+        scope: controls.scope.clone(),
+        max_iterations,
+        tools,
+        completion_deferred: controls.defer_turn_completed,
+        ..TurnReport::default()
+    });
+}
+
 fn failure(error: RuntimeError) -> DriverFailure {
     DriverFailure {
         error,
@@ -132,7 +143,13 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
     for TurnDriver<State, C>
 {
     async fn execute(&self, request: DriverRequest<C>) -> Result<DriverOutcome, DriverFailure> {
-        let plan = self.planner.plan(&request).await.map_err(failure)?;
+        let plan = match self.planner.plan(&request).await {
+            Ok(plan) => plan,
+            Err(error) => {
+                publish_failed(&request.controls, 0, ToolSetReport::default());
+                return Err(failure(error));
+            }
+        };
         let DriverRequest {
             history,
             tools: snapshot,
@@ -162,10 +179,14 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
             let capped = run_context.config.max_model_calls.map_or(n, |c| c.min(n));
             run_context.config.max_model_calls = Some(capped);
         }
+        // The harness enforces the stricter of an explicit config cap and the
+        // policy cap; the pauser must trip on that same number.
         let max_iterations = run_context
             .config
             .max_model_calls
-            .unwrap_or(policy.limits.max_model_calls);
+            .map_or(policy.limits.max_model_calls, |cap| {
+                cap.min(policy.limits.max_model_calls)
+            });
 
         let mut harness: AgentHarness<State, C> = AgentHarness::new();
         harness.with_policy(policy);
@@ -203,6 +224,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
 
         if enforce_tool_snapshot && !same_tools(&harness.tools().declared_specs(), snapshot.specs())
         {
+            publish_failed(&controls, max_iterations, tool_report);
             return Err(failure(RuntimeError::ToolSnapshotMismatch));
         }
 
@@ -221,7 +243,13 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
                 max_iterations,
                 run_context.run_id().as_str(),
             )
-            .map_err(|error| failure(RuntimeError::Driver(error.to_string())))?;
+            {
+                Ok(pauser) => pauser,
+                Err(error) => {
+                    publish_failed(&controls, max_iterations, tool_report);
+                    return Err(failure(RuntimeError::Driver(error.to_string())));
+                }
+            };
             run_context.events.subscribe(pauser);
         }
 
