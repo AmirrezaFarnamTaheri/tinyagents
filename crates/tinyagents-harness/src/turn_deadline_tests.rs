@@ -95,3 +95,22 @@ fn parse_backstop_defaults_and_disables() {
     );
     assert_eq!(parse_backstop(Some("0")), None);
 }
+
+#[test]
+fn close_budget_is_backstop_remainder_minus_reserve_and_floors_at_zero() {
+    let started = Instant::now();
+    let d = TurnDeadline::new(started, Duration::from_secs(900));
+    assert_eq!(d.close_budget(started), Duration::from_secs(890));
+    assert_eq!(
+        d.close_budget(started + Duration::from_secs(800)),
+        Duration::from_secs(90)
+    );
+    assert_eq!(
+        d.close_budget(started + Duration::from_secs(895)),
+        Duration::ZERO
+    );
+    assert_eq!(
+        d.close_budget(started + Duration::from_secs(2000)),
+        Duration::ZERO
+    );
+}
