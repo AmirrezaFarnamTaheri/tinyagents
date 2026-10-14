@@ -60,9 +60,14 @@ pub fn summary_child_config(
 /// shared event sink as the parent's text. `max_model_calls` bounds the loop
 /// (tool calls are capped at eight per model call, at least eight).
 ///
+/// The child runs on `AgentHarness<(), Ctx>`: the state is `()` because the
+/// summary run is its own harness, and `child_context` must have been derived
+/// for that pairing.
+///
 /// # Errors
 ///
-/// The child run's error.
+/// The child run's error, or a validation error when it produced no text (an
+/// empty summary must not replace the original payload).
 pub async fn run_unary_summary<Ctx: Send + Sync + 'static>(
     child_context: RunContext<Ctx>,
     model_name: &str,
@@ -90,7 +95,12 @@ pub async fn run_unary_summary<Ctx: Send + Sync + 'static>(
             vec![Message::system(system), Message::user(prompt)],
         )
         .await?;
-    Ok(run.text().unwrap_or_default())
+    match run.text() {
+        Some(text) if !text.trim().is_empty() => Ok(text),
+        _ => Err(crate::error::TinyAgentsError::Validation(
+            "summary run produced no text".into(),
+        )),
+    }
 }
 
 #[cfg(test)]

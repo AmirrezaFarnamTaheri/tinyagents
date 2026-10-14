@@ -51,6 +51,9 @@ impl ExposureDivergence {
 /// divergence from the registered set under `[tool-exposure]`. It never
 /// mutates the live `ModelRequest::tools`, so what the model can call is
 /// unchanged.
+///
+/// The once-per-run latch lives on the instance, so build one per run (the
+/// way a host assembles its per-turn harness); a reused instance evaluates once.
 pub struct ToolExposureShadowMiddleware {
     allowlist: ToolAllowlistMiddleware,
     selection: ContextualToolSelectionMiddleware,

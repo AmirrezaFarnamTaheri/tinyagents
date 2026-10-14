@@ -165,7 +165,7 @@ pub use stop_hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
 pub use stop_latch::StopLatch;
-pub use tool_exposure_shadow::ToolExposureShadowMiddleware;
+pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use unmet_deliverable::{

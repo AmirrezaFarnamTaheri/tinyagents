@@ -42,3 +42,16 @@ async fn unary_summary_returns_the_models_text() {
         .unwrap();
     assert_eq!(text, "short summary");
 }
+
+#[tokio::test]
+async fn unary_summary_rejects_an_empty_answer() {
+    use crate::testkit::ScriptedModel;
+    use tinyinference_llm::model::ModelResponse;
+    let ctx = RunContext::new(RunConfig::new("summarizer-summary"), ());
+    let model: Arc<dyn ChatModel<()>> =
+        Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("  ")]));
+    let err = run_unary_summary(ctx, "m", model, 2, "sys".into(), "prompt".into())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("no text"), "{err}");
+}
