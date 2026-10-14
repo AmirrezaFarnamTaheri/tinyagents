@@ -210,5 +210,13 @@ async fn text_dialect_recovery_policy_on_stream_and_unary() {
             runs,
             "policy {policy:?}, tool_calling {native:?}, streamed {streamed}: {reply}"
         );
+        // Markup the stream scrubbed must not come back in the final text.
+        if streamed && !runs && policy == Auto && native == Some(true) {
+            let text = result.unwrap().text().unwrap_or_default();
+            assert!(
+                !text.contains("tool_call>"),
+                "scrubbed markup came back: {text}"
+            );
+        }
     }
 }

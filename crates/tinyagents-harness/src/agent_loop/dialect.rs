@@ -701,10 +701,13 @@ impl DeltaScrubber {
                 .record_withheld(calls.len(), &self.model_call_id);
             return;
         }
-        for call in calls
-            .into_iter()
-            .filter(|call| call.special_token || !self.special_tokens_only)
-        {
+        for call in calls {
+            if self.special_tokens_only && !call.special_token {
+                // Quoted plain markup: scrubbed like a withheld call, so the
+                // terminal text loses it too, but never run (#6733).
+                self.withheld += 1;
+                continue;
+            }
             let slot = self.calls.len() + 1;
             self.calls
                 .push(to_tool_call(call, &self.model_call_id, slot));
@@ -721,7 +724,8 @@ impl DeltaScrubber {
         !self.calls.is_empty()
     }
 
-    /// Whether any complete call was withheld during the stream.
+    /// Whether any complete call was scrubbed without being run during the
+    /// stream (withheld, or plain markup under `special_tokens_only`).
     pub(super) fn has_withheld(&self) -> bool {
         self.withheld > 0
     }
