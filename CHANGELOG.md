@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased: tinystoragedrivers by git tag
+
+The workspace takes `tinystoragedrivers-core` / `-sqlite` by git tag `v0.11.0`
+(the source every module names) instead of a path into a vendored copy. The
+`vendor/tinystoragedrivers` submodule and the `[patch]` that redirected the
+tinyinference git dependency onto it are removed. Hosts no longer need a
+`[patch."https://github.com/tinyhumansai/tinystoragedrivers"]` to keep one set
+of port types and one `libsqlite3-sys` in the graph.
+
 ## Unreleased: driver stores replace SQLite, file and JSONL backends
 
 Every durable store now runs on `tinystoragedrivers` ports (memory, SQLite,
