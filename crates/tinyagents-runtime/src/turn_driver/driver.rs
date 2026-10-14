@@ -243,7 +243,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> PreparedTurn<State,
         } = self;
         let input_len = history.len();
         // Boxed: a child turn runs nested inside its parent's drive future.
-        let mut partial = if stream {
+        let partial = if stream {
             Box::pin(harness.invoke_streaming_in_context_collecting_partial(
                 state.as_ref(),
                 run_context,
@@ -260,10 +260,6 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> PreparedTurn<State,
         };
         let succeeded = partial.error.is_none();
         let report = tail.finish(succeeded.then_some(&partial.run));
-        // An early exit that raced a failure is not an answer.
-        if !succeeded {
-            partial.run.paused = partial.run.paused.take();
-        }
         TurnRun {
             partial,
             report,

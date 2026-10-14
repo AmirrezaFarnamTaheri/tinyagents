@@ -21,7 +21,9 @@ mod steering;
 mod tool_set;
 mod types;
 
-pub use driver::{TurnDriver, TurnPlan, TurnPlanner};
+pub use driver::{
+    HarnessParts, PreparedTurn, TurnDriver, TurnPlan, TurnPlanner, TurnRun, TurnTail,
+};
 pub use steering::{FeedGuard, RunQueueFeed, SteeringFeed, SteeringRegistrar};
 pub use tool_set::{DispatchSelector, SharedToolSet, ToolSetBuilder, ToolSetReport};
 pub use types::{
