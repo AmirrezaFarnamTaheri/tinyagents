@@ -231,6 +231,16 @@ pub struct TurnRun {
 }
 
 impl<State: Send + Sync + 'static, C: Send + Sync + 'static> PreparedTurn<State, C> {
+    /// How tool registration resolved for this turn.
+    pub fn tools(&self) -> &ToolSetReport {
+        self.tail.tools()
+    }
+
+    /// The model-call cap the run enforces (the stricter of config and policy).
+    pub fn max_iterations(&self) -> usize {
+        self.tail.max_iterations()
+    }
+
     /// Drives the harness over the run context and settles the turn.
     pub async fn run(self) -> TurnRun {
         let Self {
