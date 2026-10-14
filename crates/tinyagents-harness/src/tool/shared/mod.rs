@@ -9,12 +9,29 @@
 
 mod early_exit;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tinytools::{Tool, ToolCallOptions, ToolResult, ToolRunContext, ToolTimeout};
 
 pub use early_exit::{EarlyExit, EarlyExitHook};
+
+/// A boxed tool execution, as handed to a [`ToolExecScope`].
+pub type ToolExecution<'a> = Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>>;
+
+/// Wraps every execution of an adapted tool in a host's ambient scope (a
+/// task-local, a tracing span, an origin stamp) without the harness knowing
+/// what that scope is.
+pub trait ToolExecScope: Send + Sync {
+    /// Runs `execution` inside the scope. `context` is the call's run context.
+    fn scope<'a>(
+        &'a self,
+        context: Option<&'a dyn ToolRunContext>,
+        execution: ToolExecution<'a>,
+    ) -> ToolExecution<'a>;
+}
 
 /// Canonical TinyTools adapter over shared tool sets.
 ///
@@ -26,6 +43,8 @@ pub struct CanonicalSharedToolAdapter {
     description: String,
     parameters_schema: serde_json::Value,
     early_exit: Option<EarlyExitHook>,
+    force_deferred: bool,
+    exec_scope: Option<Arc<dyn ToolExecScope>>,
 }
 
 impl std::fmt::Debug for CanonicalSharedToolAdapter {
@@ -54,7 +73,25 @@ impl CanonicalSharedToolAdapter {
             description: spec.description,
             parameters_schema: spec.parameters,
             early_exit: None,
+            force_deferred: false,
+            exec_scope: None,
         })
+    }
+
+    /// Reports a directly exposed tool as `Deferred` (served through the
+    /// search bridge). Deferral only subtracts: a `Hidden` tool stays hidden
+    /// and an already `Deferred` one is unchanged.
+    #[must_use]
+    pub fn deferred(mut self, deferred: bool) -> Self {
+        self.force_deferred = deferred;
+        self
+    }
+
+    /// Runs every execution inside `scope`.
+    #[must_use]
+    pub fn with_exec_scope(mut self, scope: Arc<dyn ToolExecScope>) -> Self {
+        self.exec_scope = Some(scope);
+        self
     }
 
     /// Attaches an [`EarlyExitHook`] fired after a successful call.
@@ -105,6 +142,9 @@ impl Tool for CanonicalSharedToolAdapter {
     fn exposure(&self) -> tinytools::ToolExposure {
         match self.resolved_tool().map(Tool::exposure) {
             Some(tinytools::ToolExposure::Deferred) => tinytools::ToolExposure::Deferred,
+            Some(tinytools::ToolExposure::Direct) if self.force_deferred => {
+                tinytools::ToolExposure::Deferred
+            }
             _ => tinytools::ToolExposure::Direct,
         }
     }
@@ -193,7 +233,13 @@ impl Tool for CanonicalSharedToolAdapter {
         // A callable tool's operational failure is input to the agent loop, not
         // a failure of the harness itself.  Preserve it as an error result so
         // the model can recover (or explain the failure) on its next round.
-        let result = match tool.execute_with_context(args, options, context).await {
+        let execution: ToolExecution<'_> =
+            Box::pin(tool.execute_with_context(args, options, context));
+        let execution = match &self.exec_scope {
+            Some(scope) => scope.scope(context, execution),
+            None => execution,
+        };
+        let result = match execution.await {
             Ok(result) => result,
             Err(error) => {
                 tracing::warn!(tool = %self.name, %error, "shared tool execution failed");
