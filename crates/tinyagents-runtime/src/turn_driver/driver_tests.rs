@@ -716,3 +716,56 @@ async fn a_planner_error_reports_the_scope_it_failed_under() {
     assert!(turn(&mut session, controls).await.is_err());
     assert!(slot.get().unwrap().completion_deferred);
 }
+
+/// A typed dispatch built the way the contract asks: over the adapter it is given.
+struct OverAdapter(Arc<dyn Tool>);
+
+#[async_trait]
+impl tinyagents_harness::tool::ToolDispatch<(), ()> for OverAdapter {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.0.clone()
+    }
+    async fn execute(
+        &self,
+        _: &(),
+        _: tinyagents_harness::ids::CallId,
+        arguments: serde_json::Value,
+        options: tinytools::ToolCallOptions,
+        _: &RunContext<()>,
+    ) -> anyhow::Result<ToolResult> {
+        self.0.execute_with_context(arguments, options, None).await
+    }
+}
+
+#[tokio::test]
+async fn a_typed_dispatch_over_the_adapter_keeps_early_exit_and_scope() {
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let model = Arc::new(ScriptedModel::new(vec![tool_call_response(call(
+        "c1", "ask", 1,
+    ))]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(FakeTool::returning("ask", "need input"))];
+    let configure: Configure = {
+        let trace = trace.clone();
+        Arc::new(move |plan| {
+            let builder = std::mem::take(&mut plan.tools);
+            plan.tools = builder
+                .exec_scope(Arc::new(Stamp(trace.clone())))
+                .dispatch(Arc::new(|_, adapter| Some(Arc::new(OverAdapter(adapter)))));
+        })
+    };
+    let mut session = session(&model, tools, &["ask"], configure);
+    let controls = TurnControls {
+        early_exit_tools: ["ask".to_string()].into(),
+        ..TurnControls::default()
+    };
+    let slot = controls.report.clone();
+
+    let outcome = turn(&mut session, controls).await.unwrap();
+
+    assert!(outcome.interrupted);
+    assert_eq!(
+        slot.get().unwrap().early_exit.unwrap().question,
+        "need input"
+    );
+    assert_eq!(*trace.lock().unwrap(), vec!["enter", "exit"]);
+}

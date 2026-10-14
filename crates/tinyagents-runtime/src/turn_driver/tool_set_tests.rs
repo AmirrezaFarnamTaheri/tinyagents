@@ -91,3 +91,45 @@ fn session_deferred_tools_leave_the_direct_surface() {
     assert_eq!(deferred, ["b"]);
     assert_ne!(ToolExposure::Direct, ToolExposure::Deferred);
 }
+
+struct HiddenTool;
+
+#[async_trait::async_trait]
+impl Tool for HiddenTool {
+    fn name(&self) -> &str {
+        "hidden"
+    }
+    fn description(&self) -> &str {
+        "named by hand only"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object", "properties": {} })
+    }
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Hidden
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("ok"))
+    }
+}
+
+fn with_hidden() -> SharedToolSet {
+    Arc::new(vec![
+        Box::new(FakeTool::new("visible")) as Box<dyn Tool>,
+        Box::new(HiddenTool),
+    ])
+}
+
+#[test]
+fn a_wildcard_never_exposes_a_hidden_tool_but_an_allowlist_may_name_it() {
+    let wildcard = ToolSetBuilder::<(), ()>::new().set(with_hidden());
+    assert_eq!(registered(&wildcard).0, ["visible"]);
+
+    let named = ToolSetBuilder::<(), ()>::new()
+        .set(with_hidden())
+        .admission(ToolAdmission {
+            allowed: Some(["hidden".to_string()].into()),
+            ..ToolAdmission::default()
+        });
+    assert_eq!(registered(&named).0, ["hidden"]);
+}

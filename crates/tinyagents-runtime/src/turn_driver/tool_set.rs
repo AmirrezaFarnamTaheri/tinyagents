@@ -15,7 +15,7 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::{
     CanonicalSharedToolAdapter, EarlyExitHook, ToolDispatch, ToolExecScope,
 };
-use tinytools::Tool;
+use tinytools::{Tool, ToolExposure};
 
 use crate::{RegistrationPlan, ToolAdmission, ToolRegistration, register_admitted};
 
@@ -24,6 +24,11 @@ pub type SharedToolSet = Arc<Vec<Box<dyn Tool>>>;
 
 /// Chooses a typed dispatch for tools that need the live parent run. Receives
 /// the tool's name and its registered adapter; `None` registers a plain tool.
+///
+/// The returned dispatch must execute **through the adapter it was given**
+/// (the harness's own canonical dispatch does). The adapter carries the turn's
+/// early-exit hook and execution scope, so a dispatch that runs the underlying
+/// tool some other way opts that tool out of both.
 pub type DispatchSelector<State, C> =
     Arc<dyn Fn(&str, Arc<dyn Tool>) -> Option<Arc<dyn ToolDispatch<State, C>>> + Send + Sync>;
 
@@ -127,7 +132,8 @@ where
         self.admission.is_subagent_run = true;
     }
 
-    /// Registers the admitted tools onto `harness`. Every name in
+    /// Registers the admitted tools onto `harness`. With no allowlist, tools
+    /// that declare `Hidden` exposure are skipped. Every name in
     /// `early_exit_tools` that registers pauses the run through `hook` after a
     /// successful call.
     pub fn register(
@@ -146,7 +152,26 @@ where
                 "[tool-set] allowlist resolved empty: registering no tools"
             );
         }
-        let names = self.candidate_names();
+        // A wildcard admits every *visible* tool. A `Hidden` tool is exposed
+        // only when an allowlist names it, because the adapter reports an
+        // unforced hidden tool as `Direct`.
+        let wildcard = self.admission.allowed.is_none();
+        let names: Vec<String> = self
+            .candidate_names()
+            .into_iter()
+            .filter(|name| {
+                let hidden = self
+                    .sets
+                    .iter()
+                    .flat_map(|set| set.iter())
+                    .find(|tool| tool.name() == name)
+                    .is_some_and(|tool| tool.exposure() == ToolExposure::Hidden);
+                if wildcard && hidden {
+                    tracing::debug!(tool = %name, "[tool-set] wildcard skips hidden tool");
+                }
+                !(wildcard && hidden)
+            })
+            .collect();
         let mut registered = Vec::new();
         let (_, plan) = register_admitted(harness, names, &self.admission, |name| {
             let mut adapter = CanonicalSharedToolAdapter::for_name(self.sets.clone(), name)?
