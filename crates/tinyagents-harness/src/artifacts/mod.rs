@@ -52,7 +52,7 @@
 //!
 //! ## Logging
 //!
-//! Every write emits `[artifact] wrote worker artifact under the artifact root`,
+//! Every write emits `[artifact] stored worker artifact on the blob store`,
 //! and every path a handoff carries emits `[artifact] handoff carried an
 //! artifact path`, so a run journal shows both ends of a pointer.
 

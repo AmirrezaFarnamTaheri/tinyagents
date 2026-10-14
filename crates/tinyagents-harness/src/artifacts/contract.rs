@@ -1,7 +1,7 @@
 //! The prompt-side half of the artifact-offload convention (#3883).
 //!
 //! Single source of truth for the directory names the model is told about, so
-//! the prompt and [`super::resolve_artifact_path`] can never drift. The write
+//! the prompt and [`super::resolve_artifact_key`] can never drift. The write
 //! tool the contract may name is a parameter: tool names are host vocabulary.
 
 use std::collections::HashSet;
