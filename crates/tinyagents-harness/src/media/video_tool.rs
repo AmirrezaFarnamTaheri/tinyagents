@@ -20,7 +20,7 @@ use super::{artifact_stem, media_policy};
 pub const GENERATE_VIDEO_TOOL_NAME: &str = "generate_video";
 
 /// Generates videos with a [`VideoGenerator`], waits for the job, and saves
-/// the clips to the run's workspace.
+/// the clips as artifacts on the output blob store.
 ///
 /// A job that is still running when the wait budget runs out is reported with
 /// its id; calling the tool again with `resume_job_id` and its original model collects it without
@@ -45,7 +45,7 @@ impl GenerateVideoTool {
             wait: WaitPolicy::default(),
             name: GENERATE_VIDEO_TOOL_NAME.to_owned(),
             description: "Generate a short video clip from a text prompt, optionally starting \
-                          from (or ending on) an image, and save it into the workspace. Takes \
+                          from (or ending on) an image, and store it as an artifact. Takes \
                           minutes. Billed per call: if a job times out, call again with \
                           `resume_job_id` and the original `model` instead of submitting a new one."
                 .to_owned(),
@@ -162,8 +162,8 @@ impl GenerateVideoTool {
         if let Err(message) = check_string_options(args, &["resume_job_id", "model"]) {
             return ToolResult::error(message);
         }
-        let dir = match self.output.dir(workspace) {
-            Ok(dir) => dir,
+        let prefix = match self.output.prefix() {
+            Ok(prefix) => prefix,
             Err(message) => return ToolResult::error(message),
         };
         let outcome = if let Some(job_id) = arg_str(args, &["resume_job_id"]) {
@@ -236,13 +236,20 @@ impl GenerateVideoTool {
             };
             match self
                 .output
-                .persist(&dir, &format!("{stem}-{index}"), extension, &video.data)
+                .persist(
+                    &prefix,
+                    &format!("{stem}-{index}"),
+                    extension,
+                    &video.data,
+                    video.media_type.split(';').next().map_or("", str::trim),
+                )
+                .await
             {
                 Ok(path) => {
-                    lines.push(format!("- {}", path.display()));
+                    lines.push(format!("- {path}"));
                     artifacts.push(json!({
                         "type": "video",
-                        "path": path.display().to_string(),
+                        "path": path,
                         "media_type": video.media_type,
                         "bytes": video.data.len(),
                     }));
