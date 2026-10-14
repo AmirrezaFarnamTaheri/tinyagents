@@ -79,9 +79,7 @@ async fn oversized_result_is_bounded_to_the_shared_budget() {
 async fn body_past_persistable_limit_is_bounded_inline_not_spilled() {
     use crate::artifacts::policy::NoRedaction;
     use std::sync::Arc;
-    let tmp = tempfile::tempdir().unwrap();
-    let store = ToolResultArtifactStore::new(
-        tmp.path().to_path_buf(),
+    let store = ToolResultArtifactStore::in_memory(
         "s",
         Arc::new(NoRedaction),
         "file_read",
@@ -94,12 +92,14 @@ async fn body_past_persistable_limit_is_bounded_inline_not_spilled() {
     i.store = Some(&store);
     let out = run_output_ladder(&pol, &mut p, i).await;
     assert!(out.len() < 30_000);
-    let spilled = std::fs::read_dir(tmp.path().join("artifacts")).is_ok();
-    assert!(!spilled, "nothing may be written for an ineligible body");
+    assert!(
+        store.blobs().list("").await.unwrap().is_empty(),
+        "nothing may be written for an ineligible body"
+    );
 
     // Within the limit it does spill.
     let mut i = input("shell", "z".repeat(18_000), false);
     i.store = Some(&store);
     let out = run_output_ladder(&pol, &mut p, i).await;
-    assert!(out.contains("artifacts"), "{out}");
+    assert!(out.contains("tool-results"), "{out}");
 }

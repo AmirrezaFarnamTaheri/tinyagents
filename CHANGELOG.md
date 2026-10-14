@@ -39,6 +39,24 @@ drivers.
 - Hosts that let the model open these artifacts by file path must expose the
   store through their read tool or materialise it themselves.
 
+### Tool-result artifacts: blob store
+
+- `artifacts::ToolResultArtifactStore` writes to a tinystoragedrivers
+  `BlobStore` (`ToolResultArtifactStore::new(blobs, session, redactor,
+  read_tool, max_readable_bytes)`; `::in_memory(...)` is the default for
+  library hosts). The pointer the model receives is the blob key
+  `tool-results/<session>/<tool>/<call>.txt`. `read(key)` fetches an artifact
+  back (fail-closed on keys outside `tool-results/`; the legacy
+  `artifacts/tool-results/` pointer is still accepted), `purge_session()`
+  deletes a session's artifacts, and `with_retention(ttl)` gives every artifact
+  a lifetime on drivers with `Capability::BlobTtl`.
+- Removed: `ToolResultArtifactStore::detached`, `::try_detached`, `::root`,
+  `::is_detached` and `::prune_stale_sessions` (blobs have no modification
+  time; use `with_retention` or `purge_session`). Nothing is written to the
+  filesystem, and the envelope note changed accordingly.
+- Hosts that let the model open the pointer must serve the key from the blob
+  store in their read tool (or materialise it).
+
 ### Removed, with the replacement
 
 | Removed | Use instead |
@@ -117,11 +135,8 @@ let report = import_workspace(&provider, "agent-id", workspace_dir).await?;
 ### Not yet moved
 
 These still use files and are migrated in follow-ups (tracked in
-tinyhumansai/openhuman#7688, #7768 and #7783):
+tinyhumansai/openhuman#7688, #7768, #7783 and #7809, and tinyagents#453):
 
 - the JSONL transcript writer, reader and `FileTranscriptLocator`
   (path-bound; `session_raw/` adoption, spend and view helpers read them,
-  about 12k lines across `session::transcript`);
-- `artifacts::tool_results::ToolResultArtifactStore`, whose pointers are
-  action-relative or absolute file paths the host's `file_read` opens, and
-  whose pruning relies on file mtimes (a blob has no modification time).
+  about 12k lines across `session::transcript`).
