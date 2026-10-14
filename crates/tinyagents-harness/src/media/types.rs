@@ -1,11 +1,10 @@
 //! Shared configuration for the media generation tools.
 
-use std::fs::File;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
+use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 use tinyinference_image::MediaReference;
 
 /// Sub-directory of the output root that generated media is written into.
@@ -26,25 +25,34 @@ pub struct MediaOutput {
     /// Local-reference admission policy; `None` confines references to the
     /// workspace (or fallback) root.
     pub reference_policy: Option<ReferencePathPolicy>,
-}
-
-/// A verified artifact directory whose open handle prevents a later rename
-/// from redirecting writes through a swapped ancestor.
-pub(crate) struct ArtifactDirectory {
-    path: PathBuf,
-    #[cfg(unix)]
-    handle: File,
+    /// Where generated artifacts are stored. Defaults to a private in-memory
+    /// blob store; hosts pass their scoped blob handle with
+    /// [`with_blobs`](Self::with_blobs).
+    pub blobs: Arc<dyn BlobStore>,
 }
 
 impl MediaOutput {
-    /// Writes under `fallback_root/generated-media` when no workspace is known.
+    /// Resolves local references against `fallback_root` when no workspace is
+    /// known. Generated artifacts go to the blob store under
+    /// `generated-media/`, in memory unless [`with_blobs`](Self::with_blobs).
     #[must_use]
     pub fn new(fallback_root: impl Into<PathBuf>) -> Self {
+        let scoped = MemoryStorage::new()
+            .for_scope(&Scope::new("local").expect("static scope"))
+            .expect("memory scope");
         Self {
             fallback_root: fallback_root.into(),
             subdir: DEFAULT_MEDIA_SUBDIR.to_owned(),
             reference_policy: None,
+            blobs: scoped.blobs().clone(),
         }
+    }
+
+    /// Stores generated artifacts on `blobs` instead of the in-memory default.
+    #[must_use]
+    pub fn with_blobs(mut self, blobs: Arc<dyn BlobStore>) -> Self {
+        self.blobs = blobs;
+        self
     }
 
     /// Changes the artifact sub-directory.
@@ -66,180 +74,58 @@ impl MediaOutput {
         workspace.unwrap_or(&self.fallback_root)
     }
 
-    /// Creates and returns the artifact directory for this call.
+    /// Validates the artifact sub-directory and returns the blob key prefix
+    /// (`<subdir>/`) generated artifacts are stored under.
     ///
-    /// Every pre-existing component is inspected without following symlinks,
-    /// then the resolved directory is checked against the resolved root. This
-    /// makes a scoped workspace reject an output directory redirected outside
-    /// the workspace before a generation request can be billed.
-    pub(crate) fn dir(&self, workspace: Option<&Path>) -> Result<ArtifactDirectory, String> {
+    /// Checked before a generation request is made, so a bad host
+    /// configuration is refused before the call can be billed.
+    pub(crate) fn prefix(&self) -> Result<String, String> {
         let subdir = Path::new(&self.subdir);
         if self.subdir.trim().is_empty()
             || subdir
                 .components()
                 .any(|component| !matches!(component, Component::Normal(_)))
+            || self.subdir.contains('\\')
         {
             return Err(format!(
                 "artifact subdirectory `{}` must be a relative path below the output root",
                 self.subdir
             ));
         }
-        let root = self.root(workspace);
-        std::fs::create_dir_all(root).map_err(|error| {
-            format!(
-                "output root {} could not be created: {error}",
-                root.display()
-            )
-        })?;
-        let canonical_root = root.canonicalize().map_err(|error| {
-            format!(
-                "output root {} could not be resolved: {error}",
-                root.display()
-            )
-        })?;
-
-        let mut dir = canonical_root.clone();
-        for component in subdir.components() {
-            let Component::Normal(component) = component else {
-                unreachable!("subdirectory components were validated above");
-            };
-            dir.push(component);
-            match std::fs::symlink_metadata(&dir) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(format!(
-                        "artifact directory {} must not contain symlinks",
-                        dir.display()
-                    ));
-                }
-                Ok(metadata) if !metadata.is_dir() => {
-                    return Err(format!(
-                        "artifact path {} is not a directory",
-                        dir.display()
-                    ));
-                }
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::create_dir(&dir).map_err(|error| {
-                        format!(
-                            "artifact directory {} could not be created: {error}",
-                            dir.display()
-                        )
-                    })?;
-                    let metadata = std::fs::symlink_metadata(&dir).map_err(|error| {
-                        format!(
-                            "artifact directory {} could not be inspected: {error}",
-                            dir.display()
-                        )
-                    })?;
-                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                        return Err(format!(
-                            "artifact directory {} changed while being created",
-                            dir.display()
-                        ));
-                    }
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "artifact directory {} could not be inspected: {error}",
-                        dir.display()
-                    ));
-                }
-            }
-        }
-        let canonical_dir = dir.canonicalize().map_err(|error| {
-            format!(
-                "artifact directory {} could not be resolved: {error}",
-                dir.display()
-            )
-        })?;
-        if !canonical_dir.starts_with(&canonical_root) {
-            return Err(format!(
-                "artifact directory {} is outside the output root",
-                canonical_dir.display()
-            ));
-        }
-        #[cfg(unix)]
-        let handle = {
-            use rustix::fs::{Mode, OFlags, open};
-
-            let handle = open(
-                &canonical_dir,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(|error| {
-                format!(
-                    "artifact directory {} could not be opened safely: {error}",
-                    canonical_dir.display()
-                )
-            })?;
-            File::from(handle)
-        };
-        Ok(ArtifactDirectory {
-            path: canonical_dir,
-            #[cfg(unix)]
-            handle,
-        })
+        let joined = subdir
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        Ok(format!("{joined}/"))
     }
 
-    /// Persists one artifact without following a final-path symlink or
-    /// replacing an existing file.
-    pub(crate) fn persist(
+    /// Stores one artifact without replacing an existing blob, and returns its
+    /// key (the path the tool reports).
+    pub(crate) async fn persist(
         &self,
-        dir: &ArtifactDirectory,
+        prefix: &str,
         stem: &str,
         extension: &str,
         bytes: &[u8],
-    ) -> Result<PathBuf, String> {
+        content_type: &str,
+    ) -> Result<String, String> {
         if !is_filename_component(stem) || !is_filename_component(extension) {
             return Err(
                 "artifact name components must be non-empty filename components".to_owned(),
             );
         }
-        let filename = format!("{stem}.{extension}");
-        let path = dir.path.join(&filename);
-        #[cfg(unix)]
-        {
-            use rustix::fs::{Mode, OFlags, openat};
-
-            // `openat` writes relative to the verified directory handle, so an
-            // attacker cannot redirect this write by replacing an ancestor.
-            let file = openat(
-                &dir.handle,
-                &filename,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::RUSR | Mode::WUSR | Mode::RGRP | Mode::WGRP | Mode::ROTH | Mode::WOTH,
-            )
-            .map(File::from)
-            .map_err(|error| {
-                format!(
-                    "artifact {} could not be created safely: {error}",
-                    path.display()
-                )
-            })?;
-            let mut file = file;
-            file.write_all(bytes).map_err(|error| {
-                format!("artifact {} could not be written: {error}", path.display())
-            })?;
-            Ok(path)
+        let key = format!("{prefix}{stem}.{extension}");
+        match self.blobs.head(&key).await {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(format!("artifact {key} already exists")),
+            Err(error) => return Err(format!("artifact {key} could not be checked: {error}")),
         }
-        #[cfg(not(unix))]
-        {
-            let mut file = File::options()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|error| {
-                    format!(
-                        "artifact {} could not be created safely: {error}",
-                        path.display()
-                    )
-                })?;
-            file.write_all(bytes).map_err(|error| {
-                format!("artifact {} could not be written: {error}", path.display())
-            })?;
-            Ok(path)
-        }
+        self.blobs
+            .put(&key, bytes.to_vec(), Some(content_type))
+            .await
+            .map_err(|error| format!("artifact {key} could not be stored: {error}"))?;
+        Ok(key)
     }
 
     /// Converts a model-supplied reference string into a [`MediaReference`],
@@ -298,6 +184,7 @@ impl std::fmt::Debug for MediaOutput {
             .field("fallback_root", &self.fallback_root)
             .field("subdir", &self.subdir)
             .field("reference_policy", &self.reference_policy.is_some())
+            .field("blobs", &self.blobs)
             .finish()
     }
 }

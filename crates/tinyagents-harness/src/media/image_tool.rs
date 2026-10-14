@@ -153,8 +153,8 @@ impl GenerateImageTool {
                 Err(message) => return ToolResult::error(message),
             }
         }
-        let dir = match self.output.dir(workspace) {
-            Ok(dir) => dir,
+        let prefix = match self.output.prefix() {
+            Ok(prefix) => prefix,
             Err(message) => return ToolResult::error(message),
         };
 
@@ -211,13 +211,20 @@ impl GenerateImageTool {
             };
             match self
                 .output
-                .persist(&dir, &format!("{stem}-{index}"), ext, &image.data)
+                .persist(
+                    &prefix,
+                    &format!("{stem}-{index}"),
+                    ext,
+                    &image.data,
+                    image.media_type.split(';').next().map_or("", str::trim),
+                )
+                .await
             {
                 Ok(path) => {
-                    lines.push(format!("- {}", path.display()));
+                    lines.push(format!("- {path}"));
                     artifacts.push(json!({
                         "type": "image",
-                        "path": path.display().to_string(),
+                        "path": path,
                         "media_type": image.media_type,
                         "bytes": image.data.len(),
                     }));
