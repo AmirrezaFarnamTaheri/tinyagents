@@ -46,6 +46,11 @@ pub struct ToolDiscoveryPolicy {
     pub ranker: Option<Arc<dyn ToolRanker>>,
     /// How [`Self::ranker`] and the built-in BM25 are combined.
     pub rank_mode: DiscoveryRankMode,
+    /// What the ranker is told about the search beyond the query: the chat it
+    /// runs for, so a ranker that discloses the query off the machine can
+    /// route the disclosure there. Handed to [`Self::ranker`] unchanged on
+    /// every `tool_search` of the run. Empty by default.
+    pub rank_context: RankContext,
 }
 
 /// How a `tool_search` answer is produced when a host ranker is installed.
@@ -114,6 +119,7 @@ impl Default for ToolDiscoveryPolicy {
             max_limit: 20,
             ranker: None,
             rank_mode: DiscoveryRankMode::default(),
+            rank_context: RankContext::empty(),
         }
     }
 }

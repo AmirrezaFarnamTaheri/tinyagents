@@ -114,7 +114,7 @@ pub async fn answer_tool_search(
         });
 
     let ranking = catalog
-        .rank(policy, query, &RankContext::empty(), limit)
+        .rank(policy, query, &policy.rank_context, limit)
         .await;
     let matches: Vec<&ToolSchema> = ranking
         .names
