@@ -379,10 +379,10 @@ fn adapter_advertises_admitted_hidden_tools_and_keeps_deferred_ones_deferred() {
     assert_eq!(exposure("deferred"), tinytools::ToolExposure::Deferred);
 }
 
-struct ExposedTool(tinytools::ToolExposure);
+struct ExposureProbe(tinytools::ToolExposure);
 
 #[async_trait]
-impl Tool for ExposedTool {
+impl Tool for ExposureProbe {
     fn name(&self) -> &str {
         "exposed"
     }
@@ -405,7 +405,7 @@ fn session_deferral_only_ever_subtracts_exposure() {
     use tinytools::ToolExposure::{Deferred, Direct, Hidden};
     let exposure = |declared, deferred| {
         let sets = vec![Arc::new(vec![
-            Box::new(ExposedTool(declared)) as Box<dyn Tool>
+            Box::new(ExposureProbe(declared)) as Box<dyn Tool>
         ])];
         CanonicalSharedToolAdapter::for_name(sets, "exposed")
             .unwrap()
@@ -431,9 +431,9 @@ fn session_deferral_only_ever_subtracts_exposure() {
     );
 }
 
-struct CountingScope(std::sync::atomic::AtomicUsize);
+struct ScopeCounter(std::sync::atomic::AtomicUsize);
 
-impl ToolExecScope for CountingScope {
+impl ToolExecScope for ScopeCounter {
     fn scope<'a>(
         &'a self,
         _: Option<&'a dyn ToolRunContext>,
@@ -447,9 +447,9 @@ impl ToolExecScope for CountingScope {
 #[tokio::test]
 async fn exec_scope_wraps_each_execution() {
     let sets = vec![Arc::new(vec![
-        Box::new(ExposedTool(tinytools::ToolExposure::Direct)) as Box<dyn Tool>,
+        Box::new(ExposureProbe(tinytools::ToolExposure::Direct)) as Box<dyn Tool>,
     ])];
-    let scope = Arc::new(CountingScope(std::sync::atomic::AtomicUsize::new(0)));
+    let scope = Arc::new(ScopeCounter(std::sync::atomic::AtomicUsize::new(0)));
     let adapter = CanonicalSharedToolAdapter::for_name(sets, "exposed")
         .unwrap()
         .with_exec_scope(scope.clone());
