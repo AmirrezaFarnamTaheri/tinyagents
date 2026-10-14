@@ -44,7 +44,9 @@ fn whole_list_writes_keep_the_order() {
         // Completing step 3 out of order.
         (
             plan(&[("A", InProgress), ("B", Pending), ("C", Completed)]),
-            Err("Finish or cancel step 2 first."),
+            Err(
+                "Finish or cancel steps 1, 2 first, in order: todo {\"complete\": N} for each one that is done, or todo {\"cancel\": N, \"reason\": \"...\"}.",
+            ),
         ),
         // Ticking the step in progress and starting the next is the happy path.
         (
@@ -90,7 +92,7 @@ fn complete_out_of_order_or_out_of_range_is_refused() {
     let before = items.clone();
     assert_eq!(
         complete(&mut items, 3).unwrap_err(),
-        "Finish or cancel step 1 first."
+        "Finish or cancel steps 1, 2 first, in order: todo {\"complete\": N} for each one that is done, or todo {\"cancel\": N, \"reason\": \"...\"}."
     );
     for step in [0, 4] {
         assert!(

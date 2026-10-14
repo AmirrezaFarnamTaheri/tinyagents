@@ -133,10 +133,23 @@ fn start_next(items: &mut [TodoItem]) -> Option<String> {
     }
 }
 
+/// Names every open step above `index`, so a model that skipped ahead closes
+/// them all instead of ticking only the first and moving on.
 fn ensure_earlier_closed(items: &[TodoItem], index: usize) -> Result<(), String> {
-    match first_open(&items[..index]) {
-        Some(open) => Err(format!("Finish or cancel step {} first.", open + 1)),
-        None => Ok(()),
+    let open: Vec<String> = items[..index]
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.status.is_open())
+        .map(|(i, _)| (i + 1).to_string())
+        .collect();
+    match open.as_slice() {
+        [] => Ok(()),
+        [one] => Err(format!("Finish or cancel step {one} first.")),
+        many => Err(format!(
+            "Finish or cancel steps {} first, in order: todo {{\"complete\": N}} for each one that \
+             is done, or todo {{\"cancel\": N, \"reason\": \"...\"}}.",
+            many.join(", ")
+        )),
     }
 }
 
