@@ -1,41 +1,26 @@
-//! A generic tool-registration builder over shared, non-cloneable tool sets.
+//! A generic tool-registration builder over shared tool sets.
 //!
 //! A host owns its tools as `Arc<Vec<Box<dyn Tool>>>` sets that outlive any one
 //! turn. [`ToolSetBuilder`] registers the admitted subset onto a turn's
-//! [`AgentHarness`] through a thin [`SharedToolAdapter`] that resolves the tool
-//! by name on every call, so nothing is cloned. Admission is the fail-closed
-//! rules of [`crate::plan_registration`]; the host decides only how a tool
-//! with special execution needs is wrapped ([`ToolSetBuilder::dispatch`]) and
-//! what ambient scope its execution runs under ([`ToolSetBuilder::exec_scope`]).
+//! [`AgentHarness`] through the harness's [`CanonicalSharedToolAdapter`], which
+//! resolves each tool by name on every call, so nothing is cloned. Admission is
+//! the fail-closed rules of [`crate::plan_registration`]; the host decides only
+//! how a tool with special execution needs is wrapped ([`ToolSetBuilder::dispatch`])
+//! and what ambient scope executions run under ([`ToolSetBuilder::exec_scope`]).
 
-use std::collections::HashSet;
-use std::future::Future;
-use std::pin::Pin;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tinyagents_harness::runtime::AgentHarness;
-use tinyagents_harness::tool::ToolDispatch;
-use tinytools::{Tool, ToolCallOptions, ToolExposure, ToolResult, ToolRunContext};
+use tinyagents_harness::tool::{
+    CanonicalSharedToolAdapter, EarlyExitHook, ToolDispatch, ToolExecScope,
+};
+use tinytools::Tool;
 
 use crate::{RegistrationPlan, ToolAdmission, ToolRegistration, register_admitted};
 
 /// One shared, non-cloneable set of tools.
 pub type SharedToolSet = Arc<Vec<Box<dyn Tool>>>;
-
-/// A boxed tool execution.
-pub type ToolExecution<'a> = Pin<Box<dyn Future<Output = anyhow::Result<ToolResult>> + Send + 'a>>;
-
-/// Wraps every tool execution in a host's ambient scope (a task-local, a
-/// tracing span, an origin stamp) without the runtime knowing what it is.
-pub trait ToolExecScope: Send + Sync {
-    /// Runs `execution` inside the scope. `context` is the call's run context.
-    fn scope<'a>(
-        &'a self,
-        context: Option<&'a dyn ToolRunContext>,
-        execution: ToolExecution<'a>,
-    ) -> ToolExecution<'a>;
-}
 
 /// Chooses a typed dispatch for tools that need the live parent run. Receives
 /// the tool's name and its registered adapter; `None` registers a plain tool.
@@ -77,7 +62,7 @@ where
     State: Send + Sync + 'static,
     C: Send + Sync + 'static,
 {
-    /// An empty builder (admits nothing until a set is added).
+    /// An empty builder (registers nothing until a set is added).
     pub fn new() -> Self {
         Self::default()
     }
@@ -142,9 +127,20 @@ where
         self.admission.is_subagent_run = true;
     }
 
-    /// Registers the admitted tools onto `harness`.
-    pub fn register(&self, harness: &mut AgentHarness<State, C>) -> ToolSetReport {
-        if self.admission.allowed.as_ref().is_some_and(HashSet::is_empty) {
+    /// Registers the admitted tools onto `harness`. Every name in
+    /// `early_exit_tools` that registers pauses the run through `hook` after a
+    /// successful call.
+    pub fn register(
+        &self,
+        harness: &mut AgentHarness<State, C>,
+        early_exit: Option<(&BTreeSet<String>, &EarlyExitHook)>,
+    ) -> ToolSetReport {
+        if self
+            .admission
+            .allowed
+            .as_ref()
+            .is_some_and(HashSet::is_empty)
+        {
             tracing::warn!(
                 subagent = self.admission.is_subagent_run,
                 "[tool-set] allowlist resolved empty: registering no tools"
@@ -153,9 +149,16 @@ where
         let names = self.candidate_names();
         let mut registered = Vec::new();
         let (_, plan) = register_admitted(harness, names, &self.admission, |name| {
-            let adapter = SharedToolAdapter::for_name(self.sets.clone(), name)?
-                .deferred(self.deferred.contains(name))
-                .scoped(self.scope.clone());
+            let mut adapter = CanonicalSharedToolAdapter::for_name(self.sets.clone(), name)?
+                .deferred(self.deferred.contains(name));
+            if let Some(scope) = &self.scope {
+                adapter = adapter.with_exec_scope(scope.clone());
+            }
+            if let Some((tools, hook)) = early_exit
+                && tools.contains(name)
+            {
+                adapter = adapter.with_early_exit(hook.clone());
+            }
             let adapter: Arc<dyn Tool> = Arc::new(adapter);
             registered.push(name.to_string());
             Some(
@@ -170,141 +173,6 @@ where
             )
         });
         ToolSetReport { registered, plan }
-    }
-}
-
-/// Resolves a tool from the shared sets on every call and forwards the full
-/// `tinytools::Tool` contract to it.
-pub struct SharedToolAdapter {
-    sets: Vec<SharedToolSet>,
-    name: String,
-    description: String,
-    parameters_schema: serde_json::Value,
-    force_deferred: bool,
-    scope: Option<Arc<dyn ToolExecScope>>,
-}
-
-impl SharedToolAdapter {
-    /// An adapter for the first tool called `name`, or `None` when absent.
-    pub fn for_name(sets: Vec<SharedToolSet>, name: &str) -> Option<Self> {
-        let spec = sets
-            .iter()
-            .flat_map(|set| set.iter())
-            .find(|tool| tool.name() == name)
-            .map(|tool| tool.spec())?;
-        Some(Self {
-            sets,
-            name: spec.name,
-            description: spec.description,
-            parameters_schema: spec.parameters,
-            force_deferred: false,
-            scope: None,
-        })
-    }
-
-    /// Reports `Deferred` for a directly exposed tool.
-    #[must_use]
-    pub fn deferred(mut self, deferred: bool) -> Self {
-        self.force_deferred = deferred;
-        self
-    }
-
-    /// Runs executions inside `scope`.
-    #[must_use]
-    pub fn scoped(mut self, scope: Option<Arc<dyn ToolExecScope>>) -> Self {
-        self.scope = scope;
-        self
-    }
-
-    fn resolved(&self) -> Option<&dyn Tool> {
-        self.sets
-            .iter()
-            .flat_map(|set| set.iter())
-            .find(|tool| tool.name() == self.name)
-            .map(|tool| tool.as_ref())
-    }
-}
-
-#[async_trait]
-impl Tool for SharedToolAdapter {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        self.parameters_schema.clone()
-    }
-
-    fn policy(&self) -> tinytools::ToolPolicy {
-        self.resolved().map(Tool::policy).unwrap_or_default()
-    }
-
-    /// `Deferred` is forwarded so the harness indexes it behind its search
-    /// bridge. `Hidden` is not: the host owns exposure, and a hidden tool that
-    /// reached registration was named on purpose.
-    fn exposure(&self) -> ToolExposure {
-        match self.resolved().map(Tool::exposure) {
-            Some(ToolExposure::Deferred) => ToolExposure::Deferred,
-            Some(ToolExposure::Hidden) if self.force_deferred => ToolExposure::Hidden,
-            Some(ToolExposure::Direct) if self.force_deferred => ToolExposure::Deferred,
-            _ => ToolExposure::Direct,
-        }
-    }
-
-    fn family(&self) -> Option<&str> {
-        self.resolved().and_then(Tool::family)
-    }
-
-    async fn prepare_authorization(
-        &self,
-        arguments: &serde_json::Value,
-    ) -> anyhow::Result<Option<serde_json::Value>> {
-        match self.resolved() {
-            Some(tool) => tool.prepare_authorization(arguments).await,
-            None => Ok(None),
-        }
-    }
-
-    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult> {
-        self.execute_with_context(
-            args,
-            ToolCallOptions {
-                prefer_markdown: true,
-            },
-            None,
-        )
-        .await
-    }
-
-    async fn execute_with_context(
-        &self,
-        args: serde_json::Value,
-        options: ToolCallOptions,
-        context: Option<&dyn ToolRunContext>,
-    ) -> anyhow::Result<ToolResult> {
-        let Some(tool) = self.resolved() else {
-            tracing::warn!(tool = %self.name, "[tool-set] shared tool not found");
-            return Ok(ToolResult::error(format!("unknown tool '{}'", self.name)));
-        };
-        let execution: ToolExecution<'_> =
-            Box::pin(tool.execute_with_context(args, options, context));
-        let execution = match &self.scope {
-            Some(scope) => scope.scope(context, execution),
-            None => execution,
-        };
-        // An operational failure is input to the loop, not a harness failure:
-        // keep it as an error result so the model can recover.
-        Ok(match execution.await {
-            Ok(result) => result,
-            Err(error) => {
-                tracing::warn!(tool = %self.name, %error, "[tool-set] shared tool failed");
-                ToolResult::error(format!("{} failed: {error}", self.name))
-            }
-        })
     }
 }
 
