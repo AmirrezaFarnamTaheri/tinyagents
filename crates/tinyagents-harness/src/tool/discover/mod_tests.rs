@@ -534,10 +534,12 @@ impl tinytools::ToolRanker for ContextRecorder {
 #[tokio::test]
 async fn tool_search_hands_the_policys_rank_context_to_the_ranker() {
     let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
-    let mut policy = ToolDiscoveryPolicy::default();
-    policy.ranker = Some(recorder.clone());
-    policy.rank_context =
-        tinytools::RankContext::empty().with_chat(tinytools::RankChat::new("thread-1", "client-1"));
+    let policy = ToolDiscoveryPolicy {
+        ranker: Some(recorder.clone()),
+        rank_context: tinytools::RankContext::empty()
+            .with_chat(tinytools::RankChat::new("thread-1", "client-1")),
+        ..ToolDiscoveryPolicy::default()
+    };
     answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
     let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
     assert_eq!(
@@ -549,8 +551,10 @@ async fn tool_search_hands_the_policys_rank_context_to_the_ranker() {
 #[tokio::test]
 async fn tool_search_without_a_chat_gives_the_ranker_an_empty_context() {
     let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
-    let mut policy = ToolDiscoveryPolicy::default();
-    policy.ranker = Some(recorder.clone());
+    let policy = ToolDiscoveryPolicy {
+        ranker: Some(recorder.clone()),
+        ..ToolDiscoveryPolicy::default()
+    };
     answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
     let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
     assert_eq!(seen, tinytools::RankContext::empty());
