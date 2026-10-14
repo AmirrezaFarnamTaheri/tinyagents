@@ -116,8 +116,8 @@ fn scratch_resolves_under_its_own_namespace_not_the_internal_root() {
     // root are different places that happen to share a word. Conflating them
     // would route every scratch write into host state.
     let policy = TestPolicy::rooted_at(PathBuf::from("internal/workspace"));
-    let key = resolve_artifact_key(Some(&policy), ArtifactKind::Scratch, "notes.md")
-        .expect("resolve");
+    let key =
+        resolve_artifact_key(Some(&policy), ArtifactKind::Scratch, "notes.md").expect("resolve");
     assert_eq!(key, "workspace/notes.md");
 }
 
@@ -147,9 +147,12 @@ fn rejects_absolute_names() {
 
 #[test]
 fn rejects_control_characters() {
-    let err = resolve_artifact_key(None, ArtifactKind::Output, "a\0b")
-        .expect_err("NUL must be refused");
-    assert!(matches!(err, OffloadError::PathEscape { .. }), "got {err:?}");
+    let err =
+        resolve_artifact_key(None, ArtifactKind::Output, "a\0b").expect_err("NUL must be refused");
+    assert!(
+        matches!(err, OffloadError::PathEscape { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -479,9 +482,17 @@ async fn read_returns_none_for_a_missing_artifact() {
 #[tokio::test]
 async fn read_refuses_keys_outside_the_two_namespaces() {
     let offload = offload();
-    for key in ["internal/state", "etc/passwd", "outputs", "outputs/../workspace/x"] {
+    for key in [
+        "internal/state",
+        "etc/passwd",
+        "outputs",
+        "outputs/../workspace/x",
+    ] {
         let err = offload.read(key).await.expect_err("must be refused");
-        assert!(matches!(err, OffloadError::PathEscape { .. }), "{key}: {err:?}");
+        assert!(
+            matches!(err, OffloadError::PathEscape { .. }),
+            "{key}: {err:?}"
+        );
     }
 }
 

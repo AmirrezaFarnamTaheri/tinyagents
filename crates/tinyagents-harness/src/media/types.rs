@@ -4,8 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 use tinyinference_image::MediaReference;
+use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
 /// Sub-directory of the output root that generated media is written into.
 pub const DEFAULT_MEDIA_SUBDIR: &str = "generated-media";

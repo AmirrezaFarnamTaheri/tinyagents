@@ -140,8 +140,8 @@ async fn image_tool_stores_blobs_and_reports_their_keys() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockImageGenerator::new());
     let output = MediaOutput::new("/nonexistent");
-    let tool = GenerateImageTool::new(generator.clone(), output.clone())
-        .with_name("media_generate_image");
+    let tool =
+        GenerateImageTool::new(generator.clone(), output.clone()).with_name("media_generate_image");
     let result = tool
         .execute_with_context(
             json!({ "prompt": "a comic", "n": "2", "aspectRatio": "landscape", "seed": 5 }),
