@@ -18,6 +18,7 @@ mod session;
 mod tool_registration;
 mod tools;
 pub mod transcript;
+pub mod turn_driver;
 mod types;
 
 pub use builder::SessionBuilder;

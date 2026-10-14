@@ -2257,6 +2257,7 @@ async fn hook_option_context_mutation_reaches_driver_and_codec() {
                 stream: false,
                 session: None,
                 resume: ResumeMode::Never,
+                controls: Default::default(),
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),
@@ -2344,6 +2345,7 @@ async fn before_resume_mutates_context_and_options_while_target_remains_lazy() {
                 stream: false,
                 session: None,
                 resume: ResumeMode::Never,
+                controls: Default::default(),
                 cancellation: cancellation.clone(),
                 run_context: RunContext::new(RunConfig::new("test"), Context("before".into()))
                     .with_cancellation(cancellation),

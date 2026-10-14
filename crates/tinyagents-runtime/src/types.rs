@@ -47,6 +47,10 @@ pub struct TurnOptions<C = ()> {
     pub cancellation: CancellationToken,
     /// Explicit live execution context consumed by the driver.
     pub run_context: RunContext<C>,
+    /// Host-neutral controls for a [`crate::turn_driver::TurnDriver`]: the
+    /// model-call cap and pause-at-cap, early-exit tools, steering, child
+    /// scope and deferred completion. Other drivers ignore them.
+    pub controls: crate::turn_driver::TurnControls,
 }
 
 /// The codec-visible, durable subset of one turn's explicit options.
@@ -294,6 +298,7 @@ impl Default for TurnOptions<()> {
             session: None,
             run_context: RunContext::new(RunConfig::new("session"), ())
                 .with_cancellation(cancellation.clone()),
+            controls: crate::turn_driver::TurnControls::default(),
             cancellation,
         }
     }

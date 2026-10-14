@@ -591,6 +591,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let request_id = options.request_id.clone();
         let thread_id = options.thread_id.clone();
         let stream = options.stream;
+        let controls = std::mem::take(&mut options.controls);
         let cancellation = options.cancellation.clone();
         // `RunContext` is consumed exactly once. The host context captured in
         // `codec_options` is the one after preparation and before handoff.
@@ -624,6 +625,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 tools,
                 run_context,
                 stream,
+                controls,
             });
             tokio::pin!(driver);
             tokio::select! {

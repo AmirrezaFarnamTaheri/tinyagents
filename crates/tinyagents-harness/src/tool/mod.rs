@@ -44,7 +44,9 @@ pub use schema_compact::*;
 pub use schema_prepare::*;
 pub use schema_walk::*;
 pub use select::*;
-pub use shared::{CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook};
+pub use shared::{
+    CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook, ToolExecScope, ToolExecution,
+};
 pub use signature::*;
 pub use timeout::*;
 pub use toolset::{ToolExposureExplanation, ToolSet};
