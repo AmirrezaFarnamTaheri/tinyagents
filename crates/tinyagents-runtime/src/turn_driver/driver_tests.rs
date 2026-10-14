@@ -358,7 +358,7 @@ impl Tool for CountingTool {
     }
     async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(ToolResult::text("ran"))
+        Ok(ToolResult::success("ran"))
     }
 }
 
@@ -413,7 +413,7 @@ impl Middleware<(), ()> for Trace {
     ) -> HarnessResult<()> {
         self.log.lock().unwrap().push(format!("{}.after_tool", self.name));
         if self.rewrite_result {
-            *result = ToolResult::text("[capped]");
+            *result = ToolResult::success("[capped]");
         }
         Ok(())
     }
