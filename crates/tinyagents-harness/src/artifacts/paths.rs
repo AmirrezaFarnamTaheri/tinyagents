@@ -1,13 +1,13 @@
-//! Path hardening for the artifact-offload convention.
+//! Key hardening for the artifact-offload convention.
 //!
-//! Everything an agent offloads resolves under
-//! `<artifact root>/<outputs|workspace>`. The resolver is deliberately
-//! fail-closed: it rejects absolute paths, `..` traversal, anything landing
-//! outside its convention root after lexical normalization, and — when the host
-//! supplies an [`ArtifactPathPolicy`] — anything reaching the host's internal
-//! state.
+//! Everything an agent offloads is a blob keyed `<outputs|workspace>/<name>`.
+//! The resolver is deliberately fail-closed: it rejects absolute names, `..`
+//! traversal and control characters, and — when the host supplies an
+//! [`ArtifactPathPolicy`] — anything reaching the host's internal state.
+//! There is no filesystem underneath, so there are no symlinks to escape
+//! through; the key is the whole address.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use super::policy::ArtifactPathPolicy;
 use super::types::{ArtifactKind, OffloadError};
@@ -38,120 +38,80 @@ pub fn sanitize_component(value: &str) -> String {
     }
 }
 
-/// Lexically normalize `path` by dropping `.` components and popping a
-/// directory for each `..`.
+/// Resolve `relative` into the blob key `<kind.subdir()>/<name>`, or explain
+/// why it is refused.
 ///
-/// Purely lexical on purpose: the target usually does not exist yet, so
-/// `canonicalize` is unavailable. [`resolve_artifact_path`] rejects `..`
-/// outright before calling this; the popping here is defence in depth for any
-/// future caller.
-fn normalize_lexically(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
-
-/// Render `absolute` as a `root`-relative, `/`-separated path, so the string can
-/// be pasted straight into a file-read call on any platform.
-///
-/// Falls back to the lossy display form when `absolute` is somehow not under
-/// `root` — unreachable via [`resolve_artifact_path`], which validates
-/// containment first, but reachable when a caller renders against a *different*
-/// root than it wrote to (see `ArtifactOffload::with_render_root`). Falling back
-/// to an absolute path is correct there: a wrong relative path would silently
-/// resolve against the reader's own root and miss the file.
-pub fn relative_to_root(root: &Path, absolute: &Path) -> String {
-    match absolute.strip_prefix(root) {
-        Ok(rel) => rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("/"),
-        Err(_) => absolute.to_string_lossy().to_string(),
-    }
-}
-
-/// Resolve `relative` into an absolute offload target under
-/// `root/<kind.subdir()>`, or explain why it is refused.
-///
-/// When `policy` is supplied the resolved path is additionally checked against
-/// the host's internal state:
+/// `.` and empty segments are dropped. When `policy` is supplied the key is
+/// additionally checked against the host's internal state:
 ///
 /// * anything [`ArtifactPathPolicy::is_internal_state`] flags is refused with
 ///   [`OffloadError::InternalState`];
 /// * anything under [`ArtifactPathPolicy::internal_root`] is refused with
 ///   [`OffloadError::InternalRoot`].
 ///
-/// The specific check runs **first** so its more precise error survives when a
-/// host has configured the artifact root inside its internal root — reporting
-/// the blanket containment failure there would lose the useful detail.
+/// The specific check runs **first** so its more precise error survives.
 ///
 /// Passing `policy: None` skips only those two checks; traversal and
 /// containment always run.
-pub fn resolve_artifact_path(
-    root: &Path,
+pub fn resolve_artifact_key(
     policy: Option<&dyn ArtifactPathPolicy>,
     kind: ArtifactKind,
     relative: &str,
-) -> Result<PathBuf, OffloadError> {
+) -> Result<String, OffloadError> {
     let trimmed = relative.trim();
     if trimmed.is_empty() {
         return Err(OffloadError::EmptyName);
     }
-
-    let requested = Path::new(trimmed);
-    let convention_root = root.join(kind.subdir());
-    for component in requested.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(OffloadError::PathEscape {
-                    root: convention_root.display().to_string(),
-                    path: trimmed.to_string(),
-                });
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(OffloadError::AbsolutePath {
-                    path: trimmed.to_string(),
-                });
-            }
-        }
-    }
-
-    let candidate = normalize_lexically(&convention_root.join(requested));
-    // `normalize_lexically` cannot climb above the root given the `..`
-    // rejection above, but assert containment anyway so a future relaxation of
-    // that rejection cannot silently widen the write surface.
-    if !candidate.starts_with(&convention_root) {
-        return Err(OffloadError::PathEscape {
-            root: convention_root.display().to_string(),
-            path: candidate.display().to_string(),
+    if trimmed.starts_with(['/', '\\']) || has_drive_prefix(trimmed) {
+        return Err(OffloadError::AbsolutePath {
+            path: trimmed.to_string(),
         });
     }
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in trimmed.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                return Err(OffloadError::PathEscape {
+                    root: kind.subdir().to_string(),
+                    path: trimmed.to_string(),
+                });
+            }
+            other if other.chars().any(char::is_control) => {
+                return Err(OffloadError::PathEscape {
+                    root: kind.subdir().to_string(),
+                    path: trimmed.escape_debug().to_string(),
+                });
+            }
+            other => segments.push(other),
+        }
+    }
+    if segments.is_empty() {
+        return Err(OffloadError::EmptyName);
+    }
+    let key = format!("{}/{}", kind.subdir(), segments.join("/"));
 
     if let Some(policy) = policy {
-        if policy.is_internal_state(&candidate) {
-            return Err(OffloadError::InternalState {
-                path: candidate.display().to_string(),
-            });
+        let as_path = Path::new(&key);
+        if policy.is_internal_state(as_path) {
+            return Err(OffloadError::InternalState { path: key });
         }
         if policy
             .internal_root()
-            .is_some_and(|internal_root| candidate.starts_with(internal_root))
+            .is_some_and(|internal_root| as_path.starts_with(internal_root))
         {
-            return Err(OffloadError::InternalRoot {
-                path: candidate.display().to_string(),
-            });
+            return Err(OffloadError::InternalRoot { path: key });
         }
     }
 
-    Ok(candidate)
+    Ok(key)
+}
+
+/// `C:` style prefix, refused so a Windows-absolute name is never a key.
+fn has_drive_prefix(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(first), Some(':')) if first.is_ascii_alphabetic()
+    )
 }

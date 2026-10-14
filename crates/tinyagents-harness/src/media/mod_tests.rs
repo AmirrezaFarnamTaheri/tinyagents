@@ -136,11 +136,12 @@ impl VideoGenerator for WebmVideoGenerator {
 }
 
 #[tokio::test]
-async fn image_tool_saves_into_the_workspace_and_reports_paths() {
+async fn image_tool_stores_blobs_and_reports_their_keys() {
     let dir = tempfile::tempdir().unwrap();
     let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"))
-        .with_name("media_generate_image");
+    let output = MediaOutput::new("/nonexistent");
+    let tool =
+        GenerateImageTool::new(generator.clone(), output.clone()).with_name("media_generate_image");
     let result = tool
         .execute_with_context(
             json!({ "prompt": "a comic", "n": "2", "aspectRatio": "landscape", "seed": 5 }),
@@ -150,10 +151,15 @@ async fn image_tool_saves_into_the_workspace_and_reports_paths() {
         .await
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
-    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media"))
-        .unwrap()
-        .collect();
+    let saved = stored(&output).await;
     assert_eq!(saved.len(), 2);
+    assert!(
+        !dir.path().join("generated-media").exists(),
+        "nothing is written to the workspace"
+    );
+    for key in &saved {
+        assert!(text(&result).contains(key.as_str()), "{key} is reported");
+    }
 
     let request = generator.requests().pop().unwrap();
     assert_eq!(request.n, Some(2), "numeric strings are accepted");
@@ -335,6 +341,18 @@ async fn a_host_reference_policy_replaces_the_default_confinement() {
     assert!(!result.is_error, "{}", text(&result));
 }
 
+/// Keys of every artifact the output has stored.
+async fn stored(output: &MediaOutput) -> Vec<String> {
+    output
+        .blobs
+        .list(&output.prefix().unwrap())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|meta| meta.key)
+        .collect()
+}
+
 fn fast() -> WaitPolicy {
     WaitPolicy::new(Duration::from_millis(1), Duration::from_secs(5))
 }
@@ -350,8 +368,8 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
         ],
         error: None,
     }));
-    let tool = GenerateVideoTool::new(generator.clone(), MediaOutput::new(dir.path()))
-        .with_wait_policy(fast());
+    let output = MediaOutput::new(dir.path());
+    let tool = GenerateVideoTool::new(generator.clone(), output.clone()).with_wait_policy(fast());
     let result = tool
         .execute(json!({
             "prompt": "a lighthouse", "durationSeconds": 5, "aspect_ratio": "16:9",
@@ -361,10 +379,7 @@ async fn video_tool_waits_for_delivery_and_saves_the_clip() {
         .unwrap();
     assert!(!result.is_error, "{}", text(&result));
     assert!(text(&result).contains("mock-job"));
-    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media"))
-        .unwrap()
-        .collect();
-    assert_eq!(saved.len(), 1);
+    assert_eq!(stored(&output).await.len(), 1);
 
     let request = generator.requests().pop().unwrap();
     assert_eq!(request.duration_s, Some(5), "legacy durationSeconds alias");
@@ -385,18 +400,14 @@ fn text_response(text: &str) -> ModelResponse {
 #[tokio::test]
 async fn video_tool_preserves_delivered_media_extension() {
     let dir = tempfile::tempdir().unwrap();
-    let tool = GenerateVideoTool::new(Arc::new(WebmVideoGenerator), MediaOutput::new(dir.path()));
+    let output = MediaOutput::new(dir.path());
+    let tool = GenerateVideoTool::new(Arc::new(WebmVideoGenerator), output.clone());
     let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
 
     assert!(!result.is_error, "{}", text(&result));
-    let saved: Vec<_> = std::fs::read_dir(dir.path().join("generated-media"))
-        .unwrap()
-        .collect();
+    let saved = stored(&output).await;
     assert_eq!(saved.len(), 1);
-    assert_eq!(
-        saved[0].as_ref().unwrap().path().extension().unwrap(),
-        "webm"
-    );
+    assert!(saved[0].ends_with(".webm"), "{}", saved[0]);
 }
 
 /// Regression (R2): a timed-out job names its id and points at resume instead
@@ -636,41 +647,52 @@ async fn artifact_subdirectory_must_stay_below_the_output_root() {
     );
 }
 
-/// A pre-existing output symlink must be rejected before the provider is
-/// called, otherwise a scoped workspace can write artifacts outside itself.
-#[cfg(unix)]
 #[tokio::test]
-async fn symlinked_artifact_directory_cannot_escape_the_workspace() {
-    let workspace_dir = tempfile::tempdir().unwrap();
-    let outside_dir = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(
-        outside_dir.path(),
-        workspace_dir.path().join("generated-media"),
-    )
-    .unwrap();
+async fn a_host_blob_store_receives_the_artifacts_with_their_content_type() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
-    let generator = Arc::new(MockImageGenerator::new());
-    let tool = GenerateImageTool::new(generator.clone(), MediaOutput::new("/nonexistent"));
-    let result = tool
-        .execute_with_context(
-            json!({ "prompt": "x" }),
-            ToolCallOptions::default(),
-            Some(&workspace(workspace_dir.path())),
-        )
+    let scoped = MemoryStorage::new()
+        .for_scope(&Scope::new("host").unwrap())
+        .unwrap();
+    let blobs = scoped.blobs().clone();
+    let output = MediaOutput::new("/nonexistent")
+        .with_subdir("media/out")
+        .with_blobs(blobs.clone());
+    let tool = GenerateImageTool::new(Arc::new(MockImageGenerator::new()), output);
+    let result = tool.execute(json!({ "prompt": "x" })).await.unwrap();
+    assert!(!result.is_error, "{}", text(&result));
+
+    let listed = blobs.list("media/out/").await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].content_type.as_deref(), Some("image/png"));
+}
+
+#[tokio::test]
+async fn persist_refuses_to_replace_an_existing_artifact() {
+    let output = MediaOutput::new("/nonexistent");
+    let prefix = output.prefix().unwrap();
+    output
+        .persist(&prefix, "clip", "png", b"one", "image/png")
         .await
         .unwrap();
+    let error = output
+        .persist(&prefix, "clip", "png", b"two", "image/png")
+        .await
+        .unwrap_err();
+    assert!(error.contains("already exists"), "{error}");
+    let kept = output.blobs.get("generated-media/clip.png").await.unwrap();
+    assert_eq!(kept.unwrap().bytes, b"one");
+}
 
-    assert!(result.is_error, "{}", text(&result));
-    assert!(
-        generator.requests().is_empty(),
-        "must reject before billing"
-    );
-    assert!(
-        std::fs::read_dir(outside_dir.path())
-            .unwrap()
-            .next()
-            .is_none()
-    );
+#[tokio::test]
+async fn persist_refuses_path_like_names() {
+    let output = MediaOutput::new("/nonexistent");
+    let prefix = output.prefix().unwrap();
+    let error = output
+        .persist(&prefix, "../escape", "png", b"x", "image/png")
+        .await
+        .unwrap_err();
+    assert!(error.contains("filename components"), "{error}");
 }
 
 #[test]
