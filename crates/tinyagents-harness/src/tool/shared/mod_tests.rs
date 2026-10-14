@@ -177,7 +177,6 @@ async fn canonical_adapter_fails_closed_when_the_registered_tool_is_gone() {
         early_exit: None,
         force_deferred: false,
         exec_scope: None,
-        early_exit: None,
     };
 
     let result = adapter
