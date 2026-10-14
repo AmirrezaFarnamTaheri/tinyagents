@@ -2097,6 +2097,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tinyagents-harness",
+ "tinyagents-registry",
  "tinyagents-session",
  "tinyinference-llm",
  "tinytools",

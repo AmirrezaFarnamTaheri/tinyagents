@@ -27,6 +27,16 @@ impl FinishActivity {
     pub fn called(&self, tool: &str) -> bool {
         self.tools_called.contains(tool)
     }
+
+    /// Trigger predicate: at least `min_rounds` tool rounds, or `tool` was
+    /// requested at least once. Threshold and tool name are host config.
+    pub fn rounds_or_called(
+        min_rounds: usize,
+        tool: impl Into<String>,
+    ) -> impl Fn(&FinishActivity) -> bool + Send + Sync + 'static {
+        let tool = tool.into();
+        move |activity| activity.tool_rounds >= min_rounds || activity.called(&tool)
+    }
 }
 
 /// Decides whether a run's activity warrants the check.

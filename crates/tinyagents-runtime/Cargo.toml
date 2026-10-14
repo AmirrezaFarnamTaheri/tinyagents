@@ -17,6 +17,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "2"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.1.4" }
+tinyagents-registry = { path = "../tinyagents-registry", version = "2.1.4" }
 tinyagents-session = { path = "../tinyagents-session", version = "2.1.4" }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }

@@ -61,6 +61,7 @@
 //! `as_str()` gives a stable telemetry label.
 
 mod classified;
+mod classified_ladder;
 mod escalation;
 mod fingerprint;
 mod loop_patterns;
@@ -73,6 +74,10 @@ mod types;
 mod util;
 
 pub use classified::{ClassifiedFailure, ClassifiedFailureTracker};
+pub use classified_ladder::{
+    ClassifiedStep, RECOVERY_CLASSES, UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX, class_has_nudge,
+    classified_step, clear_recovered, json_error_recovery, recovery_nudge,
+};
 pub use escalation::{DEFAULT_BLOCK_AFTER_WARN, DEFAULT_BLOCKS_BEFORE_HALT};
 pub use fingerprint::{OutcomeFingerprinter, VolatileSpanNormalizer, normalize_volatile};
 pub use loop_patterns::{

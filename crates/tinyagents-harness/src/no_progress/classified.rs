@@ -59,6 +59,14 @@ impl ClassifiedFailureTracker {
         self.counts.lock().unwrap().remove(key);
     }
 
+    /// Clear every class recorded for `operation` on `scope`, whatever the class.
+    pub fn clear_operation(&self, operation: &str, scope: &str) {
+        self.counts
+            .lock()
+            .unwrap()
+            .retain(|k, _| !(k.operation == operation && k.scope == scope));
+    }
+
     /// Clear all groups when a new turn begins.
     pub fn reset(&self) {
         self.counts.lock().unwrap().clear();

@@ -66,3 +66,35 @@ fn tools_read_the_run_hosts_through_the_execution_context() {
     assert_eq!(tool_ctx.host::<Origin>(), Some(&Origin("tool")));
     assert!(tool_ctx.host::<Sink>().is_none());
 }
+
+#[test]
+fn contains_and_if_absent_never_clobber_an_installed_value() {
+    let base = HostExtensions::new().with(Origin("parent"));
+    assert!(base.contains::<Origin>());
+    assert!(!base.contains::<Sink>());
+    let kept = base.with_arc_if_absent(Arc::new(Origin("default")));
+    assert_eq!(kept.get::<Origin>(), Some(&Origin("parent")));
+    let filled = base.with_arc_if_absent(Arc::new(Sink(3)));
+    assert_eq!(filled.get::<Sink>(), Some(&Sink(3)));
+}
+
+#[test]
+fn overlay_prefers_the_other_map_and_leaves_inputs_untouched() {
+    let a = HostExtensions::new().with(Origin("a")).with(Sink(1));
+    let b = HostExtensions::new().with(Origin("b"));
+    let merged = a.overlay(&b);
+    assert_eq!(merged.get::<Origin>(), Some(&Origin("b")));
+    assert_eq!(merged.get::<Sink>(), Some(&Sink(1)));
+    assert_eq!(a.get::<Origin>(), Some(&Origin("a")));
+    assert_eq!(a.overlay(&HostExtensions::new()).len(), 2);
+}
+
+#[test]
+fn tool_context_exposes_a_shared_handle_and_the_whole_map() {
+    let ctx: RunContext = RunContext::new(RunConfig::new("r"), ()).with_host(Sink(9));
+    let tool_ctx = ToolExecutionContext::from_run_context(&ctx, CallId::new("c"));
+    assert_eq!(*tool_ctx.host_arc::<Sink>().unwrap(), Sink(9));
+    assert_eq!(tool_ctx.host_extensions().len(), 1);
+    let kept = ctx.with_host_arc_if_absent(Arc::new(Sink(1)));
+    assert_eq!(kept.host::<Sink>(), Some(&Sink(9)));
+}

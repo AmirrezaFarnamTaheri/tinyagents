@@ -124,6 +124,19 @@ impl ToolExecutionContext {
         self.host_ext.get::<X>()
     }
 
+    /// The host extension of type `X` as a shared handle, for a tool that
+    /// moves it into a spawned task.
+    #[must_use]
+    pub fn host_arc<X: Any + Send + Sync>(&self) -> Option<Arc<X>> {
+        self.host_ext.get_arc::<X>()
+    }
+
+    /// The run's whole host extension map.
+    #[must_use]
+    pub fn host_extensions(&self) -> &crate::context::HostExtensions {
+        &self.host_ext
+    }
+
     /// Calls another registered tool as a **nested call** of this one and
     /// returns its result.
     ///
