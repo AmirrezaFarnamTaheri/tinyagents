@@ -22,6 +22,46 @@ pub trait OutputCapPolicy: Send + Sync {
     }
 }
 
+/// An [`OutputCapPolicy`] built from plain lists: the shared budget, per-tool
+/// caps, and the tool names exempt from each stage. Enough for a host whose
+/// exemptions are fixed name sets; a host with computed rules implements the
+/// trait itself.
+#[derive(Clone, Debug, Default)]
+pub struct ListedOutputCapPolicy {
+    /// The shared byte budget.
+    pub default_budget_bytes: usize,
+    /// Tool name to its own declared cap.
+    pub tool_caps: std::collections::HashMap<String, usize>,
+    /// Tools exempt from summary and compaction only.
+    pub compaction_exempt: Vec<String>,
+    /// Tools exempt from the cap and the backstop (also compaction-exempt
+    /// only if listed in `compaction_exempt`).
+    pub truncation_exempt: Vec<String>,
+    /// Largest body worth keeping whole; `0` means no limit.
+    pub max_persistable_bytes: u64,
+}
+
+impl OutputCapPolicy for ListedOutputCapPolicy {
+    fn default_budget_bytes(&self) -> usize {
+        self.default_budget_bytes
+    }
+    fn tool_cap(&self, tool: &str) -> Option<usize> {
+        self.tool_caps.get(tool).copied()
+    }
+    fn is_compaction_exempt(&self, tool: &str) -> bool {
+        self.compaction_exempt.iter().any(|t| t == tool)
+    }
+    fn is_truncation_exempt(&self, tool: &str) -> bool {
+        self.truncation_exempt.iter().any(|t| t == tool)
+    }
+    fn max_persistable_bytes(&self) -> u64 {
+        match self.max_persistable_bytes {
+            0 => u64::MAX,
+            n => n,
+        }
+    }
+}
+
 /// What the ladder applies to one result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutputStagePlan {

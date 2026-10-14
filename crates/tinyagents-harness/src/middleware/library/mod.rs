@@ -128,7 +128,7 @@ pub use memory_protocol::{
 };
 pub use memory_protocol_middleware::MemoryProtocolMiddleware;
 pub use output_cap::{
-    OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages, should_compact,
+    ListedOutputCapPolicy, OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages, should_compact,
 };
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,

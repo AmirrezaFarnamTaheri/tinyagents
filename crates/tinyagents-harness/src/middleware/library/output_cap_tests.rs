@@ -69,3 +69,28 @@ fn disclosure_orders_summary_label_before_notice() {
     );
     assert_eq!(disclose("body".into(), None, None, "host"), "body");
 }
+
+#[test]
+fn listed_policy_reads_caps_and_exemptions_from_its_lists() {
+    let mut p = ListedOutputCapPolicy {
+        default_budget_bytes: 16_000,
+        truncation_exempt: vec!["mcp_list_tools".into()],
+        compaction_exempt: vec!["mcp_list_tools".into(), "get_tool_contract".into()],
+        ..Default::default()
+    };
+    p.tool_caps.insert("web_fetch".into(), 50_000);
+    assert_eq!(
+        plan_output_stages(&p, "web_fetch", 10, true).budget_bytes,
+        50_000
+    );
+    assert_eq!(
+        plan_output_stages(&p, "shell", 10, true).budget_bytes,
+        16_000
+    );
+    let sample = plan_output_stages(&p, "get_tool_contract", 20_000, true);
+    assert!(sample.compaction_exempt && !sample.truncation_exempt && sample.keep_full_output);
+    let listing = plan_output_stages(&p, "mcp_list_tools", 900_000, true);
+    assert!(listing.truncation_exempt && !listing.keep_full_output);
+    // 0 means no persistence limit.
+    assert!(plan_output_stages(&p, "shell", 5_000_000, true).keep_full_output);
+}
