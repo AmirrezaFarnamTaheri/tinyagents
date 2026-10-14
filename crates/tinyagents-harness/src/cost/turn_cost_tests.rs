@@ -103,7 +103,7 @@ fn merged_tallies_keep_the_least_certain_source() {
 }
 
 fn response_with(usage: Usage, charge: Option<f64>) -> tinyinference_llm::model::ModelResponse {
-    let mut response = tinyinference_llm::model::ModelResponse::default();
+    let mut response = tinyinference_llm::model::ModelResponse::assistant("done");
     response.usage = Some(usage);
     response.raw = charge.map(|usd| serde_json::json!({ "total_cost_usd": usd }));
     response
@@ -112,9 +112,7 @@ fn response_with(usage: Usage, charge: Option<f64>) -> tinyinference_llm::model:
 #[test]
 fn recorded_responses_are_priced_through_the_installed_lookup() {
     use crate::middleware::StopHookMetrics;
-    let lookup: PricingLookup = std::sync::Arc::new(|model: &str| {
-        (model == "priced").then(sonnet)
-    });
+    let lookup: PricingLookup = std::sync::Arc::new(|model: &str| (model == "priced").then(sonnet));
     let mut turn = TurnCost::with_pricing(lookup);
 
     // Provider charge wins, zero or not.

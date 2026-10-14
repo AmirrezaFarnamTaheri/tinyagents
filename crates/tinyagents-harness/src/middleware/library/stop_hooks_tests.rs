@@ -582,10 +582,9 @@ async fn metrics_seed_starts_each_run_from_the_host_value() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let middleware = StopHookMiddleware::<Seeded>::new("m", vec![Arc::new(SeenAt(seen.clone()))])
         .with_metrics_seed(Seeded(41));
-    let mut context = RunContext::<()>::default();
-    context.steering = Some(SteeringHandle::new());
+    let mut context = run();
     middleware.before_agent(&mut context, &()).await.unwrap();
-    let mut response = ModelResponse::default();
+    let mut response = ModelResponse::assistant("done");
     middleware
         .after_model(&mut context, &(), &mut response)
         .await

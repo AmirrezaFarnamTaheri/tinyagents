@@ -18,7 +18,8 @@ use std::ops::{Add, AddAssign};
 pub use gateway_charge::GatewayChargeModel;
 use tinyinference_llm::usage::Usage;
 pub use turn_cost::{
-    CallCost, CallUsage, CostSource, CostTally, PricingLookup, TurnCost, call_cost, estimate_call_cost_usd,
+    CallCost, CallUsage, CostSource, CostTally, PricingLookup, TurnCost, call_cost,
+    estimate_call_cost_usd,
 };
 pub use types::*;
 
