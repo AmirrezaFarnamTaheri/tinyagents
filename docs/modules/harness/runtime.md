@@ -170,7 +170,7 @@ report native tool calling, and it always skips markup that appears only
 inside a fenced code block. Streaming exception (openhuman#6733): `Auto`
 still recovers a native model's chat-template special tokens (DeepSeek DSML,
 `<|tool_call>`) and scrubs its other markup unrun; `Off` recovers nothing.
-Otherwise a native model's quoted tool syntax is never executed as a call.
+Under `Auto`, a native model's quoted plain markup is never run as a call.
 
 Every safe checkpoint above — before a model call is dispatched, after the
 model response, and after tool execution — also drains any pending
