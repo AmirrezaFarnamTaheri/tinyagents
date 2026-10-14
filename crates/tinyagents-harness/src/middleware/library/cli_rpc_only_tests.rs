@@ -26,8 +26,14 @@ impl Tool for Scoped {
 
 fn guard() -> CliRpcOnlyMiddleware {
     let set: Vec<Box<dyn Tool>> = vec![
-        Box::new(Scoped { name: "phone_call", scope: ToolScope::CliRpcOnly }),
-        Box::new(Scoped { name: "file_read", scope: ToolScope::All }),
+        Box::new(Scoped {
+            name: "phone_call",
+            scope: ToolScope::CliRpcOnly,
+        }),
+        Box::new(Scoped {
+            name: "file_read",
+            scope: ToolScope::All,
+        }),
     ];
     CliRpcOnlyMiddleware::new(vec![Arc::new(set)])
 }
