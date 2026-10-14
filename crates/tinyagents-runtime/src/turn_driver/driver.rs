@@ -32,7 +32,7 @@ use tinyinference_llm::model::ChatModel;
 
 use super::steering::cleanup_only_guard;
 use super::tool_set::ToolSetBuilder;
-use super::types::{TurnCompletionSink, TurnControls, TurnReport, TurnScope};
+use super::types::{TurnCompletionSink, TurnReport, TurnScope};
 use crate::driver::{outcome_from_partial, same_tools};
 use crate::{DriverFailure, DriverOutcome, DriverRequest, RuntimeError, SessionDriver};
 
@@ -41,7 +41,7 @@ pub struct TurnPlan<State, C> {
     /// Models to register; the first is the default.
     pub models: Vec<(String, Arc<dyn ChatModel<State>>)>,
     /// The run policy (retry, fallback, dialect, limits). The driver overrides
-    /// only the model-call cap, from [`TurnControls::max_iterations`].
+    /// only the model-call cap, from [`TurnControls::max_iterations`](super::TurnControls::max_iterations).
     pub policy: RunPolicy,
     /// The tools this turn can call.
     pub tools: ToolSetBuilder<State, C>,
@@ -54,7 +54,7 @@ pub struct TurnPlan<State, C> {
     pub approval: Option<Arc<dyn ApprovalResolver<C>>>,
     /// Extra listeners subscribed to the run's event sink.
     pub listeners: Vec<Arc<dyn EventListener>>,
-    /// Fired once when the turn completes (see [`TurnControls::defer_turn_completed`]).
+    /// Fired once when the turn completes (see [`TurnControls::defer_turn_completed`](super::TurnControls::defer_turn_completed)).
     pub completion: Option<Arc<dyn TurnCompletionSink>>,
     /// Refuse to run when the harness's declared tools differ from the
     /// session's frozen [`crate::ToolSnapshot`]. On by default.
@@ -90,7 +90,7 @@ where
     C: Send + Sync + 'static,
 {
     /// Plans one turn. The request is the session's frozen view; the planner
-    /// reads history, tools, context data and [`TurnControls`] from it.
+    /// reads history, tools, context data and [`TurnControls`](super::TurnControls) from it.
     async fn plan(&self, request: &DriverRequest<C>) -> Result<TurnPlan<State, C>, RuntimeError>;
 }
 
