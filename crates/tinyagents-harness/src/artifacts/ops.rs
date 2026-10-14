@@ -1,9 +1,10 @@
 //! Write, pointer-render, and handoff plumbing for the artifact-offload
 //! convention.
 //!
-//! [`ArtifactOffload`] is the per-run writer: it resolves a target path via
-//! [`super::paths::resolve_artifact_path`], applies the host redactor from
-//! [`super::policy`], and writes the redacted body to disk. [`should_offload`]
+//! [`ArtifactOffload`] is the per-run writer: it resolves a target key via
+//! [`super::paths::resolve_artifact_key`], applies the host redactor from
+//! [`super::policy`], and stores the redacted body on a
+//! [`BlobStore`] port (memory by default). [`should_offload`]
 //! and [`effective_offload_threshold`] decide *whether* a result should be
 //! written; [`offload_oversized_result`] ties threshold decision, write, and
 //! pointer rendering into the single entry point most callers use.
@@ -11,13 +12,15 @@
 //! side: parsing pointers back out of a handoff payload and logging both ends
 //! of the exchange. See [`super`] for the convention this module implements.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::paths::{relative_to_root, resolve_artifact_path, sanitize_component};
+use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
+
+use super::paths::{resolve_artifact_key, sanitize_component};
 use super::policy::{ArtifactPathPolicy, ArtifactRedactor};
 use super::types::{
-    ABSTRACT_BUDGET_CHARS, ARTIFACT_POINTER_PREFIX, ArtifactKind, OffloadError, OffloadedArtifact,
+    ABSTRACT_BUDGET_CHARS, ARTIFACT_POINTER_PREFIX, ArtifactKind, OUTPUTS_DIR, OffloadError,
+    OffloadedArtifact, SCRATCH_DIR,
 };
 
 /// Whether a payload of `bytes` should be offloaded at `threshold_bytes`.
@@ -74,8 +77,8 @@ pub fn render_artifact_pointer(
     format!(
         "{ARTIFACT_POINTER_PREFIX} kind={kind} path={path} bytes={bytes}\n\
          read_with: {read_tool} {{\"path\":\"{path}\"}}\n\
-         note: The full result was written to the action workspace instead of being inlined. \
-         Read the file for complete fidelity; the abstract below is not exhaustive.{redaction_note}\n\n\
+         note: The full result was stored as an artifact instead of being inlined. \
+         Read the artifact for complete fidelity; the abstract below is not exhaustive.{redaction_note}\n\n\
          [abstract]\n{abstract_text}",
         kind = artifact.kind.as_str(),
         path = artifact.relative_path,
@@ -162,15 +165,12 @@ pub fn effective_offload_threshold(
 
 /// Per-run writer for the offload convention.
 ///
-/// Holds the resolved artifact root, the host policies used for the fail-closed
-/// path checks and redaction, and the identifiers that name generated artifacts
-/// and tag the `[artifact]` logs.
+/// Holds the blob store the artifacts land on, the host policies used for the
+/// fail-closed key checks and redaction, and the identifiers that name
+/// generated artifacts and tag the `[artifact]` logs.
 #[derive(Clone)]
 pub struct ArtifactOffload {
-    root: PathBuf,
-    /// Root the handed-back path is rendered against. Normally identical to
-    /// `root`; see [`Self::with_render_root`].
-    render_root: PathBuf,
+    blobs: Arc<dyn BlobStore>,
     policy: Option<Arc<dyn ArtifactPathPolicy>>,
     redactor: Option<Arc<dyn ArtifactRedactor>>,
     agent_id: String,
@@ -180,8 +180,7 @@ pub struct ArtifactOffload {
 impl std::fmt::Debug for ArtifactOffload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArtifactOffload")
-            .field("root", &self.root)
-            .field("render_root", &self.render_root)
+            .field("blobs", &self.blobs)
             .field("policy", &self.policy.as_ref().map(|_| "set"))
             .field("redactor", &self.redactor.as_ref().map(|_| "set"))
             .field("agent_id", &self.agent_id)
@@ -191,16 +190,20 @@ impl std::fmt::Debug for ArtifactOffload {
 }
 
 impl ArtifactOffload {
-    /// A writer rooted at `root` for the given agent and task.
+    /// A writer over `blobs` (a scoped tinystoragedrivers blob handle) for the
+    /// given agent and task.
     ///
     /// Starts with no path policy and no redactor: add them with
     /// [`with_path_policy`](Self::with_path_policy) and
     /// [`with_redactor`](Self::with_redactor). A writer with no redactor stores
     /// bytes verbatim — see [`ArtifactRedactor`].
-    pub fn new(root: PathBuf, agent_id: impl Into<String>, task_id: impl Into<String>) -> Self {
+    pub fn new(
+        blobs: Arc<dyn BlobStore>,
+        agent_id: impl Into<String>,
+        task_id: impl Into<String>,
+    ) -> Self {
         Self {
-            render_root: root.clone(),
-            root,
+            blobs,
             policy: None,
             redactor: None,
             agent_id: agent_id.into(),
@@ -208,29 +211,24 @@ impl ArtifactOffload {
         }
     }
 
-    /// Consults `policy` for host-internal path refusals.
+    /// A writer over a private in-memory blob store: the default for library
+    /// users with no storage backend. Nothing outlives the process.
+    pub fn in_memory(agent_id: impl Into<String>, task_id: impl Into<String>) -> Self {
+        let scoped = MemoryStorage::new()
+            .for_scope(&Scope::new("local").expect("static scope"))
+            .expect("memory scope");
+        Self::new(scoped.blobs().clone(), agent_id, task_id)
+    }
+
+    /// Consults `policy` for host-internal key refusals.
     pub fn with_path_policy(mut self, policy: Arc<dyn ArtifactPathPolicy>) -> Self {
         self.policy = Some(policy);
         self
     }
 
-    /// Scrubs bodies through `redactor` before they touch disk.
+    /// Scrubs bodies through `redactor` before they are stored.
     pub fn with_redactor(mut self, redactor: Arc<dyn ArtifactRedactor>) -> Self {
         self.redactor = Some(redactor);
-        self
-    }
-
-    /// Render handed-back paths relative to `render_root` instead of the write
-    /// root.
-    ///
-    /// An isolated worker writes inside its own checkout, but the parent that
-    /// receives the pointer does not hold that worker's root — a bare
-    /// `outputs/…` would resolve against the *parent's* root and miss the file
-    /// entirely. Rendering against the parent's root yields a relative path when
-    /// the worker's root is nested inside it, and an absolute path when it is
-    /// not, so the pointer is never silently wrong.
-    pub fn with_render_root(mut self, render_root: PathBuf) -> Self {
-        self.render_root = render_root;
         self
     }
 
@@ -244,16 +242,16 @@ impl ArtifactOffload {
         )
     }
 
-    /// Resolve `relative` under this run's root without writing.
+    /// Resolve `relative` to its blob key without writing.
     ///
-    /// Exposed so callers can validate a model-supplied path before acting on it.
-    pub fn resolve(&self, kind: ArtifactKind, relative: &str) -> Result<PathBuf, OffloadError> {
-        resolve_artifact_path(&self.root, self.policy.as_deref(), kind, relative)
+    /// Exposed so callers can validate a model-supplied name before acting on it.
+    pub fn resolve(&self, kind: ArtifactKind, relative: &str) -> Result<String, OffloadError> {
+        resolve_artifact_key(self.policy.as_deref(), kind, relative)
     }
 
-    /// Write `content` to `relative` under the convention directory for `kind`.
+    /// Store `content` under `relative` in the convention namespace for `kind`.
     ///
-    /// The body passes through the host redactor before it touches disk.
+    /// The body passes through the host redactor before it is stored.
     pub async fn write(
         &self,
         kind: ArtifactKind,
@@ -271,34 +269,30 @@ impl ArtifactOffload {
     /// Callers surfacing any part of the artifact back into a model's context
     /// must render it from this value, never from their own input: building a
     /// preview from the raw text would re-expose exactly the credentials the
-    /// redactor just scrubbed out of the file.
+    /// redactor just scrubbed out of the artifact.
     pub async fn write_returning_stored(
         &self,
         kind: ArtifactKind,
         relative: &str,
         content: &str,
     ) -> Result<(OffloadedArtifact, String), OffloadError> {
-        let absolute = self.resolve(kind, relative)?;
-        if let Some(parent) = absolute.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-            // The checks in `resolve` are lexical, so a pre-existing symlink
-            // (`outputs -> /elsewhere`, or `outputs/x -> <internal root>`) would
-            // still be followed by the write below. Re-validate the parent that
-            // actually materialised on disk before touching it.
-            self.assert_real_parent_inside_root(kind, parent).await?;
-        }
+        let key = self.resolve(kind, relative)?;
 
         let stored = match self.redactor.as_deref() {
             Some(redactor) => redactor.redact(content),
             None => super::policy::Redacted::unchanged(content),
         };
-        tokio::fs::write(&absolute, stored.text.as_bytes()).await?;
+        self.blobs
+            .put(
+                &key,
+                stored.text.clone().into_bytes(),
+                Some("text/markdown; charset=utf-8"),
+            )
+            .await?;
 
-        let relative_path = relative_to_root(&self.render_root, &absolute);
         let artifact = OffloadedArtifact {
             kind,
-            relative_path,
-            absolute_path: absolute,
+            relative_path: key,
             stored_bytes: stored.text.len(),
             original_bytes: content.len(),
             redacted: stored.changed,
@@ -312,58 +306,45 @@ impl ArtifactOffload {
             original_bytes = artifact.original_bytes,
             stored_bytes = artifact.stored_bytes,
             redacted = artifact.redacted,
-            "[artifact] wrote worker artifact under the artifact root"
+            "[artifact] stored worker artifact on the blob store"
         );
 
         Ok((artifact, stored.text))
     }
 
-    /// Resolve `parent` through symlinks and confirm it still sits inside this
-    /// kind's convention root, and outside the host's internal state.
+    /// Read an artifact back by the key a pointer carried
+    /// ([`OffloadedArtifact::relative_path`]).
     ///
-    /// [`resolve_artifact_path`] cannot do this: its target usually does not
-    /// exist yet, so it is lexical by necessity. Once `create_dir_all` has run
-    /// the parent *does* exist, which is the first moment the real,
-    /// link-resolved location can be checked.
-    async fn assert_real_parent_inside_root(
-        &self,
-        kind: ArtifactKind,
-        parent: &Path,
-    ) -> Result<(), OffloadError> {
-        let convention_root = self.root.join(kind.subdir());
-        let real_parent = tokio::fs::canonicalize(parent).await?;
-        // The root itself may be reached through a symlink (macOS `/tmp` ->
-        // `/private/tmp` is the everyday case), so compare like with like
-        // rather than against the lexical root.
-        let real_root = tokio::fs::canonicalize(&convention_root).await?;
-        if !real_parent.starts_with(&real_root) {
-            return Err(OffloadError::SymlinkEscape {
-                path: parent.display().to_string(),
-                resolved: real_parent.display().to_string(),
-            });
-        }
-        if let Some(policy) = self.policy.as_deref() {
-            let inside_internal_root = match policy.internal_root() {
-                Some(root) => tokio::fs::canonicalize(root)
-                    .await
-                    .map(|resolved| real_parent.starts_with(&resolved))
-                    .unwrap_or(false),
-                None => false,
-            };
-            if policy.is_internal_state(&real_parent) || inside_internal_root {
-                return Err(OffloadError::SymlinkEscape {
-                    path: parent.display().to_string(),
-                    resolved: real_parent.display().to_string(),
-                });
-            }
-        }
-        Ok(())
+    /// The key passes the same fail-closed checks as a write, so a pointer a
+    /// model rewrote by hand cannot address anything outside the two
+    /// convention namespaces. `Ok(None)` means no such artifact.
+    pub async fn read(&self, key: &str) -> Result<Option<String>, OffloadError> {
+        let (kind, relative) = split_key(key).ok_or_else(|| OffloadError::PathEscape {
+            root: format!("{OUTPUTS_DIR}|{SCRATCH_DIR}"),
+            path: key.to_string(),
+        })?;
+        let key = self.resolve(kind, relative)?;
+        let blob = self.blobs.get(&key).await?;
+        Ok(blob.map(|blob| String::from_utf8_lossy(&blob.bytes).into_owned()))
     }
 
-    /// Artifact root this writer is anchored at.
-    pub fn root(&self) -> &Path {
-        &self.root
+    /// The blob store artifacts are written to, for hosts that materialize or
+    /// list them.
+    pub fn blobs(&self) -> &Arc<dyn BlobStore> {
+        &self.blobs
     }
+}
+
+/// Split `outputs/x` / `workspace/x` into its kind and the name below it.
+fn split_key(key: &str) -> Option<(ArtifactKind, &str)> {
+    let key = key.trim();
+    [ArtifactKind::Output, ArtifactKind::Scratch]
+        .into_iter()
+        .find_map(|kind| {
+            key.strip_prefix(kind.subdir())
+                .and_then(|rest| rest.strip_prefix('/'))
+                .map(|rest| (kind, rest))
+        })
 }
 
 /// Offload `output` when it exceeds `threshold_bytes`, returning the text the

@@ -1,7 +1,7 @@
 //! Inert value types for the artifact-offload convention.
 //!
-//! Dependency-free by design (std + `thiserror` only) so a host can build
-//! against these without pulling the engine — RFC §2 rule 2.
+//! Light by design (std, `thiserror` and the storage error type) so a host can
+//! build against these without pulling the engine — RFC §2 rule 2.
 
 /// Deliverables directory under the artifact root. Artifacts here are meant to
 /// outlive the step that produced them and to be handed to a parent agent or a

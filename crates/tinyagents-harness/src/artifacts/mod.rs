@@ -75,7 +75,7 @@ pub use ops::{
     effective_offload_threshold, extract_artifact_paths, note_artifact_handoff,
     offload_oversized_result, render_artifact_pointer, should_offload,
 };
-pub use paths::{relative_to_root, resolve_artifact_path, sanitize_component};
+pub use paths::{resolve_artifact_key, sanitize_component};
 pub use policy::{ArtifactPathPolicy, ArtifactRedactor, NoRedaction, OpenPathPolicy, Redacted};
 pub use request_truncation::{
     RequestTruncation, reducible_tool_result_bytes, truncate_older_tool_results,
