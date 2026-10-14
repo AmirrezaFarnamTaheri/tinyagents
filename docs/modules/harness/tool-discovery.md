@@ -80,8 +80,9 @@ ranker invented never reaches the model. The catalogue is what the ranker
 sees; the model's `query` is the only intent, with the policy's
 `rank_context` — empty by default, since the model already distilled the turn
 into the query. A host opts in by setting `ToolDiscoveryPolicy::rank_context`
-(for example `RankContext::with_chat`), and the ranker then receives exactly
-that on every `tool_search` of the run. That is the only metadata beyond the
+(for example `RankContext::with_chat`), and an installed host ranker then receives
+exactly that on every `tool_search` it answers (no ranker, or `Bm25` mode, never
+sees it). That is the only metadata beyond the
 query a ranker can see, so a host that sets a chat is choosing to let an
 off-machine ranker route its disclosure there.
 
