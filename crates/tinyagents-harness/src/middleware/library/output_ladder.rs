@@ -81,7 +81,9 @@ pub async fn run_output_ladder(
         summary_label,
     } = input;
     let plan = plan_output_stages(policy, tool, content.len(), store.is_some());
+    let original_len = content.len();
     let full_output = plan.keep_full_output.then(|| content.clone());
+    let mut compacted_here = false;
 
     let mut notice = None;
     let mut summarized_from_bytes = None;
@@ -90,10 +92,15 @@ pub async fn run_output_ladder(
             .compact(tool, std::mem::take(&mut content), focus)
             .await;
         content = compacted.text;
+        compacted_here = true;
         notice = compacted.notice;
         summarized_from_bytes = compacted.summarized_from_bytes;
     }
 
+    // An uncompacted body past the policy's persistable limit is bounded
+    // inline: spilling it would store more than the policy allows.
+    let store =
+        store.filter(|_| compacted_here || original_len as u64 <= policy.max_persistable_bytes());
     if !plan.truncation_exempt && plan.budget_bytes > 0 {
         let (capped, outcome) = apply_per_result_persistence(
             std::mem::take(&mut content),

@@ -74,3 +74,20 @@ async fn oversized_result_is_bounded_to_the_shared_budget() {
     let out = run_output_ladder(&policy(), &mut p, input("shell", "y".repeat(40_000), false)).await;
     assert!(out.len() < 40_000, "got {}", out.len());
 }
+
+#[test]
+fn uncompacted_body_past_persistable_limit_is_not_spilled() {
+    // The store is never reached for an ineligible original: bounded inline.
+    let mut pol = policy();
+    pol.max_persistable_bytes = 20_000;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let mut p = Upper { compacted: 0 };
+    let out = rt.block_on(run_output_ladder(
+        &pol,
+        &mut p,
+        input("shell", "z".repeat(30_000), false),
+    ));
+    assert!(out.len() < 30_000);
+}
