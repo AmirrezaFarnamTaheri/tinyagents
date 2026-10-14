@@ -1,4 +1,4 @@
-//! Filesystem offload for oversized worker artifacts on long-horizon runs.
+//! Blob-store offload for oversized worker artifacts on long-horizon runs.
 //!
 //! ## The problem
 //!
@@ -37,21 +37,18 @@
 //!
 //! ## Hardening
 //!
-//! [`resolve_artifact_path`] is fail-closed. Absolute paths, `..` traversal, and
-//! anything escaping the convention root are refused; when an
+//! [`resolve_artifact_key`] is fail-closed. Absolute names, drive prefixes, `..`
+//! traversal and control characters are refused; when an
 //! [`ArtifactPathPolicy`] is supplied, so is anything reaching the host's
-//! internal state.
-//!
-//! The lexical checks cannot see symlinks, because the target does not exist
-//! when they run. So the real parent directory is re-validated after
-//! `create_dir_all` and before the write — that is the first moment the
-//! link-resolved location can be checked at all.
+//! internal state. The artifacts live on a tinystoragedrivers blob store, not
+//! the filesystem, so the key is the whole address and there is no symlink to
+//! follow out of the namespace.
 //!
 //! ## What the host supplies
 //!
 //! Two policies, both of which a redistributed crate cannot decide for itself:
 //! [`ArtifactPathPolicy`] (which paths are off limits) and [`ArtifactRedactor`]
-//! (what is scrubbed before bytes hit disk). See [`policy`].
+//! (what is scrubbed before bytes are stored). See [`policy`].
 //!
 //! ## Logging
 //!

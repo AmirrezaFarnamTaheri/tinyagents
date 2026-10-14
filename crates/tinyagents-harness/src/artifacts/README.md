@@ -1,7 +1,7 @@
 # harness::artifacts
 
-Filesystem offload for oversized worker results on long-horizon runs, plus the
-fail-closed path resolution and host policy hooks it depends on.
+Blob-store offload for oversized worker results on long-horizon runs, plus the
+fail-closed key resolution and host policy hooks it depends on.
 
 ## Why this exists
 
@@ -64,20 +64,22 @@ already had.
 | ------------ | --------------------------------------------------------------------- |
 | `mod.rs`     | Module overview, re-exports.                                          |
 | `types.rs`   | `ArtifactKind`, `OffloadedArtifact`, `OffloadError`, constants.        |
-| `paths.rs`   | Fail-closed path resolution (`resolve_artifact_path` and helpers).     |
+| `paths.rs`   | Fail-closed key resolution (`resolve_artifact_key`, `sanitize_component`). |
 | `policy.rs`  | `ArtifactPathPolicy`, `ArtifactRedactor` traits and their defaults.    |
 | `tool_results.rs` | Per-tool-result persistence: `ToolResultArtifactStore` (`new`: under `<action_dir>/artifacts/tool-results/`, relative pointers; `detached`: under `<storage_dir>/tool-results/` outside the working tree, absolute pointers), `apply_per_result_persistence`, `spill_aggregate_tool_results`, paged artifact reads (`read_target`). Host supplies redactor, read/wrapper tool names, read limit, and for a detached store the read grant on its artifact namespace. |
 | `tool_results_tests.rs` | Tests for the above, incl. a byte-stable envelope fixture. |
-| `ops.rs`     | `ArtifactOffload` writer, `offload_oversized_result`, pointer/handoff plumbing. |
+| `ops.rs`     | `ArtifactOffload` writer over a `BlobStore`, `offload_oversized_result`, pointer/handoff plumbing. |
 | `mod_tests.rs`, `contract_tests.rs`, `policy_tests.rs`, `request_truncation_tests.rs` | Unit tests: happy path, fallback path, fail-closed hardening. |
 
 ## Operational constraints
 
-- `resolve_artifact_path` is lexical only — it cannot see symlinks, because
-  the write target usually does not exist yet. `ArtifactOffload::write`
-  re-validates the real, symlink-resolved parent directory after
-  `create_dir_all` and before the write; that is the first moment a
-  pre-existing symlink escape can be detected.
+- Artifacts are blobs on a tinystoragedrivers `BlobStore` (in memory unless
+  the host passes its scoped handle to `ArtifactOffload::new`). A pointer
+  carries the blob key (`outputs/<name>`), not a filesystem path: read it back
+  with `ArtifactOffload::read`, or have the host expose the store through its
+  own read tool or materialise it. `resolve_artifact_key` is fail-closed on
+  `..`, absolute names, drive prefixes and control characters; there are no
+  symlinks to escape through.
 - A `None` redactor stores bytes verbatim. That is a legitimate choice for a
   host with nothing to scrub, but it is a security decision the host must make
   explicitly — this crate cannot supply credential/PII patterns for it.
@@ -85,10 +87,6 @@ already had.
   **stored** (post-redaction) body, never from the caller's original input.
   `write_returning_stored` and `offload_oversized_result` exist specifically
   so callers have that stored value at hand.
-- `ArtifactOffload::with_render_root` matters whenever a worker writes inside
-  its own checkout: the parent receiving the pointer does not hold the
-  worker's root, so paths must be rendered relative to the *parent's* root
-  (or absolute, when the worker's root is not nested inside it).
 - Every write and every handoff emits a structured `[artifact]` log line, so a
   run journal shows both ends of a pointer (see `mod.rs` for the exact
   messages).
