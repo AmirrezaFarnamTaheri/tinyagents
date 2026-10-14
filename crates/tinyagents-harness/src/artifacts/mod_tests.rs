@@ -154,7 +154,7 @@ fn rejects_control_characters() {
 
 #[test]
 fn rejects_empty_and_whitespace_names() {
-    for name in ["", "   ", "\t\n", "./", "//"] {
+    for name in ["", "   ", "\t\n", "./", ".//."] {
         let err = resolve_artifact_key(None, ArtifactKind::Output, name)
             .expect_err("blank name must be refused");
         assert!(matches!(err, OffloadError::EmptyName), "{name:?}: {err:?}");
@@ -576,7 +576,11 @@ async fn offload_is_disabled_by_a_zero_threshold() {
 async fn offload_failure_keeps_the_inline_payload_for_the_host_backstop() {
     // The load-bearing soft-failure contract: a refused offload must never cost
     // the caller its content, or a storage problem turns into data loss.
-    let offload = ArtifactOffload::in_memory(&"a".repeat(4096), "task");
+    // Every key under `outputs` is host-internal state here, so the write is
+    // refused by policy.
+    let offload = ArtifactOffload::in_memory("agent", "task").with_path_policy(Arc::new(
+        TestPolicy::rooted_at(PathBuf::from("internal")).with_internal_suffix("outputs"),
+    ));
     let big = "x".repeat(10_000);
 
     let (text, artifact) = offload_oversized_result(big.clone(), &offload, 8_192, READ_TOOL).await;
