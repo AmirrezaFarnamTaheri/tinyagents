@@ -22,6 +22,23 @@ drivers.
   `ConversationError::Legacy` and `::Worker` are removed.
 - Classic `memory/conversations/` files are no longer read by this crate.
 
+### Artifact offload and generated media: blob store
+
+- `artifacts::ArtifactOffload` writes to a tinystoragedrivers `BlobStore`
+  (`ArtifactOffload::new(blobs, agent, task)`; `ArtifactOffload::in_memory`
+  is the default for library hosts) instead of the filesystem. Pointers carry
+  the blob key (`outputs/<name>`); `ArtifactOffload::read` and `::blobs`
+  fetch it back. Removed: `ArtifactOffload::root` and `::with_render_root`,
+  `OffloadedArtifact::absolute_path`, `OffloadError::Io` and `::SymlinkEscape`
+  (new `OffloadError::Storage`), `relative_to_root`, and
+  `resolve_artifact_path` (now `resolve_artifact_key`, with no root argument).
+- `media::MediaOutput` stores generated images and clips on a blob store
+  (`MediaOutput::with_blobs`, in-memory by default) under `generated-media/`;
+  tool results report the blob key as `path`. Local reference inputs still
+  resolve against the workspace. `rustix` is no longer a dependency.
+- Hosts that let the model open these artifacts by file path must expose the
+  store through their read tool or materialise it themselves.
+
 ### Removed, with the replacement
 
 | Removed | Use instead |
@@ -100,9 +117,11 @@ let report = import_workspace(&provider, "agent-id", workspace_dir).await?;
 ### Not yet moved
 
 These still use files and are migrated in follow-ups (tracked in
-tinyhumansai/openhuman#7688 and #7768):
+tinyhumansai/openhuman#7688, #7768 and #7783):
 
 - the JSONL transcript writer, reader and `FileTranscriptLocator`
-  (path-bound; `session_raw/` adoption, spend and view helpers read them);
-- the artifact offload (`artifacts::ArtifactOffload`) and media outputs, which
-  write files the model later opens by path.
+  (path-bound; `session_raw/` adoption, spend and view helpers read them,
+  about 12k lines across `session::transcript`);
+- `artifacts::tool_results::ToolResultArtifactStore`, whose pointers are
+  action-relative or absolute file paths the host's `file_read` opens, and
+  whose pruning relies on file mtimes (a blob has no modification time).
