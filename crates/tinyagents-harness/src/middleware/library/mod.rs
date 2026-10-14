@@ -74,6 +74,7 @@ mod memory_protocol;
 mod memory_protocol_middleware;
 mod observe;
 mod output_cap;
+mod output_ladder;
 mod policy_gate;
 mod repeat_loop_stop;
 mod repeat_progress;
@@ -131,6 +132,7 @@ pub use output_cap::{
     ListedOutputCapPolicy, OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages,
     should_compact,
 };
+pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
     PolicyDecision, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware, record_approved,
