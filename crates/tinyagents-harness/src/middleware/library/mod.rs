@@ -103,6 +103,7 @@ pub use call_effect::{
     CallEffect, DispatchTarget, ToolEffectFacts, ToolFactsLookup, call_effect, dispatch_target,
     facts_for_tool, name_effect, tool_sets_lookup,
 };
+pub use cli_rpc_only::CliRpcOnlyMiddleware;
 pub use context_ladder::{
     COMPACTION_TAIL_WINDOW_FRACTION, ContextLadder, UNKNOWN_WINDOW_FALLBACK_TOKENS,
     compression_policy, microcompact_for_window, with_turn_aware_tail,
