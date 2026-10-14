@@ -340,7 +340,7 @@ struct ExposedTool(&'static str, tinytools::ToolExposure);
 #[async_trait]
 impl Tool for ExposedTool {
     fn name(&self) -> &str {
-        self.exposure
+        self.1
     }
 
     fn description(&self) -> &str {
