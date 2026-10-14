@@ -158,7 +158,7 @@ pub struct TurnCost {
     pub cached_input_tokens: u64,
     pub cost: CostTally,
     pub call_count: u32,
-    /// Pricing the stop-hook accounting ([`StopHookMetrics`]) resolves each
+    /// Pricing the stop-hook accounting ([`StopHookMetrics`](crate::middleware::StopHookMetrics)) resolves each
     /// recorded response's model against. `None` prices nothing, so a call
     /// without a provider charge is `Unknown`.
     pub pricing: Option<PricingLookup>,
