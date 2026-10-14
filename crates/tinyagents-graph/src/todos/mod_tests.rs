@@ -11,10 +11,12 @@ fn status_strings_match_serialized() {
     assert_eq!(TodoStatus::Pending.as_str(), "pending");
     assert_eq!(TodoStatus::InProgress.as_str(), "in_progress");
     assert_eq!(TodoStatus::Completed.as_str(), "completed");
+    assert_eq!(TodoStatus::Cancelled.as_str(), "cancelled");
     for status in [
         TodoStatus::Pending,
         TodoStatus::InProgress,
         TodoStatus::Completed,
+        TodoStatus::Cancelled,
     ] {
         assert_eq!(
             serde_json::to_value(status).unwrap(),
@@ -34,6 +36,8 @@ fn parse_status_accepts_aliases() {
     );
     assert_eq!(parse_status("done").unwrap(), TodoStatus::Completed);
     assert_eq!(parse_status("completed").unwrap(), TodoStatus::Completed);
+    assert_eq!(parse_status("canceled").unwrap(), TodoStatus::Cancelled);
+    assert_eq!(parse_status("skipped").unwrap(), TodoStatus::Cancelled);
     assert!(parse_status("blocked").is_err(), "kanban states are gone");
     assert!(parse_status("nope").is_err());
 }
@@ -180,20 +184,31 @@ mod store_tests {
     }
 
     #[tokio::test]
-    async fn replace_rejects_two_in_progress_and_blank_thread() {
+    async fn replace_keeps_one_in_progress_and_rejects_blank_thread() {
         let s = store();
-        let err = store::replace(
+        let snap = store::replace(
             &s,
             "t",
             items(&[("A", TodoStatus::InProgress), ("B", TodoStatus::InProgress)]),
         )
         .await
+        .unwrap();
+        assert_eq!(snap.items[1].status, TodoStatus::Pending);
+        assert!(snap.notes[0].contains("Only one step"), "{:?}", snap.notes);
+
+        // An order the plan refuses leaves the stored list untouched.
+        let err = store::replace(
+            &s,
+            "t",
+            items(&[("A", TodoStatus::Pending), ("B", TodoStatus::InProgress)]),
+        )
+        .await
         .unwrap_err();
-        assert!(err.to_string().contains("in_progress"), "{err}");
         assert!(
-            store::list(&s, "t").await.unwrap().items.is_empty(),
-            "a rejected replace leaves the list untouched"
+            err.to_string().contains("Finish or cancel step 1 first."),
+            "{err}"
         );
+        assert_eq!(store::list(&s, "t").await.unwrap().items, snap.items);
         assert!(store::replace(&s, "  ", Vec::new()).await.is_err());
         assert!(store::list(&s, "").await.is_err());
     }
@@ -388,6 +403,12 @@ mod tool_tests {
             description.contains("at most once per assistant response"),
             "replacement calls are bounded per assistant response: {description}"
         );
+        assert!(
+            description.contains("one at a time, in order")
+                && description.contains("`{\"complete\": N}`")
+                && description.contains("before starting the next"),
+            "each step is ticked before the next starts: {description}"
+        );
     }
 
     #[test]
@@ -416,7 +437,10 @@ mod tool_tests {
                 "completed",
                 "complete",
                 "done",
-                "finished"
+                "finished",
+                "cancelled",
+                "canceled",
+                "skipped"
             ])
         );
         assert_eq!(
@@ -468,7 +492,9 @@ mod tool_tests {
         .await;
         assert!(!res.is_error, "{res:?}");
         assert_eq!(raw(&res)["todos"][0]["status"], "completed");
-        assert_eq!(raw(&res)["todos"][1]["status"], "pending");
+        // No status reads as pending, and the first open step then starts.
+        assert_eq!(raw(&res)["todos"][1]["status"], "in_progress");
+        assert_eq!(raw(&res)["notes"][0], "Step 2 \"B\" is now in progress.");
     }
 
     #[tokio::test]
@@ -576,7 +602,7 @@ mod tool_tests {
     }
 
     #[tokio::test]
-    async fn invariant_violation_is_a_soft_error() {
+    async fn several_in_progress_are_fixed_and_reported() {
         let tool = TodoTool::new(store());
         let res = run(
             &tool,
@@ -587,6 +613,68 @@ mod tool_tests {
             ] }),
         )
         .await;
-        assert!(res.is_error && res.output().contains("in_progress"));
+        assert!(!res.is_error, "{res:?}");
+        assert_eq!(raw(&res)["todos"][1]["status"], "pending");
+        assert!(
+            raw(&res)["notes"][0]
+                .as_str()
+                .unwrap()
+                .contains("Only one step")
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_and_cancel_tick_the_plan_in_order() {
+        let tool = TodoTool::new(store());
+        let res = run(
+            &tool,
+            Some("t"),
+            json!({ "todos": [{ "content": "A" }, { "content": "B" }, { "content": "C" }] }),
+        )
+        .await;
+        assert_eq!(
+            raw(&res)["todos"][0]["status"],
+            "in_progress",
+            "step 1 starts"
+        );
+
+        let res = run(&tool, Some("t"), json!({ "complete": 2 })).await;
+        assert!(res.is_error);
+        assert_eq!(res.output(), "Finish or cancel step 1 first.");
+
+        let res = run(&tool, Some("t"), json!({ "complete": 1 })).await;
+        assert!(!res.is_error, "{res:?}");
+        assert_eq!(raw(&res)["todos"][1]["status"], "in_progress");
+        assert_eq!(raw(&res)["notes"][0], "Step 2 \"B\" is now in progress.");
+
+        let res = run(
+            &tool,
+            Some("t"),
+            json!({ "cancel": 2, "reason": "covered by A" }),
+        )
+        .await;
+        assert!(!res.is_error, "{res:?}");
+        assert_eq!(raw(&res)["todos"][1]["status"], "cancelled");
+        assert_eq!(raw(&res)["todos"][1]["reason"], "covered by A");
+        assert_eq!(
+            raw(&res)["markdown"],
+            "- [x] A\n- [-] B (cancelled: covered by A)\n- [~] C"
+        );
+
+        for (args, message) in [
+            (json!({ "cancel": 3 }), "`cancel` needs a `reason`."),
+            (
+                json!({ "complete": 0 }),
+                "a step number is a positive integer",
+            ),
+            (json!({ "complete": 3, "todos": [] }), "unknown arguments"),
+            (json!({ "complete": 9 }), "There is no step 9"),
+        ] {
+            let res = run(&tool, Some("t"), args.clone()).await;
+            assert!(
+                res.is_error && res.output().starts_with(message),
+                "{args}: {res:?}"
+            );
+        }
     }
 }
