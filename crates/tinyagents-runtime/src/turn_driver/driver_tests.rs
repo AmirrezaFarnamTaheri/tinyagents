@@ -847,3 +847,24 @@ async fn a_split_turn_is_driven_by_the_host_and_settled_by_its_tail() {
     );
     assert_eq!(model.requests().len(), 1);
 }
+
+/// The cap pause reports `(completed, cap)` to the host's recorder.
+#[tokio::test]
+async fn the_cap_pause_is_reported_to_the_recorder() {
+    let model = looping_model();
+    let mut session = session(&model, step_tools(), &["step"], no_configure());
+    let seen: Arc<Mutex<Vec<(u64, u64)>>> = Arc::default();
+    let controls = TurnControls {
+        max_iterations: Some(2),
+        pause_at_cap: true,
+        cap_pause_recorder: Some({
+            let seen = seen.clone();
+            Arc::new(move |completed, cap| seen.lock().unwrap().push((completed, cap)))
+        }),
+        ..TurnControls::default()
+    };
+
+    turn(&mut session, controls).await.unwrap();
+
+    assert_eq!(*seen.lock().unwrap(), vec![(2, 2)]);
+}

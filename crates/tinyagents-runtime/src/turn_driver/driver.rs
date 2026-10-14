@@ -408,10 +408,11 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
             run_context.events.subscribe(listener);
         }
         if controls.pause_at_cap {
-            let pauser = match tinyagents_harness::events::CapPauser::new(
+            let pauser = match tinyagents_harness::events::CapPauser::with_recorder(
                 handle.clone(),
                 max_iterations,
                 run_context.run_id().as_str(),
+                controls.cap_pause_recorder.clone(),
             ) {
                 Ok(pauser) => pauser,
                 Err(error) => {
