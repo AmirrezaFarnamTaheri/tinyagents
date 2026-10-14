@@ -198,3 +198,36 @@ async fn the_reminder_fires_once_per_step_and_a_todo_call_restarts_the_count() {
             .contains("Step 2 \"B\"")
     );
 }
+
+#[tokio::test]
+async fn an_ignored_reminder_gates_other_tools_until_a_todo_call() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+    store::replace(&store, THREAD, plan(&["A", "B"]))
+        .await
+        .unwrap();
+    let mw = TodoSequenceMiddleware::new(store.clone()).with_reminder_rounds(2);
+    let mut ctx = ctx();
+
+    // Reminder at 2 rounds, gate at 4.
+    for _ in 0..3 {
+        tool_round(&mw, &mut ctx, "shell").await;
+        assert!(before(&mw, &mut ctx, "shell").await.is_ok());
+    }
+    tool_round(&mw, &mut ctx, "shell").await;
+    let error = before(&mw, &mut ctx, "shell")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Update your plan first: step 1 \"A\"") && error.contains("todo {}"),
+        "{error}"
+    );
+    assert!(
+        before(&mw, &mut ctx, "todo").await.is_ok(),
+        "todo is never gated"
+    );
+
+    // A bare `todo` read ("still on it") lifts the gate and restarts the count.
+    tool_round(&mw, &mut ctx, "todo").await;
+    assert!(before(&mw, &mut ctx, "shell").await.is_ok());
+}

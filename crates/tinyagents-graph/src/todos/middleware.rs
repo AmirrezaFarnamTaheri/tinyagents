@@ -23,6 +23,10 @@
 //!   rounds with the same step in progress and no `todo` call, one note is
 //!   appended to that round's first tool result naming the step and how to
 //!   tick it. Once per step; a `todo` call restarts the count.
+//! - **An ignored reminder becomes a gate** (`before_tool`): at twice that
+//!   many rounds without a `todo` call, every other tool is refused until the
+//!   model calls `todo` (`{"complete": N}`, or a bare `{}` to confirm it is
+//!   still on the step).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -150,8 +154,12 @@ impl TodoSequenceMiddleware {
                 );
                 run.pending_note = Some(wrap_harness_instruction(&format!(
                     "Step {} \"{}\" has been in progress for {rounds} rounds. If it's done, call \
-                     todo {{\"complete\": {}}}.",
-                    step.0, step.1, step.0
+                     todo {{\"complete\": {}}}; if you are still on it, call todo {{}} to confirm. \
+                     After {} rounds without a plan update, other tools are refused.",
+                    step.0,
+                    step.1,
+                    step.0,
+                    rounds * 2
                 )));
             }
         });
@@ -226,6 +234,23 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for TodoSequenceMiddleware
     ) -> Result<()> {
         if call.name == TODO_TOOL_NAME {
             return Ok(());
+        }
+        // A reminder the model ignored for another `reminder_rounds` rounds:
+        // any `todo` call (even a bare read) resets the count and lifts this.
+        let stale = self.reminder_rounds * 2;
+        if let Some((step, text)) = self.with_run(ctx.instance_id(), |run| {
+            run.step.clone().filter(|_| run.rounds_on_step >= stale)
+        }) {
+            tracing::info!(
+                tool = %call.name,
+                step,
+                "[tinyagents::mw] todo_sequence: refusing a tool, plan not updated for {stale} rounds"
+            );
+            return Err(TinyAgentsError::ToolFailed(format!(
+                "Update your plan first: step {step} \"{text}\" has been in progress for {stale} \
+                 rounds without a todo call. Call todo {{\"complete\": {step}}} if it is done, or \
+                 todo {{}} if you are still on it, then retry."
+            )));
         }
         let thread_id = thread_of(ctx);
         let items = self.items(thread_id.as_deref()).await;
