@@ -281,9 +281,11 @@ async fn aggregate_forces_budget_when_envelope_has_no_savings() {
         "total={total} exceeds floor={floor_total}"
     );
     assert!(
-        tmp.path()
-            .join("artifacts/tool-results/session/one/one.txt")
-            .exists()
+        store
+            .read("tool-results/session/one/one.txt")
+            .await
+            .unwrap()
+            .is_some()
     );
 }
 
