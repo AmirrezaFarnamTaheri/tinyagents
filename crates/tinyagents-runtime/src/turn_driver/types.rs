@@ -8,6 +8,7 @@ use std::sync::{
 };
 
 use tinyagents_harness::steering::{SteeringCommandKind, SteeringPolicy};
+pub use tinyagents_harness::tool::EarlyExit;
 
 use super::steering::{SteeringFeed, SteeringRegistrar};
 use super::tool_set::ToolSetReport;
@@ -60,16 +61,6 @@ impl TurnScope {
                 .allow(SteeringCommandKind::Redirect),
         }
     }
-}
-
-/// A tool call that ended the turn early (for example a clarification
-/// question that must reach the user before the loop can continue).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EarlyExit {
-    /// The early-exit tool that fired.
-    pub tool: String,
-    /// The tool's model-facing output, surfaced as the turn's text.
-    pub question: String,
 }
 
 /// Receives the terminal "turn completed" signal.
