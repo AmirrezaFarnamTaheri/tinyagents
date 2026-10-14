@@ -3,7 +3,7 @@
 //! Covers the happy path (oversized result lands in `outputs/`, the parent gets
 //! a path + abstract), the fallback path (offload refused, inline payload
 //! survives for the host's backstop), and the fail-closed path hardening that
-//! keeps offload inside the artifact root and out of host-internal state.
+//! keeps offload inside its two namespaces and out of host-internal state.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -71,10 +71,25 @@ impl ArtifactRedactor for TestRedactor {
 
 const READ_TOOL: &str = "file_read";
 
-fn offload_for(root: &Path, internal_root: &Path) -> ArtifactOffload {
-    ArtifactOffload::new(root.to_path_buf(), "worker-agent", "task-1")
-        .with_path_policy(Arc::new(TestPolicy::rooted_at(internal_root.to_path_buf())))
+fn offload() -> ArtifactOffload {
+    ArtifactOffload::in_memory("worker-agent", "task-1")
+        .with_path_policy(Arc::new(TestPolicy::rooted_at(PathBuf::from("internal"))))
         .with_redactor(Arc::new(TestRedactor))
+}
+
+/// Everything stored, as `(key, body)` pairs.
+async fn stored_bodies(offload: &ArtifactOffload) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for meta in offload.blobs().list("").await.expect("list") {
+        let blob = offload
+            .blobs()
+            .get(&meta.key)
+            .await
+            .expect("get")
+            .expect("listed blob exists");
+        out.push((meta.key, String::from_utf8(blob.bytes).expect("utf8")));
+    }
+    out
 }
 
 // ── Kinds and directories ─────────────────────────────────────────────────────
@@ -90,87 +105,74 @@ fn kinds_map_to_the_documented_directories() {
 // ── Path resolution ───────────────────────────────────────────────────────────
 
 #[test]
-fn resolves_under_the_convention_directory() {
-    let root = PathBuf::from("/action");
-    let resolved =
-        resolve_artifact_path(&root, None, ArtifactKind::Output, "report.md").expect("resolve");
-    assert_eq!(resolved, root.join("outputs").join("report.md"));
+fn resolves_under_the_convention_namespace() {
+    let key = resolve_artifact_key(None, ArtifactKind::Output, "report.md").expect("resolve");
+    assert_eq!(key, "outputs/report.md");
 }
 
 #[test]
-fn scratch_resolves_under_the_artifact_root_not_the_internal_root() {
-    // The `workspace` subdir of the artifact root and the host's internal root
-    // are different places that happen to share a word. Conflating them would
-    // route every scratch write into host state.
-    let root = PathBuf::from("/action");
-    let internal = PathBuf::from("/internal/workspace");
-    let policy = TestPolicy::rooted_at(internal.clone());
-    let resolved = resolve_artifact_path(&root, Some(&policy), ArtifactKind::Scratch, "notes.md")
+fn scratch_resolves_under_its_own_namespace_not_the_internal_root() {
+    // The `workspace` namespace of the artifact store and the host's internal
+    // root are different places that happen to share a word. Conflating them
+    // would route every scratch write into host state.
+    let policy = TestPolicy::rooted_at(PathBuf::from("internal/workspace"));
+    let key = resolve_artifact_key(Some(&policy), ArtifactKind::Scratch, "notes.md")
         .expect("resolve");
-    assert_eq!(resolved, root.join("workspace").join("notes.md"));
-    assert!(!resolved.starts_with(&internal));
+    assert_eq!(key, "workspace/notes.md");
 }
 
 #[test]
 fn rejects_parent_traversal() {
-    let err = resolve_artifact_path(
-        Path::new("/action"),
-        None,
-        ArtifactKind::Output,
-        "../../etc/passwd",
-    )
-    .expect_err("traversal must be refused");
-    assert!(
-        matches!(err, OffloadError::PathEscape { .. }),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn rejects_absolute_paths() {
-    let err = resolve_artifact_path(
-        Path::new("/action"),
-        None,
-        ArtifactKind::Output,
-        "/etc/passwd",
-    )
-    .expect_err("absolute path must be refused");
-    assert!(
-        matches!(err, OffloadError::AbsolutePath { .. }),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn rejects_empty_and_whitespace_names() {
-    for name in ["", "   ", "\t\n"] {
-        let err = resolve_artifact_path(Path::new("/action"), None, ArtifactKind::Output, name)
-            .expect_err("blank name must be refused");
-        assert!(matches!(err, OffloadError::EmptyName), "got {err:?}");
+    for name in ["../../etc/passwd", "a/../../b", "a\\..\\b"] {
+        let err = resolve_artifact_key(None, ArtifactKind::Output, name)
+            .expect_err("traversal must be refused");
+        assert!(
+            matches!(err, OffloadError::PathEscape { .. }),
+            "{name}: got {err:?}"
+        );
     }
 }
 
 #[test]
-fn accepts_leading_current_dir_segments() {
-    // `./report.md` is how a model commonly writes a relative path; refusing it
-    // would reject a correct request on a formatting technicality.
-    let resolved = resolve_artifact_path(
-        Path::new("/action"),
-        None,
-        ArtifactKind::Output,
-        "./report.md",
-    )
-    .expect("resolve");
-    assert_eq!(resolved, Path::new("/action/outputs/report.md"));
+fn rejects_absolute_names() {
+    for name in ["/etc/passwd", "\\share\\x", "C:\\Windows\\x", "c:/x"] {
+        let err = resolve_artifact_key(None, ArtifactKind::Output, name)
+            .expect_err("absolute name must be refused");
+        assert!(
+            matches!(err, OffloadError::AbsolutePath { .. }),
+            "{name}: got {err:?}"
+        );
+    }
 }
 
 #[test]
-fn rejects_targets_inside_the_internal_root_fail_closed() {
-    // An artifact root configured inside the host's internal root: containment
-    // passes, so only the policy check stands between an agent and host state.
-    let root = PathBuf::from("/internal/action");
-    let policy = TestPolicy::rooted_at(PathBuf::from("/internal"));
-    let err = resolve_artifact_path(&root, Some(&policy), ArtifactKind::Output, "leak.md")
+fn rejects_control_characters() {
+    let err = resolve_artifact_key(None, ArtifactKind::Output, "a\0b")
+        .expect_err("NUL must be refused");
+    assert!(matches!(err, OffloadError::PathEscape { .. }), "got {err:?}");
+}
+
+#[test]
+fn rejects_empty_and_whitespace_names() {
+    for name in ["", "   ", "\t\n", "./", "//"] {
+        let err = resolve_artifact_key(None, ArtifactKind::Output, name)
+            .expect_err("blank name must be refused");
+        assert!(matches!(err, OffloadError::EmptyName), "{name:?}: {err:?}");
+    }
+}
+
+#[test]
+fn accepts_leading_current_dir_segments_and_collapses_empty_ones() {
+    // `./report.md` is how a model commonly writes a relative path; refusing it
+    // would reject a correct request on a formatting technicality.
+    let key = resolve_artifact_key(None, ArtifactKind::Output, "./a//report.md").expect("resolve");
+    assert_eq!(key, "outputs/a/report.md");
+}
+
+#[test]
+fn rejects_keys_inside_the_internal_root_fail_closed() {
+    let policy = TestPolicy::rooted_at(PathBuf::from("outputs/internal"));
+    let err = resolve_artifact_key(Some(&policy), ArtifactKind::Output, "internal/leak.md")
         .expect_err("internal root must be refused");
     assert!(
         matches!(err, OffloadError::InternalRoot { .. }),
@@ -179,33 +181,15 @@ fn rejects_targets_inside_the_internal_root_fail_closed() {
 }
 
 #[test]
-fn rejects_host_internal_state_paths_with_the_specific_error() {
+fn rejects_host_internal_state_keys_with_the_specific_error() {
     // The specific check runs first so its more useful message survives when a
-    // path trips both rules.
-    let root = PathBuf::from("/internal/action");
-    let policy = TestPolicy::rooted_at(PathBuf::from("/internal")).with_internal_suffix("outputs");
-    let err = resolve_artifact_path(&root, Some(&policy), ArtifactKind::Output, "leak.md")
+    // key trips both rules.
+    let policy = TestPolicy::rooted_at(PathBuf::from("outputs")).with_internal_suffix("outputs");
+    let err = resolve_artifact_key(Some(&policy), ArtifactKind::Output, "leak.md")
         .expect_err("internal state must be refused");
     assert!(
         matches!(err, OffloadError::InternalState { .. }),
         "the specific rule must win over blanket containment, got {err:?}"
-    );
-}
-
-#[test]
-fn a_policy_free_resolve_still_enforces_containment() {
-    // `policy: None` relaxes only the host checks. If it ever relaxed traversal
-    // too, every host without a policy would gain an escape.
-    let err = resolve_artifact_path(
-        Path::new("/action"),
-        None,
-        ArtifactKind::Output,
-        "../out.md",
-    )
-    .expect_err("traversal must still be refused without a policy");
-    assert!(
-        matches!(err, OffloadError::PathEscape { .. }),
-        "got {err:?}"
     );
 }
 
@@ -219,23 +203,6 @@ fn sanitize_component_strips_separators_and_never_returns_empty() {
     assert_eq!(sanitize_component(""), "unknown");
     assert_eq!(sanitize_component("///"), "___");
     assert!(sanitize_component(&"x".repeat(500)).len() <= 80);
-}
-
-#[test]
-fn relative_to_root_falls_back_to_display_for_outside_paths() {
-    // An absolute fallback is correct here: a bogus relative path would resolve
-    // against the reader's own root and silently miss the file.
-    let rendered = relative_to_root(Path::new("/action"), Path::new("/elsewhere/outputs/x.md"));
-    assert_eq!(rendered, "/elsewhere/outputs/x.md");
-}
-
-#[test]
-fn relative_to_root_renders_slash_separated() {
-    let rendered = relative_to_root(
-        Path::new("/action"),
-        &PathBuf::from("/action").join("outputs").join("x.md"),
-    );
-    assert_eq!(rendered, "outputs/x.md");
 }
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
@@ -307,7 +274,6 @@ fn sample_artifact(redacted: bool) -> OffloadedArtifact {
     OffloadedArtifact {
         kind: ArtifactKind::Output,
         relative_path: "outputs/agent/task-result.md".to_string(),
-        absolute_path: PathBuf::from("/action/outputs/agent/task-result.md"),
         stored_bytes: 1234,
         original_bytes: 1300,
         redacted,
@@ -394,19 +360,9 @@ fn handoff_stages_are_distinct() {
 
 // ── Writing ───────────────────────────────────────────────────────────────────
 
-fn temp_roots() -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path().join("action");
-    let internal = dir.path().join("internal");
-    std::fs::create_dir_all(&root).expect("action dir");
-    std::fs::create_dir_all(&internal).expect("internal dir");
-    (dir, root, internal)
-}
-
 #[tokio::test]
-async fn write_persists_under_outputs_and_reports_the_relative_path() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+async fn write_stores_under_outputs_and_reports_the_key() {
+    let offload = offload();
 
     let artifact = offload
         .write(ArtifactKind::Output, "report.md", "hello")
@@ -417,16 +373,15 @@ async fn write_persists_under_outputs_and_reports_the_relative_path() {
     assert_eq!(artifact.stored_bytes, 5);
     assert_eq!(artifact.original_bytes, 5);
     assert!(!artifact.redacted);
-    let on_disk = tokio::fs::read_to_string(&artifact.absolute_path)
-        .await
-        .expect("read back");
-    assert_eq!(on_disk, "hello");
+    assert_eq!(
+        offload.read(&artifact.relative_path).await.expect("read"),
+        Some("hello".to_string())
+    );
 }
 
 #[tokio::test]
-async fn write_redacts_credentials_before_they_reach_disk() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+async fn write_redacts_credentials_before_they_are_stored() {
+    let offload = offload();
     let body = format!("token: {SECRET}\n");
 
     let artifact = offload
@@ -435,40 +390,38 @@ async fn write_redacts_credentials_before_they_reach_disk() {
         .expect("write");
 
     assert!(artifact.redacted, "the redactor rewrote the body");
-    let on_disk = tokio::fs::read_to_string(&artifact.absolute_path)
-        .await
-        .expect("read back");
+    let stored = stored_bodies(&offload).await;
+    assert_eq!(stored.len(), 1);
     assert!(
-        !on_disk.contains(SECRET),
-        "the secret reached disk: {on_disk}"
+        !stored[0].1.contains(SECRET),
+        "the secret reached the store: {}",
+        stored[0].1
     );
-    assert!(on_disk.contains(REDACTION));
-    // Original bytes describe the caller's payload, stored bytes the file.
+    assert!(stored[0].1.contains(REDACTION));
+    // Original bytes describe the caller's payload, stored bytes the artifact.
     assert_eq!(artifact.original_bytes, body.len());
-    assert_eq!(artifact.stored_bytes, on_disk.len());
+    assert_eq!(artifact.stored_bytes, stored[0].1.len());
 }
 
 #[tokio::test]
 async fn write_without_a_redactor_stores_bytes_verbatim() {
     // The documented consequence of omitting a redactor. Pinned so the default
     // cannot quietly become "scrub something" and give false assurance.
-    let (_dir, root, _internal) = temp_roots();
-    let offload = ArtifactOffload::new(root.clone(), "agent", "task");
+    let offload = ArtifactOffload::in_memory("agent", "task");
     let artifact = offload
         .write(ArtifactKind::Output, "raw.md", SECRET)
         .await
         .expect("write");
     assert!(!artifact.redacted);
-    let on_disk = tokio::fs::read_to_string(&artifact.absolute_path)
-        .await
-        .expect("read back");
-    assert_eq!(on_disk, SECRET);
+    assert_eq!(
+        offload.read(&artifact.relative_path).await.expect("read"),
+        Some(SECRET.to_string())
+    );
 }
 
 #[tokio::test]
-async fn write_refuses_a_traversal_target_without_touching_disk() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+async fn write_refuses_a_traversal_target_without_storing_anything() {
+    let offload = offload();
 
     let err = offload
         .write(ArtifactKind::Output, "../escape.md", "x")
@@ -480,17 +433,16 @@ async fn write_refuses_a_traversal_target_without_touching_disk() {
         "got {err:?}"
     );
     assert!(
-        !root.join("escape.md").exists(),
-        "nothing may be written on a refused path"
+        stored_bodies(&offload).await.is_empty(),
+        "nothing may be stored on a refused key"
     );
 }
 
 #[tokio::test]
 async fn default_result_name_sanitizes_both_identifiers() {
-    let (_dir, root, _internal) = temp_roots();
-    let offload = ArtifactOffload::new(root, "agent/../x", "task id/1");
+    let offload = ArtifactOffload::in_memory("agent/../x", "task id/1");
     // Each of `/`, `.`, `.`, `/` becomes its own underscore — the separators are
-    // replaced, never collapsed, so no identifier can smuggle in a path level.
+    // replaced, never collapsed, so no identifier can smuggle in a key level.
     assert_eq!(
         offload.default_result_name(),
         "agent____x/task_id_1-result.md"
@@ -498,77 +450,85 @@ async fn default_result_name_sanitizes_both_identifiers() {
 }
 
 #[tokio::test]
-async fn write_refuses_a_parent_that_symlinks_out_of_the_convention_root() {
-    let (dir, root, internal) = temp_roots();
-    let outside = dir.path().join("outside");
-    std::fs::create_dir_all(&outside).expect("outside dir");
-    std::fs::create_dir_all(root.join("outputs")).expect("outputs dir");
+async fn scratch_and_outputs_are_separate_namespaces() {
+    let offload = offload();
+    offload
+        .write(ArtifactKind::Output, "a.md", "out")
+        .await
+        .expect("write output");
+    offload
+        .write(ArtifactKind::Scratch, "a.md", "scratch")
+        .await
+        .expect("write scratch");
 
-    // `outputs/escape -> ../../outside`. The lexical checks cannot see this:
-    // the target does not exist when they run.
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&outside, root.join("outputs").join("escape")).expect("symlink");
-    #[cfg(not(unix))]
-    return;
+    assert_eq!(
+        offload.read("outputs/a.md").await.expect("read"),
+        Some("out".to_string())
+    );
+    assert_eq!(
+        offload.read("workspace/a.md").await.expect("read"),
+        Some("scratch".to_string())
+    );
+}
 
-    let offload = offload_for(&root, &internal);
+#[tokio::test]
+async fn read_returns_none_for_a_missing_artifact() {
+    assert_eq!(offload().read("outputs/nope.md").await.expect("read"), None);
+}
+
+#[tokio::test]
+async fn read_refuses_keys_outside_the_two_namespaces() {
+    let offload = offload();
+    for key in ["internal/state", "etc/passwd", "outputs", "outputs/../workspace/x"] {
+        let err = offload.read(key).await.expect_err("must be refused");
+        assert!(matches!(err, OffloadError::PathEscape { .. }), "{key}: {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn artifacts_land_on_a_host_supplied_blob_store() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+
+    let scoped = MemoryStorage::new()
+        .for_scope(&Scope::new("host").expect("scope"))
+        .expect("scoped");
+    let blobs = scoped.blobs().clone();
+    let offload = ArtifactOffload::new(blobs.clone(), "agent", "task");
+
+    offload
+        .write(ArtifactKind::Output, "report.md", "body")
+        .await
+        .expect("write");
+
+    let blob = blobs
+        .get("outputs/report.md")
+        .await
+        .expect("get")
+        .expect("present on the host store");
+    assert_eq!(blob.bytes, b"body");
+    assert_eq!(
+        blob.meta.content_type.as_deref(),
+        Some("text/markdown; charset=utf-8")
+    );
+}
+
+#[tokio::test]
+async fn a_failing_store_surfaces_a_storage_error() {
+    let offload = offload();
+    // A key longer than any driver's limit makes the port refuse the write.
+    let name = "x".repeat(4096);
     let err = offload
-        .write(ArtifactKind::Output, "escape/leak.md", "x")
+        .write(ArtifactKind::Output, &name, "x")
         .await
-        .expect_err("symlink escape must be refused");
-
-    assert!(
-        matches!(err, OffloadError::SymlinkEscape { .. }),
-        "got {err:?}"
-    );
-    assert!(
-        !outside.join("leak.md").exists(),
-        "the write must not have followed the link"
-    );
-}
-
-#[tokio::test]
-async fn worktree_artifact_renders_a_path_the_parent_can_resolve() {
-    // An isolated worker writes in its own checkout; the parent that receives
-    // the pointer holds a different root. Rendering against the parent's root is
-    // what keeps the path resolvable on the receiving side.
-    let (dir, root, internal) = temp_roots();
-    let parent_root = dir.path().to_path_buf();
-    let offload = offload_for(&root, &internal).with_render_root(parent_root);
-
-    let artifact = offload
-        .write(ArtifactKind::Output, "report.md", "x")
-        .await
-        .expect("write");
-
-    assert_eq!(artifact.relative_path, "action/outputs/report.md");
-}
-
-#[tokio::test]
-async fn a_render_root_outside_the_write_root_falls_back_to_absolute() {
-    // Better an absolute path than a relative one that resolves against the
-    // wrong root and silently misses the file.
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal).with_render_root(PathBuf::from("/unrelated"));
-
-    let artifact = offload
-        .write(ArtifactKind::Output, "report.md", "x")
-        .await
-        .expect("write");
-
-    assert!(
-        Path::new(&artifact.relative_path).is_absolute(),
-        "expected an absolute fallback, got {}",
-        artifact.relative_path
-    );
+        .expect_err("the store must refuse an oversized key");
+    assert!(matches!(err, OffloadError::Storage(_)), "got {err:?}");
 }
 
 // ── The offload entry point ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn oversized_result_is_offloaded_and_the_parent_gets_a_path_plus_abstract() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+async fn oversized_result_is_offloaded_and_the_parent_gets_a_key_plus_abstract() {
+    let offload = offload();
     let big = "x".repeat(10_000);
 
     let (text, artifact) = offload_oversized_result(big.clone(), &offload, 8_192, READ_TOOL).await;
@@ -579,16 +539,20 @@ async fn oversized_result_is_offloaded_and_the_parent_gets_a_path_plus_abstract(
         text.len() < big.len(),
         "the pointer must be smaller than the payload it replaced"
     );
-    let on_disk = tokio::fs::read_to_string(&artifact.absolute_path)
-        .await
-        .expect("read back");
-    assert_eq!(on_disk, big, "full fidelity is preserved on disk");
+    assert_eq!(
+        extract_artifact_paths(&text),
+        vec![artifact.relative_path.clone()]
+    );
+    assert_eq!(
+        offload.read(&artifact.relative_path).await.expect("read"),
+        Some(big),
+        "full fidelity is preserved in the store"
+    );
 }
 
 #[tokio::test]
 async fn small_result_stays_inline() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+    let offload = offload();
 
     let (text, artifact) =
         offload_oversized_result("small".to_string(), &offload, 8_192, READ_TOOL).await;
@@ -599,8 +563,7 @@ async fn small_result_stays_inline() {
 
 #[tokio::test]
 async fn offload_is_disabled_by_a_zero_threshold() {
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+    let offload = offload();
     let big = "x".repeat(10_000);
 
     let (text, artifact) = offload_oversized_result(big.clone(), &offload, 0, READ_TOOL).await;
@@ -612,10 +575,8 @@ async fn offload_is_disabled_by_a_zero_threshold() {
 #[tokio::test]
 async fn offload_failure_keeps_the_inline_payload_for_the_host_backstop() {
     // The load-bearing soft-failure contract: a refused offload must never cost
-    // the caller its content, or a disk problem turns into data loss.
-    let (_dir, _root, internal) = temp_roots();
-    let unwritable = PathBuf::from("/proc/nonexistent-artifact-root");
-    let offload = offload_for(&unwritable, &internal);
+    // the caller its content, or a storage problem turns into data loss.
+    let offload = ArtifactOffload::in_memory(&"a".repeat(4096), "task");
     let big = "x".repeat(10_000);
 
     let (text, artifact) = offload_oversized_result(big.clone(), &offload, 8_192, READ_TOOL).await;
@@ -631,9 +592,8 @@ async fn offload_failure_keeps_the_inline_payload_for_the_host_backstop() {
 async fn abstract_is_built_from_the_redacted_body_not_the_raw_output() {
     // The pointer goes straight into the parent's context. Building the
     // abstract from the raw text would re-expose the credential that was just
-    // scrubbed out of the file — and the file would still look correct.
-    let (_dir, root, internal) = temp_roots();
-    let offload = offload_for(&root, &internal);
+    // scrubbed out of the artifact — and the artifact would still look correct.
+    let offload = offload();
     let body = format!("{SECRET} {}", "x".repeat(10_000));
 
     let (text, artifact) = offload_oversized_result(body, &offload, 8_192, READ_TOOL).await;
