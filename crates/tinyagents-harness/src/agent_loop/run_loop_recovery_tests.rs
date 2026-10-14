@@ -18,6 +18,7 @@ fn offered(names: &[&str]) -> TextRecovery {
         registry: None,
         dropped: Arc::default(),
         withhold: false,
+        special_tokens_only: false,
     }
 }
 
@@ -127,4 +128,95 @@ fn only_the_last_and_invalid_calls_are_possibly_truncated() {
         "positional: a duplicate id does not widen it"
     );
     assert!(super::truncated_call_positions(&[]).is_empty());
+}
+
+/// #6733: which text-dialect markup runs as a call, per policy, on the stream
+/// and on the unary path. Each row is (policy, the profile's `tool_calling`,
+/// or `None` for a model with no profile, reply, streamed, whether it runs).
+#[tokio::test]
+async fn text_dialect_recovery_policy_on_stream_and_unary() {
+    use crate::limits::{LimitBehavior, RunLimits};
+    use crate::runtime::TextDialectRecovery::{Auto, Off, On};
+    use crate::runtime::{AgentHarness, RunPolicy};
+    use crate::testkit::{FakeTool, StreamingMock};
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelProfile;
+
+    const PROSE: &str =
+        r#"Wrap it like <tool_call>{"name": "lookup", "arguments": {}}</tool_call> in your reply."#;
+    const BARE_FENCE: &str =
+        "```\n<tool_call>{\"name\": \"lookup\", \"arguments\": {}}</tool_call>\n```";
+    const DSML: &str = "<｜DSML｜invoke name=\"lookup\"><｜DSML｜parameter name=\"q\" string=\"true\">x</｜DSML｜parameter></｜DSML｜invoke>";
+    const PIPE_TAG: &str = r#"<|tool_call>call:{"name": "lookup", "arguments": {}}<tool_call|>"#;
+    const XML_FENCE: &str =
+        "```xml\n<tool_call>{\"name\": \"lookup\", \"arguments\": {}}</tool_call>\n```";
+
+    for (policy, native, reply, streamed, runs) in [
+        // The fix: under `Auto` a native model's plain markup is quoting, so
+        // the stream no longer runs it...
+        (Auto, Some(true), PROSE, true, false),
+        (Auto, Some(true), BARE_FENCE, true, false),
+        // ...while its own special tokens are still recovered on the stream.
+        (Auto, Some(true), DSML, true, true),
+        (Auto, Some(true), PIPE_TAG, true, true),
+        // `Off` is off for every model and every spelling.
+        (Off, None, PROSE, true, false),
+        (Off, Some(true), DSML, true, false),
+        // Unchanged: `Auto` still recovers for a model not known to call
+        // natively.
+        (Auto, None, PROSE, true, true),
+        // Unchanged: `On` recovers for a native model, streamed too.
+        (On, Some(true), PROSE, true, true),
+        // Unchanged: a language-tagged fence is a quoted example even when
+        // recovery is on.
+        (On, Some(true), XML_FENCE, true, false),
+        // Control, unchanged: the unary path.
+        (Auto, Some(true), BARE_FENCE, false, false),
+        (On, Some(true), PROSE, false, true),
+    ] {
+        let tool = Arc::new(FakeTool::new("lookup"));
+        let mut model = StreamingMock::from_text_chunks([reply]);
+        if let Some(tool_calling) = native {
+            model = model.with_profile(ModelProfile {
+                tool_calling,
+                ..ModelProfile::default()
+            });
+        }
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.register_model("mock", Arc::new(model));
+        harness.register_tool(tool.clone());
+        harness.with_policy(RunPolicy {
+            text_dialect_recovery: policy,
+            limits: RunLimits {
+                max_model_calls: 1,
+                behavior: LimitBehavior::StopWithPartial,
+                ..RunLimits::default()
+            },
+            ..RunPolicy::default()
+        });
+        let input = vec![Message::user("go")];
+        // The one-call cap stops the run cleanly after a dispatched call, so a
+        // row that runs nothing cannot pass on a failed run.
+        let result = if streamed {
+            harness
+                .invoke_streaming(&(), (), RunConfig::new("policy-row"), input)
+                .await
+        } else {
+            harness.invoke_default(&(), input).await
+        };
+        assert!(result.is_ok(), "run failed: {:?}", result.err());
+        assert_eq!(
+            !tool.calls().is_empty(),
+            runs,
+            "policy {policy:?}, tool_calling {native:?}, streamed {streamed}: {reply}"
+        );
+        // Markup the stream scrubbed must not come back in the final text.
+        if streamed && !runs && policy == Auto && native == Some(true) {
+            let text = result.unwrap().text().unwrap_or_default();
+            assert!(
+                !text.contains("tool_call>"),
+                "scrubbed markup came back: {text}"
+            );
+        }
+    }
 }

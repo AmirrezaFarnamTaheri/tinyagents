@@ -686,13 +686,43 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 binding.model.profile().map(|profile| profile.tool_calling),
             );
             let forced_text_dialect = dialect.is_text();
-            let recovery = if tools_available_this_turn {
+            // Whether text-dialect markup may become a call on this turn. A
+            // forced text dialect always recovers regardless of this flag —
+            // the model can only answer in text, so parsing it is the
+            // protocol, not a fallback. Under `Native`, `Auto` skips a model
+            // whose resolved profile reports native tool calling, since such
+            // a model that still answered in prose was explaining or quoting
+            // the format, not making a call (I-2).
+            let text_dialect_recovery_enabled = match self.policy.text_dialect_recovery {
+                crate::runtime::TextDialectRecovery::Off => false,
+                crate::runtime::TextDialectRecovery::On => true,
+                crate::runtime::TextDialectRecovery::Auto => !binding
+                    .model
+                    .profile()
+                    .map(|profile| profile.tool_calling)
+                    .unwrap_or(false),
+            };
+            // That native model still emits its own chat-template tokens
+            // (DeepSeek DSML, `<|tool_call>`) when it narrates a real call,
+            // and quoted prose does not contain them. So under `Auto` the
+            // stream scrubber keeps recovering those and nothing else; `Off`
+            // recovers nothing on either path (#6733).
+            let special_tokens_only = !forced_text_dialect
+                && !text_dialect_recovery_enabled
+                && self.policy.text_dialect_recovery == crate::runtime::TextDialectRecovery::Auto;
+            let recovery = if tools_available_this_turn
+                && (forced_text_dialect || text_dialect_recovery_enabled || special_tokens_only)
+            {
                 super::dialect::TextRecovery {
                     offered: Arc::new(request.tools.clone()),
                     registry: dialect.registry_for(&request.tools),
                     dropped: Arc::default(),
                     withhold: false,
+                    special_tokens_only,
                 }
+            } else if tools_available_this_turn {
+                // Recovery is off: markup stays text and never becomes a call.
+                super::dialect::TextRecovery::default()
             } else {
                 // Nothing can be recovered as a call, but a call the model
                 // writes anyway is kept out of the answer (see
@@ -744,25 +774,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 model: model_name.clone(),
             });
             status.set_last_event(record.id);
-
-            // Captured before `binding.model` moves into `base` below: decides
-            // whether text-dialect recovery should even be attempted for this
-            // call's response (see the call site after the model returns). A
-            // forced text dialect always recovers regardless of this flag —
-            // the model can only answer in text, so parsing it is the
-            // protocol, not a fallback. Under `Native`, `Auto` skips a model
-            // whose resolved profile reports native tool calling, since such
-            // a model that still answered in prose was explaining or quoting
-            // the format, not making a call (I-2).
-            let text_dialect_recovery_enabled = match self.policy.text_dialect_recovery {
-                crate::runtime::TextDialectRecovery::Off => false,
-                crate::runtime::TextDialectRecovery::On => true,
-                crate::runtime::TextDialectRecovery::Auto => !binding
-                    .model
-                    .profile()
-                    .map(|profile| profile.tool_calling)
-                    .unwrap_or(false),
-            };
 
             // The real model call (cache + retry + fallback core) is the
             // innermost base of the model-wrap onion. Lifecycle `before_model`
@@ -845,12 +856,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // every grammar the protocol crate knows (`recover_text_calls`),
             // but only when the provider did not already supply structured
             // calls. `recovery` is already empty when this turn offered no
-            // tools or the effective tool choice was `None` (computed
-            // above); the `forced_text_dialect || text_dialect_recovery_enabled`
-            // gate additionally skips a resolved model whose profile reports
-            // native tool calling under `RunPolicy::text_dialect_recovery`'s
-            // `Auto` default. The audit event lives in the wrapper; which
-            // fenced code is protected is `tinytools-agent`'s call.
+            // tools, the effective tool choice was `None`, or the policy is
+            // `Off`; this gate also skips the `Auto` native model, whose
+            // special-token calls only the stream scrubber recovers (#6733).
+            // The audit event lives in the wrapper; which fenced code is
+            // protected is `tinytools-agent`'s call.
             if forced_text_dialect || text_dialect_recovery_enabled {
                 recover_text_dialect_calls(ctx, &mut response, &call_id, &recovery);
             }
@@ -1405,13 +1415,14 @@ pub(super) fn refresh_prompt_cache_fingerprint(request: &mut ModelRequest) {
 /// `recovery` carries the tools offered this turn and the P-Format registry;
 /// it is already empty when nothing could be recovered — no tools offered,
 /// an effective `ToolChoice::None`, or
-/// [`crate::runtime::RunPolicy::text_dialect_recovery`] resolving to off for
-/// the resolved model (see the `recovery` binding in `run_loop_body`).
-/// Whether markup inside a fenced code block is a call or a quoted example is
-/// `tinytools-agent`'s decision (its protected ranges): a language-tagged
-/// fence is protected, a bare one is not. The stream scrubber applies the
-/// same policy, so a streamed and a unary reply parse alike. Emits [`AgentEvent::ControlApplied`] when it actually rewrites
-/// the response, so the recovery is auditable rather than a silent transform.
+/// [`crate::runtime::RunPolicy::text_dialect_recovery`] set to `Off`. For a
+/// native model under `Auto` the caller skips this function, and only the
+/// stream scrubber recovers, special-token calls only (see the `recovery`
+/// binding in `run_loop_body`, #6733). Whether markup inside a fenced code
+/// block is a call or a quoted example is `tinytools-agent`'s decision (its protected ranges): a
+/// language-tagged fence is protected, a bare one is not. Emits
+/// [`AgentEvent::ControlApplied`] when it actually rewrites the response, so
+/// the recovery is auditable rather than a silent transform.
 fn recover_text_dialect_calls<Ctx>(
     ctx: &RunContext<Ctx>,
     response: &mut tinyinference_llm::model::ModelResponse,

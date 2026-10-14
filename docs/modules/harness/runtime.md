@@ -167,9 +167,10 @@ protocol. Under a native dialect it is gated by
 `RunPolicy::text_dialect_recovery` (`TextDialectRecovery::Off | On | Auto`,
 default `Auto`): it only runs when the resolved model's profile does not
 report native tool calling, and it always skips markup that appears only
-inside a fenced code block. A model that quotes the syntax while explaining
-it (or answers under a model that *does* support native tool calling) is
-never executed as a real call.
+inside a fenced code block. Streaming exception (openhuman#6733): `Auto`
+still recovers a native model's chat-template special tokens (DeepSeek DSML,
+`<|tool_call>`) and scrubs its other markup unrun; `Off` recovers nothing.
+Under `Auto`, a native model's quoted plain markup is never run as a call.
 
 Every safe checkpoint above — before a model call is dispatched, after the
 model response, and after tool execution — also drains any pending
