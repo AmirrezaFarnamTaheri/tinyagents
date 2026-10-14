@@ -143,10 +143,9 @@ pub fn json_error_recovery(error: &str) -> Option<super::RecoveryDecision> {
         Some(429 | 500 | 502 | 503 | 504) => return Some(D::new("transient", 2)),
         _ => {}
     }
-    let code = value
-        .get("code")
-        .or_else(|| value.pointer("/error/code"))
-        .and_then(serde_json::Value::as_str);
+    let code = ["/code", "/error/code"]
+        .iter()
+        .find_map(|p| value.pointer(p).and_then(serde_json::Value::as_str));
     match code {
         Some("PERMISSION_DENIED") => Some(D::new("permission", 0)),
         Some("UNAUTHENTICATED") => Some(D::new("authentication", 0)),

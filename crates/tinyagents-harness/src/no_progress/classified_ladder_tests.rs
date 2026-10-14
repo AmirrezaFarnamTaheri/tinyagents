@@ -146,3 +146,9 @@ fn json_error_recovery_falls_through_nonnumeric_status() {
     let d = json_error_recovery(r#"{"status":"error","error":{"status_code":401}}"#);
     assert!(d.is_some());
 }
+
+#[test]
+fn json_error_recovery_falls_through_nonstring_code() {
+    let d = json_error_recovery(r#"{"code":7,"error":{"code":"UNAUTHENTICATED"}}"#);
+    assert!(d.is_some());
+}
