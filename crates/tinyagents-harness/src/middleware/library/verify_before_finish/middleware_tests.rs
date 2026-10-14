@@ -564,3 +564,15 @@ async fn a_truncated_response_with_no_output_is_not_reported_as_an_empty_answer(
     let fine = answer("a real answer");
     assert_eq!(mw.skip_reason(&ctx, &fine), None);
 }
+
+#[test]
+fn rounds_or_called_trigger_fires_on_rounds_or_named_tool() {
+    let trigger = FinishActivity::rounds_or_called(5, "todo");
+    let mut activity = FinishActivity::default();
+    assert!(!trigger(&activity));
+    activity.tool_rounds = 5;
+    assert!(trigger(&activity));
+    let mut named = FinishActivity::default();
+    named.tools_called.insert("todo".to_string());
+    assert!(trigger(&named));
+}
