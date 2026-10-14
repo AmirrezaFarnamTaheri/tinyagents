@@ -67,6 +67,7 @@ mod context;
 mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
+mod cli_rpc_only;
 mod image_trim;
 mod lifecycle_hooks;
 mod loop_guards;
@@ -85,6 +86,7 @@ mod response_shape;
 mod shell_turn_budget;
 mod stop_hooks;
 mod stop_latch;
+mod tool_exposure_shadow;
 mod tool_policy;
 mod turn_clock;
 mod unmet_deliverable;
@@ -127,7 +129,9 @@ pub use memory_protocol::{
     MEMORY_PROTOCOL_MARKER, MemoryOp, MemoryProtocolObservation, MemoryProtocolSpec,
     MemoryProtocolTracker, ModeTool,
 };
+pub use cli_rpc_only::CliRpcOnlyMiddleware;
 pub use memory_protocol_middleware::MemoryProtocolMiddleware;
+pub use tool_exposure_shadow::ToolExposureShadowMiddleware;
 pub use output_cap::{
     ListedOutputCapPolicy, OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages,
     should_compact,
