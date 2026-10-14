@@ -131,7 +131,6 @@ pub use memory_protocol::{
     MemoryProtocolTracker, ModeTool,
 };
 pub use memory_protocol_middleware::MemoryProtocolMiddleware;
-pub use tool_exposure_shadow::ToolExposureShadowMiddleware;
 pub use output_cap::{
     ListedOutputCapPolicy, OutputCapPolicy, OutputStagePlan, disclose, plan_output_stages,
     should_compact,
@@ -166,6 +165,7 @@ pub use stop_hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
 pub use stop_latch::StopLatch;
+pub use tool_exposure_shadow::ToolExposureShadowMiddleware;
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use unmet_deliverable::{
