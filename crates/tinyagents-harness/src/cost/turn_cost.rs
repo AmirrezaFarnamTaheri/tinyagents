@@ -145,14 +145,36 @@ impl CostTally {
     }
 }
 
+/// A host's list-rate lookup: the pricing for a model label, or `None` when
+/// the model is not priced (its calls are then `Unknown` unless the provider
+/// reports a charge).
+pub type PricingLookup = std::sync::Arc<dyn Fn(&str) -> Option<ModelPricing> + Send + Sync>;
+
 /// Running cost / token tally across every provider call inside one turn.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct TurnCost {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
     pub cost: CostTally,
     pub call_count: u32,
+    /// Pricing the stop-hook accounting ([`StopHookMetrics`](crate::middleware::StopHookMetrics)) resolves each
+    /// recorded response's model against. `None` prices nothing, so a call
+    /// without a provider charge is `Unknown`.
+    pub pricing: Option<PricingLookup>,
+}
+
+impl std::fmt::Debug for TurnCost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TurnCost")
+            .field("input_tokens", &self.input_tokens)
+            .field("output_tokens", &self.output_tokens)
+            .field("cached_input_tokens", &self.cached_input_tokens)
+            .field("cost", &self.cost)
+            .field("call_count", &self.call_count)
+            .field("pricing", &self.pricing.as_ref().map(|_| "set"))
+            .finish()
+    }
 }
 
 impl TurnCost {
@@ -172,9 +194,42 @@ impl TurnCost {
         self.call_count = self.call_count.saturating_add(1);
     }
 
+    /// An empty accumulator that prices recorded responses through `pricing`.
+    pub fn with_pricing(pricing: PricingLookup) -> Self {
+        Self {
+            pricing: Some(pricing),
+            ..Self::default()
+        }
+    }
+
+    /// [`add_call`](Self::add_call) with the pricing resolved for `model`
+    /// through the installed [`PricingLookup`].
+    pub fn add_priced_call(&mut self, model: &str, usage: &CallUsage) {
+        let pricing = self.pricing.as_ref().and_then(|lookup| lookup(model));
+        self.add_call(pricing.as_ref(), usage);
+    }
+
     /// The turn's cost so far, or `None` when any call's cost is unknown.
     pub fn total_usd(&self) -> Option<f64> {
         self.cost.usd()
+    }
+}
+
+/// Folds every completed model response into the tally: the provider's
+/// reported charge when the response carries one, else the list-rate estimate
+/// from the installed [`PricingLookup`], else unknown.
+impl crate::middleware::StopHookMetrics for TurnCost {
+    fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {
+        let Some(recovered) = tinyinference_llm::usage::recover_usage(response) else {
+            return;
+        };
+        let usage = CallUsage {
+            usage: recovered.usage,
+            charged_amount_usd: recovered.charged_amount_usd.unwrap_or(0.0),
+            cost_is_estimate: false,
+            charge_reported: recovered.charged_amount_usd.is_some(),
+        };
+        self.add_priced_call(model, &usage);
     }
 }
 

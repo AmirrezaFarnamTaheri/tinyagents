@@ -28,6 +28,7 @@ pub struct StopHookMiddleware<Metrics = ()> {
     model: String,
     hooks: Vec<Arc<dyn StopHook<Metrics>>>,
     runs: Mutex<HashMap<u64, HookRunState<Metrics>>>,
+    seed: Option<Metrics>,
     observer: Option<StopObserver>,
 }
 
@@ -40,8 +41,22 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
             model: model.into(),
             hooks,
             runs: Mutex::new(HashMap::new()),
+            seed: None,
             observer: None,
         }
+    }
+
+    /// Start every run's tally from `seed` instead of `Metrics::default()`.
+    ///
+    /// For metrics that carry host configuration the harness cannot default,
+    /// such as a [`TurnCost`](crate::cost::TurnCost) with a pricing lookup.
+    pub fn with_metrics_seed(mut self, seed: Metrics) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    fn fresh_metrics(&self) -> Metrics {
+        self.seed.clone().unwrap_or_default()
     }
 
     /// Project the first stopping report into a host result, log or event.
@@ -103,6 +118,7 @@ where
                 context.instance_id(),
                 HookRunState {
                     lifecycle: Arc::downgrade(&context.lifecycle),
+                    metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 },
             );
@@ -138,6 +154,7 @@ where
                 .entry(context.instance_id())
                 .or_insert_with(|| HookRunState {
                     lifecycle: Arc::downgrade(&context.lifecycle),
+                    metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 });
             if run.stopped {
