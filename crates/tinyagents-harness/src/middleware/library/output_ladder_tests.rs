@@ -75,19 +75,31 @@ async fn oversized_result_is_bounded_to_the_shared_budget() {
     assert!(out.len() < 40_000, "got {}", out.len());
 }
 
-#[test]
-fn uncompacted_body_past_persistable_limit_is_not_spilled() {
-    // The store is never reached for an ineligible original: bounded inline.
+#[tokio::test]
+async fn body_past_persistable_limit_is_bounded_inline_not_spilled() {
+    use crate::artifacts::policy::NoRedaction;
+    use std::sync::Arc;
+    let tmp = tempfile::tempdir().unwrap();
+    let store = ToolResultArtifactStore::new(
+        tmp.path().to_path_buf(),
+        "s",
+        Arc::new(NoRedaction),
+        "file_read",
+        10 * 1024 * 1024,
+    );
     let mut pol = policy();
     pol.max_persistable_bytes = 20_000;
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
     let mut p = Upper { compacted: 0 };
-    let out = rt.block_on(run_output_ladder(
-        &pol,
-        &mut p,
-        input("shell", "z".repeat(30_000), false),
-    ));
+    let mut i = input("shell", "z".repeat(30_000), false);
+    i.store = Some(&store);
+    let out = run_output_ladder(&pol, &mut p, i).await;
     assert!(out.len() < 30_000);
+    let spilled = std::fs::read_dir(tmp.path().join("artifacts")).is_ok();
+    assert!(!spilled, "nothing may be written for an ineligible body");
+
+    // Within the limit it does spill.
+    let mut i = input("shell", "z".repeat(18_000), false);
+    i.store = Some(&store);
+    let out = run_output_ladder(&pol, &mut p, i).await;
+    assert!(out.contains("artifacts"), "{out}");
 }
