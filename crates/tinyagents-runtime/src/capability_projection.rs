@@ -8,7 +8,9 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_registry::{CapabilityRegistry, ComponentKind};
 use tinytools::Tool;
 
-use crate::tool_registration::{plan_registration, RegistrationPlan, ToolAdmission, ToolRegistration};
+use crate::tool_registration::{
+    RegistrationPlan, ToolAdmission, ToolRegistration, plan_registration,
+};
 
 /// Like [`register_admitted`](crate::register_admitted), and also mirrors every
 /// registered tool into `registry`. `build` returns the registration plus the
