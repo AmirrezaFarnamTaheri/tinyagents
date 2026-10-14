@@ -126,3 +126,23 @@ fn json_error_contract_maps_status_and_code() {
     assert_eq!(d(r#"{"status":200,"data":[1]}"#), None);
     assert_eq!(d("plain text"), None);
 }
+
+#[test]
+fn clear_recovered_clears_classes_outside_the_known_list() {
+    let tracker = ClassifiedFailureTracker::default();
+    assert!(matches!(
+        classified_step(&tracker, "custom_class", "t", "s", 1, "x"),
+        ClassifiedStep::Within
+    ));
+    clear_recovered(&tracker, "t", "s");
+    assert!(matches!(
+        classified_step(&tracker, "custom_class", "t", "s", 1, "x"),
+        ClassifiedStep::Within
+    ));
+}
+
+#[test]
+fn json_error_recovery_falls_through_nonnumeric_status() {
+    let d = json_error_recovery(r#"{"status":"error","error":{"status_code":401}}"#);
+    assert!(d.is_some());
+}

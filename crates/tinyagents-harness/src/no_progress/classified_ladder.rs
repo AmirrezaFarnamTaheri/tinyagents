@@ -124,9 +124,7 @@ pub fn classified_step(
 /// Clear every class's blocker for `(tool, scope)`: only a success against that
 /// operation and scope shows its blocker changed.
 pub fn clear_recovered(tracker: &ClassifiedFailureTracker, tool: &str, scope: &str) {
-    for class in RECOVERY_CLASSES {
-        tracker.clear(&ClassifiedFailure::new(*class, tool, scope));
-    }
+    tracker.clear_operation(tool, scope);
 }
 
 /// A tool-owned JSON error contract (`status_code` / `status` / `code`) read as
@@ -135,11 +133,9 @@ pub fn clear_recovered(tracker: &ClassifiedFailureTracker, tool: &str, scope: &s
 pub fn json_error_recovery(error: &str) -> Option<super::RecoveryDecision> {
     use super::RecoveryDecision as D;
     let value: serde_json::Value = serde_json::from_str(error).ok()?;
-    let status = value
-        .get("status_code")
-        .or_else(|| value.get("status"))
-        .or_else(|| value.pointer("/error/status_code"))
-        .and_then(serde_json::Value::as_u64);
+    let status = ["/status_code", "/status", "/error/status_code"]
+        .iter()
+        .find_map(|p| value.pointer(p).and_then(serde_json::Value::as_u64));
     match status {
         Some(401) => return Some(D::new("authentication", 0)),
         Some(403) => return Some(D::new("permission", 0)),
