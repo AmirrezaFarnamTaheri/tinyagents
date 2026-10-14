@@ -101,3 +101,43 @@ fn merged_tallies_keep_the_least_certain_source() {
     parent.merge(unknown);
     assert_eq!(parent.usd(), None);
 }
+
+fn response_with(usage: Usage, charge: Option<f64>) -> tinyinference_llm::model::ModelResponse {
+    let mut response = tinyinference_llm::model::ModelResponse::default();
+    response.usage = Some(usage);
+    response.raw = charge.map(|usd| serde_json::json!({ "total_cost_usd": usd }));
+    response
+}
+
+#[test]
+fn recorded_responses_are_priced_through_the_installed_lookup() {
+    use crate::middleware::StopHookMetrics;
+    let lookup: PricingLookup = std::sync::Arc::new(|model: &str| {
+        (model == "priced").then(sonnet)
+    });
+    let mut turn = TurnCost::with_pricing(lookup);
+
+    // Provider charge wins, zero or not.
+    turn.record_model("unpriced", &response_with(Usage::new(10, 1), Some(0.5)));
+    assert_eq!(turn.total_usd(), Some(0.5));
+    assert_eq!(turn.cost.source, CostSource::Charged);
+
+    // No charge, priced model: list-rate estimate (1M input at $3).
+    turn.record_model("priced", &response_with(Usage::new(1_000_000, 0), None));
+    assert_eq!(turn.cost.source, CostSource::Estimated);
+    assert!((turn.total_usd().unwrap() - 3.5).abs() < 1e-9);
+
+    // No charge, unpriced model: the total is void.
+    turn.record_model("unpriced", &response_with(Usage::new(10, 1), None));
+    assert_eq!(turn.total_usd(), None);
+    assert_eq!(turn.call_count, 3);
+    assert_eq!(turn.input_tokens, 1_000_020);
+}
+
+#[test]
+fn a_turn_without_a_pricing_lookup_prices_nothing() {
+    use crate::middleware::StopHookMetrics;
+    let mut turn = TurnCost::new();
+    turn.record_model("priced", &response_with(Usage::new(1_000_000, 0), None));
+    assert_eq!(turn.total_usd(), None);
+}

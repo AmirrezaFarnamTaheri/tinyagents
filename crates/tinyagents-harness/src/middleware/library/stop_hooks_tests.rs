@@ -554,3 +554,41 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
     assert!(!handle.is_paused());
     assert!(handle.is_empty());
 }
+
+#[derive(Clone, Default)]
+struct Seeded(u32);
+
+impl StopHookMetrics for Seeded {
+    fn record_model(&mut self, _model: &str, _response: &ModelResponse) {
+        self.0 += 1;
+    }
+}
+
+struct SeenAt(Arc<std::sync::Mutex<Vec<u32>>>);
+
+#[async_trait]
+impl StopHook<Seeded> for SeenAt {
+    fn name(&self) -> &str {
+        "seen"
+    }
+    async fn check(&self, state: &TurnState<'_, Seeded>) -> StopDecision {
+        self.0.lock().unwrap().push(state.cost.0);
+        StopDecision::Continue
+    }
+}
+
+#[tokio::test]
+async fn metrics_seed_starts_each_run_from_the_host_value() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let middleware = StopHookMiddleware::<Seeded>::new("m", vec![Arc::new(SeenAt(seen.clone()))])
+        .with_metrics_seed(Seeded(41));
+    let mut context = RunContext::<()>::default();
+    context.steering = Some(SteeringHandle::new());
+    middleware.before_agent(&mut context, &()).await.unwrap();
+    let mut response = ModelResponse::default();
+    middleware
+        .after_model(&mut context, &(), &mut response)
+        .await
+        .unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec![42]);
+}
