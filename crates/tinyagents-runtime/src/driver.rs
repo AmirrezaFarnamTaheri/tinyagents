@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use tinyagents_harness::{context::RunContext, runtime::AgentHarness};
 use tinyinference_llm::message::Message;
 
+use crate::turn_driver::TurnControls;
 use crate::{RuntimeError, ToolSnapshot, TranscriptPartial};
 
 /// Immutable values passed from a [`crate::Session`] to one driver invocation.
@@ -16,6 +17,9 @@ pub struct DriverRequest<C = ()> {
     pub run_context: RunContext<C>,
     /// Requests the driver's streaming execution path.
     pub stream: bool,
+    /// Host-neutral per-turn controls, from [`crate::TurnOptions::controls`].
+    /// Only a [`crate::turn_driver::TurnDriver`] acts on them.
+    pub controls: TurnControls,
 }
 
 /// A driver's complete or partial model result.
@@ -113,41 +117,49 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
                 )
                 .await
         };
-        let output = partial
-            .run
-            .messages
-            .get(input_len..)
-            .unwrap_or_default()
-            .iter()
-            .rev()
-            .find_map(|message| matches!(message, Message::Assistant(_)).then(|| message.text()));
-        let terminal = partial.run.terminal.clone();
-        let outcome = DriverOutcome {
-            history: partial.run.messages,
-            output: output.clone(),
-            // The pinned harness retains partial model history but exposes no
-            // separate streamed text delta, reasoning, or iteration here. The
-            // accumulated final assistant text is the only display-safe value.
-            partial: partial
-                .error
-                .as_ref()
-                .and(output)
-                .map(TranscriptPartial::new),
-            interrupted: partial.run.paused.is_some(),
-            outcome: terminal.clone(),
-        };
-        match partial.error {
-            Some(error) => Err(DriverFailure {
-                outcome: terminal,
-                error: RuntimeError::Driver(error.to_string()),
-                partial: Some(outcome),
-            }),
-            None => Ok(outcome),
-        }
+        outcome_from_partial(partial, input_len)
     }
 }
 
-fn same_tools(left: &[tinytools::ToolSpec], right: &[tinytools::ToolSpec]) -> bool {
+/// Folds a collected harness run into the session driver's result shape.
+pub(crate) fn outcome_from_partial(
+    partial: tinyagents_harness::agent_loop::PartialRunOutcome,
+    input_len: usize,
+) -> Result<DriverOutcome, DriverFailure> {
+    let output = partial
+        .run
+        .messages
+        .get(input_len..)
+        .unwrap_or_default()
+        .iter()
+        .rev()
+        .find_map(|message| matches!(message, Message::Assistant(_)).then(|| message.text()));
+    let terminal = partial.run.terminal.clone();
+    let outcome = DriverOutcome {
+        history: partial.run.messages,
+        output: output.clone(),
+        // The pinned harness retains partial model history but exposes no
+        // separate streamed text delta, reasoning, or iteration here. The
+        // accumulated final assistant text is the only display-safe value.
+        partial: partial
+            .error
+            .as_ref()
+            .and(output)
+            .map(TranscriptPartial::new),
+        interrupted: partial.run.paused.is_some(),
+        outcome: terminal.clone(),
+    };
+    match partial.error {
+        Some(error) => Err(DriverFailure {
+            outcome: terminal,
+            error: RuntimeError::Driver(error.to_string()),
+            partial: Some(outcome),
+        }),
+        None => Ok(outcome),
+    }
+}
+
+pub(crate) fn same_tools(left: &[tinytools::ToolSpec], right: &[tinytools::ToolSpec]) -> bool {
     left.len() == right.len()
         && left.iter().zip(right).all(|(left, right)| {
             left.name == right.name

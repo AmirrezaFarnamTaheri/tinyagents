@@ -17,6 +17,7 @@ mod prefix;
 mod session;
 mod tool_registration;
 mod tools;
+pub mod turn_driver;
 pub mod transcript;
 mod types;
 

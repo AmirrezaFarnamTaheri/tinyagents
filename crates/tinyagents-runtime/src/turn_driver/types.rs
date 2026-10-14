@@ -88,8 +88,8 @@ pub struct TurnReport {
     /// The completion signal was deferred to the caller. Call
     /// [`Self::emit_completed`] once its post-run work is done.
     pub completion_deferred: bool,
-    completion: Option<Arc<dyn TurnCompletionSink>>,
-    completed: Arc<AtomicBool>,
+    pub(crate) completion: Option<Arc<dyn TurnCompletionSink>>,
+    pub(crate) completed: Arc<AtomicBool>,
 }
 
 impl TurnReport {

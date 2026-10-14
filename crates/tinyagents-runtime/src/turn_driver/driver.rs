@@ -32,7 +32,7 @@ use tinyinference_llm::model::ChatModel;
 
 use super::steering::cleanup_only_guard;
 use super::tool_set::ToolSetBuilder;
-use super::types::{TurnCompletionSink, TurnControls, TurnReport, TurnScope};
+use super::types::{TurnCompletionSink, TurnReport, TurnScope};
 use crate::driver::{outcome_from_partial, same_tools};
 use crate::{DriverFailure, DriverOutcome, DriverRequest, RuntimeError, SessionDriver};
 
@@ -169,9 +169,9 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
 
         let mut harness: AgentHarness<State, C> = AgentHarness::new();
         harness.with_policy(policy);
-        for (name, model) in models {
+        for (index, (name, model)) in models.into_iter().enumerate() {
             harness.register_model(name.clone(), model);
-            if harness.models().default_name().is_none() {
+            if index == 0 {
                 harness.set_default_model(name);
             }
         }
@@ -208,7 +208,7 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> SessionDriver<C>
         }
 
         run_context.config.tags.push(scope.tag().to_string());
-        let mut run_context = if run_context.steering.is_none() {
+        let run_context = if run_context.steering.is_none() {
             run_context.with_steering(handle.clone())
         } else {
             run_context
