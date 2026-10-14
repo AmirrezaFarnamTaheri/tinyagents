@@ -505,3 +505,53 @@ async fn search_schema_text_is_independent_of_nested_json_object_insertion_order
         answer_tool_search(&b, &policy, &args).await.result.text(),
     );
 }
+
+/// Records the context of the last search it was asked.
+struct ContextRecorder(std::sync::Mutex<Option<tinytools::RankContext>>);
+
+#[async_trait::async_trait]
+impl tinytools::ToolRanker for ContextRecorder {
+    fn kind(&self) -> &'static str {
+        "recorder"
+    }
+
+    async fn rank(
+        &self,
+        _intent: &str,
+        context: &tinytools::RankContext,
+        candidates: &[tinytools::RankCandidate],
+        limit: usize,
+    ) -> Result<Vec<tinytools::RankHit>, tinytools::RankError> {
+        *self.0.lock().unwrap() = Some(context.clone());
+        Ok(candidates
+            .iter()
+            .take(limit)
+            .map(|c| tinytools::RankHit::new(c.key.clone(), 1.0))
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn tool_search_hands_the_policys_rank_context_to_the_ranker() {
+    let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
+    let mut policy = ToolDiscoveryPolicy::default();
+    policy.ranker = Some(recorder.clone());
+    policy.rank_context =
+        tinytools::RankContext::empty().with_chat(tinytools::RankChat::new("thread-1", "client-1"));
+    answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
+    let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
+    assert_eq!(
+        seen.chat,
+        Some(tinytools::RankChat::new("thread-1", "client-1"))
+    );
+}
+
+#[tokio::test]
+async fn tool_search_without_a_chat_gives_the_ranker_an_empty_context() {
+    let recorder = std::sync::Arc::new(ContextRecorder(std::sync::Mutex::new(None)));
+    let mut policy = ToolDiscoveryPolicy::default();
+    policy.ranker = Some(recorder.clone());
+    answer_tool_search(&catalog(), &policy, &json!({"query": "read a pdf"})).await;
+    let seen = recorder.0.lock().unwrap().clone().expect("ranker ran");
+    assert_eq!(seen, tinytools::RankContext::empty());
+}

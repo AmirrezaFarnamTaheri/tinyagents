@@ -10,7 +10,7 @@
 
 use serde_json::{Value, json};
 use tinyinference_llm::tool::{ToolFormat, ToolSchema};
-use tinytools::{RankContext, ToolResult};
+use tinytools::ToolResult;
 
 use super::manifest::render_manifest;
 use super::types::{DeferredCatalog, RankedSearch, ToolDiscoveryPolicy};
