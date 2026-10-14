@@ -586,7 +586,7 @@ impl ToolExecScope for Stamp {
 }
 
 #[tokio::test]
-async fn deferred_tools_and_execution_scope_apply_to_registered_tools() {
+async fn execution_scope_wraps_every_tool_call() {
     let trace = Arc::new(Mutex::new(Vec::new()));
     let model = Arc::new(ScriptedModel::new(vec![
         tool_call_response(call("c1", "lookup", 1)),
