@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased: Langfuse v4 trace export over OTLP
+
+Langfuse v4 ingests traces only over OTLP, and Langfuse Cloud removes the
+legacy `/api/public/ingestion` trace path on 2026-11-16.
+
+- `LangfuseClient::send_otlp` sends `x-langfuse-ingestion-version: 4` and
+  reports a 2xx answer with rejected spans (`partialSuccess.rejectedSpans`)
+  as an error.
+- New `trace_export::ingestion_otlp` (`ingestion_batch_to_otlp_spans`,
+  `ingestion_batch_otlp_requests`): converts a locally built ingestion batch
+  into v4 OTLP spans, with trace name, user, session, tags, metadata,
+  environment, release and version on every span and the trace input/output
+  on the root observation.
+- New `LangfuseClient::send_observations_otlp` / `send_batch_otlp` and
+  `GraphLangfuseExporter::send_observations_otlp` / `build_otlp_requests`.
+  The batch-path `send_observations` methods stay for legacy deployments.
+- `trace_export::otlp::chunk_otlp_spans` exposes the request chunking that
+  `otlp_requests` uses.
+
 ## Unreleased: the path-based transcript API is removed (tinyagents#453)
 
 **Breaking.** `tinyagents-session` no longer reads or writes a workspace
