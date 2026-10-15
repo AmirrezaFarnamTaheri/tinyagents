@@ -206,7 +206,7 @@ Remaining open question:
 
 Transcript accounting preserves cost provenance in durable usage records.
 Hosts should use `TranscriptSpend::cost_split` to separate charged or estimated
-amounts from unpriced usage, and `thread_spend` for full-history accounting.
+amounts from unpriced usage, and `thread_spend_in` for full-history accounting.
 See the [transcript contract](../../crates/tinyagents-session/src/transcript/README.md#spend-and-cost-provenance-spendrs).
 
 - [Transcript execution projections](../../crates/tinyagents-runtime/src/transcript/README.md): mechanical typed-row conversion; durable codecs remain host-owned.

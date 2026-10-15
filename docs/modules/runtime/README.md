@@ -41,8 +41,8 @@ rows before any commit, replacing host-side shadow history.
 With a `TranscriptHistory`, a successful turn first passes `before_commit`, the
 pre-commit validation hook. The runtime then submits its logical transcript
 delta, metadata, and any supplied `TranscriptPartial` to one
-`append_turn_with_partial` operation. `FileTranscriptHistory` serializes those
-records into one buffer before one file write. The interrupted partial remains
+`append_turn_with_partial` operation. The driver-backed history writes those
+records as one entry in one conditional write. The interrupted partial remains
 in the display projection and is excluded from model-context replay.
 
 Custom history implementations that cannot make this combined operation reject
