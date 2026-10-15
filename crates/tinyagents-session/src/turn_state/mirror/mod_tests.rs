@@ -3,14 +3,13 @@
 
 use super::*;
 use crate::port::InMemoryTurnStates;
-use crate::transcript::FileTranscriptLocator;
+use crate::port::InMemoryTranscriptLocator;
 use crate::transcript::{
-    self, DisplayRecord, TranscriptMessage, TranscriptMeta, read_transcript,
-    read_transcript_display,
+    DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta,
+    TranscriptRead,
 };
 use crate::turn_state::types::{SubagentActivity, ToolTimelineEntry, ToolTimelineStatus};
 use crate::turn_state::types::{TranscriptItem, TurnLifecycle};
-use tempfile::tempdir;
 
 fn memory_store() -> Arc<InMemoryTurnStates> {
     Arc::new(InMemoryTurnStates::default())
@@ -22,15 +21,18 @@ fn fresh(thread_id: &str) -> (Arc<InMemoryTurnStates>, TurnStateMirror) {
     (store, mirror)
 }
 
-/// A mirror whose interrupted partials land in the transcripts under `dir`.
+/// A mirror whose interrupted partials land in `transcripts`.
 fn mirror_over(
-    dir: &std::path::Path,
+    transcripts: &Arc<InMemoryTranscriptLocator>,
     store: Arc<dyn TurnStates>,
     thread_id: &str,
     request_id: &str,
 ) -> TurnStateMirror {
-    TurnStateMirror::new(store, thread_id, request_id)
-        .with_transcripts(Arc::new(FileTranscriptLocator::new(dir)), None)
+    TurnStateMirror::new(store, thread_id, request_id).with_transcripts(transcripts.clone(), None)
+}
+
+fn transcripts() -> Arc<InMemoryTranscriptLocator> {
+    Arc::new(InMemoryTranscriptLocator::new("mirror-tests"))
 }
 
 /// A store whose conditional write cannot read the stored outcome.
@@ -85,9 +87,10 @@ impl TurnStates for UnreadableOutcome {
     }
 }
 
-fn seed_root_transcript(workspace: &std::path::Path, thread_id: &str) -> std::path::PathBuf {
-    let path = transcript::resolve_keyed_transcript_path(workspace, "100_orchestrator")
-        .expect("resolve path");
+fn seed_root_transcript(
+    transcripts: &InMemoryTranscriptLocator,
+    thread_id: &str,
+) -> Arc<dyn TranscriptHistory> {
     let meta = TranscriptMeta {
         session_id: None,
         parent_session_id: None,
@@ -108,14 +111,13 @@ fn seed_root_transcript(workspace: &std::path::Path, thread_id: &str) -> std::pa
         thread_id: Some(thread_id.to_string()),
         task_id: None,
     };
-    transcript::write_transcript(
-        &path,
-        &[TranscriptMessage::new("user", "hello there")],
-        &meta,
-        None,
-    )
-    .expect("seed transcript");
-    path
+    let history = transcripts
+        .open_stem("100_orchestrator", meta)
+        .expect("open transcript");
+    history
+        .append(TranscriptMessage::new("user", "hello there"))
+        .expect("seed transcript");
+    history
 }
 
 #[test]
@@ -221,9 +223,9 @@ fn subagent_prose_coalesces_per_kind_and_iteration() {
 
 #[test]
 fn finish_marks_an_unfinished_turn_interrupted() {
-    let dir = tempdir().expect("tempdir");
+    let transcripts = transcripts();
     let store = memory_store();
-    let mut m = mirror_over(dir.path(), store.clone(), "thr_new", "req-1");
+    let mut m = mirror_over(&transcripts, store.clone(), "thr_new", "req-1");
     m.state.streaming_text = "orphan partial".into();
     // No transcript exists yet: must not panic, snapshot keeps the partial.
     m.finish();
@@ -237,15 +239,17 @@ fn finish_marks_an_unfinished_turn_interrupted() {
 
 #[test]
 fn finish_appends_interrupted_partial_to_existing_transcript() {
-    let dir = tempdir().expect("tempdir");
-    let path = seed_root_transcript(dir.path(), "thr_abc");
-    let mut m = mirror_over(dir.path(), memory_store(), "thr_abc", "req-9");
+    let transcripts = transcripts();
+    let path = seed_root_transcript(&transcripts, "thr_abc");
+    let mut m = mirror_over(&transcripts, memory_store(), "thr_abc", "req-9");
     m.state.iteration = 2;
     m.state.thinking = "hmm".into();
     m.state.streaming_text = "half an answer".into();
     m.finish();
 
-    let model = read_transcript(&path).expect("read model context");
+    let model = path.read_session()
+        .expect("read model context")
+        .expect("transcript present");
     assert!(
         !model
             .messages
@@ -253,7 +257,9 @@ fn finish_appends_interrupted_partial_to_existing_transcript() {
             .any(|msg| msg.content.contains("half an answer")),
         "interrupted partial must be excluded from the model context"
     );
-    let display = read_transcript_display(&path).expect("read display");
+    let display = path.read_display()
+        .expect("read display")
+        .expect("transcript present");
     let partial = display
         .records
         .iter()
@@ -270,13 +276,15 @@ fn finish_appends_interrupted_partial_to_existing_transcript() {
 
 #[test]
 fn finish_after_completion_writes_no_partial() {
-    let dir = tempdir().expect("tempdir");
-    let path = seed_root_transcript(dir.path(), "thr_done");
-    let mut m = mirror_over(dir.path(), memory_store(), "thr_done", "req-done");
+    let transcripts = transcripts();
+    let path = seed_root_transcript(&transcripts, "thr_done");
+    let mut m = mirror_over(&transcripts, memory_store(), "thr_done", "req-done");
     m.state.streaming_text = "final answer".into();
     m.turn_completed = true;
     m.finish();
-    let display = read_transcript_display(&path).expect("read display");
+    let display = path.read_display()
+        .expect("read display")
+        .expect("transcript present");
     assert!(
         !display
             .records
@@ -288,10 +296,10 @@ fn finish_after_completion_writes_no_partial() {
 
 #[test]
 fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
-    let dir = tempdir().expect("tempdir");
-    let path = seed_root_transcript(dir.path(), "thr_settled");
+    let transcripts = transcripts();
+    let path = seed_root_transcript(&transcripts, "thr_settled");
     let store = memory_store();
-    let mut m = mirror_over(dir.path(), store.clone(), "thr_settled", "req-s");
+    let mut m = mirror_over(&transcripts, store.clone(), "thr_settled", "req-s");
     m.state.streaming_text = "delivered reply".into();
     // The turn driver settles the snapshot as completed behind the mirror's back.
     let mut settled = m.state.clone();
@@ -300,7 +308,9 @@ fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
     m.finish();
     let stored = store.get_turn("thr_settled", "req-s").unwrap().unwrap();
     assert_eq!(stored.lifecycle, TurnLifecycle::Completed);
-    let display = read_transcript_display(&path).expect("read display");
+    let display = path.read_display()
+        .expect("read display")
+        .expect("transcript present");
     assert!(
         !display
             .records
@@ -312,13 +322,13 @@ fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
 
 #[test]
 fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
-    let dir = tempdir().expect("tempdir");
-    let path = seed_root_transcript(dir.path(), "thr_corrupt");
+    let transcripts = transcripts();
+    let path = seed_root_transcript(&transcripts, "thr_corrupt");
     let store = Arc::new(UnreadableOutcome {
         inner: InMemoryTurnStates::default(),
         unreadable: std::sync::atomic::AtomicBool::new(false),
     });
-    let mut m = mirror_over(dir.path(), store.clone(), "thr_corrupt", "req-c");
+    let mut m = mirror_over(&transcripts, store.clone(), "thr_corrupt", "req-c");
     m.state.streaming_text = "maybe delivered".into();
     store
         .unreadable
@@ -330,7 +340,9 @@ fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
         TurnLifecycle::Started,
         "an outcome that cannot be read must not be overwritten"
     );
-    let display = read_transcript_display(&path).expect("read display");
+    let display = path.read_display()
+        .expect("read display")
+        .expect("transcript present");
     assert!(
         !display
             .records
