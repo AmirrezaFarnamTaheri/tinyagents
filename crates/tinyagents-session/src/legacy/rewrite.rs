@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::transcripts::raw_dir;
 use super::types::LegacyRewriteReport;
-use crate::transcript::writer::write_transcript_with_tools;
-use crate::transcript::{SessionTranscript, read_transcript};
+use crate::transcript::{SessionTranscript, read_transcript, write_transcript_with_tools};
 
 const LOG_PREFIX: &str = "[session:legacy:rewrite]";
 

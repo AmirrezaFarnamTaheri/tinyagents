@@ -185,6 +185,7 @@ pub use writer::{
     append_transcript_turn_with_partial, write_transcript, write_transcript_if_absent,
     write_transcript_if_absent_with_tools,
 };
+pub(crate) use writer::write_transcript_with_tools;
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
