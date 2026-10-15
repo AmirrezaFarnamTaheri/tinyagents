@@ -538,11 +538,11 @@ async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
     let dir = tempdir().unwrap();
     let locator = FileTranscriptLocator::new(dir.path());
     live_turn(&locator, &session(), &[], &first_turn());
-    let session = session();
+    let bound = session();
     let deliver = || {
         append_background_message(
             &locator,
-            &session,
+            &bound,
             TranscriptMessage::assistant("Time to stretch!"),
             options("run-1"),
         )
