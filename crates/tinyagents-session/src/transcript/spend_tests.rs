@@ -739,7 +739,10 @@ fn a_compacted_subagent_is_one_run_counted_once() {
     ] {
         let (researcher, runs) = spend.subagents.get("researcher").expect("child counted");
         assert_eq!(*runs, 1, "{walk}: one delegation across its generations");
-        assert_eq!(researcher.input_tokens, 12_000, "{walk}: carried turn counted once");
+        assert_eq!(
+            researcher.input_tokens, 12_000,
+            "{walk}: carried turn counted once"
+        );
         assert_eq!(researcher.output_tokens, 120, "{walk}");
         assert_eq!(researcher.turns, 2, "{walk}");
     }
@@ -752,5 +755,8 @@ fn subagent_chains_order_generations_numerically() {
             .into_iter()
             .map(|stem| (stem.to_string(), stem)),
     );
-    assert_eq!(chains, vec![vec!["a", "a.g2", "a.g10"], vec!["a.gx"], vec!["b"]]);
+    assert_eq!(
+        chains,
+        vec![vec!["a", "a.g2", "a.g10"], vec!["a.gx"], vec!["b"]]
+    );
 }

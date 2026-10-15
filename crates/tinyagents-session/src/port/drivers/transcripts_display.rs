@@ -26,8 +26,7 @@ use super::{
 use crate::transcript::{
     CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionRef, ThreadTranscript,
     ThreadTranscripts, TranscriptLocator, TranscriptMeta, TranscriptPartial, TranscriptRead,
-    display_message_of,
-    partial_display_message, session_stem,
+    display_message_of, partial_display_message, session_stem,
 };
 
 impl HistoryInner {
@@ -188,7 +187,9 @@ impl DriverTranscriptLocator {
             .collect();
         roots.sort_by(|(a, a_meta), (b, b_meta)| {
             let created = |meta: &Option<TranscriptMeta>| {
-                meta.as_ref().map(|meta| meta.created.clone()).unwrap_or_default()
+                meta.as_ref()
+                    .map(|meta| meta.created.clone())
+                    .unwrap_or_default()
             };
             created(a_meta)
                 .cmp(&created(b_meta))
@@ -196,8 +197,7 @@ impl DriverTranscriptLocator {
                 .then_with(|| a.stem.cmp(&b.stem))
         });
         let has_session_id = |meta: &Option<TranscriptMeta>| {
-            meta.as_ref()
-                .is_some_and(|meta| meta.session_id.is_some())
+            meta.as_ref().is_some_and(|meta| meta.session_id.is_some())
         };
         if !roots.iter().any(|(_, meta)| has_session_id(meta)) {
             return roots.into_iter().map(|(root, _)| root.stem).collect();
@@ -285,10 +285,7 @@ impl DriverTranscriptLocator {
             (None, _) => by_thread,
         };
         let mut subagents: Vec<String> = self
-            .indexed(
-                Filter::eq("subagent", true).and(wanted),
-                "thread_subagents",
-            )
+            .indexed(Filter::eq("subagent", true).and(wanted), "thread_subagents")
             .into_iter()
             .filter(|sub| {
                 prefixes.iter().any(|prefix| sub.stem.starts_with(prefix))

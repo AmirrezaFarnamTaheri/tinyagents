@@ -131,7 +131,10 @@ fn an_unreadable_dated_directory_is_counted() {
 
     if !readable {
         assert_eq!(report.scanned, 1);
-        assert_eq!(report.errors, 1, "the unreadable child directory is reported");
+        assert_eq!(
+            report.errors, 1,
+            "the unreadable child directory is reported"
+        );
     }
 }
 

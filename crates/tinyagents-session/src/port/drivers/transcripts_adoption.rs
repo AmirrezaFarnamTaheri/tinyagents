@@ -118,9 +118,8 @@ impl DriverTranscriptLocator {
             docs.query_all(ENTRIES, &query).await
         });
         let entries = entries.map_err(|error| {
-            anyhow::Error::new(error).context(
-                "could not scan the transcript log for legacy roots; deferring adoption",
-            )
+            anyhow::Error::new(error)
+                .context("could not scan the transcript log for legacy roots; deferring adoption")
         })?;
         Ok(entries
             .iter()

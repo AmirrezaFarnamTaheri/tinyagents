@@ -197,7 +197,11 @@ fn shared_sub_agents_stay_listed_after_the_root_is_adopted() {
         ["before", "after"],
         "the agent's own root is listed"
     );
-    let subs: Vec<_> = listed.subagents.iter().map(|sub| sub.stem.clone()).collect();
+    let subs: Vec<_> = listed
+        .subagents
+        .iter()
+        .map(|sub| sub.stem.clone())
+        .collect();
     assert_eq!(
         subs,
         [
