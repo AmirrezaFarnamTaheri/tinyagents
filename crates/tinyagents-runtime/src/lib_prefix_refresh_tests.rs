@@ -411,6 +411,8 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
         let mut example = TranscriptMessage::new("user", "example");
         example.extra_metadata = Some(serde_json::json!({"opaque":"conversation provenance"}));
         example.request_id = Some("original-turn".into());
+        // As a store returns a row it already holds: its request id is recorded.
+        example.preserve_request_id = true;
         sealed.append(example).unwrap();
         let sealed_before = crate::test_store::fingerprint(sealed.as_ref());
         let original_row = sealed.read_session().unwrap().unwrap().messages[1].clone();
@@ -465,7 +467,6 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
             persisted.messages[2].extra_metadata,
             original_row.extra_metadata
         );
-        eprintln!("DBG original={:?}\npersisted={:?}", original_row, persisted.messages);
         assert_eq!(persisted.messages[2].request_id, original_row.request_id);
         drop(session);
         let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))

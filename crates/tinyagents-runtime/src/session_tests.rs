@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use crate::test_store::{memory, read, seed};
 use tinyagents_session::transcript::{
-    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptLocator,
+    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript,
     TranscriptMessage, TranscriptMeta, session_stem,
 };
 use tinyinference_llm::message::Message;
