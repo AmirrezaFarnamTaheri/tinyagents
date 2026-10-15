@@ -19,6 +19,11 @@ driver store:
   non-file store the provenance rides in `extra_metadata` under
   `BACKGROUND_METADATA_KEY`. `TranscriptLocator::file_backing()` names the
   file locator behind a file-backed one.
+- `DriverTranscriptLocator::adopt_legacy` folds a thread's pre-identity
+  roots (for example the imported `session_raw/` timestamped stems of a
+  `WorkspaceStores` workspace) into the session once, with the file adopter's
+  semantics; the write reserves the session stem, so a concurrent first turn
+  wins and the call reports `Ok(None)`.
 - `legacy::rewrite_legacy_transcripts(workspace_dir, rewrite) ->
   LegacyRewriteReport` for pre-import fixups of classic `session_raw/` files.
 

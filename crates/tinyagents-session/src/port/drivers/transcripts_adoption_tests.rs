@@ -16,7 +16,10 @@ fn locator() -> DriverTranscriptLocator {
 
 /// A root of `THREAD` under `stem`, written with `meta` (as an import does).
 fn write_root(locator: &DriverTranscriptLocator, stem: &str, meta: &TranscriptMeta, rows: &[&str]) {
-    let rows: Vec<TranscriptMessage> = rows.iter().map(|row| TranscriptMessage::user(*row)).collect();
+    let rows: Vec<TranscriptMessage> = rows
+        .iter()
+        .map(|row| TranscriptMessage::user(*row))
+        .collect();
     locator
         .open_stem(stem, meta.clone())
         .unwrap()
@@ -59,8 +62,18 @@ fn contents(locator: &dyn TranscriptLocator, session: &SessionRef) -> Vec<String
 fn legacy_roots_are_folded_oldest_first_once() {
     let locator = locator();
     // Written newest first: the fold orders by `_meta.created`, not by write.
-    write_root(&locator, "1700000200_planner", &legacy("planner", "2026-01-02", 1, 7), &["two"]);
-    write_root(&locator, "1700000100_planner", &legacy("planner", "2026-01-01", 2, 5), &["one"]);
+    write_root(
+        &locator,
+        "1700000200_planner",
+        &legacy("planner", "2026-01-02", 1, 7),
+        &["two"],
+    );
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 2, 5),
+        &["one"],
+    );
     let session = SessionRef::scoped(THREAD, "planner");
 
     let adoption = locator
@@ -83,29 +96,54 @@ fn legacy_roots_are_folded_oldest_first_once() {
     assert_eq!(folded.session_id, Some(session.session_id()));
     assert_eq!(folded.thread_id.as_deref(), Some(THREAD));
     assert_eq!((folded.turn_count, folded.input_tokens), (3, 12));
-    assert_eq!((folded.created.as_str(), folded.updated.as_str()), ("2026-01-01", "2026-01-02"));
+    assert_eq!(
+        (folded.created.as_str(), folded.updated.as_str()),
+        ("2026-01-01", "2026-01-02")
+    );
 
     assert!(
-        locator.adopt_legacy(&session, THREAD, &meta(THREAD)).unwrap().is_none(),
+        locator
+            .adopt_legacy(&session, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none(),
         "a second call finds the session already written"
     );
     assert_eq!(contents(&locator, &session), vec!["one", "two"]);
     // The legacy roots are left as they were.
-    assert_eq!(
-        contents(&locator, &SessionRef::root("1700000100_planner")),
-        vec!["one"]
-    );
+    let untouched = locator
+        .open_stem("1700000100_planner", meta(THREAD))
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(untouched.messages.len(), 1);
+    assert!(untouched.meta.session_id.is_none());
 }
 
 #[test]
 fn session_identified_roots_and_other_agents_are_not_folded() {
     let locator = locator();
-    write_root(&locator, "1700000100_planner", &legacy("planner", "2026-01-01", 1, 0), &["mine"]);
-    write_root(&locator, "1700000150_writer", &legacy("writer", "2026-01-01", 1, 0), &["writer's"]);
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 0),
+        &["mine"],
+    );
+    write_root(
+        &locator,
+        "1700000150_writer",
+        &legacy("writer", "2026-01-01", 1, 0),
+        &["writer's"],
+    );
     let other = SessionRef::scoped("another-key", "planner");
     let mut identified = legacy("planner", "2026-01-01", 1, 0);
     identified.session_id = Some(other.session_id());
-    write_root(&locator, &session_stem(&other), &identified, &["already a session"]);
+    write_root(
+        &locator,
+        &session_stem(&other),
+        &identified,
+        &["already a session"],
+    );
 
     let session = SessionRef::scoped(THREAD, "planner");
     let adoption = locator
@@ -120,28 +158,58 @@ fn session_identified_roots_and_other_agents_are_not_folded() {
 fn nothing_to_fold_writes_nothing() {
     let locator = locator();
     let session = SessionRef::scoped(THREAD, "planner");
-    assert!(locator.adopt_legacy(&session, THREAD, &meta(THREAD)).unwrap().is_none());
-    write_root(&locator, "1700000100_writer", &legacy("writer", "2026-01-01", 1, 0), &["x"]);
-    assert!(locator.adopt_legacy(&session, THREAD, &meta(THREAD)).unwrap().is_none());
+    assert!(
+        locator
+            .adopt_legacy(&session, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
+    write_root(
+        &locator,
+        "1700000100_writer",
+        &legacy("writer", "2026-01-01", 1, 0),
+        &["x"],
+    );
+    assert!(
+        locator
+            .adopt_legacy(&session, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
     assert!(!locator.session_exists(&session));
 }
 
 #[test]
 fn an_existing_session_is_left_alone() {
     let locator = locator();
-    write_root(&locator, "1700000100_planner", &legacy("planner", "2026-01-01", 1, 0), &["old"]);
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 0),
+        &["old"],
+    );
     let session = SessionRef::scoped(THREAD, "planner");
     let mut own = meta(THREAD);
     own.session_id = Some(session.session_id());
     write_root(&locator, &session_stem(&session), &own, &["new"]);
-    assert!(locator.adopt_legacy(&session, THREAD, &meta(THREAD)).unwrap().is_none());
+    assert!(
+        locator
+            .adopt_legacy(&session, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(contents(&locator, &session), vec!["new"]);
 }
 
 #[test]
 fn a_reserved_stem_reports_nothing_adopted() {
     let locator = locator();
-    write_root(&locator, "1700000100_planner", &legacy("planner", "2026-01-01", 1, 0), &["old"]);
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 0),
+        &["old"],
+    );
     let session = SessionRef::scoped(THREAD, "planner");
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
@@ -153,7 +221,12 @@ fn a_reserved_stem_reports_nothing_adopted() {
     })
     .unwrap()
     .unwrap();
-    assert!(locator.adopt_legacy(&session, THREAD, &meta(THREAD)).unwrap().is_none());
+    assert!(
+        locator
+            .adopt_legacy(&session, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[cfg(feature = "legacy-import")]
@@ -188,12 +261,25 @@ fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
         .unwrap()
         .expect("the imported legacy roots are adopted");
     assert_eq!(adoption.messages, 2);
-    assert!(transcripts.adopt_legacy(&session, THREAD, &seed).unwrap().is_none());
+    assert!(
+        transcripts
+            .adopt_legacy(&session, THREAD, &seed)
+            .unwrap()
+            .is_none()
+    );
     drop((transcripts, stores));
 
     // The next process resumes the session in place.
     let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
     let transcripts = stores.transcripts();
-    assert!(transcripts.adopt_legacy(&session, THREAD, &seed).unwrap().is_none());
-    assert_eq!(contents(transcripts.as_ref(), &session), vec!["first", "second"]);
+    assert!(
+        transcripts
+            .adopt_legacy(&session, THREAD, &seed)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        contents(transcripts.as_ref(), &session),
+        vec!["first", "second"]
+    );
 }
