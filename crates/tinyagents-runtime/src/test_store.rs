@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use tinyagents_session::port::InMemoryTranscriptLocator;
+use tinyagents_session::port::{DriverSessionStores, InMemoryTranscriptLocator, SessionStoreProvider};
+use tinystoragedrivers_core::MemoryStorage;
 use tinyagents_session::transcript::{
     DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts,
     TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
@@ -172,4 +173,12 @@ impl TranscriptLocator for Destination {
         self.store
             .begin_generation_from_baseline(session, seed, baseline)
     }
+}
+
+/// An empty driver-backed transcript store (the production store, over memory).
+pub(crate) fn driver() -> Arc<dyn TranscriptLocator> {
+    DriverSessionStores::new(Arc::new(MemoryStorage::new()))
+        .expect("driver session stores over memory")
+        .for_agent("runtime-tests")
+        .transcripts
 }

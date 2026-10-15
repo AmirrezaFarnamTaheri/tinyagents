@@ -3009,7 +3009,6 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // A Thread scan can read a different file from the session-bound write
     // destination. Rebinding to that destination must replace the cached
     // stored-boundary count as well as its raw rows.
-    let rebound_dir = tempfile::tempdir().unwrap();
     let destination_ref = SessionRef::scoped("destination-prefix", "agent-id");
     let rebound_locator = memory();
     let mut destination_meta = meta();
@@ -3028,21 +3027,19 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
             .append(TranscriptMessage::new(role, content))
             .unwrap();
     }
-    let scanned_path = resolve_keyed_transcript_path(rebound_dir.path(), "2000_other").unwrap();
     let mut scanned_meta = meta();
     scanned_meta.thread_id = Some("shared-prefix-thread".into());
     scanned_meta.created = "2026-02-01T00:00:00Z".into();
     scanned_meta.prefix_message_count = Some(1);
-    write_transcript(
-        &scanned_path,
+    seed(
+        rebound_locator.as_ref(),
+        "2000_other",
         &[
             TranscriptMessage::new("system", "scanned stable"),
             TranscriptMessage::new("user", "scanned turn"),
         ],
         &scanned_meta,
-        None,
-    )
-    .unwrap();
+    );
     let mut rebound = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(RoleCodec))
         .session(rebound_locator, destination_ref, meta())
@@ -3235,7 +3232,6 @@ async fn session_driver_receives_the_frozen_system_boundary() {
 /// corrupt the destination.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destination() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = memory();
 
@@ -3256,16 +3252,15 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-later".into();
-    tinyagents_session::transcript::write_transcript(
-        &directory.path().join("session_raw/legacy_other.jsonl"),
+    seed(
+        locator.as_ref(),
+        "legacy_other",
         &[
             TranscriptMessage::new("user", "legacy one"),
             TranscriptMessage::new("user", "legacy two"),
         ],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     // The driver extends whatever it was handed by exactly one message.
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
@@ -3299,11 +3294,7 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
     // message: this assertion catches exactly that class of bug rather than
     // merely checking "some content survived", which an append-only writer
     // satisfies by construction even when it drops the wrong number of rows.
-    let destination_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let on_disk = read_transcript(&destination_path).unwrap();
+    let on_disk = read(locator.as_ref(), &session_stem(&session_ref));
     assert_eq!(
         on_disk.messages.len(),
         3,
@@ -3333,7 +3324,6 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
 /// has its own, different metadata.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_metadata() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = memory();
 
@@ -3358,16 +3348,15 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
     let mut legacy = meta();
     legacy.thread_id = Some("thread-1".into());
     legacy.created = "zzz-scanned-created".into();
-    tinyagents_session::transcript::write_transcript(
-        &directory.path().join("session_raw/legacy_other.jsonl"),
+    seed(
+        locator.as_ref(),
+        "legacy_other",
         &[TranscriptMessage::new(
             "user",
             "from a different file entirely",
         )],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3389,11 +3378,7 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
         .await
         .unwrap();
 
-    let destination_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let on_disk = read_transcript(&destination_path).unwrap();
+    let on_disk = read(locator.as_ref(), &session_stem(&session_ref));
     assert_eq!(
         on_disk.meta.created, "destination-created",
         "the destination's own created timestamp must survive, not the scanned file's"
@@ -3404,7 +3389,6 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
 /// byte-for-byte unchanged — instead of the actual head.
 #[tokio::test]
 async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_generation() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = memory();
     // `ResumeMode::Thread` matches on `_meta.thread_id`, so the seed for both
@@ -3427,11 +3411,10 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
     head_handle
         .append(TranscriptMessage::new("user", "head generation 1"))
         .unwrap();
-    let sealed_path = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let sealed_bytes_before = std::fs::read(&sealed_path).unwrap();
+    let sealed = locator
+        .read_session_transcript(&session_ref)
+        .expect("generation 0 exists");
+    let sealed_bytes_before = fingerprint(sealed.as_ref());
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
         vec![
@@ -3454,17 +3437,15 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
         .unwrap();
 
     assert_eq!(
-        std::fs::read(&sealed_path).unwrap(),
+        fingerprint(sealed.as_ref()),
         sealed_bytes_before,
-        "generation 0 must stay sealed and byte-identical"
+        "generation 0 must stay sealed and unchanged"
     );
-    let head_path = directory.path().join("session_raw").join(format!(
-        "{}.jsonl",
-        session_stem(&session_ref.next_generation())
-    ));
-    let head_contents: Vec<String> = read_transcript(&head_path)
-        .unwrap()
-        .messages
+    let head_contents: Vec<String> = read(
+        locator.as_ref(),
+        &session_stem(&session_ref.next_generation()),
+    )
+    .messages
         .into_iter()
         .map(|message| message.content)
         .collect();
@@ -3479,26 +3460,21 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
 /// regains the turns newest-wins lookup had stranded.
 #[tokio::test]
 async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
-    let directory = tempfile::tempdir().unwrap();
+    let store = crate::test_store::driver();
     let mut legacy = meta();
     legacy.thread_id = Some("thread-9fa08".into());
     legacy.created = "2026-09-22T07:30:47Z".into();
-    tinyagents_session::transcript::write_transcript(
-        &tinyagents_session::transcript::resolve_keyed_transcript_path(
-            directory.path(),
-            "1790062247_orchestrator",
-        )
-        .unwrap(),
+    seed(
+        store.as_ref(),
+        "1790062247_orchestrator",
         &[TranscriptMessage::new("user", "plan a trip to kashmir")],
         &legacy,
-        None,
-    )
-    .unwrap();
+    );
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
-            memory(),
+            store,
             SessionRef::scoped("thread-9fa08", "agent-id"),
             meta(),
         )
@@ -3522,7 +3498,6 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
 
 #[tokio::test]
 async fn a_session_resume_with_no_history_anywhere_loads_nothing() {
-    let directory = tempfile::tempdir().unwrap();
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
