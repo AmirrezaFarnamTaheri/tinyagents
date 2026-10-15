@@ -46,14 +46,46 @@ pub(crate) fn read(locator: &dyn TranscriptLocator, stem: &str) -> SessionTransc
 /// The model-context replay of the transcript `stem`, when it exists.
 pub(crate) fn try_read(locator: &dyn TranscriptLocator, stem: &str) -> Option<SessionTranscript> {
     locator
-        .read_session_transcript(&session_ref_of(stem))
-        .and_then(|handle| handle.read_session().expect("read transcript"))
+        .open_stem(stem, placeholder_meta())
+        .expect("open stem")
+        .read_session()
+        .expect("read transcript")
 }
 
 /// The display projection of the transcript `stem`; panics when it is absent.
-pub(crate) fn read_display(locator: &dyn TranscriptLocator, stem: &str) -> DisplaySessionTranscript {
+pub(crate) fn read_display(
+    locator: &dyn TranscriptLocator,
+    stem: &str,
+) -> DisplaySessionTranscript {
     locator
-        .read_session_transcript(&session_ref_of(stem))
-        .and_then(|handle| handle.read_display().expect("read display"))
+        .open_stem(stem, placeholder_meta())
+        .expect("open stem")
+        .read_display()
+        .expect("read display")
         .unwrap_or_else(|| panic!("transcript {stem} is absent"))
+}
+
+/// A `_meta` for opening a stem only to read it (never written: the stem exists
+/// or the read is `None`).
+fn placeholder_meta() -> TranscriptMeta {
+    TranscriptMeta {
+        session_id: None,
+        parent_session_id: None,
+        agent_name: String::new(),
+        agent_id: None,
+        agent_type: None,
+        dispatcher: String::new(),
+        provider: None,
+        model: None,
+        created: String::new(),
+        updated: String::new(),
+        turn_count: 0,
+        prefix_message_count: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        charged_amount_usd: 0.0,
+        thread_id: None,
+        task_id: None,
+    }
 }
