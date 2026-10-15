@@ -2,11 +2,11 @@
 //! delta (message tail or compaction record), interrupted partials, and the
 //! derived `.md` companion.
 
+#[cfg(test)]
 use super::history::TranscriptPartial;
-use super::jsonl::{
-    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json, partial_line,
-    serialise_message_lines, tools_line_json,
-};
+#[cfg(test)]
+use super::jsonl::{COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, partial_line};
+use super::jsonl::{meta_line_json, serialise_message_lines, tools_line_json};
 use super::markdown::render_markdown;
 use super::paths::md_companion_path;
 use super::types::TranscriptMessage;

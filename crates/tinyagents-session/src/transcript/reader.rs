@@ -9,8 +9,7 @@ use super::jsonl::{
 use super::legacy_md::read_transcript_legacy_md;
 use super::types::TranscriptMessage;
 use super::types::{
-    CompactionMarker, DisplayRecord, DisplaySessionTranscript, MessageUsage, SessionTranscript,
-    TranscriptMeta,
+    CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionTranscript, TranscriptMeta,
 };
 use anyhow::{Context, Result};
 use std::fs;
