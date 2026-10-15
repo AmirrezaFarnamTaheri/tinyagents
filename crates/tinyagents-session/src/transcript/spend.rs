@@ -6,12 +6,10 @@
 //! host's concern and stays out of here.
 
 use std::collections::{BTreeMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use super::{
     DisplayRecord, DisplaySessionTranscript, SessionTranscript, ThreadTranscript,
     TranscriptLocator, TranscriptMessage, TranscriptMeta, TurnUsage, UsageCostSource,
-    find_root_transcripts_for_thread, read_transcript_display,
 };
 
 /// One transcript's own spend, summed from the per-turn `turn_usage` records
@@ -159,7 +157,7 @@ pub fn context_output_tokens_of(usage: &TurnUsage) -> u64 {
 ///
 /// This sums only what `transcript.messages` still holds: after a compaction
 /// that is the reduced context, so it undercounts a compacted session. The
-/// thread aggregate ([`thread_spend`]) reads the full append history instead.
+/// thread aggregate ([`thread_spend_in`]) reads the full append history instead.
 pub fn transcript_spend(transcript: &SessionTranscript) -> TranscriptSpend {
     spend_from_usages(
         transcript
@@ -238,24 +236,6 @@ fn spend_from_usages<'a>(
 /// writing the rows it retained from its parent, and those rows keep their
 /// original `request_id`, so a row whose `request_id` is in that set is
 /// carried history, not new spend. The ids this file counts are added to it.
-fn file_spend(
-    path: &Path,
-    earlier_requests: &mut HashSet<String>,
-) -> Option<(TranscriptSpend, TranscriptMeta)> {
-    let display = match read_transcript_display(path) {
-        Ok(display) => display,
-        Err(err) => {
-            tracing::warn!(
-                "[transcript:spend] skipping unreadable transcript {}: {err}",
-                path.display()
-            );
-            return None;
-        }
-    };
-    Some(display_spend(display, earlier_requests))
-}
-
-/// [`file_spend`] of an already-read display projection.
 fn display_spend(
     display: DisplaySessionTranscript,
     earlier_requests: &mut HashSet<String>,
@@ -339,41 +319,6 @@ fn carried_from(prior: &TranscriptMessage, row: &TranscriptMessage) -> bool {
         && prior.turn_usage == row.turn_usage
 }
 
-/// Every descendant transcript of `root`, at any delegation depth.
-///
-/// Sub-agent transcripts are named `{root_stem}__{child}` (and a grandchild
-/// chains another `__`), which is the *only* durable record of the parent→child
-/// relation. Selecting them by `_meta.thread_id` instead — as the session
-/// crate's own summary helper does — drops the majority of them: a delegation
-/// gets its own worker thread, and `inherited_thread_id` lets that worker id win
-/// over the parent's, so the child's header names a thread the caller never
-/// asked about (#6460).
-fn descendant_transcripts(root: &Path) -> Vec<PathBuf> {
-    let Some(dir) = root.parent() else {
-        return Vec::new();
-    };
-    let Some(root_stem) = root.file_stem().and_then(|s| s.to_str()) else {
-        return Vec::new();
-    };
-    let prefix = format!("{root_stem}__");
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut matches: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension().and_then(|s| s.to_str()) == Some("jsonl")
-                && path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|stem| stem.starts_with(&prefix))
-        })
-        .collect();
-    matches.sort();
-    matches
-}
-
 /// One thread's spend, split into the orchestrator's own and each sub-agent
 /// archetype's, each counted exactly once.
 #[derive(Debug, Clone, Default)]
@@ -385,45 +330,7 @@ pub struct ThreadSpend {
     pub found_transcript: bool,
 }
 
-/// Walk a thread's root transcripts and their descendants, totalling each file's
-/// own recorded spend.
-///
-/// Correct-by-construction because every transcript records only what the agent
-/// that owns it spent (see the host's per-turn usage codec): the walk visits
-/// each file once, so no token is counted twice however deep the delegation went,
-/// and a child whose usage never reached its parent's in-turn ledger (#6459) is
-/// still counted from its own file.
-pub fn thread_spend(workspace_dir: &Path, thread_id: &str) -> ThreadSpend {
-    let mut out = ThreadSpend::default();
-    let roots = find_root_transcripts_for_thread(workspace_dir, thread_id);
-    // Shared across the thread's root files (oldest first), so rows a later
-    // generation carried over from an earlier one are not counted twice.
-    let mut root_requests = HashSet::new();
-    for root in &roots {
-        out.found_transcript = true;
-        if let Some((spend, meta)) = file_spend(root, &mut root_requests) {
-            out.add_root(spend, meta);
-        }
-        let children = descendant_transcripts(root)
-            .into_iter()
-            .map(|path| (stem_of(&path), path));
-        for chain in subagent_chains(children) {
-            // One run per chain: a compacted sub-agent's `.gN` successors open
-            // with rows carried from the earlier generation, which keep their
-            // `request_id` and must not be counted again.
-            let mut requests = HashSet::new();
-            let mut new_run = true;
-            for child in chain {
-                if let Some((spend, child_meta)) = file_spend(&child, &mut requests) {
-                    out.add_subagent(spend, &child_meta, std::mem::take(&mut new_run));
-                }
-            }
-        }
-    }
-    out
-}
-
-/// [`thread_spend`] over any [`TranscriptLocator`]: the thread's roots and
+/// A thread's spend over a [`TranscriptLocator`]: the thread's roots and
 /// sub-agent transcripts come from
 /// [`TranscriptLocator::thread_transcripts`], each counted once — the roots
 /// in projection order with one shared set of counted requests, every listed
@@ -487,12 +394,6 @@ fn subagent_chains<T>(items: impl IntoIterator<Item = (String, T)>) -> Vec<Vec<T
             chain.into_iter().map(|(_, _, item)| item).collect()
         })
         .collect()
-}
-
-fn stem_of(path: &Path) -> String {
-    path.file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 /// A listed transcript's display projection; unreadable or missing ones are
