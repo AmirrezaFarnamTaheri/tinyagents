@@ -40,7 +40,7 @@ use super::jsonl::{LineKind, build_message_line, classify_line};
 use super::paths::resolve_keyed_transcript_path;
 use super::reader::read_jsonl_lines;
 use super::session::{SessionRef, session_stem};
-use super::turn_lock::{lock_session_turn, lock_session_turn_with_notification};
+use super::turn_lock::{lock_session_turn_or_identity, lock_session_turn_with_notification};
 use super::types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, TranscriptMessage,
 };
@@ -93,7 +93,7 @@ pub async fn append_background_message(
     message: TranscriptMessage,
     options: BackgroundAppend,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, None).await
+    append_background_message_impl(locator, locator, session, message, options, None).await
 }
 
 /// Test-oriented variant that signals immediately before waiting for the
@@ -106,11 +106,24 @@ pub async fn append_background_message_with_lock_notification(
     options: BackgroundAppend,
     lock_attempted: &Notify,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, Some(lock_attempted)).await
+    append_background_message_impl(
+        locator,
+        locator,
+        session,
+        message,
+        options,
+        Some(lock_attempted),
+    )
+    .await
 }
 
+/// `files` writes the JSONL line; `resolver` resolves the head and decides
+/// whether the session exists. They differ for a wrapper over a file locator
+/// (such as [`AgentTranscriptFiles`](super::AgentTranscriptFiles)) whose
+/// existence checks adopt a transcript into `files` before it is written.
 async fn append_background_message_impl(
-    locator: &FileTranscriptLocator,
+    files: &FileTranscriptLocator,
+    resolver: &dyn TranscriptLocator,
     session: &SessionRef,
     message: TranscriptMessage,
     options: BackgroundAppend,
@@ -122,10 +135,10 @@ async fn append_background_message_impl(
     let key = options.idempotency_key.as_str();
     tracing::debug!(session = %stem, idempotency_key = %key, expected_generation = ?options.expected_generation, "[transcript-background] append requested");
 
-    let _turn = lock_session_turn_with_notification(locator, &root, lock_attempted).await;
+    let _turn = lock_session_turn_with_notification(resolver, &root, lock_attempted).await;
     for _ in 0..MAX_HEAD_MOVES {
-        let head = locator.head_generation(&root);
-        if !locator.session_exists(&head) {
+        let head = resolver.head_generation(&root);
+        if !resolver.session_exists(&head) {
             tracing::debug!(session = %stem, idempotency_key = %key, "[transcript-background] no transcript; nothing written");
             return Ok(BackgroundAppendOutcome::NoSession);
         }
@@ -133,7 +146,7 @@ async fn append_background_message_impl(
             tracing::debug!(session = %stem, idempotency_key = %key, ?stale, "[transcript-background] head moved on; nothing written");
             return Ok(stale);
         }
-        match append_to_head(locator, &head, &message, &options)? {
+        match append_to_head(files, &head, &message, &options)? {
             Attempt::Done(outcome) => {
                 tracing::debug!(session = %stem, idempotency_key = %key, ?outcome, "[transcript-background] append finished");
                 return Ok(outcome);
@@ -162,7 +175,9 @@ async fn append_background_message_impl(
 ///
 /// For such a store the turn lock is the only serialisation: the duplicate
 /// check and the append are two calls, so two processes appending the same key
-/// to one store at once could both write it.
+/// to one store at once could both write it. A locator with no
+/// [`destination_key`](TranscriptLocator::destination_key) is locked by its
+/// own identity instead, so appends through that one locator still serialise.
 ///
 /// # Errors
 ///
@@ -174,7 +189,11 @@ pub async fn append_background_message_in(
     options: BackgroundAppend,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
     if let Some(files) = locator.file_backing() {
-        return append_background_message(files, session, message, options).await;
+        // Existence and head resolution go through `locator` itself, so a
+        // wrapper that adopts transcripts on lookup (an agent's own files over
+        // a shared workspace) still finds a session only its fallback holds.
+        return append_background_message_impl(files, locator, session, message, options, None)
+            .await;
     }
     let message = validate(message, &options)?;
     let root = session.first_generation();
@@ -182,7 +201,10 @@ pub async fn append_background_message_in(
     let key = options.idempotency_key.as_str();
     tracing::debug!(session = %stem, idempotency_key = %key, expected_generation = ?options.expected_generation, "[transcript-background] store append requested");
 
-    let _turn = lock_session_turn(locator, &root).await;
+    // Falls back to the locator's own identity when it names no destination,
+    // so two appends through one such locator still serialise their
+    // duplicate check and append.
+    let _turn = lock_session_turn_or_identity(locator, &root).await;
     for _ in 0..MAX_HEAD_MOVES {
         let head = locator.head_generation(&root);
         if !locator.session_exists(&head) {
