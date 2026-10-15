@@ -105,3 +105,71 @@ fn subagents_are_found_by_stem_prefix_and_unscoped_by_thread() {
     assert_eq!(subs(Some("planner")), vec!["root__1_child"]);
     assert!(locator.thread_transcripts("  ", None).is_none());
 }
+
+fn write_with(locator: &DriverTranscriptLocator, stem: &str, meta: &TranscriptMeta, rows: &[&str]) {
+    let rows: Vec<TranscriptMessage> = rows.iter().map(|r| TranscriptMessage::user(*r)).collect();
+    locator
+        .open_stem(stem, meta.clone())
+        .unwrap()
+        .append_turn(TranscriptTurn {
+            prev: &[],
+            next: &rows,
+            meta,
+            turn_usage: None,
+            request_id: None,
+            tools: None,
+        })
+        .unwrap();
+}
+
+fn root_stems(locator: &DriverTranscriptLocator, thread: &str) -> Vec<String> {
+    locator
+        .thread_transcripts(thread, None)
+        .unwrap()
+        .roots
+        .into_iter()
+        .map(|root| root.stem)
+        .collect()
+}
+
+#[test]
+fn legacy_roots_are_dropped_once_an_unscoped_session_root_exists() {
+    let locator = locator();
+    let mut legacy = meta("t");
+    legacy.agent_id = None;
+    write_with(&locator, "1700000000_planner", &legacy, &["old"]);
+
+    let session = SessionRef::root("t");
+    let mut seed = legacy.clone();
+    seed.session_id = Some(session.session_id());
+    write_with(&locator, &session_stem(&session), &seed, &["old", "new"]);
+
+    assert_eq!(root_stems(&locator, "t"), vec![session_stem(&session)]);
+}
+
+#[test]
+fn pre_identity_roots_are_ordered_by_their_creation_time() {
+    let locator = locator();
+    // Imported in name order, which is not their chronology.
+    let mut later = meta("t");
+    later.created = "2026-01-02T00:00:00Z".into();
+    write_with(&locator, "a_planner", &later, &["second"]);
+    let mut earlier = meta("t");
+    earlier.created = "2026-01-01T00:00:00Z".into();
+    write_with(&locator, "b_planner", &earlier, &["first"]);
+
+    assert_eq!(root_stems(&locator, "t"), vec!["b_planner", "a_planner"]);
+}
+
+#[test]
+fn prefix_ranges_match_exactly_the_prefixed_stems() {
+    let filter = prefix_range("stem", "root__");
+    let matches = |stem: &str| filter.matches("id", &serde_json::json!({ "stem": stem }));
+    assert!(matches("root__"));
+    assert!(matches("root__1_child"));
+    assert!(matches("root__1_child__2_grandchild.g3"));
+    assert!(!matches("root_"));
+    assert!(!matches("root_x__1_child"));
+    assert!(!matches("root"));
+    assert!(!matches("rootz__1_child"));
+}
