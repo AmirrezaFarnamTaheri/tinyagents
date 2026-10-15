@@ -90,9 +90,8 @@ jobs:
           # the two; see the script.
           git fetch --tags origin
           mapfile -t existing_tags < <(git tag --list 'v*')
-          read -r base_version next_version < <(
-            .github/scripts/next-release-version.sh "${{ inputs.bump }}" "$current_version" "${existing_tags[@]}"
-          )
+          versions="$(.github/scripts/next-release-version.sh "${{ inputs.bump }}" "$current_version" "${existing_tags[@]}")"
+          read -r base_version next_version <<< "$versions"
           tag="v${next_version}"
 
           if git rev-parse --verify --quiet "refs/tags/${tag}"; then
