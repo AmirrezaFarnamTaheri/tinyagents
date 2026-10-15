@@ -254,3 +254,57 @@ async fn requeue_front_keeps_returned_items_ahead_of_newer_ones() {
         .collect();
     assert_eq!(order, ["old-1", "old-2", "newer"]);
 }
+
+#[tokio::test]
+async fn residual_steers_are_back_in_the_queue_as_soon_as_the_guard_drops() {
+    // A host that ends a turn and then reads the queue for what the run never
+    // applied must find every residual steer there, without waiting for a
+    // background task: nothing may be in flight once the guard has dropped.
+    let queue = Arc::new(RunQueue::<Item>::new());
+    let handle = SteeringHandle::allow_all();
+    let (sink, _events) = recorder();
+    let guard = SteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "t".to_string(),
+        sink,
+    );
+    handle.send(SteeringCommand::InjectMessage(TaMessage::user(format!(
+        "{STEER_PREFIX}delivered but never applied"
+    ))));
+    drop(guard);
+    let texts: Vec<String> = queue
+        .drain_now(QueueLane::Steer)
+        .into_iter()
+        .map(|i| i.text)
+        .collect();
+    assert_eq!(texts, ["delivered but never applied"]);
+}
+
+#[tokio::test]
+async fn a_steer_queued_while_the_guard_closes_stays_in_the_queue() {
+    // Queued steers the poll loop has not forwarded yet are never taken out
+    // of the queue once the guard is dropped: they are there to read at once.
+    let queue = Arc::new(RunQueue::<Item>::new());
+    let handle = SteeringHandle::allow_all();
+    let (sink, _events) = recorder();
+    let guard = SteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "t".to_string(),
+        sink,
+    );
+    queue.push_now(QueueLane::Steer, item("q", "queued"));
+    drop(guard);
+    // Let a poll tick pass: a closed forwarder must not take it.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert!(handle.drain().is_empty());
+    let ids: Vec<String> = queue
+        .drain_now(QueueLane::Steer)
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids, ["q"]);
+}
