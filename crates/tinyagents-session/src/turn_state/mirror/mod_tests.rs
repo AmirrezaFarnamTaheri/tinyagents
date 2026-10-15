@@ -6,7 +6,6 @@ use crate::port::InMemoryTurnStates;
 use crate::port::InMemoryTranscriptLocator;
 use crate::transcript::{
     DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta,
-    TranscriptRead,
 };
 use crate::turn_state::types::{SubagentActivity, ToolTimelineEntry, ToolTimelineStatus};
 use crate::turn_state::types::{TranscriptItem, TurnLifecycle};

@@ -173,9 +173,8 @@ pub use types::{
 pub(crate) use writer::write_transcript_with_tools;
 #[cfg(test)]
 pub(crate) use writer::{
-    append_interrupted_partial, append_tools_record, append_transcript_turn,
-    append_transcript_turn_with_partial, write_transcript, write_transcript_if_absent,
-    write_transcript_if_absent_with_tools,
+    append_interrupted_partial, append_tools_record, append_transcript_turn, write_transcript,
+    write_transcript_if_absent,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────

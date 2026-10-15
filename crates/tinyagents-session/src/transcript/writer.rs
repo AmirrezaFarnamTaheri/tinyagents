@@ -172,38 +172,6 @@ pub(crate) fn append_transcript_turn(
     )
 }
 
-/// Appends one logical turn and, when present, its display-only interruption
-/// row from one serialized buffer and one file-write operation.
-///
-/// The partial is written after the logical delta and refreshed metadata. It
-/// has `interrupted: true`, so the model-context reader skips it while the
-/// display reader preserves it. Serialization happens before opening the file
-/// for append, preventing a serialization failure from leaving a logical turn
-/// without its associated display partial.
-#[cfg(test)]
-pub(crate) fn append_transcript_turn_with_partial(
-    jsonl_path: &Path,
-    prev_persisted: &[TranscriptMessage],
-    messages: &[TranscriptMessage],
-    meta: &TranscriptMeta,
-    turn_usage: Option<&TurnUsage>,
-    request_id: Option<&str>,
-    partial: Option<&TranscriptPartial>,
-) -> Result<()> {
-    append_transcript_turn_with_extras(
-        jsonl_path,
-        prev_persisted,
-        messages,
-        meta,
-        turn_usage,
-        request_id,
-        AppendTranscriptExtras {
-            partial,
-            tools: None,
-        },
-    )
-}
-
 /// Optional turn records serialized alongside a turn's logical delta.
 #[cfg(test)]
 pub(crate) struct AppendTranscriptExtras<'a> {

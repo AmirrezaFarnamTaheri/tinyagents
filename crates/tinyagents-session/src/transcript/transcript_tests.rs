@@ -6,7 +6,6 @@
 //! Consolidated here per AGENTS.md: one `test.rs` per module directory.
 
 use super::*;
-use std::sync::{Arc, Barrier};
 use tempfile::tempdir;
 
 fn meta() -> TranscriptMeta {
