@@ -64,6 +64,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Release version script
+        run: .github/scripts/next-release-version.test.sh
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
