@@ -61,7 +61,7 @@ pub use drivers::{
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use types::{AgentStores, WorkspaceStores};
 #[cfg(feature = "legacy-import")]
-pub use workspace::{STORE_DIR, WorkspaceStores};
+pub use workspace::STORE_DIR;
 
 pub use tinyagents_harness::store::{AppendStore, Store};
 

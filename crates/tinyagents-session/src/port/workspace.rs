@@ -12,39 +12,43 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use tinystoragedrivers_core::StorageBackend;
 use tinystoragedrivers_sqlite::SqliteStorage;
 
-use super::{AgentStores, DriverSessionStores};
+use super::types::WorkspaceInner;
+use super::AgentStores;
+use super::{DriverSessionStores, WorkspaceStores};
 use crate::legacy::{OnceOutcome, import_transcripts_once};
 use crate::transcript::TranscriptLocator;
 
 /// Directory under the workspace holding the internal SQLite driver files.
 pub const STORE_DIR: &str = "session_store";
 
-/// An agent's driver-backed stores for one workspace.
-#[derive(Clone)]
-pub struct WorkspaceStores {
-    provider: Arc<DriverSessionStores>,
-    stores: AgentStores,
-    outcome: Arc<OnceOutcome>,
-}
+type Cache = Mutex<HashMap<(PathBuf, String), Weak<WorkspaceInner>>>;
 
-impl std::fmt::Debug for WorkspaceStores {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WorkspaceStores")
-            .field("outcome", &self.outcome)
-            .finish_non_exhaustive()
-    }
-}
-
-type Cache = Mutex<HashMap<(PathBuf, String), WorkspaceStores>>;
-
+/// Weak entries: a backend is released once every handle drops, while live
+/// handles are still shared.
 fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Serialises first opens so two threads never run the legacy import for the
+/// same workspace concurrently (one could see the other's half-written
+/// transcript as complete).
+static OPEN_LOCK: Mutex<()> = Mutex::new(());
+
+fn cached(key: &(PathBuf, String)) -> Option<WorkspaceStores> {
+    let mut map = cache().lock().unwrap_or_else(PoisonError::into_inner);
+    match map.get(key).and_then(Weak::upgrade) {
+        Some(inner) => Some(WorkspaceStores { inner }),
+        None => {
+            map.remove(key);
+            None
+        }
+    }
 }
 
 impl WorkspaceStores {
@@ -57,12 +61,13 @@ impl WorkspaceStores {
     /// cached then, so the next call retries.
     pub fn open(workspace_dir: &Path, agent_id: &str) -> anyhow::Result<Self> {
         let key = (workspace_dir.to_path_buf(), agent_id.to_string());
-        if let Some(found) = cache()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&key)
-        {
-            return Ok(found.clone());
+        if let Some(found) = cached(&key) {
+            return Ok(found);
+        }
+        let _opening = OPEN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        // Another thread may have finished while this one waited.
+        if let Some(found) = cached(&key) {
+            return Ok(found);
         }
         let backend: Arc<dyn StorageBackend> =
             Arc::new(SqliteStorage::open(workspace_dir.join(STORE_DIR))?);
@@ -74,37 +79,44 @@ impl WorkspaceStores {
             agent_id,
             "[session-store] workspace stores opened"
         );
-        let opened = Self {
+        // An import that skipped an unreadable file is not complete: do not
+        // cache it, so the next open retries once the file is fixed.
+        let complete = matches!(
+            outcome,
+            OnceOutcome::AlreadyImported | OnceOutcome::Imported { marked: true, .. }
+        );
+        let inner = Arc::new(WorkspaceInner {
             provider,
             stores,
-            outcome: Arc::new(outcome),
-        };
-        Ok(cache()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(key)
-            .or_insert(opened)
-            .clone())
+            outcome,
+        });
+        if complete {
+            cache()
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(key, Arc::downgrade(&inner));
+        }
+        Ok(Self { inner })
     }
 
     /// The transcript port.
     pub fn transcripts(&self) -> Arc<dyn TranscriptLocator> {
-        Arc::clone(&self.stores.transcripts)
+        Arc::clone(&self.inner.stores.transcripts)
     }
 
     /// Every store of the agent.
     pub fn stores(&self) -> &AgentStores {
-        &self.stores
+        &self.inner.stores
     }
 
     /// The provider the stores come from.
     pub fn provider(&self) -> &Arc<DriverSessionStores> {
-        &self.provider
+        &self.inner.provider
     }
 
     /// What the first open's legacy import did.
     pub fn import_outcome(&self) -> &OnceOutcome {
-        &self.outcome
+        &self.inner.outcome
     }
 }
 
