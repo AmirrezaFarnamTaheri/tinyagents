@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::transcript::{
-    SessionTranscript, TranscriptHistory, TranscriptMessage, TranscriptMeta, TranscriptPartial,
-    TranscriptRead, TranscriptTurn,
+    DisplayRecord, DisplaySessionTranscript, SessionTranscript, TranscriptHistory,
+    TranscriptMessage, TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn,
+    display_message_of, partial_display_message,
 };
 
 /// A [`TranscriptHistory`] backed by a `Vec<TranscriptMessage>` behind a
@@ -43,9 +44,10 @@ struct InMemoryTranscriptState {
     tools: Option<serde_json::Value>,
     /// `false` until the first write, mirroring a file that does not exist yet.
     written: bool,
-    /// Display-only partials of interrupted turns, with their request ids.
-    /// Never part of [`TranscriptHistory::messages`].
-    partials: Vec<(TranscriptPartial, Option<String>)>,
+    /// Display-only partials of interrupted turns, with their request ids
+    /// and how many logical rows preceded them when recorded (where the
+    /// display read places them). Never part of [`TranscriptHistory::messages`].
+    partials: Vec<(TranscriptPartial, Option<String>, usize)>,
     sealed: bool,
 }
 
@@ -116,7 +118,8 @@ impl InMemoryTranscriptHistory {
         if state.sealed || partial.content.is_empty() {
             return false;
         }
-        state.partials.push((partial, request_id));
+        let position = state.messages.len();
+        state.partials.push((partial, request_id, position));
         state.written = true;
         true
     }
@@ -128,7 +131,9 @@ impl InMemoryTranscriptHistory {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .partials
-            .clone()
+            .iter()
+            .map(|(partial, request_id, _)| (partial.clone(), request_id.clone()))
+            .collect()
     }
 
     pub(crate) fn seal(&self) {
@@ -163,6 +168,37 @@ impl TranscriptRead for InMemoryTranscriptHistory {
             meta: state.meta.clone(),
             messages: state.messages.clone(),
             tools: state.tools.clone(),
+        }))
+    }
+
+    /// The logical rows with the recorded interrupted partials placed where
+    /// they were written, as the file and driver display reads show them.
+    /// There is no append log here, so earlier compactions are not replayed.
+    fn read_display(&self) -> anyhow::Result<Option<DisplaySessionTranscript>> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.written {
+            return Ok(None);
+        }
+        let mut partials: Vec<_> = state.partials.iter().collect();
+        partials.sort_by_key(|(_, _, position)| *position);
+        let mut partials = partials.into_iter().peekable();
+        let mut records = Vec::new();
+        for index in 0..=state.messages.len() {
+            while let Some((partial, request_id, _)) =
+                partials.next_if(|(_, _, position)| (*position).min(state.messages.len()) == index)
+            {
+                records.push(DisplayRecord::Message(Box::new(partial_display_message(
+                    partial,
+                    request_id.as_deref(),
+                ))));
+            }
+            if let Some(message) = state.messages.get(index) {
+                records.push(DisplayRecord::Message(Box::new(display_message_of(message))));
+            }
+        }
+        Ok(Some(DisplaySessionTranscript {
+            meta: state.meta.clone(),
+            records,
         }))
     }
 }
@@ -206,7 +242,8 @@ impl TranscriptHistory for InMemoryTranscriptHistory {
             state.tools = Some(tools.clone());
         }
         if let Some(partial) = partial.filter(|partial| !partial.content.is_empty()) {
-            state.partials.push((partial.clone(), request_id));
+            let position = state.messages.len();
+            state.partials.push((partial.clone(), request_id, position));
         }
         state.written = true;
         Ok(())
