@@ -465,6 +465,7 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
             persisted.messages[2].extra_metadata,
             original_row.extra_metadata
         );
+        eprintln!("DBG original={:?}\npersisted={:?}", original_row, persisted.messages);
         assert_eq!(persisted.messages[2].request_id, original_row.request_id);
         drop(session);
         let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))
