@@ -153,12 +153,14 @@ jobs:
         if: steps.publishable.outputs.publishable == 'true'
         run: cargo package --locked -p "$CRATE_NAME"
 
-      - name: Push release commit and tag
+      # Only the tag is pushed. The "Protect main" ruleset requires a pull
+      # request for every change to main, so pushing the release commit there
+      # is always rejected (GH013). The tag points at the release commit, which
+      # stays off main; the next version is computed from the tags.
+      - name: Push release tag
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "${RELEASE_TAG}"
+        run: git push origin "refs/tags/${RELEASE_TAG}"
 
       - name: Publish to crates.io
         if: steps.publishable.outputs.publishable == 'true'
