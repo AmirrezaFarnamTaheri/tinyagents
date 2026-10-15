@@ -627,7 +627,7 @@ fn a_display_read_repairs_an_index_a_write_could_not_refresh() {
         raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
             .await
     });
-    assert!(locator.thread_transcripts("t", None).is_none());
+    assert!(locator.root_for_thread("t").is_none());
     // A handle whose replay has not indexed the write (as after a refresh
     // that failed every attempt).
     locator
@@ -635,10 +635,73 @@ fn a_display_read_repairs_an_index_a_write_could_not_refresh() {
         .read_display()
         .unwrap()
         .unwrap();
+    assert!(
+        locator.root_for_thread("t").is_some(),
+        "the display read re-indexed it"
+    );
+}
+
+/// The thread listing reads the index alone, so a root whose index document
+/// was never written (every refresh attempt after its write failed) used to
+/// stay invisible until something read or wrote that transcript again.
+#[test]
+fn a_listing_sees_and_repairs_a_root_whose_index_refresh_failed() {
+    let docs = docs();
+    let locator = locator(&docs);
+    locator
+        .handle("s", meta("t"))
+        .append(message("user", "a"))
+        .unwrap();
+    let raw = Arc::clone(&docs);
+    on_bridge(async move {
+        raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
+            .await
+    });
+    assert!(
+        locator.root_for_thread("t").is_none(),
+        "the lookup index is missing the root"
+    );
+
     let listed = locator
         .thread_transcripts("t", None)
-        .expect("the display read re-indexed it");
+        .expect("the listing finds the unindexed root");
+    assert_eq!(listed.roots.len(), 1);
     assert_eq!(listed.roots[0].stem, "s");
+    assert!(
+        locator.root_for_thread("t").is_some(),
+        "the listing re-indexed the root for later lookups"
+    );
+}
+
+/// An unindexed sub-agent transcript is listed under its root too.
+#[test]
+fn a_listing_repairs_an_unindexed_subagent_of_an_indexed_root() {
+    let docs = docs();
+    let locator = locator(&docs);
+    locator
+        .handle("100_root", meta("t"))
+        .append(message("user", "a"))
+        .unwrap();
+    locator
+        .handle("100_root__200_child", meta("t"))
+        .append(message("user", "b"))
+        .unwrap();
+    let raw = Arc::clone(&docs);
+    on_bridge(async move {
+        raw.delete(INDEX, &doc_key(&["100_root__200_child"]), Precondition::None)
+            .await
+    });
+
+    let listed = locator.thread_transcripts("t", None).expect("listed");
+    assert_eq!(listed.roots.len(), 1);
+    assert_eq!(
+        listed
+            .subagents
+            .iter()
+            .map(|sub| sub.stem.as_str())
+            .collect::<Vec<_>>(),
+        ["100_root__200_child"]
+    );
 }
 
 #[test]
