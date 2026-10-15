@@ -13,6 +13,10 @@
 //! - candidates are the thread's written roots other than the session's own
 //!   stem, skipping session-identified ones and, when the session names an
 //!   agent, another agent's; an unreadable candidate defers the whole call;
+//! - candidates come from the index **and** from the entry log, so a root
+//!   whose durable write outran its index refresh is still folded (and its
+//!   index repaired by the read) instead of being left out of a fold that
+//!   never runs again; a failed log scan defers the call too;
 //! - they are folded oldest first by `_meta.created` (messages, last recorded
 //!   tools, summed totals, earliest `created`, latest `updated`, the first
 //!   non-empty source's `prefix_message_count`);
@@ -23,9 +27,12 @@
 //! first turn or adopter makes this call report `Ok(None)` instead of
 //! overwriting it.
 
-use tinystoragedrivers_core::{Filter, StorageError};
+use std::collections::BTreeSet;
 
-use super::{DriverTranscriptLocator, discovered_seed, run_on};
+use serde_json::Value;
+use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, StorageError};
+
+use super::{DriverTranscriptLocator, ENTRIES, discovered_seed, is_subagent, run_on};
 use crate::transcript::{
     SessionAdoption, SessionRef, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptRead, TranscriptTurn, session_stem,
@@ -48,23 +55,39 @@ impl DriverTranscriptLocator {
         own_stem: &str,
     ) -> anyhow::Result<Vec<Candidate>> {
         let filter = Filter::eq("thread_id", thread_id).and(Filter::eq("subagent", false));
+        let mut stems: Vec<String> = self
+            .indexed(filter, "adopt_legacy")
+            .into_iter()
+            .map(|indexed| indexed.stem)
+            .collect();
+        for logged in self.logged_roots(thread_id)? {
+            if !stems.contains(&logged) {
+                tracing::debug!(
+                    target: "tinyagents_session::port::drivers",
+                    stem = %logged,
+                    "[session-store] adoption found a root missing from the index"
+                );
+                stems.push(logged);
+            }
+        }
         let mut found = Vec::new();
-        for indexed in self.indexed(filter, "adopt_legacy") {
-            if indexed.stem == own_stem {
+        for stem in stems {
+            if stem == own_stem {
                 continue;
             }
-            let handle = self.handle(&indexed.stem, discovered_seed(&indexed.stem));
+            let handle = self.handle(&stem, discovered_seed(&stem));
             let Some(transcript) = handle.read_session().map_err(|error| {
                 error.context(format!(
-                    "legacy root {} is unreadable; deferring adoption rather than finalizing a \
-                     fold that would permanently drop its turns",
-                    indexed.stem
+                    "legacy root {stem} is unreadable; deferring adoption rather than finalizing a \
+                     fold that would permanently drop its turns"
                 ))
             })?
             else {
                 continue;
             };
-            if transcript.meta.session_id.is_some() {
+            if transcript.meta.session_id.is_some()
+                || transcript.meta.thread_id.as_deref() != Some(thread_id)
+            {
                 continue;
             }
             if let Some(expected) = session.agent_id.as_deref()
@@ -82,6 +105,29 @@ impl DriverTranscriptLocator {
         // Stable: equal `created` keeps the index's creation order.
         found.sort_by(|a, b| a.meta.created.cmp(&b.meta.created));
         Ok(found)
+    }
+
+    /// Root stems whose entry log names `thread_id` in a `_meta`, whether or
+    /// not the index has caught up with them. An error when the log cannot be
+    /// scanned: adoption must not finalize without it.
+    fn logged_roots(&self, thread_id: &str) -> anyhow::Result<BTreeSet<String>> {
+        let thread_id = thread_id.to_string();
+        let entries = self.run(|docs, declared| async move {
+            declared.ensure(&docs).await?;
+            let query = Query::filter(Filter::eq("meta.thread_id", thread_id));
+            docs.query_all(ENTRIES, &query).await
+        });
+        let entries = entries.map_err(|error| {
+            anyhow::Error::new(error).context(
+                "could not scan the transcript log for legacy roots; deferring adoption",
+            )
+        })?;
+        Ok(entries
+            .iter()
+            .filter_map(|entry| entry.doc.get("stem").and_then(Value::as_str))
+            .filter(|stem| !is_subagent(stem))
+            .map(str::to_string)
+            .collect())
     }
 
     pub(super) fn adopt(
