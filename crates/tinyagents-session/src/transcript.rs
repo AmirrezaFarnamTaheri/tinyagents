@@ -189,6 +189,9 @@ pub use writer::{
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "transcript/locator_parity_tests.rs"]
+mod locator_parity_tests;
+#[cfg(test)]
 #[path = "transcript/transcript_tests.rs"]
 mod test;
 #[cfg(test)]
