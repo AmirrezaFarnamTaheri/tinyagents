@@ -2699,7 +2699,7 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
 async fn a_restart_after_a_compaction_resumes_the_head_generation() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     locator
         .open_session(&session_ref, meta())
         .unwrap()
@@ -2771,7 +2771,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let mut thread_meta = meta();
     thread_meta.thread_id = Some("thread-prefix".into());
     let root = locator
@@ -2875,7 +2875,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     let altered_dir = tempfile::tempdir().unwrap();
     let altered_ref = SessionRef::scoped("altered-prefix", "agent-id");
-    let altered_locator = Arc::new(FileTranscriptLocator::new(altered_dir.path()));
+    let altered_locator = memory();
     let sealed = altered_locator.open_session(&altered_ref, meta()).unwrap();
     for (role, content) in [
         ("system", "old stable"),
@@ -2927,7 +2927,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // than compare its rows with generation zero's different prompt.
     let recorded_dir = tempfile::tempdir().unwrap();
     let recorded_ref = SessionRef::scoped("recorded-prefix", "agent-id");
-    let recorded_locator = Arc::new(FileTranscriptLocator::new(recorded_dir.path()));
+    let recorded_locator = memory();
     let sealed = recorded_locator
         .open_session(&recorded_ref, meta())
         .unwrap();
@@ -2972,7 +2972,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
 
     let few_shot_dir = tempfile::tempdir().unwrap();
     let few_shot_ref = SessionRef::scoped("few-shot-prefix", "agent-id");
-    let few_shot_locator = Arc::new(FileTranscriptLocator::new(few_shot_dir.path()));
+    let few_shot_locator = memory();
     let mut few_shot_meta = meta();
     few_shot_meta.prefix_message_count = Some(2);
     let few_shot_history = few_shot_locator
@@ -3011,7 +3011,7 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // stored-boundary count as well as its raw rows.
     let rebound_dir = tempfile::tempdir().unwrap();
     let destination_ref = SessionRef::scoped("destination-prefix", "agent-id");
-    let rebound_locator = Arc::new(FileTranscriptLocator::new(rebound_dir.path()));
+    let rebound_locator = memory();
     let mut destination_meta = meta();
     destination_meta.thread_id = Some("shared-prefix-thread".into());
     destination_meta.created = "2026-01-01T00:00:00Z".into();
@@ -3237,7 +3237,7 @@ async fn session_driver_receives_the_frozen_system_boundary() {
 async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destination() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     // The session's own destination already carries one real message from an
     // earlier session-mode turn.
@@ -3335,7 +3335,7 @@ async fn thread_resume_on_a_session_bound_target_does_not_corrupt_its_own_destin
 async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_metadata() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     // The destination's own metadata: a distinct `created` from whatever the
     // scan below will find. `agent_id` has to match the builder's seed
@@ -3406,7 +3406,7 @@ async fn thread_resume_on_a_session_bound_target_reloads_the_destinations_own_me
 async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_generation() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     // `ResumeMode::Thread` matches on `_meta.thread_id`, so the seed for both
     // generations needs it set — otherwise `root_for_thread_scoped` finds
     // neither file and `resume` returns early before ever reaching the bind
@@ -3498,7 +3498,7 @@ async fn a_first_session_resume_adopts_a_pre_identity_conversation() {
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
-            Arc::new(FileTranscriptLocator::new(directory.path())),
+            memory(),
             SessionRef::scoped("thread-9fa08", "agent-id"),
             meta(),
         )
@@ -3526,7 +3526,7 @@ async fn a_session_resume_with_no_history_anywhere_loads_nothing() {
     let mut session = SessionBuilder::new(Arc::new(Driver::new(Vec::new())))
         .codec(Arc::new(Codec::default()))
         .session(
-            Arc::new(FileTranscriptLocator::new(directory.path())),
+            memory(),
             SessionRef::scoped("thread-fresh", "agent-id"),
             meta(),
         )
@@ -3615,7 +3615,7 @@ fn tools_records(path: &std::path::Path) -> usize {
 #[tokio::test]
 async fn each_turn_records_the_tools_it_was_sent_with() {
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let (_, recorded) = one_file_turn(locator, two_tools(), false, 0).await;
 
     let path = recorded_tools_path(directory.path());
@@ -3634,7 +3634,7 @@ async fn each_turn_records_the_tools_it_was_sent_with() {
 #[tokio::test]
 async fn a_resumed_session_keeps_tools_the_new_process_did_not_rebuild() {
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // A "restarted" process that has only rebuilt `alpha` so far.
@@ -3697,7 +3697,7 @@ async fn in_memory_sessions_retain_tools_sent_on_earlier_turns() {
 async fn thread_resume_restores_tools_from_its_write_destination() {
     let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-tools", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let destination = directory
         .path()
         .join("session_raw")
@@ -3753,7 +3753,7 @@ async fn thread_resume_restores_tools_from_its_write_destination() {
 #[tokio::test]
 async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), false, 0).await;
     let (driver, _) = one_file_turn(locator, tools("alpha"), false, 1).await;
 
@@ -3773,7 +3773,7 @@ async fn without_retention_a_changed_tool_set_is_sent_and_recorded_as_is() {
 #[tokio::test]
 async fn an_exact_tool_turn_neither_merges_nor_records() {
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     let mut history: Vec<Message> = (0..2).map(|_| Message::user("x")).collect();
@@ -3812,7 +3812,7 @@ async fn an_exact_tool_turn_neither_merges_nor_records() {
 #[tokio::test]
 async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation() {
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     one_file_turn(locator.clone(), two_tools(), true, 0).await;
 
     // Return a reduced history so persistence opens a successor generation.
@@ -3894,7 +3894,7 @@ async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
 /// says to: lazily from the *current* workspace dir, "never frozen at build
 /// time". That necessarily yields a fresh `Arc` per `before_resume`.
 struct FreshLocatorEachTurn {
-    workspace_dir: PathBuf,
+    store: Arc<tinyagents_session::port::InMemoryTranscriptLocator>,
     session: SessionRef,
     built: Mutex<usize>,
 }
@@ -4104,7 +4104,7 @@ async fn explicit_prefix_refresh_preserves_history_and_survives_cold_resume() {
         }
     }
     let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path().to_path_buf()));
+    let locator = memory();
     let identity = SessionRef::scoped("managed", "agent-id");
     let prefix = vec![Message::system("base"), Message::system("tools")];
     let first = vec![
