@@ -143,7 +143,7 @@ mod reader;
 mod session;
 pub mod spend;
 #[cfg(test)]
-mod test_locator;
+pub(crate) mod test_locator;
 mod turn_lock;
 mod types;
 pub mod view;
@@ -152,6 +152,8 @@ mod writer;
 pub use adoption::SessionAdoption;
 pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
+#[cfg(test)]
+pub(crate) use display::with_background as display_with_background;
 pub(crate) use display::{display_from_session, display_message_of, partial_display_message};
 pub(crate) use history::same_transcript_messages;
 pub use history::{

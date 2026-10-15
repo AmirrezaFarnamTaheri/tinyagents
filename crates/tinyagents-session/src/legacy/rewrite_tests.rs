@@ -177,35 +177,34 @@ fn symlinks_are_neither_followed_nor_rewritten() {
 #[tokio::test]
 async fn a_rewrite_keeps_background_delivery_provenance() {
     use crate::transcript::{
-        BackgroundAppend, BackgroundAppendOutcome, DisplayRecord, FileTranscriptLocator,
-        SessionRef, TranscriptLocator, append_background_message, read_transcript_display,
-        resolve_keyed_transcript_path, session_stem,
+        BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, SessionRef,
+        append_background_message_in, read_transcript_display, resolve_keyed_transcript_path,
+        session_stem,
     };
 
     let dir = tempfile::tempdir().unwrap();
-    let locator = FileTranscriptLocator::new(dir.path());
     let session = SessionRef::scoped("thread-1", "orchestrator");
-    locator
-        .open_session(&session, meta())
-        .unwrap()
-        .replace(&[
+    let path = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
+    // A classic transcript holding one out-of-band delivery, as the classic
+    // background writer recorded it (a top-level `background` line field).
+    let origin = BackgroundOrigin {
+        idempotency_key: "run-1".into(),
+        provenance: serde_json::json!({"kind": "cron"}),
+    };
+    write_transcript(
+        &path,
+        &[
             TranscriptMessage::system("keep ### SECRET"),
             TranscriptMessage::user("hi"),
-        ])
-        .unwrap();
-    let options = || BackgroundAppend::new("run-1", serde_json::json!({"kind": "cron"}));
-    let deliver = || {
-        append_background_message(
-            &locator,
-            &session,
-            TranscriptMessage::assistant("Time to stretch!"),
-            options(),
-        )
-    };
-    assert_eq!(
-        deliver().await.unwrap(),
-        BackgroundAppendOutcome::Appended { generation: 0 }
-    );
+            crate::transcript::display_with_background(
+                TranscriptMessage::assistant("Time to stretch!"),
+                &origin,
+            ),
+        ],
+        &meta(),
+        None,
+    )
+    .unwrap();
 
     let report = rewrite_legacy_transcripts(dir.path(), |session| {
         session.messages[0].content = "keep".into();
@@ -213,9 +212,8 @@ async fn a_rewrite_keeps_background_delivery_provenance() {
     });
     assert_eq!(report.rewritten, 1);
 
-    let path = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
     let display = read_transcript_display(&path).unwrap();
-    let origin = display
+    let kept = display
         .records
         .iter()
         .find_map(|record| match record {
@@ -223,9 +221,20 @@ async fn a_rewrite_keeps_background_delivery_provenance() {
             DisplayRecord::Compaction(_) => None,
         })
         .expect("the rewritten row keeps its provenance");
-    assert_eq!(origin.idempotency_key, "run-1");
+    assert_eq!(kept.idempotency_key, "run-1");
+
+    // Imported into a store, the delivery is still a duplicate.
+    let locator = crate::transcript::test_locator::imported_locator(dir.path());
+    let outcome = append_background_message_in(
+        &locator,
+        &session,
+        TranscriptMessage::assistant("Time to stretch!"),
+        BackgroundAppend::new("run-1", serde_json::json!({"kind": "cron"})),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        deliver().await.unwrap(),
+        outcome,
         BackgroundAppendOutcome::Duplicate { generation: 0 },
         "the idempotency key survives the rewrite"
     );
