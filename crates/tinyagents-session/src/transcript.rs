@@ -132,47 +132,33 @@
 //! | `adoption`      | Folding pre-identity transcripts into a session.              |
 
 mod adoption;
-mod agent_files;
 mod background;
 mod display;
 mod history;
 mod jsonl;
 mod legacy_md;
 mod markdown;
-mod migration;
 mod paths;
 mod reader;
 mod session;
 pub mod spend;
-mod thread_lookup;
 mod turn_lock;
 mod types;
 pub mod view;
 mod writer;
 
-pub use adoption::{SessionAdoption, adopt_legacy_session_transcripts};
-pub use agent_files::{AgentTranscriptFiles, agent_transcript_root};
-pub use background::{
-    append_background_message, append_background_message_in,
-    append_background_message_with_lock_notification,
-};
+pub use adoption::SessionAdoption;
+pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
 pub(crate) use display::{display_from_session, display_message_of, partial_display_message};
 pub(crate) use history::same_transcript_messages;
 pub use history::{
-    FileTranscriptHistory, FileTranscriptLocator, TranscriptHistory, TranscriptLocator,
-    TranscriptPartial, TranscriptRead, TranscriptTurn, TruncateCut,
+    TranscriptHistory, TranscriptLocator, TranscriptPartial, TranscriptRead, TranscriptTurn,
+    TruncateCut,
 };
 pub(crate) use jsonl::stamped_rows;
-pub use legacy_md::read_transcript_legacy_md;
-pub use migration::{TranscriptLayoutMigration, migrate_layout_if_needed};
-pub use paths::{find_latest_transcript, resolve_keyed_transcript_path};
-pub use reader::{read_transcript, read_transcript_display};
+pub(crate) use reader::{read_transcript, read_transcript_display};
 pub use session::{SessionRef, session_stem};
-pub use thread_lookup::{
-    find_root_transcript_for_thread, find_root_transcript_for_thread_scoped,
-    find_root_transcripts_for_thread, read_thread_usage_summary,
-};
 pub use turn_lock::{SessionTurnGuard, lock_session_turn};
 pub use types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, CompactionMarker, DisplayMessage,
@@ -181,20 +167,9 @@ pub use types::{
     TranscriptMeta, TranscriptPart, TranscriptToolCall, TurnUsage, UsageCostSource,
 };
 pub(crate) use writer::write_transcript_with_tools;
-pub use writer::{
-    append_interrupted_partial, append_tools_record, append_transcript_turn,
-    append_transcript_turn_with_partial, write_transcript, write_transcript_if_absent,
-    write_transcript_if_absent_with_tools,
-};
 
 // ── Tests ─────────────────────────────────────────────────────────────
 
-#[cfg(test)]
-#[path = "transcript/locator_parity_tests.rs"]
-mod locator_parity_tests;
-#[cfg(test)]
-#[path = "transcript/transcript_tests.rs"]
-mod test;
 #[cfg(test)]
 #[path = "transcript/typed_rows_tests.rs"]
 mod typed_rows_test;
