@@ -628,7 +628,13 @@ fn a_display_read_repairs_an_index_a_write_could_not_refresh() {
             .await
     });
     assert!(locator.thread_transcripts("t", None).is_none());
-    history.read_display().unwrap().unwrap();
+    // A handle whose replay has not indexed the write (as after a refresh
+    // that failed every attempt).
+    locator
+        .handle("s", meta("t"))
+        .read_display()
+        .unwrap()
+        .unwrap();
     let listed = locator
         .thread_transcripts("t", None)
         .expect("the display read re-indexed it");
