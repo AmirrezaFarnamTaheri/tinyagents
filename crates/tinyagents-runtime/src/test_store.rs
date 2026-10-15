@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use tinyagents_session::port::InMemoryTranscriptLocator;
 use tinyagents_session::transcript::{
-    DisplaySessionTranscript, SessionTranscript, TranscriptLocator, TranscriptMessage,
-    TranscriptMeta, TranscriptTurn,
+    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts,
+    TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
+    TranscriptTurn,
 };
 
 /// An empty in-memory transcript store.
@@ -99,4 +100,76 @@ pub(crate) fn fingerprint(handle: &dyn tinyagents_session::transcript::Transcrip
         handle.read_session().expect("read transcript"),
         handle.read_display().expect("read display")
     )
+}
+
+/// An in-memory store addressed under a fixed destination key, so tests can
+/// hand out separate `Arc`s that stand for one durable store (or, with
+/// another key, for a different one).
+pub(crate) struct Destination {
+    key: String,
+    store: Arc<InMemoryTranscriptLocator>,
+}
+
+impl Destination {
+    pub(crate) fn new(key: &str, store: &Arc<InMemoryTranscriptLocator>) -> Self {
+        Self {
+            key: key.to_string(),
+            store: Arc::clone(store),
+        }
+    }
+}
+
+impl TranscriptLocator for Destination {
+    fn destination_key(&self) -> Option<String> {
+        Some(self.key.clone())
+    }
+    fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.store.latest_for_agent(agent_name)
+    }
+    fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.store.root_for_thread(thread_id)
+    }
+    fn root_for_thread_scoped(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<Arc<dyn TranscriptRead>> {
+        self.store.root_for_thread_scoped(thread_id, agent_id)
+    }
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        self.store.thread_transcripts(thread_id, agent_id)
+    }
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.store.open_stem(stem, seed)
+    }
+    fn session_exists(&self, session: &SessionRef) -> bool {
+        self.store.session_exists(session)
+    }
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        self.store.read_session_transcript(session)
+    }
+    fn begin_generation(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        self.store.begin_generation(session, seed)
+    }
+    fn begin_generation_from_baseline(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+        baseline: &[TranscriptMessage],
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        self.store
+            .begin_generation_from_baseline(session, seed, baseline)
+    }
 }

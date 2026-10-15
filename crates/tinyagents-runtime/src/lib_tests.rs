@@ -15,7 +15,7 @@ use tinyagents_session::transcript::{
     DisplayRecord, SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator,
     TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, session_stem,
 };
-use crate::test_store::{fingerprint, memory, read, read_display, seed, try_read};
+use crate::test_store::{Destination, fingerprint, memory, read, read_display, seed, try_read};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
 use tinytools::{Tool, ToolResult, ToolSpec};
@@ -4015,17 +4015,17 @@ async fn a_locator_over_a_different_directory_is_not_the_same_binding() {
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
 
     let bound = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(first.path())),
+        Arc::new(Destination::new("store-a", &store)),
         session_ref.clone(),
         meta(),
     );
     let same = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(first.path())),
+        Arc::new(Destination::new("store-a", &store)),
         session_ref.clone(),
         meta(),
     );
     let elsewhere = TranscriptTarget::for_session(
-        Arc::new(FileTranscriptLocator::new(second.path())),
+        Arc::new(Destination::new("store-b", &store)),
         session_ref,
         meta(),
     );
