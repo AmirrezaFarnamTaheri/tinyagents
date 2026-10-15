@@ -470,10 +470,10 @@ async fn an_agents_files_adopt_a_shared_session_before_the_append() {
 struct Unnamed(FileTranscriptLocator);
 
 impl TranscriptLocator for Unnamed {
-    fn latest_for_agent(&self, agent_name: &str) -> Option<std::sync::Arc<dyn TranscriptRead>> {
+    fn latest_for_agent(&self, agent_name: &str) -> Option<std::sync::Arc<dyn crate::transcript::TranscriptRead>> {
         self.0.latest_for_agent(agent_name)
     }
-    fn root_for_thread(&self, thread_id: &str) -> Option<std::sync::Arc<dyn TranscriptRead>> {
+    fn root_for_thread(&self, thread_id: &str) -> Option<std::sync::Arc<dyn crate::transcript::TranscriptRead>> {
         self.0.root_for_thread(thread_id)
     }
     fn open_stem(
