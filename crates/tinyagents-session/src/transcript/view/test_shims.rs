@@ -11,7 +11,7 @@ use super::types::ProjectedTranscript;
 use super::{SpawnCallLookup, TranscriptPage, get_page_in, project};
 use crate::transcript::test_locator::imported_locator;
 use crate::transcript::history::seed_meta_for_discovered;
-use crate::transcript::{ThreadTranscript, TranscriptLocator, TranscriptRead};
+use crate::transcript::{ThreadTranscript, TranscriptRead};
 
 pub(crate) fn get_page(
     workspace_dir: &Path,

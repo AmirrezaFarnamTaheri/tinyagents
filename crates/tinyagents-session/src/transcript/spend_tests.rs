@@ -533,7 +533,7 @@ fn request_less_compaction_with_usage_identical_to_history_still_counts() {
 /// counted in the sealed generation.
 #[test]
 fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
-    use crate::transcript::{SessionRef, TranscriptLocator, TruncateCut};
+    use crate::transcript::{SessionRef, TruncateCut};
     let thread = "thread-generations";
     let locator = driver_locator();
     let session = SessionRef::scoped(thread, "orchestrator");
