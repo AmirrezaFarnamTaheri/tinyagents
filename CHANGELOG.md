@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased: unapplied steers are back in the run queue when a turn ends
+
+`SteeringForwarderGuard` now drains and delivers under its shutdown gate and
+requeues residual (delivered-but-unapplied) steers synchronously in `Drop`,
+instead of on a spawned task. Once the guard has dropped, every steer the run
+did not apply is in the queue, so a host can collect the leftovers of a turn
+deterministically. `RunQueue` guards its lanes with a `std::sync::Mutex`
+(never held across an `.await`) and gains synchronous `push_now` and
+`drain_now`; its `async` methods are unchanged.
 ## Unreleased: workspace transcripts on driver ports (tinyagents#453, transcript half)
 
 - `port::WorkspaceStores::open(workspace, agent_id)` (feature `legacy-import`)

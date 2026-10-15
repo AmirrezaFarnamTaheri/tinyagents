@@ -28,7 +28,9 @@ stops, pauses, and deferrals leave the queue untouched. Details:
 
 - [`RunQueue<T>`] — the queue itself. `new`/`Default` create an empty queue;
   `push(lane, item)` appends; `drain(lane)` empties one lane in FIFO order and
-  returns its contents; `take(lane, mode)` is the `QueueMode`-aware form;
+  returns its contents; `push_now`/`drain_now` are their synchronous forms,
+  for `Drop` impls and other non-async callers; `take(lane, mode)` is the
+  `QueueMode`-aware form;
   `status()` snapshots per-lane depth; `clear()` empties every lane and
   returns how many items were dropped.
 - [`QueueLane`] — which lane an item belongs to: `Steer` (inject at the next
@@ -51,11 +53,16 @@ stops, pauses, and deferrals leave the queue untouched. Details:
 
 ## Operational constraints
 
-- All mutating/reading methods are `async` and serialize through a single
-  `tokio::sync::Mutex` guarding all three lanes together, so a caller draining
-  one lane briefly blocks a concurrent push to another — acceptable given the
+- Every method serializes through a single `std::sync::Mutex` guarding all
+  three lanes together. It is held only for one vector operation and never
+  across an `.await`, so the `async` methods never block a runtime thread for
+  long and the synchronous `push_now`/`drain_now` are safe anywhere. The
   queue is meant to hold a handful of pending items, not a high-throughput
   channel.
+- `SteeringForwarderGuard` drains and delivers under its shutdown gate and
+  requeues residual (delivered-but-unapplied) steers synchronously in `Drop`,
+  so once the guard has dropped, every steer the run did not apply is back in
+  the queue and readable at once.
 - `drain` removes and returns items in FIFO order; it does not re-queue on
   failure — a caller that fails to act on a drained item is responsible for
   re-pushing it if that is the desired behavior.
