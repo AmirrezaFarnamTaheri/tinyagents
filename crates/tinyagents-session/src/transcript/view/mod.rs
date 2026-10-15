@@ -18,8 +18,10 @@ use serde::Serialize;
 
 pub use project::{
     project_records, project_thread, project_thread_scoped, project_thread_scoped_with,
-    resolve_files_scoped,
+    project_transcripts, resolve_files_scoped,
 };
+
+use crate::transcript::TranscriptLocator;
 #[allow(deprecated)]
 pub use types::SubagentStatus;
 pub use types::{DisplayItem, ProjectedTranscript, ToolCallStatus, TranscriptSubagentStatus};
@@ -101,15 +103,44 @@ pub fn get_page_scoped(
     cursor: Option<&str>,
     limit: Option<usize>,
 ) -> TranscriptPage {
-    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let upper_cursor = parse_cursor(cursor);
-
     let projected = if let Some(agent_id) = agent_id {
         project::project_thread_scoped(workspace_dir, thread_id, Some(agent_id))
             .map(std::sync::Arc::new)
     } else {
         cache::global().get_or_project(workspace_dir, thread_id)
     };
+    page_of(thread_id, projected.as_deref(), cursor, limit)
+}
+
+/// [`get_page_scoped`] over any [`TranscriptLocator`]: the thread's
+/// transcripts come from
+/// [`TranscriptLocator::thread_transcripts`] and are projected exactly as the
+/// file view projects them. Not cached.
+pub fn get_page_in(
+    locator: &dyn TranscriptLocator,
+    thread_id: &str,
+    agent_id: Option<&str>,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> TranscriptPage {
+    let projected = locator
+        .thread_transcripts(thread_id, agent_id)
+        .map(|listed| {
+            project::project_transcripts(thread_id, &listed.roots, &listed.subagents, None)
+        });
+    page_of(thread_id, projected.as_ref(), cursor, limit)
+}
+
+/// One newest-first page of `projected` (an empty, transcript-less page when
+/// the thread has none).
+fn page_of(
+    thread_id: &str,
+    projected: Option<&ProjectedTranscript>,
+    cursor: Option<&str>,
+    limit: Option<usize>,
+) -> TranscriptPage {
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let upper_cursor = parse_cursor(cursor);
     let Some(projected) = projected else {
         tracing::debug!("{LOG_PREFIX} get_page thread={thread_id}: no transcript");
         return TranscriptPage {

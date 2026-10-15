@@ -25,11 +25,9 @@
 //! there are no turns) instead of after every root item, which is where all
 //! sub-agents used to go.
 
-use std::path::{Path, PathBuf};
-
 use super::SpawnCallLookup;
 
-use crate::transcript::{self, DisplayRecord};
+use crate::transcript::{DisplayRecord, ThreadTranscript};
 
 use super::project::{native_tool_round, project_records};
 use super::types::{DisplayItem, ToolCallStatus, TranscriptSubagentStatus};
@@ -80,19 +78,19 @@ enum OwnState {
 /// `segments` are the root turns' `(request_id, commit unix)` pairs.
 pub(super) fn attach(
     items: &mut Vec<DisplayItem>,
-    sub_paths: &[PathBuf],
+    subs: &[ThreadTranscript],
     segments: &[(String, i64)],
     root_thread_id: Option<&str>,
     lookup: Option<&dyn SpawnCallLookup>,
 ) {
-    let children = build_children(sub_paths, None, root_thread_id, 0, lookup);
+    let children = build_children(subs, None, root_thread_id, 0, lookup);
     place(items, children, segments, lookup);
 }
 
 /// Project the direct children of `parent_stem` (or of the roots, when
 /// `None`), recursing into their own children.
 fn build_children(
-    sub_paths: &[PathBuf],
+    subs: &[ThreadTranscript],
     parent_stem: Option<&str>,
     parent_thread_id: Option<&str>,
     depth: usize,
@@ -102,19 +100,16 @@ fn build_children(
         return Vec::new();
     }
     let mut children = Vec::new();
-    for path in sub_paths {
-        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
+    for sub in subs {
+        let stem = sub.stem.as_str();
         // A compacted child transcript is a generation chain. The newest
         // generation contains the retained prefix plus its subsequent rows;
         // project that head once instead of rendering every generation as a
         // separate child card.
         if let Some((base, generation)) = child_generation(stem)
-            && sub_paths
+            && subs
                 .iter()
-                .filter_map(|candidate| candidate.file_stem().and_then(|name| name.to_str()))
-                .filter_map(|candidate| child_generation(candidate))
+                .filter_map(|candidate| child_generation(&candidate.stem))
                 .any(|(candidate_base, candidate_generation)| {
                     candidate_base == base && candidate_generation > generation
                 })
@@ -137,11 +132,10 @@ fn build_children(
             .then(|| stem.split_once("__").map(|(parent, _)| parent))
             .flatten();
         if let Some(child) = build_child(
-            path,
-            stem,
+            sub,
             suffix,
             parent_thread_id.or(stem_parent_thread_id),
-            sub_paths,
+            subs,
             depth,
             lookup,
         ) {
@@ -158,28 +152,29 @@ fn child_generation(stem: &str) -> Option<(&str, u32)> {
 }
 
 fn build_child(
-    path: &Path,
-    stem: &str,
+    sub: &ThreadTranscript,
     suffix: &str,
     parent_thread_id: Option<&str>,
-    sub_paths: &[PathBuf],
+    subs: &[ThreadTranscript],
     depth: usize,
     lookup: Option<&dyn SpawnCallLookup>,
 ) -> Option<ChildRun> {
-    let display = match transcript::read_transcript_display(path) {
-        Ok(display) => display,
+    let stem = sub.stem.as_str();
+    let display = match sub.transcript.read_display() {
+        Ok(Some(display)) => display,
+        Ok(None) => {
+            tracing::warn!("{LOG_PREFIX} sub-agent transcript {stem} is missing");
+            return None;
+        }
         Err(err) => {
-            tracing::warn!(
-                "{LOG_PREFIX} failed to read sub-agent transcript {}: {err}",
-                path.display()
-            );
+            tracing::warn!("{LOG_PREFIX} failed to read sub-agent transcript {stem}: {err}");
             return None;
         }
     };
     let own_state = own_state(&display.records);
     let mut items = project_records(&display.records);
     let grandchildren = build_children(
-        sub_paths,
+        subs,
         Some(stem),
         display.meta.thread_id.as_deref(),
         depth + 1,

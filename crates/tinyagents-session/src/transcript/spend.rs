@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::{
-    DisplayRecord, SessionTranscript, TranscriptMessage, TranscriptMeta, TurnUsage,
-    UsageCostSource, find_root_transcripts_for_thread, read_transcript_display,
+    DisplayRecord, DisplaySessionTranscript, SessionTranscript, ThreadTranscript,
+    TranscriptLocator, TranscriptMessage, TranscriptMeta, TurnUsage, UsageCostSource,
+    find_root_transcripts_for_thread, read_transcript_display,
 };
 
 /// One transcript's own spend, summed from the per-turn `turn_usage` records
@@ -251,6 +252,14 @@ fn file_spend(
             return None;
         }
     };
+    Some(display_spend(display, earlier_requests))
+}
+
+/// [`file_spend`] of an already-read display projection.
+fn display_spend(
+    display: DisplaySessionTranscript,
+    earlier_requests: &mut HashSet<String>,
+) -> (TranscriptSpend, TranscriptMeta) {
     let mut usages: Vec<&TurnUsage> = Vec::new();
     let mut counted_requests: HashSet<&str> = HashSet::new();
     // The logical context as of the previous record: what a compaction's kept
@@ -316,7 +325,7 @@ fn file_spend(
     }
     let spend = spend_from_usages(usages, display.meta.model.as_ref());
     earlier_requests.extend(counted_requests.into_iter().map(str::to_owned));
-    Some((spend, display.meta))
+    (spend, display.meta)
 }
 
 /// Whether `row` in a compaction replacement is `prior` carried over: same
@@ -393,57 +402,107 @@ pub fn thread_spend(workspace_dir: &Path, thread_id: &str) -> ThreadSpend {
     for root in &roots {
         out.found_transcript = true;
         if let Some((spend, meta)) = file_spend(root, &mut root_requests) {
-            out.root.input_tokens = out.root.input_tokens.saturating_add(spend.input_tokens);
-            out.root.output_tokens = out.root.output_tokens.saturating_add(spend.output_tokens);
-            out.root.cached_input_tokens = out
-                .root
-                .cached_input_tokens
-                .saturating_add(spend.cached_input_tokens);
-            out.root.cost_usd += spend.cost_usd;
-            out.root.cost_split.merge(&spend.cost_split);
-            out.root.turns += spend.turns;
-            // `find_root_transcripts_for_thread` returns oldest first, so the
-            // last root to report a turn owns the last-turn view.
-            if spend.turns > 0 {
-                out.root.last_input_tokens = spend.last_input_tokens;
-                out.root.last_output_tokens = spend.last_output_tokens;
-                out.root.last_context_tokens = spend.last_context_tokens;
-                out.root.last_context_input_tokens = spend.last_context_input_tokens;
-                out.root.last_context_output_tokens = spend.last_context_output_tokens;
-            }
-            if spend.context_window > 0 {
-                out.root.context_window = spend.context_window;
-            }
-            if spend.model.is_some() {
-                out.root.model = spend.model;
-            }
-            out.updated = Some(meta.updated);
+            out.add_root(spend, meta);
         }
         for child in descendant_transcripts(root) {
-            let Some((spend, child_meta)) = file_spend(&child, &mut HashSet::new()) else {
-                continue;
-            };
-            out.found_transcript = true;
-            let entry = out
-                .subagents
-                .entry(child_meta.agent_name.clone())
-                .or_default();
-            entry.0.input_tokens = entry.0.input_tokens.saturating_add(spend.input_tokens);
-            entry.0.output_tokens = entry.0.output_tokens.saturating_add(spend.output_tokens);
-            entry.0.cached_input_tokens = entry
-                .0
-                .cached_input_tokens
-                .saturating_add(spend.cached_input_tokens);
-            entry.0.cost_usd += spend.cost_usd;
-            entry.0.cost_split.merge(&spend.cost_split);
-            entry.0.turns += spend.turns;
-            if entry.0.model.is_none() {
-                entry.0.model = spend.model;
+            if let Some((spend, child_meta)) = file_spend(&child, &mut HashSet::new()) {
+                out.add_subagent(spend, &child_meta);
             }
-            entry.1 += 1;
         }
     }
     out
+}
+
+/// [`thread_spend`] over any [`TranscriptLocator`]: the thread's roots and
+/// sub-agent transcripts come from
+/// [`TranscriptLocator::thread_transcripts`], each counted once — the roots
+/// in projection order with one shared set of counted requests, every listed
+/// sub-agent into its archetype. Unlike the file walk, a sub-agent the
+/// listing finds by its `_meta.thread_id` (not only by stem) is counted too.
+pub fn thread_spend_in(locator: &dyn TranscriptLocator, thread_id: &str) -> ThreadSpend {
+    let mut out = ThreadSpend::default();
+    let Some(listed) = locator.thread_transcripts(thread_id, None) else {
+        return out;
+    };
+    let mut root_requests = HashSet::new();
+    for root in &listed.roots {
+        out.found_transcript = true;
+        if let Some(display) = read_listed(root) {
+            let (spend, meta) = display_spend(display, &mut root_requests);
+            out.add_root(spend, meta);
+        }
+    }
+    for child in &listed.subagents {
+        if let Some(display) = read_listed(child) {
+            let (spend, meta) = display_spend(display, &mut HashSet::new());
+            out.add_subagent(spend, &meta);
+        }
+    }
+    out
+}
+
+/// A listed transcript's display projection; unreadable or missing ones are
+/// skipped with a warning, as the file walk skips an unreadable file.
+fn read_listed(listed: &ThreadTranscript) -> Option<DisplaySessionTranscript> {
+    match listed.transcript.read_display() {
+        Ok(found) => found,
+        Err(err) => {
+            tracing::warn!(
+                "[transcript:spend] skipping unreadable transcript {}: {err}",
+                listed.stem
+            );
+            None
+        }
+    }
+}
+
+impl ThreadSpend {
+    /// Adds one root transcript's own spend; roots arrive oldest first, so
+    /// the last one to report a turn owns the last-turn view.
+    fn add_root(&mut self, spend: TranscriptSpend, meta: TranscriptMeta) {
+        self.root.input_tokens = self.root.input_tokens.saturating_add(spend.input_tokens);
+        self.root.output_tokens = self.root.output_tokens.saturating_add(spend.output_tokens);
+        self.root.cached_input_tokens = self
+            .root
+            .cached_input_tokens
+            .saturating_add(spend.cached_input_tokens);
+        self.root.cost_usd += spend.cost_usd;
+        self.root.cost_split.merge(&spend.cost_split);
+        self.root.turns += spend.turns;
+        if spend.turns > 0 {
+            self.root.last_input_tokens = spend.last_input_tokens;
+            self.root.last_output_tokens = spend.last_output_tokens;
+            self.root.last_context_tokens = spend.last_context_tokens;
+            self.root.last_context_input_tokens = spend.last_context_input_tokens;
+            self.root.last_context_output_tokens = spend.last_context_output_tokens;
+        }
+        if spend.context_window > 0 {
+            self.root.context_window = spend.context_window;
+        }
+        if spend.model.is_some() {
+            self.root.model = spend.model;
+        }
+        self.updated = Some(meta.updated);
+    }
+
+    /// Adds one sub-agent run's own spend to its archetype (`_meta.agent`).
+    fn add_subagent(&mut self, spend: TranscriptSpend, meta: &TranscriptMeta) {
+        self.found_transcript = true;
+        let entry = self.subagents.entry(meta.agent_name.clone()).or_default();
+        entry.0.input_tokens = entry.0.input_tokens.saturating_add(spend.input_tokens);
+        entry.0.output_tokens = entry.0.output_tokens.saturating_add(spend.output_tokens);
+        entry.0.cached_input_tokens = entry
+            .0
+            .cached_input_tokens
+            .saturating_add(spend.cached_input_tokens);
+        entry.0.cost_usd += spend.cost_usd;
+        entry.0.cost_split.merge(&spend.cost_split);
+        entry.0.turns += spend.turns;
+        if entry.0.model.is_none() {
+            entry.0.model = spend.model;
+        }
+        entry.1 += 1;
+    }
 }
 
 #[cfg(test)]
