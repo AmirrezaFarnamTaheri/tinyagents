@@ -103,3 +103,31 @@ fn a_workspace_with_no_legacy_files_opens_empty() {
     let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert!(opened.transcripts().latest_for_agent("agent").is_none());
 }
+
+#[test]
+fn a_dropped_handle_releases_its_backend_and_reopens_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    let weak = Arc::downgrade(first.provider());
+    drop(first);
+    assert!(
+        weak.upgrade().is_none(),
+        "cache must not keep the backend alive"
+    );
+    WorkspaceStores::open(dir.path(), "agent").unwrap();
+}
+
+#[test]
+fn an_incomplete_import_is_retried_on_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = dir.path().join("session_raw");
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::write(raw.join("broken.jsonl"), "not json at all\n").unwrap();
+    let first = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    assert!(matches!(
+        first.import_outcome(),
+        OnceOutcome::Imported { marked: false, .. }
+    ));
+    let second = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    assert!(!Arc::ptr_eq(first.provider(), second.provider()));
+}
