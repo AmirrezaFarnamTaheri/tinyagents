@@ -8,10 +8,10 @@
 //!   was written. Entries keep no wall clock, so a marker's `ts` is `None` and
 //!   intermediate tool-call rows carry no per-step timestamp.
 //! - **Thread listing.** [`TranscriptLocator::thread_transcripts`] reads the
-//!   index: the thread's written roots, ordered like the file view (session
-//!   chains oldest first, pre-identity roots dropped once a session root
-//!   exists), and the sub-agent transcripts that descend from a root stem or
-//!   (unscoped) name the thread.
+//!   index: the thread's written roots, ordered like the file view (by
+//!   `_meta.created`, session chains oldest first, pre-identity roots dropped
+//!   once a session root exists), and the sub-agent transcripts that descend
+//!   from a root stem or (unscoped) name the thread.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -25,7 +25,8 @@ use super::{
 };
 use crate::transcript::{
     CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionRef, ThreadTranscript,
-    ThreadTranscripts, TranscriptLocator, TranscriptPartial, TranscriptRead, display_message_of,
+    ThreadTranscripts, TranscriptLocator, TranscriptMeta, TranscriptPartial, TranscriptRead,
+    display_message_of,
     partial_display_message, session_stem,
 };
 
@@ -152,21 +153,50 @@ impl DriverTranscriptLocator {
         ThreadTranscript { stem, transcript }
     }
 
-    /// Whether the transcript at `stem` records a session identity (a
-    /// pre-identity root does not).
-    fn has_session_id(&self, stem: &str) -> bool {
+    /// The `_meta` of the transcript at `stem`, when it is readable.
+    fn root_meta(&self, stem: &str) -> Option<TranscriptMeta> {
         self.handle(stem, discovered_seed(stem))
             .read_session()
             .ok()
             .flatten()
-            .is_some_and(|session| session.meta.session_id.is_some())
+            .map(|session| session.meta)
     }
 
     /// The thread's roots in projection order; see the module docs.
+    ///
+    /// Like the file view, roots are first ordered by `_meta.created` (then
+    /// generation, then stem), not by when their index document was written:
+    /// an import writes files in name order, which need not be chronological.
+    /// Once any root records a session identity, pre-identity roots are
+    /// dropped — they were folded into that session — whether or not the
+    /// session is agent-scoped.
     fn ordered_roots(&self, thread_id: &str, roots: Vec<Indexed>) -> Vec<String> {
+        let mut roots: Vec<(Indexed, Option<TranscriptMeta>)> = roots
+            .into_iter()
+            .map(|root| {
+                let meta = self.root_meta(&root.stem);
+                (root, meta)
+            })
+            .collect();
+        roots.sort_by(|(a, a_meta), (b, b_meta)| {
+            let created = |meta: &Option<TranscriptMeta>| {
+                meta.as_ref().map(|meta| meta.created.clone()).unwrap_or_default()
+            };
+            created(a_meta)
+                .cmp(&created(b_meta))
+                .then_with(|| stem_generation(&a.stem).cmp(&stem_generation(&b.stem)))
+                .then_with(|| a.stem.cmp(&b.stem))
+        });
+        let has_session_id = |meta: &Option<TranscriptMeta>| {
+            meta.as_ref()
+                .is_some_and(|meta| meta.session_id.is_some())
+        };
+        if !roots.iter().any(|(_, meta)| has_session_id(meta)) {
+            return roots.into_iter().map(|(root, _)| root.stem).collect();
+        }
         let mut chains: Vec<Vec<String>> = Vec::new();
         let mut agents: HashSet<String> = HashSet::new();
-        for root in &roots {
+        for (root, _) in &roots {
             if let Some(agent_id) = &root.agent_id
                 && agents.insert(agent_id.clone())
             {
@@ -180,13 +210,10 @@ impl DriverTranscriptLocator {
                 }
             }
         }
-        if chains.is_empty() {
-            return roots.into_iter().map(|root| root.stem).collect();
-        }
         let mut seen: HashSet<String> = HashSet::new();
         let mut ordered = Vec::new();
         let mut dropped_legacy = 0usize;
-        for root in roots {
+        for (root, meta) in roots {
             if seen.contains(&root.stem) {
                 continue;
             }
@@ -196,7 +223,7 @@ impl DriverTranscriptLocator {
                         ordered.push(link.clone());
                     }
                 }
-            } else if self.has_session_id(&root.stem) {
+            } else if has_session_id(&meta) {
                 seen.insert(root.stem.clone());
                 ordered.push(root.stem);
             } else {
@@ -236,8 +263,28 @@ impl DriverTranscriptLocator {
             .map(|root| format!("{}__", root.stem))
             .collect();
         let roots = self.ordered_roots(thread_id, roots);
+        // Bounded to this thread: each root's `{stem}__` range, plus
+        // (unscoped) the sub-agents naming the thread. The in-memory filter
+        // below stays as the exact rule.
+        let mut wanted = prefixes
+            .iter()
+            .map(|prefix| prefix_range("stem", prefix))
+            .reduce(Filter::or);
+        if agent_id.is_none() {
+            let by_thread = Filter::eq("thread_id", thread_id);
+            wanted = Some(match wanted {
+                Some(ranges) => ranges.or(by_thread),
+                None => by_thread,
+            });
+        }
+        let Some(wanted) = wanted else {
+            unreachable!("a listed thread has at least one root prefix")
+        };
         let mut subagents: Vec<String> = self
-            .indexed(Filter::eq("subagent", true), "thread_subagents")
+            .indexed(
+                Filter::eq("subagent", true).and(wanted),
+                "thread_subagents",
+            )
             .into_iter()
             .filter(|sub| {
                 prefixes.iter().any(|prefix| sub.stem.starts_with(prefix))
@@ -262,6 +309,29 @@ impl DriverTranscriptLocator {
                 .collect(),
         })
     }
+}
+
+/// `field` starts with `prefix`, as a range: `prefix <= field < upper`,
+/// where `upper` is `prefix` with its last character incremented. A stem
+/// prefix here always ends in `__`, so the bump is `_` to `` ` ``.
+fn prefix_range(field: &str, prefix: &str) -> Filter {
+    let mut upper: Vec<char> = prefix.chars().collect();
+    let filter = Filter::gte(field, prefix);
+    match upper.pop().and_then(|last| char::from_u32(last as u32 + 1)) {
+        Some(next) => {
+            upper.push(next);
+            filter.and(Filter::lt(field, upper.into_iter().collect::<String>()))
+        }
+        None => filter,
+    }
+}
+
+/// The compaction generation a stem encodes: `n` for `{base}.g{n}`, else 0.
+fn stem_generation(stem: &str) -> u32 {
+    stem.rsplit_once(".g")
+        .filter(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|(_, digits)| digits.parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
