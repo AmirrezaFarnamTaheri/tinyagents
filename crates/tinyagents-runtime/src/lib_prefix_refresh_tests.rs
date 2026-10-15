@@ -348,8 +348,7 @@ async fn legacy_mixed_role_prefix_resumes_repeatedly_then_records_boundary_on_co
 
 #[tokio::test]
 async fn mixed_role_refresh_preserves_overlapping_conversation_on_request_and_cold_resume() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path().to_path_buf()));
+    let locator = crate::test_store::memory();
     let identity = SessionRef::scoped("refresh", "agent-id");
     let hooks = Arc::new(RefreshHook::default());
     let prefix = vec![Message::system("new"), Message::user("first question")];
@@ -400,8 +399,7 @@ async fn mixed_role_refresh_preserves_overlapping_conversation_on_request_and_co
 #[tokio::test]
 async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_partial_turns() {
     for partial in [false, true] {
-        let directory = tempfile::tempdir().unwrap();
-        let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+        let locator = crate::test_store::memory();
         let identity = SessionRef::scoped("extension", "agent-id");
         let mut initial_meta = meta();
         initial_meta.turn_count = 1;
@@ -414,7 +412,7 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
         example.extra_metadata = Some(serde_json::json!({"opaque":"conversation provenance"}));
         example.request_id = Some("original-turn".into());
         sealed.append(example).unwrap();
-        let sealed_before = std::fs::read(sealed.path()).unwrap();
+        let sealed_before = crate::test_store::fingerprint(sealed.as_ref());
         let original_row = sealed.read_session().unwrap().unwrap().messages[1].clone();
         let prefix = vec![Message::system("base"), Message::user("example")];
         let expected = vec![
@@ -455,7 +453,7 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
             head.generation, 1,
             "changed committed prefix must seal generation zero"
         );
-        assert_eq!(std::fs::read(sealed.path()).unwrap(), sealed_before);
+        assert_eq!(crate::test_store::fingerprint(sealed.as_ref()), sealed_before);
         let persisted = locator
             .read_session_transcript(&head)
             .unwrap()
@@ -472,7 +470,7 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
         let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))
             .codec(Arc::new(RetainedCodec))
             .session(
-                Arc::new(FileTranscriptLocator::new(directory.path())),
+                locator.clone(),
                 identity,
                 meta(),
             )
@@ -490,8 +488,7 @@ async fn compacted_legacy_mixed_role_prefix_resumes_then_records_exact_boundary(
 }
 
 async fn legacy_prefix_contract(compacted: bool, recorded_root: bool) {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path().to_path_buf()));
+    let locator = crate::test_store::memory();
     let identity = SessionRef::scoped("legacy-prefix", "agent-id");
     let mut legacy_meta = meta();
     legacy_meta.turn_count = 1;
@@ -588,7 +585,7 @@ async fn legacy_prefix_contract(compacted: bool, recorded_root: bool) {
     let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(codec)
         .session(
-            Arc::new(FileTranscriptLocator::new(directory.path().to_path_buf())),
+            locator.clone(),
             identity,
             meta(),
         )

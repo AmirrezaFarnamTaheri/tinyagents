@@ -89,3 +89,14 @@ fn placeholder_meta() -> TranscriptMeta {
         task_id: None,
     }
 }
+
+/// Everything `handle` would show a reader (model context and display), as one
+/// comparable value, so a test can assert a transcript is byte-for-byte what
+/// it was.
+pub(crate) fn fingerprint(handle: &dyn tinyagents_session::transcript::TranscriptRead) -> String {
+    format!(
+        "{:?}\n{:?}",
+        handle.read_session().expect("read transcript"),
+        handle.read_display().expect("read display")
+    )
+}
