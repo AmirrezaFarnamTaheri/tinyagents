@@ -2,20 +2,18 @@
 //!
 //! Turns the append-only log's [`DisplayRecord`]s (message lines, compaction
 //! markers, interrupted partials) into the frontend's chat vocabulary
-//! ([`DisplayItem`]), sanitizing injected scaffolding as it goes. File
-//! resolution lives in [`super::resolve`]; sub-agent trails are placed by
+//! ([`DisplayItem`]), sanitizing injected scaffolding as it goes. Cross-generation row identity lives in [`super::resolve`]; sub-agent trails are placed by
 //! [`super::subagents`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use crate::transcript::history::seed_meta_for_discovered;
 use crate::transcript::{
-    CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript,
-    FileTranscriptHistory, ThreadTranscript, TranscriptRead,
+    CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript, ThreadTranscript,
+    TranscriptLocator,
 };
 
+#[cfg(test)]
+pub(crate) use super::test_shims::{project_from_files, project_thread, resolve_files};
 use super::{SpawnCallLookup, TOOL_RESULT_FAILURES_METADATA_KEY};
 
 use super::prompt_tools::{self, CallRegistry, PromptToolResult};
@@ -37,95 +35,29 @@ const CHANNEL_CONTEXT_PREFIX: &str = "[Channel context]";
 type NativeToolCall = (String, String, String);
 type NativeToolEnvelope = (String, Vec<NativeToolCall>);
 
-/// Resolve a thread's root transcript, discover its sub-agent siblings, and
-/// project everything into display items. Returns `None` when the thread has
-/// no root transcript yet (brand-new thread / first turn not persisted).
-pub fn project_thread(workspace_dir: &Path, thread_id: &str) -> Option<ProjectedTranscript> {
-    project_thread_scoped(workspace_dir, thread_id, None)
-}
-
-/// Project only the transcript roots owned by `agent_id` when supplied.
-pub fn project_thread_scoped(
-    workspace_dir: &Path,
+/// Lists `thread_id`'s transcripts through `locator` (scoped to `agent_id`
+/// when given) and projects them. `None` when the thread has no root
+/// transcript yet (brand-new thread, first turn not persisted).
+///
+/// With a [`SpawnCallLookup`], a sub-agent is placed under the exact tool call
+/// that spawned it when the run ledger knows which one that was, instead of by
+/// the timestamp/target heuristic.
+pub fn project_thread_in(
+    locator: &dyn TranscriptLocator,
     thread_id: &str,
     agent_id: Option<&str>,
+    lookup: Option<&dyn SpawnCallLookup>,
 ) -> Option<ProjectedTranscript> {
-    let (root_paths, sub_paths) =
-        resolve::resolve_files_scoped(workspace_dir, thread_id, agent_id)?;
-    Some(project_from_files(thread_id, &root_paths, &sub_paths, None))
-}
-
-/// [`project_thread_scoped`] with a [`SpawnCallLookup`], so a sub-agent is
-/// placed under the exact tool call that spawned it when the run ledger knows
-/// which one that was, instead of by the timestamp/target heuristic.
-pub fn project_thread_scoped_with(
-    workspace_dir: &Path,
-    thread_id: &str,
-    agent_id: Option<&str>,
-    lookup: &dyn SpawnCallLookup,
-) -> Option<ProjectedTranscript> {
-    let (root_paths, sub_paths) =
-        resolve::resolve_files_scoped(workspace_dir, thread_id, agent_id)?;
-    Some(project_from_files(
+    let listed = locator.thread_transcripts(thread_id, agent_id)?;
+    Some(project_transcripts(
         thread_id,
-        &root_paths,
-        &sub_paths,
-        Some(lookup),
+        &listed.roots,
+        &listed.subagents,
+        lookup,
     ))
 }
 
-/// Resolve the on-disk file set backing a thread's transcript view: the root
-/// generations in chain order plus every sub-agent sibling file. `None` when
-/// the thread has no root transcript yet. Exposed so the cache can key on
-/// these paths (and their mtimes/lengths) without re-projecting.
-pub fn resolve_files(
-    workspace_dir: &Path,
-    thread_id: &str,
-) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
-    resolve::resolve_files(workspace_dir, thread_id)
-}
-
-/// Resolve the files for one agent's transcript when `agent_id` is supplied.
-pub fn resolve_files_scoped(
-    workspace_dir: &Path,
-    thread_id: &str,
-    agent_id: Option<&str>,
-) -> Option<(Vec<PathBuf>, Vec<PathBuf>)> {
-    resolve::resolve_files_scoped(workspace_dir, thread_id, agent_id)
-}
-
-/// Project a thread from an already-resolved file set (root generations +
-/// sub-agent siblings). Missing/unreadable files degrade to empty rather than
-/// failing.
-///
-/// A root whose `_meta.parent_session_id` names the previous root is that
-/// session's next compaction generation: it opens with the retained set
-/// rewritten, so those rows are dropped (see [`resolve::drop_retained_rows`])
-/// and a [`DisplayItem::Compaction`] marks the seam instead.
-pub fn project_from_files(
-    thread_id: &str,
-    root_paths: &[PathBuf],
-    sub_paths: &[PathBuf],
-    lookup: Option<&dyn SpawnCallLookup>,
-) -> ProjectedTranscript {
-    let handles = |paths: &[PathBuf]| -> Vec<ThreadTranscript> {
-        paths
-            .iter()
-            .map(|path| {
-                // The same stem rule as `FileTranscriptLocator::thread_transcripts`
-                // (strips only `.jsonl`), so both paths name a file alike.
-                let stem = crate::transcript::history::stem_of_handle(path);
-                let transcript: Arc<dyn TranscriptRead> = Arc::new(
-                    FileTranscriptHistory::opened_at(path.clone(), seed_meta_for_discovered(&stem)),
-                );
-                ThreadTranscript { stem, transcript }
-            })
-            .collect()
-    };
-    project_transcripts(thread_id, &handles(root_paths), &handles(sub_paths), lookup)
-}
-
-/// `project_from_files` over a listed transcript set (see
+/// Projects a thread from a listed transcript set (see
 /// [`TranscriptLocator::thread_transcripts`](crate::transcript::TranscriptLocator::thread_transcripts)),
 /// so any store projects the same way. Unreadable transcripts degrade to
 /// empty rather than failing.

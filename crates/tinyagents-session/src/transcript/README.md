@@ -1,39 +1,39 @@
 # `session::transcript` — durable, provider-neutral session transcripts
 
-An append-only, JSONL-backed transcript store used for KV-cache-stable
-resume: `{workspace}/session_raw/{stem}.jsonl` is the source of truth, with a
-human-readable `.md` companion re-rendered on every write. See the extensive
-module doc in `../transcript.rs` for the on-disk schema, the append-only log
-format (pure extension vs. compaction records), and backward compatibility
-with the legacy date-grouped layout — this README covers the module's shape
-and how its files relate rather than repeating that.
+The store-port seam hosts persist conversations through. A transcript lives in
+whatever store the host installed (`crate::port`: the `tinystoragedrivers`
+backed `DriverSessionStores`, or the in-memory double); this module defines
+the traits and types, and nothing in it reads or writes a workspace directory.
+The only code touching classic `session_raw/{stem}.jsonl` files is in
+`crate::legacy`: the one-time, read-only import (`import_transcripts_once`,
+`WorkspaceStores`) and `rewrite_legacy_transcripts`, which rewrites them in
+place. Both parse them with the internal JSONL codec kept here
+(`jsonl.rs`, `reader.rs`, `legacy_md.rs`). See the module doc in
+`../transcript.rs` for the append-only log model and the classic line schema.
 
 ## Why this exists, and how it differs from `crate::ops` / `crate::run_ledger`
 
-This module persists the literal message stream a model saw, byte-for-byte,
-so a resumed run gets exactly the same context (and, for providers with
-prompt caching, hits the same cache) it would have if the process never
-restarted. `crate::ops` records a *searchable summary* of a session
-(messages, tool calls, cost) for history/search; `crate::run_ledger` records
-*execution state* (run status, checkpoints, coordination). All three can
-describe the same conversation from different angles and are written
-independently — a host that only wants search doesn't need transcripts, and
-vice versa.
+This module persists the literal message stream a model saw, so a resumed run
+gets exactly the same context (and, for providers with prompt caching, hits
+the same cache) it would have if the process never restarted. `crate::ops`
+records a *searchable summary* of a session (messages, tool calls, cost) for
+history/search; `crate::run_ledger` records *execution state* (run status,
+checkpoints, coordination). All three can describe the same conversation from
+different angles and are written independently.
 
 ## Public surface
 
-Re-exported from `transcript::` (see `../transcript.rs`); reachable as
-`session::transcript::`.
+Re-exported from `transcript::` (see `../transcript.rs`).
 
 ### Types (`types.rs`)
 
 - `TranscriptMessage` / `TranscriptToolCall` — the durable, provider-neutral
   message and tool-call shapes. Deliberately not an inference message: this
-  is an on-disk compatibility boundary, and hosts convert at their own edge.
-- `TranscriptMeta` / `SessionTranscript` — the `_meta` header and the parsed
+  is a compatibility boundary, and hosts convert at their own edge.
+- `TranscriptMeta` / `SessionTranscript` — the `_meta` header and the
   model-context transcript (`meta` + exact message array). The optional
   `_meta.prefix_message_count` records how many leading messages were frozen
-  prompt tiers in this generation; older files omit it.
+  prompt tiers in this generation.
 - `MessageUsage` / `TurnUsage` — per-turn usage and provenance attached to
   the last assistant message of a turn. `input` / `output` / `cached_input`
   sum every provider call of the turn (its spend); `last_call_input` /
@@ -44,39 +44,43 @@ Re-exported from `transcript::` (see `../transcript.rs`); reachable as
   falling back to the mean request size for records written before them.
 - `DisplayMessage` / `CompactionMarker` / `DisplayRecord` /
   `DisplaySessionTranscript` — the display projection, which (unlike the
-  model-context view) preserves every record in file order.
+  model-context view) preserves every record in log order.
 - `ToolFailure` — provider-neutral failure status for a tool-result row.
 
-### Writing (`writer.rs`)
+### Store seam (`history.rs`)
 
-- `write_transcript` — one-shot **full rewrite**; used by migrations,
-  sub-agent runners, and tests.
-- `append_transcript_turn` — the incremental, append-only path: appends new
-  tail lines on pure extension, or a `compaction` record on context
-  reduction. Never rewrites existing lines.
-- `append_interrupted_partial` — appends a display-only partial assistant
-  answer when a stream was cancelled mid-turn; skipped by the model-context
-  reader.
+- `TranscriptLocator` — resolves transcripts by thread, agent or
+  `SessionRef`, lists a thread's transcripts (`thread_transcripts`: the roots
+  with session chains oldest first and pre-identity roots dropped once a
+  session root exists, plus sub-agent transcripts), binds a session's write
+  handle (`open_session` / `open_stem`), and opens compaction generations
+  (`begin_generation`, `begin_generation_from_baseline`,
+  `truncate_into_next_generation`). `destination_key()` names the durable
+  destination so rebuilt locators over one store compare equal.
+- `TranscriptHistory` / `TranscriptRead` — the write and read handles a turn
+  path holds. `TranscriptRead` has no write methods, so a discovered
+  transcript cannot be appended to by construction. `read_session()` is the
+  model-context replay (compactions replace the accumulator, interrupted
+  partials are skipped); `read_display()` is the display projection (every
+  record, including pre-compaction history, compaction markers and interrupted
+  partials).
+- `TranscriptTurn` — the borrowed argument bundle for
+  `TranscriptHistory::append_turn`.
 
 ### Background appends (`background.rs`, `turn_lock.rs`)
 
-- `append_background_message(&FileTranscriptLocator, &SessionRef,
+- `append_background_message_in(&dyn TranscriptLocator, &SessionRef,
   TranscriptMessage, BackgroundAppend) -> Result<BackgroundAppendOutcome>`
   (async) — appends one plain assistant message to a session's **head**
   generation from outside any turn (e.g. a scheduled job reporting back into
   the chat that created it). Outcomes: `Appended { generation }`,
-  `Duplicate { generation }` (the idempotency key is already in the head),
-  `StaleGeneration { expected, head }` (a pinned `expected_generation` no
-  longer matches), `NoSession` (no transcript; none is created). The line is
-  an ordinary message line plus an additive top-level
-  `"background": {"idempotency_key", "provenance"}` field, so the
-  model-context reader resumes it as an assistant row and the display reader
-  exposes the origin as `DisplayMessage::background`.
-- `append_background_message_in(&dyn TranscriptLocator, …)` — the same
-  contract through any locator. A file-backed one (`file_backing()`) writes
-  the identical JSONL line; any other store appends through its history
-  handle and keeps the provenance in the row's `extra_metadata` under
-  `BACKGROUND_METADATA_KEY`, which the display read lifts back out.
+  `Duplicate { generation }` (the idempotency key is already held by the head
+  generation's *live* context: a key dropped by a compaction, in the same
+  generation or a successor, is free again), `StaleGeneration { expected,
+  head }` (a pinned `expected_generation` no longer matches), `NoSession` (no
+  transcript; none is created). The provenance is kept in the row's
+  `extra_metadata` under `BACKGROUND_METADATA_KEY`, which the display read
+  lifts back out as `DisplayMessage::background`.
 - `lock_session_turn(&dyn TranscriptLocator, &SessionRef) ->
   Option<SessionTurnGuard>` (async) — the per-session, in-process turn lock,
   keyed by `destination_key()` + the generation-0 stem. A live turn holds it
@@ -85,30 +89,12 @@ Re-exported from `transcript::` (see `../transcript.rs`); reachable as
   awaits it, so it always lands between turns. Not reentrant: never await a
   background append into a session from inside that session's own turn.
 
-### Reading (`reader.rs`)
-
-- `read_transcript` — model-context replay: compaction records replace the
-  accumulator, interrupted partials are skipped. Falls back to the legacy
-  `.md` reader when no `.jsonl` exists.
-- `read_transcript_display` — display projection: every record in file
-  order, including pre-compaction history and interrupted partials.
-- `TranscriptRead::read_display()` — the same projection through any handle
-  (a driver store replays its entry log: a later `set` is a compaction
-  marker, a `clear` an empty one, a partial an interrupted record; entries
-  keep no clock, so markers carry no `ts`).
-- `TranscriptLocator::thread_transcripts(thread_id, agent_id)` — the roots
-  (session chains oldest first, pre-identity roots dropped once a session
-  root exists) and sub-agent transcripts backing a thread, as
-  `ThreadTranscripts`. `view::get_page_in` and `spend::thread_spend_in` take a
-  locator and use it, so a host never names a transcript file.
-
 ### Spend and cost provenance (`spend.rs`)
 
 - `transcript_spend(&SessionTranscript)` sums usage in the logical context.
   Compaction removes older rows from that view; use
-  `thread_spend(workspace_dir, thread_id)` (or `thread_spend_in(locator,
-  thread_id)` for any store) for the full append history.
-- `thread_spend` returns `ThreadSpend`: `root` contains the orchestrator's
+  `thread_spend_in(locator, thread_id)` for the full append history.
+- `thread_spend_in` returns `ThreadSpend`: `root` contains the orchestrator's
   own spend, and `subagents` groups descendant runs by archetype, including
   children whose headers name a different worker thread. Retained root rows
   across generations are counted once.
@@ -139,108 +125,47 @@ Present the known priced amount with its source and separately re-price the
 unpriced tokens at host-selected rates, or report their cost as unavailable.
 Do not describe an estimated amount as a provider charge.
 
-### Paths and resume (`paths.rs`)
+### View (`view/`)
 
-- `resolve_keyed_transcript_path` — resolves/creates
-  `session_raw/{stem}.jsonl` for a given stem.
-- `find_latest_transcript` — newest-transcript scan for an agent, with a
-  fallback to the legacy `session_raw/DDMMYYYY/` layout.
-
-### Thread lookups (`thread_lookup.rs`)
-
-- `find_root_transcript_for_thread` / `find_root_transcript_for_thread_scoped`
-  / `find_root_transcripts_for_thread` — locate a thread's root transcript(s)
-  by `_meta.thread_id`, optionally scoped by `_meta.agent_id` to avoid
-  splicing one agent's history into another's when a `thread_id` is reused.
-- `read_thread_usage_summary` — aggregated token/cost usage for a thread
-  across all its root transcripts, plus a per-archetype sub-agent breakdown.
-
-### Legacy compatibility (`legacy_md.rs`)
-
-- `read_transcript_legacy_md` — parses the pre-JSONL HTML-comment `.md`
-  format; one-release migration compat.
-
-### History/locator seam (`history.rs`)
-
-- `TranscriptHistory` / `TranscriptRead` / `TranscriptLocator` — the traits a
-  host turn path holds (`Arc<dyn ...>`) instead of calling the free functions
-  directly, so a discovered transcript that turns out to be a legacy `.md`
-  file cannot be appended to by construction (`TranscriptRead` has no write
-  methods).
-- `FileTranscriptHistory` / `FileTranscriptLocator` — the default
-  implementations, each a thin wrapper over exactly one free function per
-  method.
-- `TranscriptTurn` — the borrowed argument bundle for
-  `TranscriptHistory::append_turn`, shaped to mirror
-  `append_transcript_turn`'s signature one-for-one.
+`view::get_page_in(locator, thread_id, agent_id, cursor, limit)` projects a
+thread's listed transcripts and returns one newest-first page;
+`view::project_thread_in` returns the whole projection (optionally placing
+sub-agents by a `SpawnCallLookup`). See `view/README.md`.
 
 ## File-by-file map
 
 | File | Role |
 | --- | --- |
 | `types.rs` | Public domain types: messages, meta, usage, display projection. |
-| `jsonl.rs` | Internal JSONL line shapes and line ⇄ message conversions. |
-| `writer.rs` | Full rewrite, append-only turn delta, interrupted partials. |
-| `reader.rs` | Model-context replay, display projection, meta-only/usage scans. |
-| `paths.rs` | Path resolution, sanitization, and the newest-transcript resume scan. |
-| `thread_lookup.rs` | Thread → root transcript lookup and usage summaries. |
-| `spend.rs` | Full-history thread spend and cost provenance splits. |
-| `markdown.rs` | Human-readable `.md` companion rendering (never read back). |
-| `legacy_md.rs` | Legacy HTML-comment `.md` reader (migration compat). |
 | `history.rs` | `TranscriptHistory` / `TranscriptRead` / `TranscriptLocator` seam. |
 | `background.rs` | Out-of-band, idempotent assistant appends into a session's head. |
 | `turn_lock.rs` | Per-session async turn lock shared by live turns and background appends. |
-| `*_tests.rs` | Module-local unit tests (`transcript_tests.rs`, `session_tests.rs`, ...). |
-
-`../transcript.rs` (the module root, one level up) wires these together,
-re-exports the public surface, and carries the full format specification in
-its module doc.
+| `spend.rs` | Full-history thread spend and cost provenance splits. |
+| `session.rs` | `SessionRef` identity and its deterministic stem. |
+| `display.rs` | Row ⇄ display projection helpers. |
+| `jsonl.rs` | Internal classic JSONL line shapes and line ⇄ message conversions. |
+| `reader.rs` | Classic-file model-context replay and display projection (legacy import). |
+| `writer.rs` | Classic-file full rewrite (`legacy::rewrite_legacy_transcripts`); turn-append helpers are test fixtures. |
+| `paths.rs`, `markdown.rs` | Stem sanitisation and the `.md` companion the classic rewrite re-renders. |
+| `legacy_md.rs` | Legacy HTML-comment `.md` reader (import compatibility). |
+| `test_locator.rs` | Test fixtures: classic files imported into a driver-backed locator. |
+| `*_tests.rs` | Module-local unit tests. |
 
 ## Operational constraints
 
-**The JSONL is the only source of truth; the `.md` companion is never read
-back.** All round-trip and resume logic reads `.jsonl`. A companion write
-failure is logged and swallowed (`writer.rs::render_md_companion`) so it can
-never take down state persistence.
+**Compaction never erases.** A reduction is recorded as a compaction (or a
+successor generation), and the earlier rows stay in the log: the model reads
+the reduced context, the display read shows everything.
 
-**`append_transcript_turn` never rewrites existing lines.** It diffs the
-incoming logical message set against what was previously persisted
-(`common_prefix_len`, compared on `role`/`content`/`id`): a prefix match
-appends only the new tail; anything else appends a full `compaction` record
-carrying the reduced set, leaving earlier lines untouched.
+**Interrupted partials are display-only.** They are skipped by the
+model-context replay so a resumed context never carries a truncated assistant
+answer, but they are included by the display read for the UI timeline.
 
-**Readers must take the *last* `_meta` line, not the first.** Cumulative
-totals are kept fresh by appending a fresh `_meta` line each turn rather than
-rewriting line 1; line 1 remains a valid fallback only for old cores that
-never learned to look further.
+**Root vs. sub-agent transcripts are distinguished by stem shape**: a stem
+containing `__` is a sub-agent transcript (`{parent_chain}__{unix_ts}_{agent_id}`);
+a stem without it is a root session. Listing and spend rely on this to avoid
+folding delegated sub-agent history into a thread's main timeline.
 
-**Interrupted partials are display-only.** `interrupted: true` lines are
-skipped by `read_transcript`'s model-context replay so a resumed context
-never carries a truncated assistant answer, but they are included by
-`read_transcript_display` for the UI timeline.
-
-**Root vs. sub-agent transcripts are distinguished by stem shape**, not a
-separate directory: a stem containing `__` is a sub-agent transcript
-(`{parent_chain}__{unix_ts}_{agent_id}`); a stem without it is a root
-session (`{unix_ts}_{agent_id}`). `thread_lookup.rs` and `paths.rs` both rely
-on this to avoid folding delegated sub-agent history into a thread's main
-timeline.
-
-**`FileTranscriptHistory`'s generic trait path always re-reads the file
-before writing** (`write_logical_set`), unlike the turn path proper, which
-tracks its previously-persisted set in memory. This is deliberate: messages
-reconstructed from disk have had turn-usage fields hoisted and
-`failure`/`failure_detail` lifted out of `extra_metadata`, so feeding that
-back in as `prev` for an in-memory-tracked caller would mismatch at the
-first such message and force a full compaction record every turn.
-
-**File history mutations are coordinated across processes.** A persistent
-advisory lock under the workspace's `.transcript-locks/` directory serializes
-each file mutation. `begin_generation` keeps the successor's lock from its
-existence check through its first successful write, so a crash releases the
-reservation and leaves no phantom generation. Turn appends also compare the
-caller baseline with the current logical transcript while holding that lock;
-a stale session receives a persistence error instead of writing a compaction
-that hides another session's newer turns. Lock files are deliberately
-retained: removing a lock inode while another process waits could split future
-writers across different locks.
+**Classic-file readers must take the *last* `_meta` line, not the first.**
+Cumulative totals were kept fresh by appending a fresh `_meta` line each
+turn; line 1 remains a valid fallback only for the oldest files.

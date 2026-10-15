@@ -1,19 +1,26 @@
 use super::*;
 use crate::testkit::conformance::session_store_conformance;
-use crate::transcript::FileTranscriptLocator;
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
-/// The file-backed transcript and turn-state building blocks (with in-memory
-/// key-value and journal stores), assembled the way a desktop host's provider
-/// assembles them: everything under one workspace, shared by every agent.
-struct FileStores {
-    workspace: std::path::PathBuf,
+/// A provider that shares one in-memory transcript locator between every
+/// agent (with in-memory turn-state, key-value and journal stores), the way a
+/// single-user host shares one store.
+struct SharedStores {
+    transcripts: Arc<InMemoryTranscriptLocator>,
 }
 
-impl SessionStoreProvider for FileStores {
+impl Default for SharedStores {
+    fn default() -> Self {
+        Self {
+            transcripts: Arc::new(InMemoryTranscriptLocator::new("shared-stores")),
+        }
+    }
+}
+
+impl SessionStoreProvider for SharedStores {
     fn for_agent(&self, _agent_id: &str) -> AgentStores {
         AgentStores {
-            transcripts: Arc::new(FileTranscriptLocator::new(&self.workspace)),
+            transcripts: self.transcripts.clone(),
             turn_states: Arc::new(InMemoryTurnStates::default()),
             kv: Arc::new(InMemoryStore::new()),
             journal: Arc::new(InMemoryAppendStore::new()),
@@ -22,11 +29,8 @@ impl SessionStoreProvider for FileStores {
 }
 
 #[tokio::test]
-async fn the_file_building_blocks_meet_the_session_store_contract() {
-    let dir = tempfile::tempdir().unwrap();
-    let provider = FileStores {
-        workspace: dir.path().to_path_buf(),
-    };
+async fn the_shared_in_memory_building_blocks_meet_the_session_store_contract() {
+    let provider = SharedStores::default();
     session_store_conformance(&provider).await;
     assert!(provider.recover().is_ok(), "recovery defaults to a no-op");
     assert!(provider.destination_key().is_none());
@@ -53,11 +57,8 @@ fn the_in_memory_turn_states_serve_the_port() {
 }
 
 #[test]
-fn file_providers_explicitly_leave_actor_rebinding_unsupported() {
-    let dir = tempfile::tempdir().unwrap();
-    let provider = FileStores {
-        workspace: dir.path().to_path_buf(),
-    };
+fn shared_providers_explicitly_leave_actor_rebinding_unsupported() {
+    let provider = SharedStores::default();
     assert!(
         provider
             .bind_actor(Arc::new(tinystoragedrivers_core::MemoryStorage::new()))
@@ -95,11 +96,8 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
 
 #[test]
 /// Pins the default checked accessor for an unchanged file provider.
-fn checked_accessor_keeps_legacy_file_provider_compatible() {
-    let dir = tempfile::tempdir().unwrap();
-    let provider: &dyn SessionStoreProvider = &FileStores {
-        workspace: dir.path().to_path_buf(),
-    };
+fn checked_accessor_keeps_legacy_provider_compatible() {
+    let provider: &dyn SessionStoreProvider = &SharedStores::default();
     let stores = provider.try_for_agent("a").unwrap();
     assert!(stores.turn_states.list().unwrap().is_empty());
 }
@@ -187,10 +185,7 @@ fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
             .unwrap()
             .is_none()
     );
-    let dir = tempfile::tempdir().unwrap();
-    let default = FileStores {
-        workspace: dir.path().to_path_buf(),
-    };
+    let default = SharedStores::default();
     assert!(default.run_ledger_for_agent("allowed").unwrap().is_none());
 }
 

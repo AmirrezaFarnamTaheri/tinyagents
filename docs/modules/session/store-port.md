@@ -54,11 +54,11 @@ implement them, so code generic over a store accepts injected handles, and
 - `InMemorySessionStores`: per-agent, process-lifetime stores
   (`InMemoryTranscriptLocator`, `InMemoryTurnStates`, the harness's
   in-memory stores). For tests and hosts that keep nothing.
-- `FileTranscriptLocator` implements `TranscriptLocator` (the file turn-state
-  store is removed; use `InMemoryTurnStates` or `DriverTurnStates`); together
-  with `open_session_stores` it is the building block of a file-backed provider. This crate does not
-  assemble one: the host that owns a layout does (OpenHuman's
-  `openhuman_rpc::session_store`).
+- There is no file-backed transcript locator: the path-based transcript API
+  (`FileTranscriptLocator`, `FileTranscriptHistory`, the workspace-path
+  readers and writers) is removed. A host uses `DriverSessionStores` (or
+  `WorkspaceStores`, which also performs the one-time read-only import of a
+  classic `session_raw/` directory) and `InMemorySessionStores` for tests.
 - `TranscriptLocator::append_interrupted_partial` carries the display-only
   partial of an interrupted turn without a file path.
 - `DriverSessionStores` (feature `storage-drivers`): every agent's stores in

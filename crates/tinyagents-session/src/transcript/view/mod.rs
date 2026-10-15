@@ -1,25 +1,22 @@
-//! Transcript-derived view: project the append-only `session_raw/*.jsonl`
-//! source of truth into typed display items for the chat renderer, with
-//! newest-first pagination over a bounded in-memory cache.
+//! Transcript-derived view: project a thread's append-only transcripts into typed display items for the chat renderer, with
+//! uncached newest-first pagination.
 //!
-//! Entry point: [`get_page`] (used by the `threads.transcript_get` RPC).
+//! Entry point: [`get_page_in`] (used by the `threads.transcript_get` RPC).
 
-mod cache;
 mod project;
 mod prompt_tools;
 mod resolve;
 mod status_map;
 mod subagents;
+#[cfg(test)]
+mod test_shims;
 pub mod types;
-
-use std::path::Path;
 
 use serde::Serialize;
 
-pub use project::{
-    project_records, project_thread, project_thread_scoped, project_thread_scoped_with,
-    project_transcripts, resolve_files_scoped,
-};
+pub use project::{project_records, project_thread_in, project_transcripts};
+#[cfg(test)]
+pub(crate) use test_shims::{get_page, project_thread_scoped_with};
 
 use crate::transcript::TranscriptLocator;
 #[allow(deprecated)]
@@ -80,42 +77,14 @@ pub struct TranscriptPage {
     pub has_transcript: bool,
 }
 
-/// Project `thread_id`'s transcript and return one newest-first page.
+/// Projects `thread_id`'s transcripts (from
+/// [`TranscriptLocator::thread_transcripts`], scoped to `agent_id` when given)
+/// and returns one newest-first page.
 ///
 /// `cursor` is the opaque token returned as `next_cursor` by a previous call
 /// (an offset from the newest item); `None`/empty starts at the newest item.
-/// `limit` defaults to [`DEFAULT_LIMIT`] and is clamped to [`MAX_LIMIT`].
-pub fn get_page(
-    workspace_dir: &Path,
-    thread_id: &str,
-    cursor: Option<&str>,
-    limit: Option<usize>,
-) -> TranscriptPage {
-    get_page_scoped(workspace_dir, thread_id, None, cursor, limit)
-}
-
-/// Fetch a page scoped to an owning agent. Use this when thread IDs can be
-/// supplied by callers and shared by multiple agents.
-pub fn get_page_scoped(
-    workspace_dir: &Path,
-    thread_id: &str,
-    agent_id: Option<&str>,
-    cursor: Option<&str>,
-    limit: Option<usize>,
-) -> TranscriptPage {
-    let projected = if let Some(agent_id) = agent_id {
-        project::project_thread_scoped(workspace_dir, thread_id, Some(agent_id))
-            .map(std::sync::Arc::new)
-    } else {
-        cache::global().get_or_project(workspace_dir, thread_id)
-    };
-    page_of(thread_id, projected.as_deref(), cursor, limit)
-}
-
-/// [`get_page_scoped`] over any [`TranscriptLocator`]: the thread's
-/// transcripts come from
-/// [`TranscriptLocator::thread_transcripts`] and are projected exactly as the
-/// file view projects them. Not cached.
+/// `limit` defaults to [`DEFAULT_LIMIT`] and is clamped to [`MAX_LIMIT`]. Not
+/// cached.
 pub fn get_page_in(
     locator: &dyn TranscriptLocator,
     thread_id: &str,

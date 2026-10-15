@@ -116,6 +116,18 @@ fn count_markdown_only(workspace_dir: &Path, stems: &std::collections::HashSet<S
         .count()
 }
 
+/// The row a store keeps for `message`: the model-context row, with the
+/// out-of-band delivery provenance (a classic line's top-level `background`
+/// field) recorded in its metadata, where a store reads it back from.
+fn stored_row(message: &DisplayMessage) -> TranscriptMessage {
+    match &message.background {
+        Some(origin) => {
+            crate::transcript::display_with_background_row(message.message.clone(), origin)
+        }
+        None => message.message.clone(),
+    }
+}
+
 /// Replay one transcript's display records against `history`; returns the
 /// number of messages replayed.
 fn replay(
@@ -137,7 +149,7 @@ fn replay(
             return Ok(());
         }
         let mut next = logical.clone();
-        next.extend(group.iter().map(|m| m.message.clone()));
+        next.extend(group.iter().map(stored_row));
         let usage = group.iter().rev().find_map(|m| m.turn_usage.clone());
         let request_id = group.iter().rev().find_map(|m| m.request_id.clone());
         history.append_turn(TranscriptTurn {
@@ -187,11 +199,8 @@ fn replay(
             }
             DisplayRecord::Compaction(marker) => {
                 flush(&mut logical, &mut group, &mut replayed)?;
-                let next: Vec<TranscriptMessage> = marker
-                    .replacement
-                    .iter()
-                    .map(|m| m.message.clone())
-                    .collect();
+                let next: Vec<TranscriptMessage> =
+                    marker.replacement.iter().map(stored_row).collect();
                 let usage = marker
                     .replacement
                     .iter()

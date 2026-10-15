@@ -85,30 +85,15 @@ jobs:
             exit 1
           fi
 
-          IFS=. read -r major minor patch <<< "$current_version"
-          case "${{ inputs.bump }}" in
-            major)
-              major=$((major + 1))
-              minor=0
-              patch=0
-              ;;
-            minor)
-              minor=$((minor + 1))
-              patch=0
-              ;;
-            patch)
-              patch=$((patch + 1))
-              ;;
-            *)
-              echo "Unsupported bump: ${{ inputs.bump }}" >&2
-              exit 1
-              ;;
-          esac
-
-          next_version="${major}.${minor}.${patch}"
+          # The workspace version can lag the latest tag (releases are cut
+          # from tags), so the next version is derived from the highest of
+          # the two; see the script.
+          git fetch --tags origin
+          mapfile -t existing_tags < <(git tag --list 'v*')
+          versions="$(.github/scripts/next-release-version.sh "${{ inputs.bump }}" "$current_version" "${existing_tags[@]}")"
+          read -r base_version next_version <<< "$versions"
           tag="v${next_version}"
 
-          git fetch --tags origin
           if git rev-parse --verify --quiet "refs/tags/${tag}"; then
             echo "Tag ${tag} already exists" >&2
             exit 1
@@ -116,6 +101,7 @@ jobs:
 
           {
             echo "current_version=${current_version}"
+            echo "base_version=${base_version}"
             echo "next_version=${next_version}"
             echo "tag=${tag}"
           } >> "$GITHUB_OUTPUT"

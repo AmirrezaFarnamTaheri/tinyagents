@@ -1,11 +1,11 @@
 use super::*;
+use crate::test_store::{memory, read, seed};
 use crate::{DriverFailure, DriverOutcome, SessionBuilder, TranscriptCodec};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinyagents_session::transcript::{
-    BackgroundAppend, BackgroundAppendOutcome, FileTranscriptLocator, SessionRef,
-    SessionTranscript, TranscriptLocator, TranscriptMessage, TranscriptMeta, read_transcript,
-    resolve_keyed_transcript_path, session_stem,
+    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptMessage,
+    TranscriptMeta, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tokio::sync::Notify;
@@ -97,22 +97,18 @@ impl SessionDriver for GatedDriver {
 /// session and the write falls back to the target's existing session.
 #[tokio::test]
 async fn a_running_turn_holds_off_a_background_append_into_its_session() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let session_ref = SessionRef::scoped("thread-1", "agent");
     let selected_session = SessionRef::scoped("thread-2", "agent");
-    let path =
-        resolve_keyed_transcript_path(directory.path(), &session_stem(&session_ref)).unwrap();
-    tinyagents_session::transcript::write_transcript(
-        &path,
+    seed(
+        locator.as_ref(),
+        &session_stem(&session_ref),
         &[
             TranscriptMessage::user("remind me at 5"),
             TranscriptMessage::assistant("Scheduled."),
         ],
         &meta(),
-        None,
-    )
-    .unwrap();
+    );
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let mut session = SessionBuilder::new(Arc::new(GatedDriver {
@@ -153,19 +149,20 @@ async fn a_running_turn_holds_off_a_background_append_into_its_session() {
 
     let delivery_locator = locator.clone();
     let delivery_session = session_ref.clone();
-    let delivery_started = Arc::new(Notify::new());
-    let delivery_started_signal = delivery_started.clone();
     let mut delivery = tokio::spawn(async move {
-        tinyagents_session::transcript::append_background_message_with_lock_notification(
-            &delivery_locator,
+        tinyagents_session::transcript::append_background_message_in(
+            delivery_locator.as_ref(),
             &delivery_session,
             TranscriptMessage::assistant("Time to stretch!"),
             BackgroundAppend::new("run-1", serde_json::json!({"kind": "cron"})),
-            &delivery_started_signal,
         )
         .await
     });
-    delivery_started.notified().await;
+    // Single-threaded runtime: yielding lets the delivery run up to the turn
+    // lock it must wait on.
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
     assert!(
         timeout(Duration::from_secs(1), &mut delivery)
             .await
@@ -179,17 +176,14 @@ async fn a_running_turn_holds_off_a_background_append_into_its_session() {
         delivery.await.unwrap().unwrap(),
         BackgroundAppendOutcome::Appended { generation: 1 }
     );
-    let head_path = resolve_keyed_transcript_path(
-        directory.path(),
+    let contents: Vec<String> = read(
+        locator.as_ref(),
         &session_stem(&locator.head_generation(&session_ref)),
     )
-    .unwrap();
-    let contents: Vec<String> = read_transcript(&head_path)
-        .unwrap()
-        .messages
-        .into_iter()
-        .map(|message| message.content)
-        .collect();
+    .messages
+    .into_iter()
+    .map(|message| message.content)
+    .collect();
     assert_eq!(
         contents,
         [

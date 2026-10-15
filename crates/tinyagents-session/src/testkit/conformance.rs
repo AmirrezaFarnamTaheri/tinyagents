@@ -12,7 +12,7 @@
 //!   [`crate::transcript::TranscriptHistory`]/[`crate::transcript::TranscriptRead`],
 //!   which — unlike the ledger — genuinely has two independent
 //!   implementations: the production
-//!   [`FileTranscriptHistory`](crate::transcript::FileTranscriptHistory) and
+//!   [`DriverTranscriptHistory`](crate::port::DriverTranscriptHistory) and
 //!   the in-memory [`super::InMemoryTranscriptHistory`] double. Both are
 //!   certified against the same suite in this crate's own tests.
 //!
