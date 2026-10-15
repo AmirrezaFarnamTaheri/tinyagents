@@ -2,6 +2,7 @@
 //! conversions between them and the public [`TranscriptMessage`] /
 //! [`TranscriptMeta`] / [`DisplayMessage`] types.
 
+use super::display::{metadata_with_background, split_background};
 use super::types::{
     BackgroundOrigin, DisplayMessage, MessageUsage, TRANSCRIPT_SCHEMA_VERSION, TranscriptMeta,
     TurnUsage,
