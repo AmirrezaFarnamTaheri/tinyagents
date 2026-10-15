@@ -15,6 +15,8 @@
 //! task, runs the host's cleanup hook (e.g. deregistering a steering-registry
 //! entry), and drains residual (delivered-but-unapplied) steers back into the
 //! queue so a late steer becomes the *next* turn's input instead of vanishing.
+//! The requeue is synchronous: once the guard has dropped, every steer the run
+//! did not apply is in the queue, so a host can read the leftovers right away.
 //!
 //! The queued payload, the delivery notifications and the cleanup are host
 //! seams: [`QueuedMessage`] for the payload, [`ForwardEvent`] for notifications.
@@ -98,11 +100,11 @@ fn now_ms() -> u64 {
 
 /// Shared shutdown gate between the poll task and the guard's `Drop`.
 ///
-/// The poll task sends into the steering handle only while holding this lock
-/// and seeing `false`; `Drop` sets it to `true` under the same lock before it
-/// drains the handle. So once `Drop` has drained, no later send can land in a
-/// handle nobody will read again: the task pushes what it drained back onto the
-/// queue instead.
+/// The poll task drains the queue and sends into the steering handle only
+/// while holding this lock and seeing `false`; `Drop` sets it to `true` under
+/// the same lock before it drains the handle. So an item is always either in
+/// the queue or in the handle, never in flight, and once `Drop` has drained,
+/// no later send can land in a handle nobody will read again.
 type ClosedGate = std::sync::Mutex<bool>;
 
 fn lock_gate(gate: &ClosedGate) -> std::sync::MutexGuard<'_, bool> {
@@ -112,11 +114,12 @@ fn lock_gate(gate: &ClosedGate) -> std::sync::MutexGuard<'_, bool> {
     }
 }
 
-/// Drain `lane` and forward it into `handle`. With a `gate`, delivery happens
-/// under it, and items drained after the gate closed are pushed back onto the
-/// queue; returns `false` in that case (the caller should stop polling).
+/// Drain `lane` and forward it into `handle`. With a `gate`, the drain and
+/// the delivery both happen while holding it, so once the gate is closed no
+/// item is ever out of the queue without being in the handle; returns `false`
+/// when the gate is already closed (the caller should stop polling).
 #[allow(clippy::too_many_arguments)]
-async fn forward_lane<T: QueuedMessage>(
+fn forward_lane<T: QueuedMessage>(
     queue: &RunQueue<T>,
     handle: &SteeringHandle,
     thread_label: &str,
@@ -126,41 +129,27 @@ async fn forward_lane<T: QueuedMessage>(
     sink: &ForwardEventSink,
     gate: Option<&ClosedGate>,
 ) -> bool {
-    let drained = queue.drain(lane).await;
-    if drained.is_empty() {
-        return true;
-    }
-    let delivered = drained.len();
-    let (item_id, text) = drained
-        .first()
-        .map(|msg| (Some(msg.id().to_string()), Some(msg.text().to_string())))
-        .unwrap_or((None, None));
-    let undelivered = {
+    let (delivered, item_id, text) = {
         let closed = gate.map(lock_gate);
         if closed.as_deref().copied().unwrap_or(false) {
-            Some(drained)
-        } else {
-            for msg in &drained {
-                handle.send(SteeringCommand::InjectMessage(TaMessage::user(format!(
-                    "{prefix}{}",
-                    msg.text()
-                ))));
-            }
-            None
+            return false;
         }
+        let drained = queue.drain_now(lane);
+        if drained.is_empty() {
+            return true;
+        }
+        for msg in &drained {
+            handle.send(SteeringCommand::InjectMessage(TaMessage::user(format!(
+                "{prefix}{}",
+                msg.text()
+            ))));
+        }
+        let (item_id, text) = drained
+            .first()
+            .map(|msg| (Some(msg.id().to_string()), Some(msg.text().to_string())))
+            .unwrap_or((None, None));
+        (drained.len(), item_id, text)
     };
-    if let Some(items) = undelivered {
-        tracing::debug!(
-            thread_id = thread_label,
-            returned = items.len(),
-            mode,
-            "[run_queue] forwarder closed mid-delivery; returned drained message(s) to the queue"
-        );
-        // Back at the front, in order: anything queued after the drain is
-        // newer and must stay behind these.
-        queue.requeue_front(lane, items).await;
-        return false;
-    }
     tracing::debug!(
         thread_id = thread_label,
         delivered,
@@ -196,8 +185,7 @@ pub async fn forward_steers<T: QueuedMessage>(
         STEER_PREFIX,
         sink,
         None,
-    )
-    .await;
+    );
 }
 
 /// Forward any queued **collect** messages as injected user turns so they reach
@@ -223,8 +211,7 @@ pub async fn forward_collects<T: QueuedMessage>(
         COLLECT_PREFIX,
         sink,
         None,
-    )
-    .await;
+    );
 }
 
 /// Stop-on-drop guard around the steering-forwarder poll task.
@@ -274,10 +261,9 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
             let loop_sink = sink.clone();
             let loop_closed = closed.clone();
             tokio::spawn(async move {
-                // Not aborted on drop: an abort could land between draining the
-                // queue and delivering, losing what was drained. The loop exits
-                // on its own once the gate is closed, returning anything it
-                // drained after closing to the queue.
+                // Not aborted on drop; the loop exits on its own at its next
+                // check once the gate is closed. It drains and delivers under
+                // the gate, so a closed gate means it takes nothing more.
                 for (lane, mode, prefix) in [
                     (QueueLane::Steer, "steer", STEER_PREFIX),
                     (QueueLane::Collect, "collect", COLLECT_PREFIX),
@@ -300,8 +286,7 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
                         prefix,
                         &loop_sink,
                         Some(&loop_closed),
-                    )
-                    .await;
+                    );
                     if !open {
                         break;
                     }
@@ -354,8 +339,8 @@ impl<T: QueuedMessage> Drop for SteeringForwarderGuard<T> {
         //    once the run is gone and are intentionally dropped.
         let residual = self.handle.drain();
         // Each residual steer gets its requeued id minted here (Drop is
-        // synchronous) so the `Requeued` event below and the item actually
-        // pushed onto the queue in the spawned task agree on the same id.
+        // synchronous) so the `Requeued` event below and the item pushed onto
+        // the queue agree on the same id.
         let requeue_items: Vec<(String, QueueLane, String)> = residual
             .into_iter()
             .filter_map(|cmd| match cmd {
@@ -391,36 +376,12 @@ impl<T: QueuedMessage> Drop for SteeringForwarderGuard<T> {
             .map(|(text, _lane, id)| (Some(id.clone()), Some(text.clone())))
             .unwrap_or((None, None));
 
-        // `RunQueue::push` is async (tokio `Mutex`); `Drop` is synchronous. Push
-        // the recovered steers back on a detached task so they land in the
-        // session queue and become the next turn's input. The forwarder poll
-        // loop keeps re-draining the queue, so even if the requeue completes
-        // after the next turn starts, its next tick picks them up.
-        match tokio::runtime::Handle::try_current() {
-            Ok(rt) => {
-                let label = thread_label.clone();
-                rt.spawn(async move {
-                    // Appended, not prepended: a later guard's residuals must
-                    // not jump ahead of these, and successive drops each add
-                    // theirs behind the last.
-                    for (text, lane, id) in requeue_items {
-                        queue
-                            .push(lane, T::requeued(id, text, &label, now_ms()))
-                            .await;
-                    }
-                });
-            }
-            Err(_) => {
-                // No runtime to spawn on (should not happen on live paths, which
-                // always drop inside a tokio task). The steers are lost rather
-                // than silently mis-handled: log loudly.
-                tracing::warn!(
-                    thread_id = thread_label.as_str(),
-                    requeued,
-                    "[run_queue] could not requeue residual steers: no tokio runtime at guard drop"
-                );
-                return;
-            }
+        // Pushed synchronously, before `drop` returns, so a host reading the
+        // queue once the turn has ended finds every residual steer there.
+        // Appended, not prepended: a later guard's residuals must not jump
+        // ahead of these, and successive drops each add theirs behind the last.
+        for (text, lane, id) in requeue_items {
+            queue.push_now(lane, T::requeued(id, text, &thread_label, now_ms()));
         }
 
         tracing::debug!(
