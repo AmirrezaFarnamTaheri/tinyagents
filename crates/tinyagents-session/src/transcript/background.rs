@@ -10,7 +10,7 @@
 //! # Concurrency contract
 //!
 //! The live turn path appends a *delta* against the baseline it read when the
-//! turn started, and validates that baseline under the file lock. A foreign
+//! turn started, and validates that baseline when it writes. A foreign
 //! line written between that read and the persist makes the baseline stale and
 //! the user's turn fails to persist. So:
 //!
@@ -30,8 +30,8 @@
 //!   baseline and its next persist fails rather than hiding the line.
 //! - The turn lock is **in-process**. Another process appending mid-turn is
 //!   still caught by the baseline check (that turn fails to persist; nothing is
-//!   corrupted), and the append itself takes the same cross-process file locks
-//!   as every other writer, so bytes never interleave.
+//!   corrupted), and the append itself goes through the store's own write
+//!   path like every other writer.
 
 use super::display::with_background;
 use super::history::seed_meta_for_discovered;
