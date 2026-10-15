@@ -15,6 +15,8 @@
 //! task, runs the host's cleanup hook (e.g. deregistering a steering-registry
 //! entry), and drains residual (delivered-but-unapplied) steers back into the
 //! queue so a late steer becomes the *next* turn's input instead of vanishing.
+//! The requeue is synchronous: once the guard has dropped, every steer the run
+//! did not apply is in the queue, so a host can read the leftovers right away.
 //!
 //! The queued payload, the delivery notifications and the cleanup are host
 //! seams: [`QueuedMessage`] for the payload, [`ForwardEvent`] for notifications.
@@ -98,11 +100,11 @@ fn now_ms() -> u64 {
 
 /// Shared shutdown gate between the poll task and the guard's `Drop`.
 ///
-/// The poll task sends into the steering handle only while holding this lock
-/// and seeing `false`; `Drop` sets it to `true` under the same lock before it
-/// drains the handle. So once `Drop` has drained, no later send can land in a
-/// handle nobody will read again: the task pushes what it drained back onto the
-/// queue instead.
+/// The poll task drains the queue and sends into the steering handle only
+/// while holding this lock and seeing `false`; `Drop` sets it to `true` under
+/// the same lock before it drains the handle. So an item is always either in
+/// the queue or in the handle, never in flight, and once `Drop` has drained,
+/// no later send can land in a handle nobody will read again.
 type ClosedGate = std::sync::Mutex<bool>;
 
 fn lock_gate(gate: &ClosedGate) -> std::sync::MutexGuard<'_, bool> {
@@ -259,10 +261,9 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
             let loop_sink = sink.clone();
             let loop_closed = closed.clone();
             tokio::spawn(async move {
-                // Not aborted on drop: an abort could land between draining the
-                // queue and delivering, losing what was drained. The loop exits
-                // on its own once the gate is closed, returning anything it
-                // drained after closing to the queue.
+                // Not aborted on drop; the loop exits on its own at its next
+                // check once the gate is closed. It drains and delivers under
+                // the gate, so a closed gate means it takes nothing more.
                 for (lane, mode, prefix) in [
                     (QueueLane::Steer, "steer", STEER_PREFIX),
                     (QueueLane::Collect, "collect", COLLECT_PREFIX),
@@ -338,8 +339,8 @@ impl<T: QueuedMessage> Drop for SteeringForwarderGuard<T> {
         //    once the run is gone and are intentionally dropped.
         let residual = self.handle.drain();
         // Each residual steer gets its requeued id minted here (Drop is
-        // synchronous) so the `Requeued` event below and the item actually
-        // pushed onto the queue in the spawned task agree on the same id.
+        // synchronous) so the `Requeued` event below and the item pushed onto
+        // the queue agree on the same id.
         let requeue_items: Vec<(String, QueueLane, String)> = residual
             .into_iter()
             .filter_map(|cmd| match cmd {
