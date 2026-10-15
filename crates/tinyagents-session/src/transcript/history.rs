@@ -17,20 +17,14 @@
 //! rewrite. [`TranscriptHistory::clear`] is therefore an empty compaction.
 //!
 
-use std::collections::{HashMap, VecDeque};
-use std::fs::{self, File, OpenOptions};
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::transcript::types::TranscriptMessage;
-use fs2::FileExt;
 
 use crate::transcript::{
-    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscript,
-    ThreadTranscripts, TranscriptMeta, TurnUsage, adopt_legacy_session_transcripts,
-    find_latest_transcript, find_root_transcript_for_thread,
-    find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
-    session_stem,
+    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscript, ThreadTranscripts,
+    TranscriptMeta, TurnUsage, session_stem,
 };
 
 /// The stem a read handle is bound to: its path's last component, without the
@@ -262,15 +256,6 @@ pub trait TranscriptLocator: Send + Sync {
             }],
             subagents: Vec::new(),
         })
-    }
-
-    /// The file locator this one writes through, when it is file-backed.
-    ///
-    /// Lets a generic writer keep the JSONL line format exact (for example
-    /// [`append_background_message_in`](super::append_background_message_in)
-    /// records provenance as a line field there). `None` for any other store.
-    fn file_backing(&self) -> Option<&FileTranscriptLocator> {
-        None
     }
 
     /// Binds (creating on first write) this session's own write handle for
