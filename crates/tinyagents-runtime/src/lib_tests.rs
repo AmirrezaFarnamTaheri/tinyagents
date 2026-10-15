@@ -2697,7 +2697,6 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
 /// replaying the sealed one.
 #[tokio::test]
 async fn a_restart_after_a_compaction_resumes_the_head_generation() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let locator = memory();
     locator
@@ -2769,7 +2768,6 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         }
     }
 
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-prefix", "agent-id");
     let locator = memory();
     let mut thread_meta = meta();
@@ -2873,7 +2871,6 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
         ["replacement", "changing history summary", "later"]
     );
 
-    let altered_dir = tempfile::tempdir().unwrap();
     let altered_ref = SessionRef::scoped("altered-prefix", "agent-id");
     let altered_locator = memory();
     let sealed = altered_locator.open_session(&altered_ref, meta()).unwrap();
@@ -2925,7 +2922,6 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     // A successor that committed a replacement prefix records its own exact
     // boundary. A later cold resume must use that generation's count rather
     // than compare its rows with generation zero's different prompt.
-    let recorded_dir = tempfile::tempdir().unwrap();
     let recorded_ref = SessionRef::scoped("recorded-prefix", "agent-id");
     let recorded_locator = memory();
     let sealed = recorded_locator
@@ -2970,7 +2966,6 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
     assert_eq!(recorded.prefix_snapshot().messages().len(), 1);
     assert_eq!(resumed.history[1].text(), "changing history summary");
 
-    let few_shot_dir = tempfile::tempdir().unwrap();
     let few_shot_ref = SessionRef::scoped("few-shot-prefix", "agent-id");
     let few_shot_locator = memory();
     let mut few_shot_meta = meta();
@@ -4067,7 +4062,6 @@ async fn explicit_prefix_refresh_preserves_history_and_survives_cold_resume() {
                 .collect())
         }
     }
-    let directory = tempfile::tempdir().unwrap();
     let locator = memory();
     let identity = SessionRef::scoped("managed", "agent-id");
     let prefix = vec![Message::system("base"), Message::system("tools")];
