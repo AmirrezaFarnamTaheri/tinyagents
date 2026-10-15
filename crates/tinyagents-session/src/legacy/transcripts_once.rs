@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use tinystoragedrivers_core::{CollectionSpec, DocumentStore, ErrorKind, Precondition};
 
 use super::transcripts::{TranscriptImportReport, import_transcripts};
+use super::types::OnceOutcome;
 use crate::port::DriverSessionStores;
 
 /// Collection holding the import markers.
@@ -22,21 +23,6 @@ pub const MARKER_COLLECTION: &str = "session_import_markers";
 pub const TRANSCRIPT_MARKER_ID: &str = "session_raw_jsonl_v1";
 
 const LOG_PREFIX: &str = "[session_db:import:transcripts:once]";
-
-/// How a one-time import ended.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OnceOutcome {
-    /// A marker from an earlier launch says the import already ran.
-    AlreadyImported,
-    /// This pass ran. `marked` is false when some file did not parse, so the
-    /// next launch tries again instead of treating the import as complete.
-    Imported {
-        /// What the pass did.
-        report: TranscriptImportReport,
-        /// Whether the completion marker was written.
-        marked: bool,
-    },
-}
 
 /// Imports `<workspace_dir>/session_raw/` into `agent_id`'s transcripts once.
 ///

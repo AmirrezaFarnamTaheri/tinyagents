@@ -1,6 +1,6 @@
-//! The one-time transcript import: marker, idempotence, untouched sources.
-
 use super::*;
+
+// The one-time transcript import: marker, idempotence, untouched sources.
 use crate::port::DriverSessionStores;
 use crate::transcript::{TranscriptMessage, TranscriptMeta, write_transcript};
 use std::path::Path;

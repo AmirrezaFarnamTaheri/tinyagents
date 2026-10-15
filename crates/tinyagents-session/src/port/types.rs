@@ -32,3 +32,26 @@ impl std::fmt::Debug for AgentStores {
             .finish_non_exhaustive()
     }
 }
+
+/// An agent's driver-backed stores for one workspace.
+///
+/// Cloning shares one open backend; the backend closes when the last clone
+/// drops.
+#[derive(Clone)]
+pub struct WorkspaceStores {
+    pub(super) inner: Arc<WorkspaceInner>,
+}
+
+pub(super) struct WorkspaceInner {
+    pub(super) provider: Arc<super::DriverSessionStores>,
+    pub(super) stores: AgentStores,
+    pub(super) outcome: crate::legacy::OnceOutcome,
+}
+
+impl std::fmt::Debug for WorkspaceStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkspaceStores")
+            .field("outcome", &self.inner.outcome)
+            .finish_non_exhaustive()
+    }
+}
