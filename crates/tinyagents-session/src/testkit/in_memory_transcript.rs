@@ -1,7 +1,7 @@
 //! An in-memory [`TranscriptHistory`] double.
 //!
-//! [`FileTranscriptHistory`](crate::transcript::FileTranscriptHistory) is the
-//! only production implementation of the trait; this is a second, independent
+//! The driver-backed history ([`crate::port::DriverTranscriptHistory`]) is the
+//! production implementation of the trait; this is a second, independent
 //! one so [`TranscriptHistory`]'s conformance suite
 //! ([`super::conformance::transcript_history_conformance`]) actually certifies
 //! the *contract*, not one backend's accidental behavior, and so a test that
@@ -19,8 +19,7 @@ use crate::transcript::{
 /// A [`TranscriptHistory`] backed by a `Vec<TranscriptMessage>` behind a
 /// [`Mutex`], with no filesystem I/O at all.
 ///
-/// Mirrors [`FileTranscriptHistory`](crate::transcript::FileTranscriptHistory)'s
-/// observable contract:
+/// Mirrors the driver-backed history's observable contract:
 ///
 /// * [`TranscriptRead::read_session`] returns `Ok(None)` until the first
 ///   write (matching "the file does not exist yet"), and `Some` — including an
