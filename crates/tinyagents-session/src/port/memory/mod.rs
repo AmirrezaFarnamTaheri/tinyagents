@@ -16,7 +16,8 @@ use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 use super::{AgentStores, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
-    SessionRef, TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptPartial,
+    SessionRef, ThreadTranscript, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
+    TranscriptMeta, TranscriptPartial,
     TranscriptRead, session_stem,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
