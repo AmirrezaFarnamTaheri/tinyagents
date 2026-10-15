@@ -429,3 +429,97 @@ fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve() {
     assert!(matches!(attempt, Attempt::HeadMoved));
     assert_eq!(std::fs::read(&sealed).unwrap(), before);
 }
+
+#[tokio::test]
+async fn an_agents_files_adopt_a_shared_session_before_the_append() {
+    let dir = tempdir().unwrap();
+    // The conversation exists only in the shared workspace, as written
+    // before the agent kept its own directory.
+    let shared = FileTranscriptLocator::new(dir.path());
+    live_turn(&shared, &session(), &[], &first_turn());
+    let shared_path = head_path(dir.path(), &session());
+    let before = std::fs::read(&shared_path).unwrap();
+
+    let agent = super::super::AgentTranscriptFiles::new(dir.path(), "orchestrator");
+    let outcome = append_background_message_in(
+        &agent,
+        &session(),
+        TranscriptMessage::assistant("Time to stretch!"),
+        options("run-1"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 0 });
+    let own_root = super::super::agent_transcript_root(dir.path(), "orchestrator");
+    let own = read_transcript(&head_path(&own_root, &session())).unwrap();
+    assert_eq!(
+        own.messages.last().unwrap().content,
+        "Time to stretch!",
+        "the adopted copy receives the message"
+    );
+    assert_eq!(
+        std::fs::read(&shared_path).unwrap(),
+        before,
+        "the shared file is never modified"
+    );
+}
+
+/// A store-like locator that names no destination (and is not file backed),
+/// over real transcript files.
+struct Unnamed(FileTranscriptLocator);
+
+impl TranscriptLocator for Unnamed {
+    fn latest_for_agent(&self, agent_name: &str) -> Option<std::sync::Arc<dyn TranscriptRead>> {
+        self.0.latest_for_agent(agent_name)
+    }
+    fn root_for_thread(&self, thread_id: &str) -> Option<std::sync::Arc<dyn TranscriptRead>> {
+        self.0.root_for_thread(thread_id)
+    }
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<std::sync::Arc<dyn crate::transcript::TranscriptHistory>> {
+        self.0.open_stem(stem, seed)
+    }
+}
+
+#[tokio::test]
+async fn appends_through_one_unnamed_locator_are_serialised() {
+    let dir = tempdir().unwrap();
+    let files = FileTranscriptLocator::new(dir.path());
+    live_turn(&files, &session(), &[], &first_turn());
+    let locator = std::sync::Arc::new(Unnamed(FileTranscriptLocator::new(dir.path())));
+    assert!(locator.destination_key().is_none());
+
+    let held = super::super::turn_lock::lock_session_turn_or_identity(
+        locator.as_ref() as &dyn TranscriptLocator,
+        &session(),
+    )
+    .await;
+    let delivery = {
+        let locator = std::sync::Arc::clone(&locator);
+        tokio::spawn(async move {
+            append_background_message_in(
+                locator.as_ref(),
+                &session(),
+                TranscriptMessage::assistant("Time to stretch!"),
+                options("run-1"),
+            )
+            .await
+        })
+    };
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !delivery.is_finished(),
+        "an append through the same unnamed locator waits for its lock"
+    );
+    drop(held);
+    assert_eq!(
+        delivery.await.unwrap().unwrap(),
+        BackgroundAppendOutcome::Appended { generation: 0 }
+    );
+}
