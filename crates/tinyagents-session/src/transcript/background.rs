@@ -35,134 +35,18 @@
 
 use super::display::with_background;
 use super::history::seed_meta_for_discovered;
-use super::history::{FileTranscriptHistory, FileTranscriptLocator, TranscriptLocator};
-use super::jsonl::{LineKind, build_message_line, classify_line};
-use super::paths::resolve_keyed_transcript_path;
-use super::reader::read_jsonl_lines;
+use super::history::TranscriptLocator;
 use super::session::{SessionRef, session_stem};
 use super::turn_lock::{lock_session_turn_or_identity, lock_session_turn_with_notification};
 use super::types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, TranscriptMessage,
 };
-use super::writer::append_bytes;
-use anyhow::Context;
-use std::path::Path;
 use tokio::sync::Notify;
 
 /// How many times the head may move under an unpinned append before it gives
 /// up. Each move is a compaction or a fork landing between head resolution
 /// and the write lock; more than a couple in a row means something is wrong.
 const MAX_HEAD_MOVES: usize = 3;
-
-/// Appends `message` — one plain assistant message — to the head generation of
-/// `session` under `locator`, outside any turn.
-///
-/// - **Head only.** The head is resolved from the session's first generation,
-///   whatever `session.generation` says. With
-///   [`BackgroundAppend::expected_generation`] set, a head that has moved on
-///   returns [`BackgroundAppendOutcome::StaleGeneration`] and writes nothing.
-/// - **Idempotent.** A head generation that already holds a line with the same
-///   [`BackgroundAppend::idempotency_key`] returns
-///   [`BackgroundAppendOutcome::Duplicate`] and writes nothing. The key is
-///   checked within the head generation only. A compaction that carries the
-///   message into a successor carries its provenance too (the model-context
-///   row keeps it in `extra_metadata`, and the writer puts it back on the
-///   line), so a retry against that successor is still a duplicate; one the
-///   compaction dropped is appended again.
-/// - **Never creates a session.** No transcript yet is
-///   [`BackgroundAppendOutcome::NoSession`].
-///
-/// The line is an ordinary message line, so the model-context reader
-/// ([`read_transcript`](super::read_transcript)) replays it as an assistant row
-/// and the display reader shows it. It additionally carries a top-level
-/// `background` field (a [`BackgroundOrigin`]: the key and the caller's
-/// `provenance`), surfaced as [`DisplayMessage::background`](super::DisplayMessage::background);
-/// readers that predate the field ignore it. No `_meta` line is appended, so
-/// turn counts and usage totals are untouched, and the `.md` companion is next
-/// re-rendered by the following turn.
-///
-/// Awaits the session's turn lock first; see the module documentation for the
-/// contract this places on live turns. The file I/O itself is synchronous and
-/// small (one scan of the head file, one append).
-///
-/// # Errors
-///
-/// When `message` is not a plain assistant message (another role, tool calls,
-/// or an interrupted partial), when the key is empty, on I/O failure, or when
-/// another process holds the head's successor reserved mid-compaction.
-pub async fn append_background_message(
-    locator: &FileTranscriptLocator,
-    session: &SessionRef,
-    message: TranscriptMessage,
-    options: BackgroundAppend,
-) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, locator, session, message, options, None).await
-}
-
-/// Test-oriented variant that signals immediately before waiting for the
-/// shared turn lock. The append and production path are otherwise identical.
-#[doc(hidden)]
-pub async fn append_background_message_with_lock_notification(
-    locator: &FileTranscriptLocator,
-    session: &SessionRef,
-    message: TranscriptMessage,
-    options: BackgroundAppend,
-    lock_attempted: &Notify,
-) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(
-        locator,
-        locator,
-        session,
-        message,
-        options,
-        Some(lock_attempted),
-    )
-    .await
-}
-
-/// `files` writes the JSONL line; `resolver` resolves the head and decides
-/// whether the session exists. They differ for a wrapper over a file locator
-/// (such as [`AgentTranscriptFiles`](super::AgentTranscriptFiles)) whose
-/// existence checks adopt a transcript into `files` before it is written.
-async fn append_background_message_impl(
-    files: &FileTranscriptLocator,
-    resolver: &dyn TranscriptLocator,
-    session: &SessionRef,
-    message: TranscriptMessage,
-    options: BackgroundAppend,
-    lock_attempted: Option<&Notify>,
-) -> anyhow::Result<BackgroundAppendOutcome> {
-    let message = validate(message, &options)?;
-    let root = session.first_generation();
-    let stem = session_stem(&root);
-    let key = options.idempotency_key.as_str();
-    tracing::debug!(session = %stem, idempotency_key = %key, expected_generation = ?options.expected_generation, "[transcript-background] append requested");
-
-    let _turn = lock_session_turn_with_notification(resolver, &root, lock_attempted).await;
-    for _ in 0..MAX_HEAD_MOVES {
-        let head = resolver.head_generation(&root);
-        if !resolver.session_exists(&head) {
-            tracing::debug!(session = %stem, idempotency_key = %key, "[transcript-background] no transcript; nothing written");
-            return Ok(BackgroundAppendOutcome::NoSession);
-        }
-        if let Some(stale) = stale(&options, head.generation) {
-            tracing::debug!(session = %stem, idempotency_key = %key, ?stale, "[transcript-background] head moved on; nothing written");
-            return Ok(stale);
-        }
-        match append_to_head(files, &head, &message, &options)? {
-            Attempt::Done(outcome) => {
-                tracing::debug!(session = %stem, idempotency_key = %key, ?outcome, "[transcript-background] append finished");
-                return Ok(outcome);
-            }
-            Attempt::HeadMoved => {
-                tracing::debug!(session = %stem, idempotency_key = %key, generation = head.generation, "[transcript-background] head sealed during append; re-resolving");
-            }
-        }
-    }
-    anyhow::bail!(
-        "session {stem} head kept moving during a background append ({MAX_HEAD_MOVES} attempts)"
-    )
-}
 
 /// [`append_background_message`] through any [`TranscriptLocator`].
 ///
@@ -286,43 +170,6 @@ enum Attempt {
     HeadMoved,
 }
 
-/// Scans and appends to `head` under its file write locks.
-fn append_to_head(
-    locator: &FileTranscriptLocator,
-    head: &SessionRef,
-    message: &TranscriptMessage,
-    options: &BackgroundAppend,
-) -> anyhow::Result<Attempt> {
-    let workspace = locator.workspace_dir();
-    let path = resolve_keyed_transcript_path(workspace, &session_stem(head))?;
-    let successor =
-        resolve_keyed_transcript_path(workspace, &session_stem(&head.next_generation()))?;
-    let history = FileTranscriptHistory::opened_at(path.clone(), seed_meta_for_discovered(""));
-    history.with_write_locks(|| {
-        if successor.is_file() {
-            return Ok(Attempt::HeadMoved);
-        }
-        let generation = head.generation;
-        if holds_idempotency_key(&path, &options.idempotency_key)? {
-            return Ok(Attempt::Done(BackgroundAppendOutcome::Duplicate {
-                generation,
-            }));
-        }
-        let mut line = build_message_line(message, message.turn_usage.as_ref(), None, false);
-        line.ts = line.ts.or_else(|| Some(chrono::Utc::now().to_rfc3339()));
-        line.background = Some(BackgroundOrigin {
-            idempotency_key: options.idempotency_key.clone(),
-            provenance: options.provenance.clone(),
-        });
-        let mut buf = serde_json::to_string(&line).context("serialise background message line")?;
-        buf.push('\n');
-        append_bytes(&path, buf.as_bytes())?;
-        Ok(Attempt::Done(BackgroundAppendOutcome::Appended {
-            generation,
-        }))
-    })
-}
-
 /// `StaleGeneration` when the caller pinned a generation other than `head`.
 fn stale(options: &BackgroundAppend, head: u32) -> Option<BackgroundAppendOutcome> {
     options
@@ -361,34 +208,6 @@ fn validate(
         "background append only writes plain, complete assistant messages"
     );
     Ok(normalized)
-}
-
-/// Whether any message line of the transcript at `path` was delivered with
-/// `key`. Lines that do not parse are skipped, exactly as the readers skip them.
-fn holds_idempotency_key(path: &Path, key: &str) -> anyhow::Result<bool> {
-    let matches = |origin: &Option<BackgroundOrigin>| {
-        origin
-            .as_ref()
-            .is_some_and(|origin| origin.idempotency_key == key)
-    };
-    for line in read_jsonl_lines(path)?.into_iter().flatten() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let found = match classify_line(line) {
-            Ok(LineKind::Message(message)) => matches(&message.background),
-            Ok(LineKind::Compaction(compaction)) => compaction
-                .replacement
-                .iter()
-                .any(|message| matches(&message.background)),
-            _ => false,
-        };
-        if found {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]
