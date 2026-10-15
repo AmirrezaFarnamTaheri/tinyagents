@@ -59,8 +59,7 @@ const MAX_GENERATIONS: u32 = 4096;
 /// `prev` is a field rather than handle state on purpose: the turn path tracks
 /// the previously-persisted logical set in memory on `Agent`
 /// (`persisted_transcript_messages`) precisely so it never has to re-read a
-/// growing file, and a disk re-read is not a faithful substitute — see
-/// `FileTranscriptHistory::write_logical_set_locked`.
+/// growing log, and a store re-read is not a faithful substitute.
 pub struct TranscriptTurn<'a> {
     /// Logical message set already persisted, for the extension-vs-compaction diff.
     pub prev: &'a [TranscriptMessage],
@@ -146,9 +145,7 @@ pub trait TranscriptHistory: TranscriptRead {
 /// reads hold.
 ///
 /// Split out of [`TranscriptHistory`] rather than added as one more method on it,
-/// for a reason that is not stylistic: a *discovered* transcript can still be a
-/// legacy `.md` file (see [`FileTranscriptHistory::opened_at`]), and
-/// `append_transcript_turn` writes JSONL. Handing discovery results out as
+/// for a reason that is not stylistic: handing discovery results out as
 /// `Arc<dyn TranscriptRead>` makes it impossible to `append_turn` into
 /// one by construction, instead of by convention.
 ///
@@ -165,7 +162,7 @@ pub trait TranscriptRead: Send + Sync {
     /// The model-context replay of this transcript, `_meta` included, or
     /// `Ok(None)` when the file does not exist.
     ///
-    /// Exactly [`read_transcript`], so compaction records have already replaced
+    /// The log replayed, so compaction records have already replaced
     /// the accumulator and `interrupted: true` partials are already skipped —
     /// §3.1's "single most important constraint". Returning the whole
     /// [`SessionTranscript`] rather than messages alone is what lets the shadow
@@ -188,11 +185,10 @@ pub trait TranscriptRead: Send + Sync {
 /// this session's own write handle.
 ///
 /// One injected object covers the whole turn path: both resume reads and the
-/// first-write bind. A host holds it as `Option<Arc<dyn TranscriptLocator>>`
-/// and falls back to [`FileTranscriptLocator`] built from the *current*
-/// `workspace_dir` — lazily, never frozen at build time,
-/// because tests reassign `agent.workspace_dir` after `build()` and a
-/// build-time locator would silently keep pointing at the old directory.
+/// first-write bind. A host holds it as `Option<Arc<dyn TranscriptLocator>>`,
+/// built from the store it currently targets rather than frozen at build time,
+/// so a host that rebuilds its locator per turn still resolves the same
+/// destination (see [`Self::destination_key`]).
 pub trait TranscriptLocator: Send + Sync {
     /// The durable destination this locator addresses, when it can name one.
     ///
@@ -222,9 +218,9 @@ pub trait TranscriptLocator: Send + Sync {
     fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>>;
 
     /// [`Self::root_for_thread`], additionally scoped to `agent_id` when
-    /// given — see
-    /// [`transcript::find_root_transcript_for_thread_scoped`](crate::transcript::find_root_transcript_for_thread_scoped)
-    /// for why. Defaults to the unscoped lookup so an implementor that never
+    /// given: one caller-supplied thread id can be handed to several
+    /// independently configured agents, and each needs its own transcript.
+    /// Defaults to the unscoped lookup so an implementor that never
     /// serves several distinct agents over the same `thread_id` (this test
     /// double, notably) does not have to know about agent scoping at all.
     fn root_for_thread_scoped(
@@ -581,11 +577,11 @@ pub(crate) fn same_transcript_messages(
 
 /// A placeholder `_meta` for a handle bound to an already-existing transcript.
 ///
-/// `seed_meta` is consulted only when the file is **absent**, and a discovered
-/// path exists by definition, so this value is never written. It exists because
-/// [`FileTranscriptHistory`] is one type serving both roles; giving read-only
-/// handles a `None` meta would mean an `Option` field every write path then has
-/// to unwrap for no benefit.
+/// `seed_meta` is consulted only when the transcript is **absent**, and a
+/// discovered one exists by definition, so this value is never written. One
+/// history type serves both roles; giving read-only handles a `None` meta
+/// would mean an `Option` field every write path then has to unwrap for no
+/// benefit.
 pub(super) fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
     TranscriptMeta {
         session_id: None,
