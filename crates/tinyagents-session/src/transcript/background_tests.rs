@@ -426,7 +426,6 @@ async fn appends_through_one_unnamed_locator_are_serialised() {
     let held = super::super::turn_lock::lock_session_turn_or_identity(
         locator.as_ref() as &dyn TranscriptLocator,
         &session(),
-        None,
     )
     .await;
     let delivery = {

@@ -41,7 +41,6 @@ use super::turn_lock::lock_session_turn_or_identity;
 use super::types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, TranscriptMessage,
 };
-use tokio::sync::Notify;
 
 /// How many times the head may move under an unpinned append before it gives
 /// up. Each move is a compaction or a fork landing between head resolution
@@ -90,20 +89,7 @@ pub async fn append_background_message_in(
     message: TranscriptMessage,
     options: BackgroundAppend,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, None).await
-}
-
-/// [`append_background_message_in`] that signals `lock_attempted` immediately
-/// before waiting for the turn lock (test hook).
-#[cfg(test)]
-pub(crate) async fn append_background_message_notifying(
-    locator: &dyn TranscriptLocator,
-    session: &SessionRef,
-    message: TranscriptMessage,
-    options: BackgroundAppend,
-    lock_attempted: &Notify,
-) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, Some(lock_attempted)).await
+    append_background_message_impl(locator, session, message, options).await
 }
 
 async fn append_background_message_impl(
@@ -111,7 +97,6 @@ async fn append_background_message_impl(
     session: &SessionRef,
     message: TranscriptMessage,
     options: BackgroundAppend,
-    lock_attempted: Option<&Notify>,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
     let message = validate(message, &options)?;
     let root = session.first_generation();
@@ -122,7 +107,7 @@ async fn append_background_message_impl(
     // Falls back to the locator's own identity when it names no destination,
     // so two appends through one such locator still serialise their
     // duplicate check and append.
-    let _turn = lock_session_turn_or_identity(locator, &root, lock_attempted).await;
+    let _turn = lock_session_turn_or_identity(locator, &root).await;
     for _ in 0..MAX_HEAD_MOVES {
         let head = locator.head_generation(&root);
         if !locator.session_exists(&head) {

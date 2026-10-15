@@ -19,10 +19,7 @@
 use super::history::TranscriptLocator;
 use super::session::{SessionRef, session_stem};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::task::{Context, Poll};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 /// Proof that the holder owns `session`'s turn lock. Released on drop.
@@ -58,13 +55,9 @@ pub async fn lock_session_turn(
 /// destination is keyed by its own address instead, so callers sharing that
 /// one locator instance still serialise. (Another instance over the same store
 /// is not found; nothing could tell the two apart.)
-///
-/// `attempted` is signalled as the lock acquisition is first polled (a test
-/// hook for proving a waiter reached the lock).
 pub(crate) async fn lock_session_turn_or_identity(
     locator: &dyn TranscriptLocator,
     session: &SessionRef,
-    attempted: Option<&tokio::sync::Notify>,
 ) -> SessionTurnGuard {
     let destination = locator.destination_key().unwrap_or_else(|| {
         let address = std::ptr::from_ref(locator).cast::<()>() as usize;
@@ -73,43 +66,9 @@ pub(crate) async fn lock_session_turn_or_identity(
     let stem = session_stem(&session.first_generation());
     let lock = registry_lock(destination, stem.clone());
     tracing::debug!(session = %stem, "[transcript-turn-lock] acquiring");
-    let guard = NotifyOnPoll::new(lock.lock_owned(), attempted).await;
+    let guard = lock.lock_owned().await;
     tracing::debug!(session = %stem, "[transcript-turn-lock] acquired");
     SessionTurnGuard { _guard: guard }
-}
-
-struct NotifyOnPoll<'a, F> {
-    future: Pin<Box<F>>,
-    notify: Option<&'a tokio::sync::Notify>,
-    notified: bool,
-}
-
-impl<'a, F> NotifyOnPoll<'a, F> {
-    fn new(future: F, notify: Option<&'a tokio::sync::Notify>) -> Self {
-        Self {
-            future: Box::pin(future),
-            notify,
-            notified: false,
-        }
-    }
-}
-
-impl<F: Future> Future for NotifyOnPoll<'_, F> {
-    type Output = F::Output;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Poll the wrapped future first: a waiter woken by the notification
-        // then knows the lock attempt has already been made (and parked, if it
-        // is held), instead of racing a not-yet-polled acquisition.
-        let result = self.future.as_mut().poll(cx);
-        if !self.notified {
-            if let Some(notify) = self.notify {
-                notify.notify_one();
-            }
-            self.notified = true;
-        }
-        result
-    }
 }
 
 /// The shared mutex for `(destination, stem)`, created on first use.
