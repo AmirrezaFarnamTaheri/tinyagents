@@ -35,6 +35,14 @@ impl HistoryInner {
     /// was ever written to it.
     async fn display(&self) -> Result<Option<DisplaySessionTranscript>, StorageError> {
         self.declared.ensure(&self.docs).await?;
+        {
+            // As the model-context read does: a write whose index refresh
+            // failed is repaired here, so a transcript read only for display
+            // does not stay invisible to the thread listing and spend.
+            let mut replay = self.replay.lock().await;
+            self.refresh(&mut replay).await?;
+            self.repair_index(&mut replay).await;
+        }
         let query = Query::filter(Filter::eq("stem", self.stem.as_str())).sort(Sort::asc("seq"));
         let mut meta = None;
         let mut records: Vec<DisplayRecord> = Vec::new();
