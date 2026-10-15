@@ -112,10 +112,9 @@ pub fn project_from_files(
         paths
             .iter()
             .map(|path| {
-                let stem = path
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                // The same stem rule as `FileTranscriptLocator::thread_transcripts`
+                // (strips only `.jsonl`), so both paths name a file alike.
+                let stem = crate::transcript::history::stem_of_handle(path);
                 let transcript: Arc<dyn TranscriptRead> = Arc::new(
                     FileTranscriptHistory::opened_at(path.clone(), seed_meta_for_discovered(&stem)),
                 );
