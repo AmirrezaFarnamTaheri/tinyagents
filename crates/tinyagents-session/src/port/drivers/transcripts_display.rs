@@ -266,19 +266,15 @@ impl DriverTranscriptLocator {
         // Bounded to this thread: each root's `{stem}__` range, plus
         // (unscoped) the sub-agents naming the thread. The in-memory filter
         // below stays as the exact rule.
-        let mut wanted = prefixes
+        let by_prefix = prefixes
             .iter()
             .map(|prefix| prefix_range("stem", prefix))
             .reduce(Filter::or);
-        if agent_id.is_none() {
-            let by_thread = Filter::eq("thread_id", thread_id);
-            wanted = Some(match wanted {
-                Some(ranges) => ranges.or(by_thread),
-                None => by_thread,
-            });
-        }
-        let Some(wanted) = wanted else {
-            unreachable!("a listed thread has at least one root prefix")
+        let by_thread = Filter::eq("thread_id", thread_id);
+        let wanted = match (by_prefix, agent_id) {
+            (Some(ranges), None) => ranges.or(by_thread),
+            (Some(ranges), Some(_)) => ranges,
+            (None, _) => by_thread,
         };
         let mut subagents: Vec<String> = self
             .indexed(
