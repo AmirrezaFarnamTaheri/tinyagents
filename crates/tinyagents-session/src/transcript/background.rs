@@ -14,7 +14,7 @@
 //! line written between that read and the persist makes the baseline stale and
 //! the user's turn fails to persist. So:
 //!
-//! - **A live turn must hold [`lock_session_turn`] from its resume read
+//! - **A live turn must hold [`lock_session_turn`](super::lock_session_turn) from its resume read
 //!   through its persist.** `tinyagents-runtime`'s `Session::turn` does this
 //!   for every session-bound target whose locator names its destination.
 //!   A host driving the transcript some other way must take the lock itself.
