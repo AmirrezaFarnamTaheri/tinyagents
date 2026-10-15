@@ -30,6 +30,19 @@ pub fn write_transcript(
     meta: &TranscriptMeta,
     last_assistant_turn_usage: Option<&TurnUsage>,
 ) -> Result<()> {
+    write_transcript_with_tools(jsonl_path, messages, meta, last_assistant_turn_usage, None)
+}
+
+/// [`write_transcript`], additionally recording `tools` as the transcript's
+/// latest `{"kind":"tools"}` record, so a full rewrite of a transcript that
+/// recorded its tool declarations keeps them.
+pub(crate) fn write_transcript_with_tools(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+    last_assistant_turn_usage: Option<&TurnUsage>,
+    tools: Option<&serde_json::Value>,
+) -> Result<()> {
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create transcript dir {}", parent.display()))?;
@@ -40,6 +53,10 @@ pub fn write_transcript(
     jsonl_buf.push_str(&meta_line_json(meta)?);
     jsonl_buf.push('\n');
     serialise_message_lines(messages, last_assistant_turn_usage, None, &mut jsonl_buf)?;
+    if let Some(tools) = tools {
+        jsonl_buf.push_str(&tools_line_json(tools)?);
+        jsonl_buf.push('\n');
+    }
 
     atomic_write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
