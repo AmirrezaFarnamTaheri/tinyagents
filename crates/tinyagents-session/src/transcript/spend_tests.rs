@@ -7,8 +7,7 @@
 
 use super::*;
 use std::path::Path;
-use crate::port::InMemoryTranscriptLocator;
-use crate::transcript::test_locator::thread_spend;
+use crate::transcript::test_locator::{driver_locator, thread_spend};
 use crate::transcript::{
     MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage, append_transcript_turn,
 };
@@ -536,7 +535,7 @@ fn request_less_compaction_with_usage_identical_to_history_still_counts() {
 fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
     use crate::transcript::{SessionRef, TranscriptLocator, TruncateCut};
     let thread = "thread-generations";
-    let locator = InMemoryTranscriptLocator::new("generations");
+    let locator = driver_locator();
     let session = SessionRef::scoped(thread, "orchestrator");
     let first = locator
         .open_session(&session, meta("orchestrator", "root", Some(thread)))
@@ -550,7 +549,7 @@ fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
     answer.preserve_request_id = true;
     first.append(answer).expect("append answer");
 
-    let before = thread_spend_in(&locator, thread);
+    let before = thread_spend_in(locator.as_ref(), thread);
     assert_eq!(before.root.input_tokens, 4_000);
 
     locator
@@ -569,7 +568,7 @@ fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
         2,
         "both generations are root transcripts of the thread"
     );
-    let after = thread_spend_in(&locator, thread);
+    let after = thread_spend_in(locator.as_ref(), thread);
     assert_eq!(after.root.input_tokens, 4_000, "retained row counted twice");
     assert_eq!(after.root.turns, 1);
 }

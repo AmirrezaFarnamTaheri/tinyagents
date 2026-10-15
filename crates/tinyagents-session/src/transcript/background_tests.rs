@@ -1,5 +1,5 @@
 use super::*;
-use crate::port::InMemoryTranscriptLocator;
+use crate::transcript::test_locator::driver_locator;
 use crate::transcript::{
     DisplayRecord, ToolFailure, TranscriptHistory, TranscriptLocator, TranscriptMeta,
     TranscriptPart, TranscriptRead, TranscriptTurn, lock_session_turn,
@@ -40,14 +40,14 @@ fn options(key: &str) -> BackgroundAppend {
     )
 }
 
-fn locator() -> InMemoryTranscriptLocator {
-    InMemoryTranscriptLocator::new("background-tests")
+fn locator() -> Arc<dyn TranscriptLocator> {
+    driver_locator()
 }
 
 /// Writes one turn the way the live turn path does: through the session's own
 /// history handle, diffing `next` against `prev`.
 fn live_turn(
-    locator: &InMemoryTranscriptLocator,
+    locator: &dyn TranscriptLocator,
     session: &SessionRef,
     prev: &[TranscriptMessage],
     next: &[TranscriptMessage],
@@ -105,12 +105,12 @@ async fn deliver(
 #[tokio::test]
 async fn an_appended_message_is_resumed_as_an_assistant_turn() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
-    let outcome = deliver(&locator, "run-1").await.unwrap();
+    let outcome = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 0 });
-    let resumed = head_messages(&locator, &session());
+    let resumed = head_messages(locator.as_ref(), &session());
     let last = resumed.last().unwrap();
     assert_eq!(resumed.len(), 3);
     assert_eq!(last.role, "assistant");
@@ -121,7 +121,7 @@ async fn an_appended_message_is_resumed_as_an_assistant_turn() {
 async fn a_session_without_a_transcript_is_reported_and_not_created() {
     let locator = locator();
 
-    let outcome = deliver(&locator, "run-1").await.unwrap();
+    let outcome = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(outcome, BackgroundAppendOutcome::NoSession);
     assert!(!locator.session_exists(&locator.head_generation(&session())));
@@ -130,11 +130,11 @@ async fn a_session_without_a_transcript_is_reported_and_not_created() {
 #[tokio::test]
 async fn the_display_reader_shows_the_message_with_its_provenance() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
-    deliver(&locator, "run-1").await.unwrap();
+    deliver(locator.as_ref(), "run-1").await.unwrap();
 
-    let display = head(&locator, &session()).read_display().unwrap().unwrap();
+    let display = head(locator.as_ref(), &session()).read_display().unwrap().unwrap();
     let Some(DisplayRecord::Message(last)) = display.records.last() else {
         panic!("expected a message record last");
     };
@@ -158,23 +158,23 @@ async fn the_display_reader_shows_the_message_with_its_provenance() {
 #[tokio::test]
 async fn a_repeated_idempotency_key_is_a_duplicate_and_writes_nothing() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    let first = deliver(&locator, "run-1").await.unwrap();
-    let before = head_messages(&locator, &session());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    let first = deliver(locator.as_ref(), "run-1").await.unwrap();
+    let before = head_messages(locator.as_ref(), &session());
 
-    let again = deliver(&locator, "run-1").await.unwrap();
+    let again = deliver(locator.as_ref(), "run-1").await.unwrap();
 
     assert_eq!(first, BackgroundAppendOutcome::Appended { generation: 0 });
     assert_eq!(again, BackgroundAppendOutcome::Duplicate { generation: 0 });
-    assert_eq!(head_messages(&locator, &session()), before);
+    assert_eq!(head_messages(locator.as_ref(), &session()), before);
     // A different key is a different delivery.
-    let other = deliver(&locator, "run-2").await.unwrap();
+    let other = deliver(locator.as_ref(), "run-2").await.unwrap();
     assert_eq!(other, BackgroundAppendOutcome::Appended { generation: 0 });
 }
 
 /// Seals generation 0 and opens generation 1 with `retained`, the way a
 /// compaction in the live turn path does.
-fn compact(locator: &InMemoryTranscriptLocator, retained: &[TranscriptMessage]) {
+fn compact(locator: &dyn TranscriptLocator, retained: &[TranscriptMessage]) {
     let (_, handle) = locator.begin_generation(&session(), meta()).unwrap();
     handle
         .append_turn(TranscriptTurn {
@@ -191,8 +191,8 @@ fn compact(locator: &InMemoryTranscriptLocator, retained: &[TranscriptMessage]) 
 #[tokio::test]
 async fn a_stale_expected_generation_writes_nothing() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
     let sealed_before = locator
         .read_session_transcript(&session())
         .unwrap()
@@ -200,10 +200,10 @@ async fn a_stale_expected_generation_writes_nothing() {
         .unwrap()
         .unwrap()
         .messages;
-    let head_before = head_messages(&locator, &session());
+    let head_before = head_messages(locator.as_ref(), &session());
 
     let outcome = append_background_message_in(
-        &locator,
+        locator.as_ref(),
         &session(),
         TranscriptMessage::assistant("Time to stretch!"),
         options("run-1").expecting_generation(0),
@@ -226,17 +226,17 @@ async fn a_stale_expected_generation_writes_nothing() {
         .unwrap()
         .messages;
     assert_eq!(sealed_after, sealed_before);
-    assert_eq!(head_messages(&locator, &session()), head_before);
+    assert_eq!(head_messages(locator.as_ref(), &session()), head_before);
 }
 
 #[tokio::test]
 async fn the_append_lands_in_the_head_generation() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
 
     let outcome = append_background_message_in(
-        &locator,
+        locator.as_ref(),
         &session(),
         TranscriptMessage::assistant("Time to stretch!"),
         options("run-1").expecting_generation(1),
@@ -246,7 +246,7 @@ async fn the_append_lands_in_the_head_generation() {
 
     assert_eq!(outcome, BackgroundAppendOutcome::Appended { generation: 1 });
     assert_eq!(
-        head_messages(&locator, &session())
+        head_messages(locator.as_ref(), &session())
             .iter()
             .map(|message| message.content.as_str())
             .collect::<Vec<_>>(),
@@ -269,8 +269,8 @@ async fn the_append_lands_in_the_head_generation() {
 /// yields, so "it is still waiting" is decided by the lock, not by timing.
 #[tokio::test]
 async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
-    let locator = Arc::new(locator());
-    live_turn(&locator, &session(), &[], &first_turn());
+    let locator = locator();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
 
     // Turn two starts: lock, then read its baseline.
     let turn = lock_session_turn(locator.as_ref(), &session())
@@ -295,7 +295,7 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
     let mut second = baseline.clone();
     second.push(TranscriptMessage::user("what's the weather?"));
     second.push(TranscriptMessage::assistant("Sunny."));
-    live_turn(&locator, &session(), &baseline, &second);
+    live_turn(locator.as_ref(), &session(), &baseline, &second);
     drop(turn);
 
     assert_eq!(
@@ -311,7 +311,7 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
     let mut third = resumed.clone();
     third.push(TranscriptMessage::user("did you remind me?"));
     third.push(TranscriptMessage::assistant("Yes, at 5."));
-    live_turn(&locator, &session(), &resumed, &third);
+    live_turn(locator.as_ref(), &session(), &resumed, &third);
 
     let contents: Vec<(String, String)> = head_messages(locator.as_ref(), &session())
         .into_iter()
@@ -335,8 +335,8 @@ async fn a_background_append_waits_for_the_live_turn_and_keeps_both_in_order() {
 #[tokio::test]
 async fn only_plain_assistant_messages_with_a_key_are_accepted() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    let before = head_messages(&locator, &session());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    let before = head_messages(locator.as_ref(), &session());
     let mut interrupted = TranscriptMessage::assistant("half an ans");
     interrupted.interrupted = true;
     let calls = TranscriptMessage::assistant_with_calls(
@@ -371,22 +371,22 @@ async fn only_plain_assistant_messages_with_a_key_are_accepted() {
         (TranscriptMessage::assistant("fine"), "  "),
     ] {
         let result =
-            append_background_message_in(&locator, &session(), message, options(key)).await;
+            append_background_message_in(locator.as_ref(), &session(), message, options(key)).await;
         assert!(result.is_err(), "{result:?}");
     }
-    assert_eq!(head_messages(&locator, &session()), before);
+    assert_eq!(head_messages(locator.as_ref(), &session()), before);
 }
 
 #[tokio::test]
 async fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    compact(&locator, &[TranscriptMessage::system("summary")]);
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    compact(locator.as_ref(), &[TranscriptMessage::system("summary")]);
     let sealed = locator.read_session_transcript(&session()).unwrap();
     let before = sealed.read_session().unwrap().unwrap().messages;
 
     let attempt = append_to_stored_head(
-        &locator,
+        locator.as_ref(),
         &session(),
         &TranscriptMessage::assistant("Time to stretch!"),
         &options("run-1"),
@@ -398,7 +398,7 @@ async fn an_attempt_against_a_sealed_head_writes_nothing_and_asks_to_re_resolve(
 }
 
 /// A store-like locator that names no destination, over real transcripts.
-struct Unnamed(InMemoryTranscriptLocator);
+struct Unnamed(Arc<dyn TranscriptLocator>);
 
 impl TranscriptLocator for Unnamed {
     fn latest_for_agent(&self, agent_name: &str) -> Option<Arc<dyn TranscriptRead>> {
@@ -419,7 +419,7 @@ impl TranscriptLocator for Unnamed {
 #[tokio::test]
 async fn appends_through_one_unnamed_locator_are_serialised() {
     let inner = locator();
-    live_turn(&inner, &session(), &[], &first_turn());
+    live_turn(inner.as_ref(), &session(), &[], &first_turn());
     let locator = Arc::new(Unnamed(inner));
     assert!(locator.destination_key().is_none());
 
@@ -451,21 +451,21 @@ async fn appends_through_one_unnamed_locator_are_serialised() {
 #[tokio::test]
 async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Appended { generation: 0 }
     );
 
     // The runtime compacts from the context it read back.
-    let retained = head_messages(&locator, &session());
-    compact(&locator, &retained);
+    let retained = head_messages(locator.as_ref(), &session());
+    compact(locator.as_ref(), &retained);
 
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Duplicate { generation: 1 }
     );
-    let display = head(&locator, &session()).read_display().unwrap().unwrap();
+    let display = head(locator.as_ref(), &session()).read_display().unwrap().unwrap();
     let carried = display
         .records
         .iter()
@@ -484,23 +484,23 @@ async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
 #[tokio::test]
 async fn a_delivery_dropped_by_a_same_generation_compaction_is_appended_again() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Appended { generation: 0 }
     );
 
-    head_handle(&locator)
+    head_handle(locator.as_ref())
         .replace(&[TranscriptMessage::system("summary")])
         .unwrap();
 
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Appended { generation: 0 },
         "the compaction dropped the delivery, so the key is not held"
     );
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Duplicate { generation: 0 },
         "the fresh delivery is held again"
     );
@@ -511,19 +511,19 @@ async fn a_delivery_dropped_by_a_same_generation_compaction_is_appended_again() 
 #[tokio::test]
 async fn a_delivery_kept_by_a_same_generation_compaction_is_still_a_duplicate() {
     let locator = locator();
-    live_turn(&locator, &session(), &[], &first_turn());
-    deliver(&locator, "run-1").await.unwrap();
+    live_turn(locator.as_ref(), &session(), &[], &first_turn());
+    deliver(locator.as_ref(), "run-1").await.unwrap();
 
-    let retained = head_messages(&locator, &session());
-    head_handle(&locator).replace(&retained).unwrap();
+    let retained = head_messages(locator.as_ref(), &session());
+    head_handle(locator.as_ref()).replace(&retained).unwrap();
 
     assert_eq!(
-        deliver(&locator, "run-1").await.unwrap(),
+        deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Duplicate { generation: 0 }
     );
 }
 
-fn head_handle(locator: &InMemoryTranscriptLocator) -> Arc<dyn TranscriptHistory> {
+fn head_handle(locator: &dyn TranscriptLocator) -> Arc<dyn TranscriptHistory> {
     let head = locator.head_generation(&session());
     locator.open_session(&head, meta()).unwrap()
 }

@@ -196,7 +196,7 @@ async fn a_rewrite_keeps_background_delivery_provenance() {
         &[
             TranscriptMessage::system("keep ### SECRET"),
             TranscriptMessage::user("hi"),
-            crate::transcript::display_with_background(
+            crate::transcript::display_with_background_row(
                 TranscriptMessage::assistant("Time to stretch!"),
                 &origin,
             ),
