@@ -1,5 +1,5 @@
 use super::*;
-use crate::transcript::{TranscriptMessage, TranscriptMeta};
+use crate::transcript::{TranscriptMessage, TranscriptMeta, write_transcript};
 
 fn meta() -> TranscriptMeta {
     TranscriptMeta {
