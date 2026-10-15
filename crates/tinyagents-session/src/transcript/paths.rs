@@ -68,3 +68,15 @@ pub(super) fn md_companion_path(jsonl_path: &Path) -> PathBuf {
 
     out.with_extension("md")
 }
+
+/// Test fixture: `{workspace}/session_raw/{stem}.jsonl`, creating the
+/// directory.
+#[cfg(test)]
+pub(crate) fn resolve_keyed_transcript_path(
+    workspace_dir: &Path,
+    stem: &str,
+) -> anyhow::Result<PathBuf> {
+    let raw_dir = workspace_dir.join("session_raw");
+    std::fs::create_dir_all(&raw_dir)?;
+    Ok(raw_dir.join(format!("{}.jsonl", sanitize_stem(stem))))
+}
