@@ -27,9 +27,15 @@ const LOG_PREFIX: &str = "[session:legacy:rewrite]";
 /// missing `session_raw/` is an empty report. A directory or directory entry
 /// that cannot be read (anything but a missing `session_raw/`) is counted in
 /// `errors` too, so a report with `errors == 0` means every transcript was
-/// seen. Symlinks are skipped, never followed, so the rewrite cannot reach
-/// files outside `session_raw/`. A rewritten transcript keeps its latest
-/// recorded tool declarations ([`SessionTranscript::tools`]).
+/// seen. Symlinks *inside* `session_raw/` are skipped, never followed, so
+/// the walk cannot leave the transcript directory through an entry.
+/// `session_raw` itself is resolved like every other transcript reader and
+/// writer resolves it: a workspace may share its `session_raw` through a
+/// symlink (the turn lock keys on the resolved directory for exactly that),
+/// and that directory is the one whose transcripts the import will read. A
+/// rewritten transcript keeps its latest recorded tool declarations
+/// ([`SessionTranscript::tools`]) and each row's background-delivery
+/// provenance.
 pub fn rewrite_legacy_transcripts(
     workspace_dir: &Path,
     mut rewrite: impl FnMut(&mut SessionTranscript) -> bool,

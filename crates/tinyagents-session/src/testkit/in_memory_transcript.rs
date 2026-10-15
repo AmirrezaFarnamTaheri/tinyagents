@@ -193,7 +193,9 @@ impl TranscriptRead for InMemoryTranscriptHistory {
                 ))));
             }
             if let Some(message) = state.messages.get(index) {
-                records.push(DisplayRecord::Message(Box::new(display_message_of(message))));
+                records.push(DisplayRecord::Message(Box::new(display_message_of(
+                    message,
+                ))));
             }
         }
         Ok(Some(DisplaySessionTranscript {

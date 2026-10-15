@@ -17,8 +17,7 @@ use super::{AgentStores, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
     SessionRef, ThreadTranscript, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
-    TranscriptMeta, TranscriptPartial,
-    TranscriptRead, session_stem,
+    TranscriptMeta, TranscriptPartial, TranscriptRead, session_stem,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
 

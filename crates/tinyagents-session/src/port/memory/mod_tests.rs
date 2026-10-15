@@ -269,7 +269,10 @@ fn completed_retention_uses_completion_time() {
 }
 
 fn write_rows(history: &dyn TranscriptHistory, meta: &TranscriptMeta, rows: &[&str]) {
-    let rows: Vec<TranscriptMessage> = rows.iter().map(|row| TranscriptMessage::user(*row)).collect();
+    let rows: Vec<TranscriptMessage> = rows
+        .iter()
+        .map(|row| TranscriptMessage::user(*row))
+        .collect();
     history
         .append_turn(TranscriptTurn {
             prev: &[],
@@ -290,21 +293,37 @@ fn a_thread_lists_every_generation_and_sub_agent() {
     seed.session_id = Some(session.session_id());
     // A pre-identity root, folded into the session and dropped from the view.
     write_rows(
-        locator.open_stem("1700000000_planner", test_meta("t")).unwrap().as_ref(),
+        locator
+            .open_stem("1700000000_planner", test_meta("t"))
+            .unwrap()
+            .as_ref(),
         &test_meta("t"),
         &["legacy"],
     );
-    write_rows(locator.open_session(&session, seed.clone()).unwrap().as_ref(), &seed, &["one"]);
+    write_rows(
+        locator
+            .open_session(&session, seed.clone())
+            .unwrap()
+            .as_ref(),
+        &seed,
+        &["one"],
+    );
     let (successor, head) = locator.begin_generation(&session, seed.clone()).unwrap();
     write_rows(head.as_ref(), &seed, &["two"]);
     let root = crate::transcript::session_stem(&session);
     write_rows(
-        locator.open_stem(&format!("{root}__1_child"), test_meta("worker")).unwrap().as_ref(),
+        locator
+            .open_stem(&format!("{root}__1_child"), test_meta("worker"))
+            .unwrap()
+            .as_ref(),
         &test_meta("worker"),
         &["by prefix"],
     );
     write_rows(
-        locator.open_stem("elsewhere__2_child", test_meta("t")).unwrap().as_ref(),
+        locator
+            .open_stem("elsewhere__2_child", test_meta("t"))
+            .unwrap()
+            .as_ref(),
         &test_meta("t"),
         &["by thread"],
     );
@@ -330,7 +349,10 @@ fn a_thread_lists_every_generation_and_sub_agent() {
 fn the_display_read_shows_recorded_partials_where_they_were_written() {
     let history = InMemoryTranscriptHistory::new("display", test_meta("display"));
     write_rows(&history, &test_meta("display"), &["question"]);
-    assert!(history.record_partial(TranscriptPartial::new("half an answer"), Some("req-1".into())));
+    assert!(history.record_partial(
+        TranscriptPartial::new("half an answer"),
+        Some("req-1".into())
+    ));
 
     let display = history.read_display().unwrap().expect("written");
     let rows: Vec<(String, bool)> = display
