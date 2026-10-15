@@ -616,6 +616,26 @@ fn a_read_repairs_an_index_a_write_could_not_refresh() {
 }
 
 #[test]
+fn a_display_read_repairs_an_index_a_write_could_not_refresh() {
+    let docs = docs();
+    let locator = locator(&docs);
+    let history = locator.handle("s", meta("t"));
+    history.append(message("user", "a")).unwrap();
+    // The index refresh after that write was lost.
+    let raw = Arc::clone(&docs);
+    on_bridge(async move {
+        raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
+            .await
+    });
+    assert!(locator.thread_transcripts("t", None).is_none());
+    history.read_display().unwrap().unwrap();
+    let listed = locator
+        .thread_transcripts("t", None)
+        .expect("the display read re-indexed it");
+    assert_eq!(listed.roots[0].stem, "s");
+}
+
+#[test]
 fn clearing_an_unwritten_successor_frees_the_generation() {
     let docs = docs();
     let locator = locator(&docs);
