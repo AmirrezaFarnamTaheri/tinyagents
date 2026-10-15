@@ -149,3 +149,66 @@ fn fixture_workspace_resumes_by_stem_without_readoption_or_renaming() {
     let again = AgentTranscriptFiles::new(workspace.path(), "alpha");
     assert!(again.session_exists(&session));
 }
+
+#[test]
+fn shared_sub_agents_stay_listed_after_the_root_is_adopted() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let session = SessionRef::scoped("thread-1", "alpha");
+    let shared = FileTranscriptLocator::new(workspace.path());
+    shared
+        .open_session(&session, meta())
+        .expect("bind shared")
+        .replace(&[TranscriptMessage::user("before")])
+        .expect("write shared");
+    // Sub-agents spawned before the agent kept its own directory, one of
+    // which the agent's directory also holds by the same stem.
+    for stem in ["1700000000_alpha__1_old", "1700000000_alpha__2_both"] {
+        shared
+            .open_stem(stem, meta())
+            .expect("bind shared sub-agent")
+            .replace(&[TranscriptMessage::user(stem)])
+            .expect("write shared sub-agent");
+    }
+
+    let files = AgentTranscriptFiles::new(workspace.path(), "alpha");
+    files
+        .open_session(&session, meta())
+        .expect("bind own")
+        .replace(&[
+            TranscriptMessage::user("before"),
+            TranscriptMessage::user("after"),
+        ])
+        .expect("continue");
+    for stem in ["1700000000_alpha__2_both", "1700000000_alpha__3_new"] {
+        files
+            .open_stem(stem, meta())
+            .expect("bind own sub-agent")
+            .replace(&[TranscriptMessage::user(stem)])
+            .expect("write own sub-agent");
+    }
+
+    let listed = files
+        .thread_transcripts("thread-1", None)
+        .expect("the thread is listed");
+    let roots: Vec<_> = listed.roots.iter().map(|root| root.stem.clone()).collect();
+    assert_eq!(roots, [session_stem(&session)]);
+    assert_eq!(
+        messages(listed.roots[0].transcript.as_ref()),
+        ["before", "after"],
+        "the agent's own root is listed"
+    );
+    let subs: Vec<_> = listed.subagents.iter().map(|sub| sub.stem.clone()).collect();
+    assert_eq!(
+        subs,
+        [
+            "1700000000_alpha__1_old",
+            "1700000000_alpha__2_both",
+            "1700000000_alpha__3_new"
+        ]
+    );
+    let own_root = agent_transcript_root(workspace.path(), "alpha");
+    assert!(
+        listed.subagents[1].transcript.path().starts_with(&own_root),
+        "the agent's copy wins a stem both directories hold"
+    );
+}
