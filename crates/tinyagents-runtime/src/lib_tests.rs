@@ -3910,7 +3910,7 @@ impl SessionHooks for FreshLocatorEachTurn {
         *self.built.lock().unwrap() += 1;
         Ok(ResumePreparation {
             transcript: Some(TranscriptTarget::for_session(
-                Arc::new(FileTranscriptLocator::new(self.workspace_dir.clone())),
+                Arc::new(Destination::new("store", &self.store)),
                 self.session.clone(),
                 meta(),
             )),
@@ -3950,11 +3950,10 @@ impl SessionHooks for FreshLocatorEachTurn {
 /// The turn count matters: turn one binds, so the guard is only consulted from
 /// turn two onwards. A single-turn test passes either way.
 #[tokio::test]
-async fn a_rebuilt_locator_over_the_same_directory_is_the_same_binding() {
-    let directory = tempfile::tempdir().unwrap();
+async fn a_rebuilt_locator_over_the_same_destination_is_the_same_binding() {
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
     let hook = Arc::new(FreshLocatorEachTurn {
-        workspace_dir: directory.path().to_path_buf(),
+        store: memory(),
         session: session_ref.clone(),
         built: Mutex::new(0),
     });
@@ -4009,9 +4008,8 @@ async fn a_rebuilt_locator_over_the_same_directory_is_the_same_binding() {
 /// The converse: two genuinely different destinations must still be rejected,
 /// so the loosened comparison did not turn the redirection guard off.
 #[tokio::test]
-async fn a_locator_over_a_different_directory_is_not_the_same_binding() {
-    let first = tempfile::tempdir().unwrap();
-    let second = tempfile::tempdir().unwrap();
+async fn a_locator_over_a_different_destination_is_not_the_same_binding() {
+    let store = memory();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
 
     let bound = TranscriptTarget::for_session(
@@ -4032,11 +4030,11 @@ async fn a_locator_over_a_different_directory_is_not_the_same_binding() {
 
     assert!(
         bound.same_binding(&same),
-        "same directory, different allocation: the same durable destination"
+        "same destination, different allocation: the same durable destination"
     );
     assert!(
         !bound.same_binding(&elsewhere),
-        "a different directory is a real redirection and must stay rejected"
+        "a different destination is a real redirection and must stay rejected"
     );
 }
 
