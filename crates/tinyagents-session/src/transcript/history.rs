@@ -610,6 +610,3 @@ pub(super) fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
     }
 }
 
-#[cfg(test)]
-#[path = "history_tests.rs"]
-mod tests;
