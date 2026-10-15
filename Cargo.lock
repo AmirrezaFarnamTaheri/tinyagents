@@ -2099,6 +2099,7 @@ dependencies = [
  "tinyagents-registry",
  "tinyagents-session",
  "tinyinference-llm",
+ "tinystoragedrivers-core",
  "tinytools",
  "tokio",
  "tracing",
