@@ -102,8 +102,8 @@ impl DriverTranscriptHistory {
 }
 
 /// One index document's lookup fields.
-struct Indexed {
-    stem: String,
+pub(super) struct Indexed {
+    pub(super) stem: String,
     agent_id: Option<String>,
     thread_id: Option<String>,
 }
@@ -121,7 +121,7 @@ impl Indexed {
 
 impl DriverTranscriptLocator {
     /// The written index documents matching `filter`, oldest first.
-    fn indexed(&self, filter: Filter, what: &'static str) -> Vec<Indexed> {
+    pub(super) fn indexed(&self, filter: Filter, what: &'static str) -> Vec<Indexed> {
         let found = self.run(|docs, declared| async move {
             declared.ensure(&docs).await?;
             let query = Query::filter(filter.and(Filter::eq("written", true)))
