@@ -2528,7 +2528,7 @@ fn session_outcome(history: Vec<Message>, output: &str) -> DriverOutcome {
 /// reads and appends to the file the first one wrote.
 #[tokio::test]
 async fn a_restarted_session_continues_the_same_transcript() {
-    let directory = tempfile::tempdir().unwrap();
+    let locator = memory();
     let session_ref = SessionRef::scoped("thread-9fa08", "agent-id");
 
     let mut first = SessionBuilder::new(Arc::new(Driver::new(vec![Ok(session_outcome(
@@ -2540,7 +2540,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
     ))])))
     .codec(Arc::new(Codec::default()))
     .session(
-        Arc::new(FileTranscriptLocator::new(directory.path())),
+        locator.clone(),
         session_ref.clone(),
         meta(),
     )
@@ -2566,7 +2566,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
     ))])))
     .codec(Arc::new(Codec::default()))
     .session(
-        Arc::new(FileTranscriptLocator::new(directory.path())),
+        locator.clone(),
         session_ref.clone(),
         meta(),
     )
@@ -2592,18 +2592,18 @@ async fn a_restarted_session_continues_the_same_transcript() {
         .await
         .unwrap();
 
-    let roots: Vec<_> = std::fs::read_dir(directory.path().join("session_raw"))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .collect();
+    let roots = locator
+        .thread_transcripts("thread-9fa08", None)
+        .expect("the thread has transcripts")
+        .roots;
     assert_eq!(
         roots.len(),
         1,
-        "one conversation, one transcript: {roots:?}"
+        "one conversation, one transcript: {:?}",
+        roots.iter().map(|root| &root.stem).collect::<Vec<_>>()
     );
 
-    let persisted = read_transcript(&directory.path().join("session_raw").join(&roots[0])).unwrap();
+    let persisted = roots[0].transcript.read_session().unwrap().unwrap();
     let contents: Vec<&str> = persisted
         .messages
         .iter()
@@ -2628,9 +2628,8 @@ async fn a_restarted_session_continues_the_same_transcript() {
 /// conversation's own history.
 #[tokio::test]
 async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact() {
-    let directory = tempfile::tempdir().unwrap();
     let session_ref = SessionRef::scoped("thread-1", "agent-id");
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
 
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![
         Ok(session_outcome(
@@ -2660,11 +2659,10 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         )
         .await
         .unwrap();
-    let sealed = directory
-        .path()
-        .join("session_raw")
-        .join(format!("{}.jsonl", session_stem(&session_ref)));
-    let sealed_bytes = std::fs::read(&sealed).unwrap();
+    let sealed = locator
+        .read_session_transcript(&session_ref)
+        .expect("the first generation exists");
+    let sealed_bytes = fingerprint(sealed.as_ref());
 
     session
         .turn(
@@ -2675,15 +2673,11 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         .unwrap();
 
     assert_eq!(
-        std::fs::read(&sealed).unwrap(),
+        fingerprint(sealed.as_ref()),
         sealed_bytes,
-        "the sealed generation must be byte-identical after a compaction"
+        "the sealed generation must be unchanged after a compaction"
     );
-    let successor = directory.path().join("session_raw").join(format!(
-        "{}.jsonl",
-        session_stem(&session_ref.next_generation())
-    ));
-    let carried = read_transcript(&successor).unwrap();
+    let carried = read(locator.as_ref(), &session_stem(&session_ref.next_generation()));
     assert_eq!(
         carried
             .messages
