@@ -334,8 +334,8 @@ pub struct ThreadSpend {
 /// sub-agent transcripts come from
 /// [`TranscriptLocator::thread_transcripts`], each counted once — the roots
 /// in projection order with one shared set of counted requests, every listed
-/// sub-agent into its archetype. Unlike the file walk, a sub-agent the
-/// listing finds by its `_meta.thread_id` (not only by stem) is counted too.
+/// sub-agent into its archetype. A sub-agent the listing finds by
+/// its `_meta.thread_id` (not only by stem) is counted too.
 pub fn thread_spend_in(locator: &dyn TranscriptLocator, thread_id: &str) -> ThreadSpend {
     let mut out = ThreadSpend::default();
     let Some(listed) = locator.thread_transcripts(thread_id, None) else {
@@ -354,7 +354,7 @@ pub fn thread_spend_in(locator: &dyn TranscriptLocator, thread_id: &str) -> Thre
         .iter()
         .map(|child| (child.stem.clone(), child));
     for chain in subagent_chains(children) {
-        // As in the file walk: one run and one set of counted requests per
+        // One run and one set of counted requests per
         // compaction chain.
         let mut requests = HashSet::new();
         let mut new_run = true;
@@ -397,7 +397,7 @@ fn subagent_chains<T>(items: impl IntoIterator<Item = (String, T)>) -> Vec<Vec<T
 }
 
 /// A listed transcript's display projection; unreadable or missing ones are
-/// skipped with a warning, as the file walk skips an unreadable file.
+/// skipped with a warning.
 fn read_listed(listed: &ThreadTranscript) -> Option<DisplaySessionTranscript> {
     match listed.transcript.read_display() {
         Ok(found) => found,
