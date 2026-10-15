@@ -16,3 +16,16 @@ pub enum OnceOutcome {
         marked: bool,
     },
 }
+
+/// What [`rewrite_legacy_transcripts`](super::rewrite_legacy_transcripts) did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LegacyRewriteReport {
+    /// JSONL transcripts found.
+    pub scanned: usize,
+    /// Transcripts the rewrite changed and that were written back.
+    pub rewritten: usize,
+    /// Transcripts the rewrite left as they were.
+    pub unchanged: usize,
+    /// Transcripts that could not be read or written back.
+    pub errors: usize,
+}
