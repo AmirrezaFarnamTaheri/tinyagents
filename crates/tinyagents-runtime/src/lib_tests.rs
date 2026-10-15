@@ -3532,7 +3532,7 @@ fn two_tools() -> ToolSnapshot {
 /// requests can be inspected. `turn` numbers the call so each outcome
 /// extends the stored history instead of reading as a compaction.
 async fn one_file_turn(
-    locator: Arc<tinyagents_session::port::InMemoryTranscriptLocator>,
+    locator: Arc<dyn TranscriptLocator>,
     sent: ToolSnapshot,
     retain: bool,
     turn: usize,
@@ -3853,7 +3853,7 @@ async fn resume_adopts_the_stored_prefix_and_its_committed_turns() {
 /// says to: lazily from the *current* workspace dir, "never frozen at build
 /// time". That necessarily yields a fresh `Arc` per `before_resume`.
 struct FreshLocatorEachTurn {
-    store: Arc<tinyagents_session::port::InMemoryTranscriptLocator>,
+    store: Arc<dyn TranscriptLocator>,
     session: SessionRef,
     built: Mutex<usize>,
 }

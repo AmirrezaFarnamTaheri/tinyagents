@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tinyagents_session::port::{DriverSessionStores, InMemoryTranscriptLocator, SessionStoreProvider};
+use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
 use tinystoragedrivers_core::MemoryStorage;
 use tinyagents_session::transcript::{
     DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts,
@@ -14,9 +14,9 @@ use tinyagents_session::transcript::{
     TranscriptTurn,
 };
 
-/// An empty in-memory transcript store.
-pub(crate) fn memory() -> Arc<InMemoryTranscriptLocator> {
-    Arc::new(InMemoryTranscriptLocator::new("runtime-tests"))
+/// An empty transcript store: the production driver-backed locator, over memory.
+pub(crate) fn memory() -> Arc<dyn TranscriptLocator> {
+    driver()
 }
 
 /// Writes `messages` as the first turn of the transcript `stem`.
@@ -108,11 +108,11 @@ pub(crate) fn fingerprint(handle: &dyn tinyagents_session::transcript::Transcrip
 /// another key, for a different one).
 pub(crate) struct Destination {
     key: String,
-    store: Arc<InMemoryTranscriptLocator>,
+    store: Arc<dyn TranscriptLocator>,
 }
 
 impl Destination {
-    pub(crate) fn new(key: &str, store: &Arc<InMemoryTranscriptLocator>) -> Self {
+    pub(crate) fn new(key: &str, store: &Arc<dyn TranscriptLocator>) -> Self {
         Self {
             key: key.to_string(),
             store: Arc::clone(store),
