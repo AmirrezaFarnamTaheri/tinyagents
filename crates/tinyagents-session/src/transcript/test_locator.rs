@@ -17,3 +17,9 @@ pub(crate) fn imported_locator(workspace: &Path) -> InMemoryTranscriptLocator {
     crate::legacy::import_transcripts(workspace, &locator).expect("import fixture transcripts");
     locator
 }
+
+/// [`thread_spend_in`](super::spend::thread_spend_in) over the fixtures
+/// imported from `workspace`.
+pub(crate) fn thread_spend(workspace: &Path, thread_id: &str) -> super::spend::ThreadSpend {
+    super::spend::thread_spend_in(&imported_locator(workspace), thread_id)
+}

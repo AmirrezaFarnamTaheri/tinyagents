@@ -6,6 +6,9 @@
 //! the core actually persists.
 
 use super::*;
+use std::path::Path;
+use crate::port::InMemoryTranscriptLocator;
+use crate::transcript::test_locator::thread_spend;
 use crate::transcript::{
     MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage, append_transcript_turn,
 };
@@ -531,10 +534,9 @@ fn request_less_compaction_with_usage_identical_to_history_still_counts() {
 /// counted in the sealed generation.
 #[test]
 fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
-    use crate::transcript::{FileTranscriptLocator, SessionRef, TranscriptLocator, TruncateCut};
-    let tmp = tempfile::tempdir().expect("tempdir");
+    use crate::transcript::{SessionRef, TranscriptLocator, TruncateCut};
     let thread = "thread-generations";
-    let locator = FileTranscriptLocator::new(tmp.path());
+    let locator = InMemoryTranscriptLocator::new("generations");
     let session = SessionRef::scoped(thread, "orchestrator");
     let first = locator
         .open_session(&session, meta("orchestrator", "root", Some(thread)))
@@ -548,7 +550,7 @@ fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
     answer.preserve_request_id = true;
     first.append(answer).expect("append answer");
 
-    let before = thread_spend(tmp.path(), thread);
+    let before = thread_spend_in(&locator, thread);
     assert_eq!(before.root.input_tokens, 4_000);
 
     locator
@@ -559,11 +561,15 @@ fn retained_rows_in_a_successor_generation_are_not_counted_twice() {
         )
         .expect("next generation");
     assert_eq!(
-        find_root_transcripts_for_thread(tmp.path(), thread).len(),
+        locator
+            .thread_transcripts(thread, None)
+            .expect("thread listed")
+            .roots
+            .len(),
         2,
         "both generations are root transcripts of the thread"
     );
-    let after = thread_spend(tmp.path(), thread);
+    let after = thread_spend_in(&locator, thread);
     assert_eq!(after.root.input_tokens, 4_000, "retained row counted twice");
     assert_eq!(after.root.turns, 1);
 }
@@ -701,11 +707,9 @@ fn last_call_fields_round_trip_and_default_on_old_lines() {
 
 /// A compacted sub-agent leaves `{stem}` and `{stem}.g1` behind; the successor
 /// opens with the rows it carried over (same `request_id`). The pair is one
-/// run, and the carried turn is counted once, by the file walk and the
-/// locator walk alike.
+/// run, and the carried turn is counted once, by the locator walk.
 #[test]
 fn a_compacted_subagent_is_one_run_counted_once() {
-    use crate::transcript::FileTranscriptLocator;
     let tmp = tempfile::tempdir().expect("tempdir");
     let thread = "thread-subagent-generations";
     let root_stem = "1790000002_orchestrator_generations";
@@ -730,22 +734,12 @@ fn a_compacted_subagent_is_one_run_counted_once() {
         &[(5_000, 50, 0), (7_000, 70, 0)],
     );
 
-    for (walk, spend) in [
-        ("files", thread_spend(tmp.path(), thread)),
-        (
-            "locator",
-            thread_spend_in(&FileTranscriptLocator::new(tmp.path()), thread),
-        ),
-    ] {
-        let (researcher, runs) = spend.subagents.get("researcher").expect("child counted");
-        assert_eq!(*runs, 1, "{walk}: one delegation across its generations");
-        assert_eq!(
-            researcher.input_tokens, 12_000,
-            "{walk}: carried turn counted once"
-        );
-        assert_eq!(researcher.output_tokens, 120, "{walk}");
-        assert_eq!(researcher.turns, 2, "{walk}");
-    }
+    let spend = thread_spend(tmp.path(), thread);
+    let (researcher, runs) = spend.subagents.get("researcher").expect("child counted");
+    assert_eq!(*runs, 1, "one delegation across its generations");
+    assert_eq!(researcher.input_tokens, 12_000, "carried turn counted once");
+    assert_eq!(researcher.output_tokens, 120);
+    assert_eq!(researcher.turns, 2);
 }
 
 #[test]
