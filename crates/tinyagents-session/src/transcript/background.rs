@@ -64,8 +64,11 @@ const MAX_HEAD_MOVES: usize = 3;
 /// - **Idempotent.** A head generation that already holds a line with the same
 ///   [`BackgroundAppend::idempotency_key`] returns
 ///   [`BackgroundAppendOutcome::Duplicate`] and writes nothing. The key is
-///   checked within the head generation only: once a compaction has carried
-///   the message into a successor, that successor holds it as an ordinary row.
+///   checked within the head generation only. A compaction that carries the
+///   message into a successor carries its provenance too (the model-context
+///   row keeps it in `extra_metadata`, and the writer puts it back on the
+///   line), so a retry against that successor is still a duplicate; one the
+///   compaction dropped is appended again.
 /// - **Never creates a session.** No transcript yet is
 ///   [`BackgroundAppendOutcome::NoSession`].
 ///
