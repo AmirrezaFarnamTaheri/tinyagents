@@ -6,7 +6,7 @@
 //! the core actually persists.
 
 use super::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use crate::port::InMemoryTranscriptLocator;
 use crate::transcript::test_locator::thread_spend;
 use crate::transcript::{
