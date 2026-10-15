@@ -31,15 +31,22 @@
 pub(crate) mod rows;
 pub mod source;
 pub mod transcripts;
+mod transcripts_once;
 pub mod turn_states;
 mod workspace;
 
 pub use crate::run_ledger::drivers::{ImportCounts, LegacyDatabaseReport};
 pub use source::{LegacySourceSnapshot, QuiescentSource, SourceOwner, open_source};
 pub use transcripts::{TranscriptImportReport, import_transcripts};
+pub use transcripts_once::{
+    MARKER_COLLECTION, OnceOutcome, TRANSCRIPT_MARKER_ID, import_transcripts_once,
+};
 pub use turn_states::{TurnStateImportReport, import_turn_states};
 pub use workspace::{LegacyWorkspaceReport, WorkspaceLayout, import_workspace};
 
+#[cfg(test)]
+#[path = "transcripts_once_tests.rs"]
+mod transcripts_once_tests;
 #[cfg(test)]
 #[path = "files_tests.rs"]
 mod files_tests;
