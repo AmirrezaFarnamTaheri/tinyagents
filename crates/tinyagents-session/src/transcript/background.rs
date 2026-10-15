@@ -3,7 +3,7 @@
 //! A conversation's transcript is normally written only by its own live turns.
 //! Some work finishes *outside* any turn but belongs in the conversation — a
 //! scheduled job created from a chat reports back into that chat, so the next
-//! turn can see it ("did you remind me?"). [`append_background_message`] is
+//! turn can see it ("did you remind me?"). [`append_background_message_in`] is
 //! that writer: one plain assistant message, appended to the session's head
 //! generation, idempotent per caller key, and marked with where it came from.
 //!
@@ -37,7 +37,7 @@ use super::display::with_background;
 use super::history::seed_meta_for_discovered;
 use super::history::TranscriptLocator;
 use super::session::{SessionRef, session_stem};
-use super::turn_lock::{lock_session_turn_or_identity, lock_session_turn_with_notification};
+use super::turn_lock::lock_session_turn_or_identity;
 use super::types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, TranscriptMessage,
 };
@@ -48,40 +48,71 @@ use tokio::sync::Notify;
 /// and the write lock; more than a couple in a row means something is wrong.
 const MAX_HEAD_MOVES: usize = 3;
 
-/// [`append_background_message`] through any [`TranscriptLocator`].
+/// Appends `message` — one plain assistant message — to the head generation of
+/// `session` under `locator`, outside any turn.
 ///
-/// A file-backed locator ([`TranscriptLocator::file_backing`]) goes through
-/// the file writer, so the JSONL line is exactly what
-/// [`append_background_message`] writes. Any other store gets the same
-/// contract — the turn lock, head-only, idempotent within the head
-/// generation, never creating a session — with the message appended through
-/// its [`TranscriptHistory`](super::TranscriptHistory) handle and the
-/// provenance recorded in the row's `extra_metadata` under
+/// - **Head only.** The head is resolved from the session's first generation,
+///   whatever `session.generation` says. With
+///   [`BackgroundAppend::expected_generation`] set, a head that has moved on
+///   returns [`BackgroundAppendOutcome::StaleGeneration`] and writes nothing.
+/// - **Idempotent.** A head generation whose *live* context already holds a
+///   message delivered with the same [`BackgroundAppend::idempotency_key`]
+///   returns [`BackgroundAppendOutcome::Duplicate`] and writes nothing. The
+///   live context is what a compaction left: rows written before a
+///   compaction of the same generation count only if that compaction's
+///   replacement kept them (a kept row keeps its provenance in
+///   `extra_metadata`). A key a compaction dropped is therefore appended
+///   again, in the same generation or in a successor.
+/// - **Never creates a session.** No transcript yet is
+///   [`BackgroundAppendOutcome::NoSession`].
+///
+/// The message is appended through the head's
+/// [`TranscriptHistory`](super::TranscriptHistory) handle, with the provenance
+/// recorded in the row's `extra_metadata` under
 /// [`BACKGROUND_METADATA_KEY`](super::BACKGROUND_METADATA_KEY), which the
 /// display read lifts back into [`DisplayMessage::background`](super::DisplayMessage::background).
 ///
-/// For such a store the turn lock is the only serialisation: the duplicate
-/// check and the append are two calls, so two processes appending the same key
-/// to one store at once could both write it. A locator with no
-/// [`destination_key`](TranscriptLocator::destination_key) is locked by its
-/// own identity instead, so appends through that one locator still serialise.
+/// Awaits the session's turn lock first; see the module documentation for the
+/// contract this places on live turns. The turn lock is the only
+/// serialisation: the duplicate check and the append are two calls, so two
+/// processes appending the same key to one store at once could both write it.
+/// A locator with no [`destination_key`](TranscriptLocator::destination_key)
+/// is locked by its own identity instead, so appends through that one locator
+/// still serialise.
 ///
 /// # Errors
 ///
-/// As [`append_background_message`], plus any store error.
+/// When `message` is not a plain assistant message (another role, tool calls,
+/// or an interrupted partial), when the key is empty, or on any store error.
 pub async fn append_background_message_in(
     locator: &dyn TranscriptLocator,
     session: &SessionRef,
     message: TranscriptMessage,
     options: BackgroundAppend,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    if let Some(files) = locator.file_backing() {
-        // Existence and head resolution go through `locator` itself, so a
-        // wrapper that adopts transcripts on lookup (an agent's own files over
-        // a shared workspace) still finds a session only its fallback holds.
-        return append_background_message_impl(files, locator, session, message, options, None)
-            .await;
-    }
+    append_background_message_impl(locator, session, message, options, None).await
+}
+
+/// [`append_background_message_in`] that signals `lock_attempted` immediately
+/// before waiting for the turn lock (test hook).
+#[cfg(test)]
+pub(crate) async fn append_background_message_notifying(
+    locator: &dyn TranscriptLocator,
+    session: &SessionRef,
+    message: TranscriptMessage,
+    options: BackgroundAppend,
+    lock_attempted: &Notify,
+) -> anyhow::Result<BackgroundAppendOutcome> {
+    append_background_message_impl(locator, session, message, options, Some(lock_attempted)).await
+}
+
+async fn append_background_message_impl(
+    locator: &dyn TranscriptLocator,
+    session: &SessionRef,
+    message: TranscriptMessage,
+    options: BackgroundAppend,
+    lock_attempted: Option<&Notify>,
+) -> anyhow::Result<BackgroundAppendOutcome> {
     let message = validate(message, &options)?;
     let root = session.first_generation();
     let stem = session_stem(&root);
@@ -91,7 +122,7 @@ pub async fn append_background_message_in(
     // Falls back to the locator's own identity when it names no destination,
     // so two appends through one such locator still serialise their
     // duplicate check and append.
-    let _turn = lock_session_turn_or_identity(locator, &root).await;
+    let _turn = lock_session_turn_or_identity(locator, &root, lock_attempted).await;
     for _ in 0..MAX_HEAD_MOVES {
         let head = locator.head_generation(&root);
         if !locator.session_exists(&head) {
@@ -129,15 +160,9 @@ fn append_to_stored_head(
     let generation = head.generation;
     let handle = locator.open_session(head, seed_meta_for_discovered(""))?;
     let key = options.idempotency_key.as_str();
-    let held = handle.read_display()?.is_some_and(|display| {
-        display.records.iter().any(|record| match record {
-            DisplayRecord::Message(message) => carries_key(message.background.as_ref(), key),
-            DisplayRecord::Compaction(compaction) => compaction
-                .replacement
-                .iter()
-                .any(|message| carries_key(message.background.as_ref(), key)),
-        })
-    });
+    let held = handle
+        .read_display()?
+        .is_some_and(|display| live_context_holds_key(&display.records, key));
     if held {
         return Ok(Attempt::Done(BackgroundAppendOutcome::Duplicate {
             generation,
@@ -157,6 +182,28 @@ fn append_to_stored_head(
     Ok(Attempt::Done(BackgroundAppendOutcome::Appended {
         generation,
     }))
+}
+
+/// Whether the *live* context of `records` holds a message delivered with
+/// `key`. A compaction replaces the context accumulated so far, so only rows
+/// after the last compaction and that compaction's own replacement count; a
+/// key the compaction dropped is not held.
+fn live_context_holds_key(records: &[DisplayRecord], key: &str) -> bool {
+    let mut held = false;
+    for record in records {
+        match record {
+            DisplayRecord::Message(message) => {
+                held |= carries_key(message.background.as_ref(), key);
+            }
+            DisplayRecord::Compaction(compaction) => {
+                held = compaction
+                    .replacement
+                    .iter()
+                    .any(|message| carries_key(message.background.as_ref(), key));
+            }
+        }
+    }
+    held
 }
 
 fn carries_key(origin: Option<&BackgroundOrigin>, key: &str) -> bool {
