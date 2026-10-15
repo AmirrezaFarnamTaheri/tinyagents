@@ -42,6 +42,12 @@ Driver-backed stores repair the index on a display read, order pre-identity
 roots by `_meta.created`, drop adopted roots beside an unscoped session root,
 bound the sub-agent listing query to the thread, and find roots missing from
 the index before adoption.
+A model-context `TranscriptMessage` now keeps a JSONL row's background
+provenance in `extra_metadata` (under `BACKGROUND_METADATA_KEY`, as row
+stores do) and the line codec writes it back as the line field, so legacy
+rewrites and compactions keep the idempotency key on both backends.
+`InMemoryTranscriptLocator` lists a thread's generations and sub-agents, and
+`InMemoryTranscriptHistory::read_display` shows recorded partials.
 
 ## Unreleased: unapplied steers are back in the run queue when a turn ends
 
