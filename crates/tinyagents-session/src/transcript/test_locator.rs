@@ -7,19 +7,31 @@
 //! locator and exercise the store-port APIs against that.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use crate::port::InMemoryTranscriptLocator;
+use tinystoragedrivers_core::MemoryStorage;
 
-/// An in-memory locator holding every transcript under
+use super::TranscriptLocator;
+use crate::port::{DriverSessionStores, SessionStoreProvider};
+
+/// An empty driver-backed locator (the production store, over memory).
+pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
+    let provider = DriverSessionStores::new(Arc::new(MemoryStorage::new()))
+        .expect("driver session stores over memory");
+    provider.for_agent("test").transcripts
+}
+
+/// A driver-backed locator holding every transcript under
 /// `<workspace>/session_raw` (flat and date-grouped), imported id-preserving.
-pub(crate) fn imported_locator(workspace: &Path) -> InMemoryTranscriptLocator {
-    let locator = InMemoryTranscriptLocator::new("test-import");
-    crate::legacy::import_transcripts(workspace, &locator).expect("import fixture transcripts");
+pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
+    let locator = driver_locator();
+    crate::legacy::import_transcripts(workspace, locator.as_ref())
+        .expect("import fixture transcripts");
     locator
 }
 
 /// [`thread_spend_in`](super::spend::thread_spend_in) over the fixtures
 /// imported from `workspace`.
 pub(crate) fn thread_spend(workspace: &Path, thread_id: &str) -> super::spend::ThreadSpend {
-    super::spend::thread_spend_in(&imported_locator(workspace), thread_id)
+    super::spend::thread_spend_in(imported_locator(workspace).as_ref(), thread_id)
 }

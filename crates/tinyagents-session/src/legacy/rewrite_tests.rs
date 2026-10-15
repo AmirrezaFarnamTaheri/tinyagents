@@ -226,7 +226,7 @@ async fn a_rewrite_keeps_background_delivery_provenance() {
     // Imported into a store, the delivery is still a duplicate.
     let locator = crate::transcript::test_locator::imported_locator(dir.path());
     let outcome = append_background_message_in(
-        &locator,
+        locator.as_ref(),
         &session,
         TranscriptMessage::assistant("Time to stretch!"),
         BackgroundAppend::new("run-1", serde_json::json!({"kind": "cron"})),

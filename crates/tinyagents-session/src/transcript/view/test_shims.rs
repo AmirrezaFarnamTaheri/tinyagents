@@ -20,7 +20,7 @@ pub(crate) fn get_page(
     limit: Option<usize>,
 ) -> TranscriptPage {
     get_page_in(
-        &imported_locator(workspace_dir),
+        imported_locator(workspace_dir).as_ref(),
         thread_id,
         None,
         cursor,
@@ -29,7 +29,7 @@ pub(crate) fn get_page(
 }
 
 pub(crate) fn project_thread(workspace_dir: &Path, thread_id: &str) -> Option<ProjectedTranscript> {
-    project::project_thread_in(&imported_locator(workspace_dir), thread_id, None, None)
+    project::project_thread_in(imported_locator(workspace_dir).as_ref(), thread_id, None, None)
 }
 
 pub(crate) fn project_thread_scoped_with(
@@ -39,7 +39,7 @@ pub(crate) fn project_thread_scoped_with(
     lookup: &dyn SpawnCallLookup,
 ) -> Option<ProjectedTranscript> {
     project::project_thread_in(
-        &imported_locator(workspace_dir),
+        imported_locator(workspace_dir).as_ref(),
         thread_id,
         agent_id,
         Some(lookup),
