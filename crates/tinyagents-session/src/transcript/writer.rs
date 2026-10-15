@@ -4,7 +4,7 @@
 
 use super::history::TranscriptPartial;
 use super::jsonl::{
-    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json,
+    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json, partial_line,
     serialise_message_lines, tools_line_json,
 };
 use super::markdown::render_markdown;
@@ -331,19 +331,7 @@ fn serialise_interrupted_partial(
     let Some(partial) = partial.filter(|partial| !partial.content.is_empty()) else {
         return Ok(());
     };
-    let mut line = build_message_line(
-        &TranscriptMessage::assistant(&partial.content),
-        None,
-        request_id,
-        true,
-    );
-    line.iteration = partial.iteration;
-    line.reasoning_content = partial
-        .reasoning_content
-        .as_deref()
-        .map(str::trim)
-        .filter(|content| !content.is_empty())
-        .map(str::to_owned);
+    let mut line = partial_line(partial, request_id);
     line.ts = Some(chrono::Utc::now().to_rfc3339());
     buf.push_str(&serde_json::to_string(&line).context("serialise interrupted partial line")?);
     buf.push('\n');

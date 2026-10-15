@@ -865,3 +865,25 @@ pub(super) fn display_message_from_line(ml: MessageLine) -> DisplayMessage {
         },
     }
 }
+
+/// The display-only line of an interrupted `partial`, without a timestamp
+/// (the file writer stamps one; a store that kept none leaves it unset).
+pub(super) fn partial_line(
+    partial: &super::history::TranscriptPartial,
+    request_id: Option<&str>,
+) -> MessageLine {
+    let mut line = build_message_line(
+        &TranscriptMessage::assistant(&partial.content),
+        None,
+        request_id,
+        true,
+    );
+    line.iteration = partial.iteration;
+    line.reasoning_content = partial
+        .reasoning_content
+        .as_deref()
+        .map(str::trim)
+        .filter(|content| !content.is_empty())
+        .map(str::to_owned);
+    line
+}

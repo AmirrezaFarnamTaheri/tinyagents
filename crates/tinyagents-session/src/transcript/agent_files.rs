@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{
-    FileTranscriptLocator, SessionAdoption, SessionRef, TranscriptHistory, TranscriptLocator,
-    TranscriptMessage, TranscriptMeta, TranscriptPartial, TranscriptRead,
+    FileTranscriptLocator, SessionAdoption, SessionRef, ThreadTranscripts, TranscriptHistory,
+    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptPartial, TranscriptRead,
     find_root_transcript_for_thread_scoped, resolve_keyed_transcript_path, session_stem,
 };
 
@@ -97,6 +97,20 @@ impl AgentTranscriptFiles {
 }
 
 impl TranscriptLocator for AgentTranscriptFiles {
+    fn file_backing(&self) -> Option<&FileTranscriptLocator> {
+        Some(&self.own)
+    }
+
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        self.own
+            .thread_transcripts(thread_id, agent_id)
+            .or_else(|| self.legacy.thread_transcripts(thread_id, agent_id))
+    }
+
     fn destination_key(&self) -> Option<String> {
         self.own.destination_key()
     }

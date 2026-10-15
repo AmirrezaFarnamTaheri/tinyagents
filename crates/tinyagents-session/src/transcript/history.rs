@@ -26,11 +26,25 @@ use crate::transcript::types::TranscriptMessage;
 use fs2::FileExt;
 
 use crate::transcript::{
-    SessionAdoption, SessionRef, SessionTranscript, TranscriptMeta, TurnUsage,
-    adopt_legacy_session_transcripts, find_latest_transcript, find_root_transcript_for_thread,
+    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscript,
+    ThreadTranscripts, TranscriptMeta, TurnUsage, adopt_legacy_session_transcripts,
+    find_latest_transcript, find_root_transcript_for_thread,
     find_root_transcript_for_thread_scoped, read_transcript, resolve_keyed_transcript_path,
     session_stem,
 };
+
+/// The stem a read handle is bound to: its path's last component, without the
+/// `.jsonl` extension a file handle carries. (A stem may itself contain dots,
+/// so this never uses `file_stem`.)
+pub(super) fn stem_of_handle(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.strip_suffix(".jsonl")
+        .map(str::to_string)
+        .unwrap_or(name)
+}
 
 /// Upper bound on the compaction generations one session may accumulate.
 ///
@@ -163,6 +177,17 @@ pub trait TranscriptRead: Send + Sync {
     /// [`SessionTranscript`] rather than messages alone is what lets the shadow
     /// read keep working through this seam.
     fn read_session(&self) -> anyhow::Result<Option<SessionTranscript>>;
+
+    /// The display projection of this transcript — every record, including
+    /// pre-compaction history, compaction markers and interrupted partials —
+    /// or `Ok(None)` when it does not exist.
+    ///
+    /// The default builds it from [`Self::read_session`], which holds only
+    /// the reduced model context: an implementor that keeps more (the file
+    /// log, a driver's entry log) overrides it.
+    fn read_display(&self) -> anyhow::Result<Option<DisplaySessionTranscript>> {
+        Ok(self.read_session()?.map(super::display_from_session))
+    }
 }
 
 /// Resolves transcripts by the two keys the turn path actually has, and binds
@@ -215,6 +240,37 @@ pub trait TranscriptLocator: Send + Sync {
     ) -> Option<Arc<dyn TranscriptRead>> {
         let _ = agent_id;
         self.root_for_thread(thread_id)
+    }
+
+    /// Every transcript backing `thread_id`'s view: its root generations in
+    /// projection order and its sub-agent transcripts, or `None` when the
+    /// thread has no root transcript yet. Scoped to the roots `agent_id` owns
+    /// when given (sub-agents are then found by stem only).
+    ///
+    /// Defaults to [`Self::root_for_thread_scoped`] alone, with no
+    /// sub-agents, for a locator that cannot list.
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        let root = self.root_for_thread_scoped(thread_id, agent_id)?;
+        Some(ThreadTranscripts {
+            roots: vec![ThreadTranscript {
+                stem: stem_of_handle(root.path()),
+                transcript: root,
+            }],
+            subagents: Vec::new(),
+        })
+    }
+
+    /// The file locator this one writes through, when it is file-backed.
+    ///
+    /// Lets a generic writer keep the JSONL line format exact (for example
+    /// [`append_background_message_in`](super::append_background_message_in)
+    /// records provenance as a line field there). `None` for any other store.
+    fn file_backing(&self) -> Option<&FileTranscriptLocator> {
+        None
     }
 
     /// Binds (creating on first write) this session's own write handle for
@@ -557,6 +613,40 @@ impl FileTranscriptLocator {
 }
 
 impl TranscriptLocator for FileTranscriptLocator {
+    fn file_backing(&self) -> Option<&FileTranscriptLocator> {
+        Some(self)
+    }
+
+    /// The same file set the path-based view projects
+    /// ([`resolve_files_scoped`](crate::transcript::view::resolve_files_scoped)).
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        let (roots, subagents) = crate::transcript::view::resolve_files_scoped(
+            &self.workspace_dir,
+            thread_id,
+            agent_id,
+        )?;
+        let listed = |paths: Vec<PathBuf>| -> Vec<ThreadTranscript> {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let stem = stem_of_handle(&path);
+                    let transcript: Arc<dyn TranscriptRead> = Arc::new(
+                        FileTranscriptHistory::opened_at(path, seed_meta_for_discovered(&stem)),
+                    );
+                    ThreadTranscript { stem, transcript }
+                })
+                .collect()
+        };
+        Some(ThreadTranscripts {
+            roots: listed(roots),
+            subagents: listed(subagents),
+        })
+    }
+
     /// The workspace root every lookup and bind resolves under, which is
     /// this locator's only field and therefore its whole identity.
     fn destination_key(&self) -> Option<String> {
@@ -1279,6 +1369,19 @@ impl TranscriptRead for FileTranscriptHistory {
             self.path.display()
         );
         Ok(Some(session))
+    }
+
+    /// [`read_transcript_display`](crate::transcript::read_transcript_display)
+    /// on this handle's file. A legacy `.md` transcript has no display log, so
+    /// it projects its model context instead.
+    fn read_display(&self) -> anyhow::Result<Option<DisplaySessionTranscript>> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        if self.path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
+            return Ok(self.read_session()?.map(super::display_from_session));
+        }
+        crate::transcript::read_transcript_display(&self.path).map(Some)
     }
 }
 

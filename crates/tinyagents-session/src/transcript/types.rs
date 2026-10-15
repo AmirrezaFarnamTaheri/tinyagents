@@ -896,3 +896,34 @@ pub enum BackgroundAppendOutcome {
     /// transcript was created).
     NoSession,
 }
+
+/// One transcript of a thread, as a locator lists it.
+#[derive(Clone)]
+pub struct ThreadTranscript {
+    /// The transcript's stem (its session key; a sub-agent's chains its
+    /// parent's with `__`).
+    pub stem: String,
+    /// A read handle on it.
+    pub transcript: std::sync::Arc<dyn super::history::TranscriptRead>,
+}
+
+impl std::fmt::Debug for ThreadTranscript {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadTranscript")
+            .field("stem", &self.stem)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Every transcript backing one thread's view, as
+/// [`TranscriptLocator::thread_transcripts`](super::TranscriptLocator::thread_transcripts)
+/// lists them.
+#[derive(Debug, Clone, Default)]
+pub struct ThreadTranscripts {
+    /// The thread's root transcripts in projection order: each session's
+    /// generations oldest first, pre-identity roots dropped once a session
+    /// root exists.
+    pub roots: Vec<ThreadTranscript>,
+    /// Its sub-agent transcripts, sorted by stem.
+    pub subagents: Vec<ThreadTranscript>,
+}

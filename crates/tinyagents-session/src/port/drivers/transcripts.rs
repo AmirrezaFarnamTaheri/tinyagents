@@ -615,6 +615,10 @@ impl TranscriptRead for DriverTranscriptHistory {
             }))
         })?)
     }
+
+    fn read_display(&self) -> anyhow::Result<Option<crate::transcript::DisplaySessionTranscript>> {
+        self.display()
+    }
 }
 
 /// The entry recording a turn whose logical messages are now `next`.
@@ -1011,6 +1015,14 @@ impl TranscriptLocator for DriverTranscriptLocator {
         Ok(Arc::new(self.handle(stem, seed)))
     }
 
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<crate::transcript::ThreadTranscripts> {
+        self.list_thread(thread_id, agent_id)
+    }
+
     fn session_exists(&self, session: &SessionRef) -> bool {
         let stem = session_stem(session);
         let written = self.run(|docs, declared| async move {
@@ -1152,6 +1164,9 @@ impl DriverTranscriptLocator {
         }
     }
 }
+
+#[path = "transcripts_display.rs"]
+mod display;
 
 #[cfg(test)]
 #[path = "transcripts_tests.rs"]

@@ -134,6 +134,7 @@
 mod adoption;
 mod agent_files;
 mod background;
+mod display;
 mod history;
 mod jsonl;
 mod legacy_md;
@@ -151,7 +152,12 @@ mod writer;
 
 pub use adoption::{SessionAdoption, adopt_legacy_session_transcripts};
 pub use agent_files::{AgentTranscriptFiles, agent_transcript_root};
-pub use background::{append_background_message, append_background_message_with_lock_notification};
+pub use background::{
+    append_background_message, append_background_message_in,
+    append_background_message_with_lock_notification,
+};
+pub use display::BACKGROUND_METADATA_KEY;
+pub(crate) use display::{display_from_session, display_message_of, partial_display_message};
 pub(crate) use history::same_transcript_messages;
 pub use history::{
     FileTranscriptHistory, FileTranscriptLocator, TranscriptHistory, TranscriptLocator,
@@ -171,8 +177,8 @@ pub use turn_lock::{SessionTurnGuard, lock_session_turn};
 pub use types::{
     BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, CompactionMarker, DisplayMessage,
     DisplayRecord, DisplaySessionTranscript, LegacyText, MessageUsage, SessionTranscript,
-    ToolFailure, TranscriptMediaRef, TranscriptMessage, TranscriptMeta, TranscriptPart,
-    TranscriptToolCall, TurnUsage, UsageCostSource,
+    ThreadTranscript, ThreadTranscripts, ToolFailure, TranscriptMediaRef, TranscriptMessage,
+    TranscriptMeta, TranscriptPart, TranscriptToolCall, TurnUsage, UsageCostSource,
 };
 pub use writer::{
     append_interrupted_partial, append_tools_record, append_transcript_turn,
