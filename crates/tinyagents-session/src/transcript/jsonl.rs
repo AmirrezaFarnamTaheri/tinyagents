@@ -317,7 +317,8 @@ pub(super) fn build_message_line(
     } else {
         None
     };
-    let extra_metadata = msg.extra_metadata.clone();
+    // Provenance a row carries in its metadata is a line field on disk.
+    let (extra_metadata, background) = split_background(msg.extra_metadata.clone());
     let failure = msg
         .tool_failure
         .as_ref()
@@ -391,7 +392,7 @@ pub(super) fn build_message_line(
         shape: typed.as_ref().map(|typed| typed.shape.as_str().to_string()),
         tool_call_id: typed.as_ref().and_then(|typed| typed.tool_call_id.clone()),
         parts: typed.and_then(|typed| typed.parts),
-        background: None,
+        background,
         _extra: HashMap::new(),
     }
 }
@@ -773,6 +774,12 @@ pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
     let turn_usage = turn_usage_from_line(&ml);
     let failure_detail = ml.failure.then(|| ml.failure_detail.clone());
     let typed = row_from_line(&ml);
+    // The row keeps a background delivery's provenance, so a rewrite or a
+    // compaction carrying it writes the line field back.
+    let extra_metadata = match &ml.background {
+        Some(origin) => metadata_with_background(ml.extra_metadata, origin),
+        None => ml.extra_metadata,
+    };
     TranscriptMessage {
         id: typed.id,
         role: typed.role,
@@ -781,7 +788,7 @@ pub(super) fn message_from_line(ml: MessageLine) -> TranscriptMessage {
         tool_call_id: typed.tool_call_id,
         parts: typed.parts,
         legacy: typed.legacy,
-        extra_metadata: ml.extra_metadata,
+        extra_metadata,
         cache_breakpoints: ml.cache_breakpoints,
         turn_usage: turn_usage.clone(),
         request_id: ml.request_id,

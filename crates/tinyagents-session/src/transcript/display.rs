@@ -7,8 +7,11 @@
 //! the two identically.
 //!
 //! Out-of-band delivery provenance ([`BackgroundOrigin`]) is a line field in
-//! JSONL. A row-keeping store carries it in the row's `extra_metadata` under
-//! [`BACKGROUND_METADATA_KEY`]; [`display_message_of`] lifts it back out.
+//! JSONL. A [`TranscriptMessage`] carries it in its `extra_metadata` under
+//! [`BACKGROUND_METADATA_KEY`] — the JSONL reader lifts the line field in
+//! there and the line codec writes it back out as the line field — so a row
+//! keeps its provenance through every read and rewrite on either backend;
+//! [`display_message_of`] lifts it back out for display.
 
 use super::history::TranscriptPartial;
 use super::jsonl::{build_message_line, display_message_from_line, partial_line};
@@ -63,7 +66,16 @@ pub(crate) fn with_background(
     mut message: TranscriptMessage,
     origin: &BackgroundOrigin,
 ) -> TranscriptMessage {
-    let mut metadata = match message.extra_metadata.take() {
+    message.extra_metadata = metadata_with_background(message.extra_metadata.take(), origin);
+    message
+}
+
+/// `metadata` with `origin` recorded under [`BACKGROUND_METADATA_KEY`].
+pub(crate) fn metadata_with_background(
+    metadata: Option<serde_json::Value>,
+    origin: &BackgroundOrigin,
+) -> Option<serde_json::Value> {
+    let mut metadata = match metadata {
         Some(serde_json::Value::Object(map)) => map,
         Some(other) => {
             let mut map = serde_json::Map::new();
@@ -76,8 +88,19 @@ pub(crate) fn with_background(
         BACKGROUND_METADATA_KEY.into(),
         serde_json::to_value(origin).unwrap_or(serde_json::Value::Null),
     );
-    message.extra_metadata = Some(serde_json::Value::Object(metadata));
-    message
+    Some(serde_json::Value::Object(metadata))
+}
+
+/// Splits the background provenance recorded under
+/// [`BACKGROUND_METADATA_KEY`] out of `metadata`: the line codec writes it as
+/// the line's own `background` field instead.
+pub(crate) fn split_background(
+    metadata: Option<serde_json::Value>,
+) -> (Option<serde_json::Value>, Option<BackgroundOrigin>) {
+    let mut message = TranscriptMessage::assistant("");
+    message.extra_metadata = metadata;
+    let origin = take_background(&mut message);
+    (message.extra_metadata, origin)
 }
 
 /// The background provenance recorded on a stored row, if any.
