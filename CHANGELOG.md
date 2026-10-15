@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased: locator-based transcript reads and writes (tinyagents#453)
+
+Hosts can now do through a `TranscriptLocator` everything they used the
+path-taking transcript API for, so the same code serves JSONL files and a
+driver store:
+
+- `TranscriptRead::read_display()` (default: from `read_session`; file
+  handles read the JSONL display log; driver handles replay their entry log
+  with compactions and interrupted partials in place).
+- `TranscriptLocator::thread_transcripts(thread_id, agent_id) ->
+  Option<ThreadTranscripts>` lists a thread's roots in projection order and
+  its sub-agent transcripts (`ThreadTranscript { stem, transcript }`).
+- `view::get_page_in(locator, thread_id, agent_id, cursor, limit)` and
+  `view::project_transcripts(...)`; `spend::thread_spend_in(locator,
+  thread_id)`.
+- `append_background_message_in(locator, session, message, options)`; for a
+  non-file store the provenance rides in `extra_metadata` under
+  `BACKGROUND_METADATA_KEY`. `TranscriptLocator::file_backing()` names the
+  file locator behind a file-backed one.
+- `legacy::rewrite_legacy_transcripts(workspace_dir, rewrite) ->
+  LegacyRewriteReport` for pre-import fixups of classic `session_raw/` files.
+
+The path API is unchanged; `project_from_files` and `thread_spend` now share
+the locator code path.
+
 ## Unreleased: workspace transcripts on driver ports (tinyagents#453, transcript half)
 
 - `port::WorkspaceStores::open(workspace, agent_id)` (feature `legacy-import`)
