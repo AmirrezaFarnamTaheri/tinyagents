@@ -130,6 +130,6 @@ pub use testkit::{
 };
 pub use todos::store as todo_store;
 pub use todos::{
-    TodoItem, TodoList, TodoStatus, TodoTool, TodosSnapshot, normalise_list, parse_status,
-    register_todo_tools, render_markdown, todo_tools,
+    TodoItem, TodoList, TodoSequenceMiddleware, TodoStatus, TodoTool, TodosSnapshot,
+    normalise_list, parse_status, register_todo_tools, render_markdown, todo_tools,
 };
