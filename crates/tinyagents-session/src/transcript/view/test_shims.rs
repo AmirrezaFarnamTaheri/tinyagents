@@ -5,11 +5,13 @@
 //! store-port function, so the projection under test is the production one.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::types::ProjectedTranscript;
 use super::{SpawnCallLookup, TranscriptPage, get_page_in, project};
 use crate::transcript::test_locator::imported_locator;
-use crate::transcript::{ThreadTranscript, TranscriptLocator};
+use crate::transcript::history::seed_meta_for_discovered;
+use crate::transcript::{ThreadTranscript, TranscriptLocator, TranscriptRead};
 
 pub(crate) fn get_page(
     workspace_dir: &Path,
@@ -86,8 +88,8 @@ pub(crate) fn project_from_files(
                     .and_then(|stem| stem.to_str())
                     .expect("utf-8 stem")
                     .to_owned();
-                let transcript = locator
-                    .read_session_by_stem(&stem)
+                let transcript: Arc<dyn TranscriptRead> = locator
+                    .open_stem(&stem, seed_meta_for_discovered(&stem))
                     .expect("fixture stem imported");
                 ThreadTranscript { stem, transcript }
             })

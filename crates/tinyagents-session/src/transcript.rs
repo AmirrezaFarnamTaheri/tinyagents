@@ -142,6 +142,8 @@ mod paths;
 mod reader;
 mod session;
 pub mod spend;
+#[cfg(test)]
+mod test_locator;
 mod turn_lock;
 mod types;
 pub mod view;

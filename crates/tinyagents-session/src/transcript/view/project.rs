@@ -12,6 +12,8 @@ use crate::transcript::{
     TranscriptLocator,
 };
 
+#[cfg(test)]
+pub(crate) use super::test_shims::{project_from_files, project_thread, resolve_files};
 use super::{SpawnCallLookup, TOOL_RESULT_FAILURES_METADATA_KEY};
 
 use super::prompt_tools::{self, CallRegistry, PromptToolResult};
