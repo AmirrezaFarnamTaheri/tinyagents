@@ -7,7 +7,7 @@
 //! projected (generations themselves arrive in chain order from the locator's
 //! [`thread_transcripts`](crate::transcript::TranscriptLocator::thread_transcripts)).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::transcript::{DisplayMessage, DisplayRecord};
 
