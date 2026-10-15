@@ -12,7 +12,7 @@ pub mod types;
 
 use serde::Serialize;
 
-pub use project::{project_records, project_transcripts};
+pub use project::{project_records, project_thread_in, project_transcripts};
 
 use crate::transcript::TranscriptLocator;
 #[allow(deprecated)]

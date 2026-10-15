@@ -147,7 +147,7 @@ pub use threads::{
     ConversationPurgeStats, ConversationThread, CreateConversationThread, CrossThreadHit,
     ThreadMessage, ThreadMessagePatch,
 };
-pub use transcript::spend::{ThreadSpend, TranscriptSpend, thread_spend, transcript_spend};
+pub use transcript::spend::{ThreadSpend, TranscriptSpend, thread_spend_in, transcript_spend};
 pub use turn_state::TurnStateMirror;
 pub use types::{
     SessionMessage, SessionRecord, SessionSearchParams, SessionSearchResult, SessionStatus,

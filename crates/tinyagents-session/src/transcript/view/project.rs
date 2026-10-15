@@ -2,18 +2,14 @@
 //!
 //! Turns the append-only log's [`DisplayRecord`]s (message lines, compaction
 //! markers, interrupted partials) into the frontend's chat vocabulary
-//! ([`DisplayItem`]), sanitizing injected scaffolding as it goes. File
-//! resolution lives in [`super::resolve`]; sub-agent trails are placed by
+//! ([`DisplayItem`]), sanitizing injected scaffolding as it goes. Cross-generation row identity lives in [`super::resolve`]; sub-agent trails are placed by
 //! [`super::subagents`].
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use crate::transcript::history::seed_meta_for_discovered;
 use crate::transcript::{
-    CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript,
-    FileTranscriptHistory, ThreadTranscript, TranscriptRead,
+    CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript, ThreadTranscript,
+    TranscriptLocator,
 };
 
 use super::{SpawnCallLookup, TOOL_RESULT_FAILURES_METADATA_KEY};
@@ -36,6 +32,28 @@ const CHANNEL_CONTEXT_PREFIX: &str = "[Channel context]";
 
 type NativeToolCall = (String, String, String);
 type NativeToolEnvelope = (String, Vec<NativeToolCall>);
+
+/// Lists `thread_id`'s transcripts through `locator` (scoped to `agent_id`
+/// when given) and projects them. `None` when the thread has no root
+/// transcript yet (brand-new thread, first turn not persisted).
+///
+/// With a [`SpawnCallLookup`], a sub-agent is placed under the exact tool call
+/// that spawned it when the run ledger knows which one that was, instead of by
+/// the timestamp/target heuristic.
+pub fn project_thread_in(
+    locator: &dyn TranscriptLocator,
+    thread_id: &str,
+    agent_id: Option<&str>,
+    lookup: Option<&dyn SpawnCallLookup>,
+) -> Option<ProjectedTranscript> {
+    let listed = locator.thread_transcripts(thread_id, agent_id)?;
+    Some(project_transcripts(
+        thread_id,
+        &listed.roots,
+        &listed.subagents,
+        lookup,
+    ))
+}
 
 /// Projects a thread from a listed transcript set (see
 /// [`TranscriptLocator::thread_transcripts`](crate::transcript::TranscriptLocator::thread_transcripts)),

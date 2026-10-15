@@ -23,7 +23,8 @@ use std::sync::Arc;
 use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
-    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscript, ThreadTranscripts,
+    DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscript,
+    ThreadTranscripts,
     TranscriptMeta, TurnUsage, session_stem,
 };
 
