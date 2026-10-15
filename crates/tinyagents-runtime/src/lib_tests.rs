@@ -12,11 +12,10 @@ use tinyagents_harness::{
     runtime::AgentHarness,
 };
 use tinyagents_session::transcript::{
-    DisplayRecord, FileTranscriptLocator, SessionRef, SessionTranscript, TranscriptHistory,
-    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    TurnUsage, read_transcript, read_transcript_display, resolve_keyed_transcript_path,
-    session_stem, write_transcript,
+    DisplayRecord, SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator,
+    TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, session_stem,
 };
+use crate::test_store::{fingerprint, memory, read, read_display, seed, try_read};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
 use tinytools::{Tool, ToolResult, ToolSpec};
@@ -791,9 +790,8 @@ async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
 }
 
 #[tokio::test]
-async fn file_history_commits_partial_model_history_and_display_only_partial_together() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+async fn history_commits_partial_model_history_and_display_only_partial_together() {
+    let locator = memory();
     let codec = Arc::new(Codec {
         turn_usage: Mutex::new(Some(turn_usage())),
         ..Default::default()
@@ -811,7 +809,7 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
         partial: Some(partial),
     })])))
     .codec(codec)
-    .transcript(locator, "agent", meta())
+    .transcript(locator.clone(), "agent", meta())
     .build()
     .unwrap();
     assert!(
@@ -823,19 +821,17 @@ async fn file_history_commits_partial_model_history_and_display_only_partial_tog
             .await
             .is_err()
     );
-    let path = directory.path().join("session_raw/agent.jsonl");
-    let persisted = read_transcript(&path).unwrap();
+    let persisted = read(locator.as_ref(), "agent");
     assert_eq!(persisted.messages[0].content, "recoverable");
     assert_eq!(persisted.messages[0].turn_usage, Some(turn_usage()));
-    assert!(read_transcript_display(&path).unwrap().records.iter().any(|record| matches!(record,
+    assert!(read_display(locator.as_ref(), "agent").records.iter().any(|record| matches!(record,
         DisplayRecord::Message(message) if message.interrupted && message.message.content == "display partial"
     )));
 }
 
 #[tokio::test]
 async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
-    let directory = tempfile::tempdir().unwrap();
-    let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+    let locator = memory();
     let codec = Arc::new(Codec {
         turn_usage: Mutex::new(Some(turn_usage())),
         ..Default::default()
@@ -844,7 +840,7 @@ async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
         Message::assistant("final"),
     ]))])))
     .codec(codec)
-    .transcript(locator, "agent", meta())
+    .transcript(locator.clone(), "agent", meta())
     .build()
     .unwrap();
 
@@ -856,7 +852,7 @@ async fn codec_turn_usage_is_written_with_the_successful_turn_append() {
         .await
         .unwrap();
 
-    let transcript = read_transcript(&directory.path().join("session_raw/agent.jsonl")).unwrap();
+    let transcript = read(locator.as_ref(), "agent");
     assert_eq!(transcript.messages.len(), 1);
     assert_eq!(transcript.messages[0].content, "final");
     assert_eq!(transcript.messages[0].turn_usage, Some(turn_usage()));
@@ -975,8 +971,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
         (true, &["stop me", "completed round"][..]),
         (false, &[][..]),
     ] {
-        let directory = tempfile::tempdir().unwrap();
-        let locator = Arc::new(FileTranscriptLocator::new(directory.path()));
+        let locator = memory();
         let options = TurnOptions::default();
         let cancellation = options.cancellation.clone();
         let started = Arc::new(tokio::sync::Notify::new());
@@ -985,7 +980,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
         let mut session = SessionBuilder::new(Arc::new(driver))
             .codec(Arc::new(Codec::default()))
             .hooks(hook)
-            .transcript(locator, "agent", meta())
+            .transcript(locator.clone(), "agent", meta())
             .build()
             .unwrap();
         let turn = tokio::spawn(async move {
@@ -1004,8 +999,7 @@ async fn cancellation_persists_the_rounds_a_cancel_aware_driver_returns() {
             [SessionTerminal::Cancelled]
         ));
         assert!(events.receipts.lock().unwrap().is_empty());
-        let path = directory.path().join("session_raw/agent.jsonl");
-        let persisted: Vec<String> = read_transcript(&path)
+        let persisted: Vec<String> = try_read(locator.as_ref(), "agent")
             .map(|transcript| transcript.messages.into_iter().map(|m| m.content).collect())
             .unwrap_or_default();
         assert_eq!(persisted, expected, "returns_partial={returns_partial}");
