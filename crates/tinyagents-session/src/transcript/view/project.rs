@@ -8,8 +8,13 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crate::transcript::{self, CompactionMarker, DisplayMessage, DisplayRecord};
+use crate::transcript::history::seed_meta_for_discovered;
+use crate::transcript::{
+    CompactionMarker, DisplayMessage, DisplayRecord, DisplaySessionTranscript,
+    FileTranscriptHistory, ThreadTranscript, TranscriptRead,
+};
 
 use super::{SpawnCallLookup, TOOL_RESULT_FAILURES_METADATA_KEY};
 
@@ -103,30 +108,64 @@ pub fn project_from_files(
     sub_paths: &[PathBuf],
     lookup: Option<&dyn SpawnCallLookup>,
 ) -> ProjectedTranscript {
+    let handles = |paths: &[PathBuf]| -> Vec<ThreadTranscript> {
+        paths
+            .iter()
+            .map(|path| {
+                // The same stem rule as `FileTranscriptLocator::thread_transcripts`
+                // (strips only `.jsonl`), so both paths name a file alike.
+                let stem = crate::transcript::history::stem_of_handle(path);
+                let transcript: Arc<dyn TranscriptRead> = Arc::new(
+                    FileTranscriptHistory::opened_at(path.clone(), seed_meta_for_discovered(&stem)),
+                );
+                ThreadTranscript { stem, transcript }
+            })
+            .collect()
+    };
+    project_transcripts(thread_id, &handles(root_paths), &handles(sub_paths), lookup)
+}
+
+/// `project_from_files` over a listed transcript set (see
+/// [`TranscriptLocator::thread_transcripts`](crate::transcript::TranscriptLocator::thread_transcripts)),
+/// so any store projects the same way. Unreadable transcripts degrade to
+/// empty rather than failing.
+pub fn project_transcripts(
+    thread_id: &str,
+    roots: &[ThreadTranscript],
+    subagents: &[ThreadTranscript],
+    lookup: Option<&dyn SpawnCallLookup>,
+) -> ProjectedTranscript {
     tracing::debug!(
         "{LOG_PREFIX} projecting thread={thread_id} roots={} subagent_files={}",
-        root_paths.len(),
-        sub_paths.len()
+        roots.len(),
+        subagents.len()
     );
 
+    let read = |root: &ThreadTranscript| match root.transcript.read_display() {
+        Ok(Some(display)) => Some(display),
+        Ok(None) => {
+            tracing::warn!("{LOG_PREFIX} root transcript {} is missing", root.stem);
+            None
+        }
+        Err(err) => {
+            tracing::warn!(
+                "{LOG_PREFIX} failed to read root transcript {}: {err}",
+                root.stem
+            );
+            None
+        }
+    };
+    let displays: Vec<(String, DisplaySessionTranscript)> = roots
+        .iter()
+        .filter_map(|root| read(root).map(|display| (root.stem.clone(), display)))
+        .collect();
+
     let mut records: Vec<DisplayRecord> = Vec::new();
-    let root_thread_id = root_paths.iter().find_map(|path| {
-        transcript::read_transcript_display(path)
-            .ok()
-            .and_then(|display| display.meta.thread_id)
-    });
+    let root_thread_id = displays
+        .iter()
+        .find_map(|(_, display)| display.meta.thread_id.clone());
     let mut previous: Option<(Option<String>, Vec<DisplayRecord>)> = None;
-    for root_path in root_paths {
-        let display = match transcript::read_transcript_display(root_path) {
-            Ok(display) => display,
-            Err(err) => {
-                tracing::warn!(
-                    "{LOG_PREFIX} failed to read root transcript {}: {err}",
-                    root_path.display()
-                );
-                continue;
-            }
-        };
+    for (root_stem, display) in displays {
         let successor_of_previous = matches!(
             (&previous, display.meta.parent_session_id.as_deref()),
             (Some((Some(prev_id), _)), Some(parent)) if prev_id == parent
@@ -138,8 +177,7 @@ pub fn project_from_files(
                 .unwrap_or_default();
             let (kept, retained) = resolve::drop_retained_rows(&display.records, predecessor);
             tracing::debug!(
-                "{LOG_PREFIX} generation {} retained={} new_records={}",
-                root_path.display(),
+                "{LOG_PREFIX} generation {root_stem} retained={} new_records={}",
                 retained.len(),
                 kept.len()
             );
@@ -167,7 +205,7 @@ pub fn project_from_files(
     let top_level = items.len();
     subagents::attach(
         &mut items,
-        sub_paths,
+        subagents,
         &subagents::turn_segments(&records),
         root_thread_id.as_deref(),
         lookup,

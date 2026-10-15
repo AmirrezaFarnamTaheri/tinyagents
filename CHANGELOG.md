@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased: locator-based transcript reads and writes (tinyagents#453)
+
+Hosts can now do through a `TranscriptLocator` everything they used the
+path-taking transcript API for, so the same code serves JSONL files and a
+driver store:
+
+- `TranscriptRead::read_display()` (default: from `read_session`; file
+  handles read the JSONL display log; driver handles replay their entry log
+  with compactions and interrupted partials in place).
+- `TranscriptLocator::thread_transcripts(thread_id, agent_id) ->
+  Option<ThreadTranscripts>` lists a thread's roots in projection order and
+  its sub-agent transcripts (`ThreadTranscript { stem, transcript }`).
+- `view::get_page_in(locator, thread_id, agent_id, cursor, limit)` and
+  `view::project_transcripts(...)`; `spend::thread_spend_in(locator,
+  thread_id)`.
+- `append_background_message_in(locator, session, message, options)`; for a
+  non-file store the provenance rides in `extra_metadata` under
+  `BACKGROUND_METADATA_KEY`. `TranscriptLocator::file_backing()` names the
+  file locator behind a file-backed one.
+- `DriverTranscriptLocator::adopt_legacy` folds a thread's pre-identity
+  roots (for example the imported `session_raw/` timestamped stems of a
+  `WorkspaceStores` workspace) into the session once, with the file adopter's
+  semantics; the write reserves the session stem, so a concurrent first turn
+  wins and the call reports `Ok(None)`.
+- `legacy::rewrite_legacy_transcripts(workspace_dir, rewrite) ->
+  LegacyRewriteReport` for pre-import fixups of classic `session_raw/` files.
+
+The path API is unchanged; `project_from_files` and `thread_spend` now share
+the locator code path.
+
+Review follow-ups: `rewrite_legacy_transcripts` keeps a transcript's recorded
+tool declarations, counts unreadable directories and entries in `errors`
+(a missing `session_raw/` is still an empty report) and skips symlinks.
+Thread spend counts a compacted sub-agent's `.gN` chain as one run with its
+carried rows counted once (`thread_spend` and `thread_spend_in`).
+`AgentTranscriptFiles` adopts a shared session on a background append and
+lists shared sub-agents beside its own. A background append through a
+locator with no destination key is serialised by that locator's identity.
+Driver-backed stores repair the index on a display read, order pre-identity
+roots by `_meta.created`, drop adopted roots beside an unscoped session root,
+bound the sub-agent listing query to the thread, and find roots missing from
+the index before adoption.
+A model-context `TranscriptMessage` now keeps a JSONL row's background
+provenance in `extra_metadata` (under `BACKGROUND_METADATA_KEY`, as row
+stores do) and the line codec writes it back as the line field, so legacy
+rewrites and compactions keep the idempotency key on both backends.
+`InMemoryTranscriptLocator` lists a thread's generations and sub-agents, and
+`InMemoryTranscriptHistory::read_display` shows recorded partials.
+
 ## Unreleased: unapplied steers are back in the run queue when a turn ends
 
 `SteeringForwarderGuard` now drains and delivers under its shutdown gate and

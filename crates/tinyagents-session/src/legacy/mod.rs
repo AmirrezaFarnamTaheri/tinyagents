@@ -28,6 +28,7 @@
 //! - [`transcripts::import_transcripts`] and [`turn_states::import_turn_states`]:
 //!   the file stores alone.
 
+mod rewrite;
 pub(crate) mod rows;
 pub mod source;
 pub mod transcripts;
@@ -37,11 +38,12 @@ mod types;
 mod workspace;
 
 pub use crate::run_ledger::drivers::{ImportCounts, LegacyDatabaseReport};
+pub use rewrite::rewrite_legacy_transcripts;
 pub use source::{LegacySourceSnapshot, QuiescentSource, SourceOwner, open_source};
 pub use transcripts::{TranscriptImportReport, import_transcripts};
 pub use transcripts_once::{MARKER_COLLECTION, TRANSCRIPT_MARKER_ID, import_transcripts_once};
 pub use turn_states::{TurnStateImportReport, import_turn_states};
-pub use types::OnceOutcome;
+pub use types::{LegacyRewriteReport, OnceOutcome};
 pub use workspace::{LegacyWorkspaceReport, WorkspaceLayout, import_workspace};
 
 #[cfg(test)]

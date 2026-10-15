@@ -14,7 +14,7 @@
 //! line written between that read and the persist makes the baseline stale and
 //! the user's turn fails to persist. So:
 //!
-//! - **A live turn must hold [`lock_session_turn`] from its resume read
+//! - **A live turn must hold [`lock_session_turn`](super::lock_session_turn) from its resume read
 //!   through its persist.** `tinyagents-runtime`'s `Session::turn` does this
 //!   for every session-bound target whose locator names its destination.
 //!   A host driving the transcript some other way must take the lock itself.
@@ -33,15 +33,16 @@
 //!   corrupted), and the append itself takes the same cross-process file locks
 //!   as every other writer, so bytes never interleave.
 
+use super::display::with_background;
 use super::history::seed_meta_for_discovered;
 use super::history::{FileTranscriptHistory, FileTranscriptLocator, TranscriptLocator};
 use super::jsonl::{LineKind, build_message_line, classify_line};
 use super::paths::resolve_keyed_transcript_path;
 use super::reader::read_jsonl_lines;
 use super::session::{SessionRef, session_stem};
-use super::turn_lock::lock_session_turn_with_notification;
+use super::turn_lock::{lock_session_turn_or_identity, lock_session_turn_with_notification};
 use super::types::{
-    BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, TranscriptMessage,
+    BackgroundAppend, BackgroundAppendOutcome, BackgroundOrigin, DisplayRecord, TranscriptMessage,
 };
 use super::writer::append_bytes;
 use anyhow::Context;
@@ -63,8 +64,11 @@ const MAX_HEAD_MOVES: usize = 3;
 /// - **Idempotent.** A head generation that already holds a line with the same
 ///   [`BackgroundAppend::idempotency_key`] returns
 ///   [`BackgroundAppendOutcome::Duplicate`] and writes nothing. The key is
-///   checked within the head generation only: once a compaction has carried
-///   the message into a successor, that successor holds it as an ordinary row.
+///   checked within the head generation only. A compaction that carries the
+///   message into a successor carries its provenance too (the model-context
+///   row keeps it in `extra_metadata`, and the writer puts it back on the
+///   line), so a retry against that successor is still a duplicate; one the
+///   compaction dropped is appended again.
 /// - **Never creates a session.** No transcript yet is
 ///   [`BackgroundAppendOutcome::NoSession`].
 ///
@@ -92,7 +96,7 @@ pub async fn append_background_message(
     message: TranscriptMessage,
     options: BackgroundAppend,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, None).await
+    append_background_message_impl(locator, locator, session, message, options, None).await
 }
 
 /// Test-oriented variant that signals immediately before waiting for the
@@ -105,11 +109,24 @@ pub async fn append_background_message_with_lock_notification(
     options: BackgroundAppend,
     lock_attempted: &Notify,
 ) -> anyhow::Result<BackgroundAppendOutcome> {
-    append_background_message_impl(locator, session, message, options, Some(lock_attempted)).await
+    append_background_message_impl(
+        locator,
+        locator,
+        session,
+        message,
+        options,
+        Some(lock_attempted),
+    )
+    .await
 }
 
+/// `files` writes the JSONL line; `resolver` resolves the head and decides
+/// whether the session exists. They differ for a wrapper over a file locator
+/// (such as [`AgentTranscriptFiles`](super::AgentTranscriptFiles)) whose
+/// existence checks adopt a transcript into `files` before it is written.
 async fn append_background_message_impl(
-    locator: &FileTranscriptLocator,
+    files: &FileTranscriptLocator,
+    resolver: &dyn TranscriptLocator,
     session: &SessionRef,
     message: TranscriptMessage,
     options: BackgroundAppend,
@@ -121,10 +138,10 @@ async fn append_background_message_impl(
     let key = options.idempotency_key.as_str();
     tracing::debug!(session = %stem, idempotency_key = %key, expected_generation = ?options.expected_generation, "[transcript-background] append requested");
 
-    let _turn = lock_session_turn_with_notification(locator, &root, lock_attempted).await;
+    let _turn = lock_session_turn_with_notification(resolver, &root, lock_attempted).await;
     for _ in 0..MAX_HEAD_MOVES {
-        let head = locator.head_generation(&root);
-        if !locator.session_exists(&head) {
+        let head = resolver.head_generation(&root);
+        if !resolver.session_exists(&head) {
             tracing::debug!(session = %stem, idempotency_key = %key, "[transcript-background] no transcript; nothing written");
             return Ok(BackgroundAppendOutcome::NoSession);
         }
@@ -132,7 +149,7 @@ async fn append_background_message_impl(
             tracing::debug!(session = %stem, idempotency_key = %key, ?stale, "[transcript-background] head moved on; nothing written");
             return Ok(stale);
         }
-        match append_to_head(locator, &head, &message, &options)? {
+        match append_to_head(files, &head, &message, &options)? {
             Attempt::Done(outcome) => {
                 tracing::debug!(session = %stem, idempotency_key = %key, ?outcome, "[transcript-background] append finished");
                 return Ok(outcome);
@@ -145,6 +162,121 @@ async fn append_background_message_impl(
     anyhow::bail!(
         "session {stem} head kept moving during a background append ({MAX_HEAD_MOVES} attempts)"
     )
+}
+
+/// [`append_background_message`] through any [`TranscriptLocator`].
+///
+/// A file-backed locator ([`TranscriptLocator::file_backing`]) goes through
+/// the file writer, so the JSONL line is exactly what
+/// [`append_background_message`] writes. Any other store gets the same
+/// contract — the turn lock, head-only, idempotent within the head
+/// generation, never creating a session — with the message appended through
+/// its [`TranscriptHistory`](super::TranscriptHistory) handle and the
+/// provenance recorded in the row's `extra_metadata` under
+/// [`BACKGROUND_METADATA_KEY`](super::BACKGROUND_METADATA_KEY), which the
+/// display read lifts back into [`DisplayMessage::background`](super::DisplayMessage::background).
+///
+/// For such a store the turn lock is the only serialisation: the duplicate
+/// check and the append are two calls, so two processes appending the same key
+/// to one store at once could both write it. A locator with no
+/// [`destination_key`](TranscriptLocator::destination_key) is locked by its
+/// own identity instead, so appends through that one locator still serialise.
+///
+/// # Errors
+///
+/// As [`append_background_message`], plus any store error.
+pub async fn append_background_message_in(
+    locator: &dyn TranscriptLocator,
+    session: &SessionRef,
+    message: TranscriptMessage,
+    options: BackgroundAppend,
+) -> anyhow::Result<BackgroundAppendOutcome> {
+    if let Some(files) = locator.file_backing() {
+        // Existence and head resolution go through `locator` itself, so a
+        // wrapper that adopts transcripts on lookup (an agent's own files over
+        // a shared workspace) still finds a session only its fallback holds.
+        return append_background_message_impl(files, locator, session, message, options, None)
+            .await;
+    }
+    let message = validate(message, &options)?;
+    let root = session.first_generation();
+    let stem = session_stem(&root);
+    let key = options.idempotency_key.as_str();
+    tracing::debug!(session = %stem, idempotency_key = %key, expected_generation = ?options.expected_generation, "[transcript-background] store append requested");
+
+    // Falls back to the locator's own identity when it names no destination,
+    // so two appends through one such locator still serialise their
+    // duplicate check and append.
+    let _turn = lock_session_turn_or_identity(locator, &root).await;
+    for _ in 0..MAX_HEAD_MOVES {
+        let head = locator.head_generation(&root);
+        if !locator.session_exists(&head) {
+            tracing::debug!(session = %stem, idempotency_key = %key, "[transcript-background] no transcript in the store; nothing written");
+            return Ok(BackgroundAppendOutcome::NoSession);
+        }
+        if let Some(stale) = stale(&options, head.generation) {
+            return Ok(stale);
+        }
+        match append_to_stored_head(locator, &head, &message, &options)? {
+            Attempt::Done(outcome) => {
+                tracing::debug!(session = %stem, idempotency_key = %key, ?outcome, "[transcript-background] store append finished");
+                return Ok(outcome);
+            }
+            Attempt::HeadMoved => {
+                tracing::debug!(session = %stem, idempotency_key = %key, generation = head.generation, "[transcript-background] store head sealed during append; re-resolving");
+            }
+        }
+    }
+    anyhow::bail!(
+        "session {stem} head kept moving during a background append ({MAX_HEAD_MOVES} attempts)"
+    )
+}
+
+/// One attempt against a store's resolved `head`.
+fn append_to_stored_head(
+    locator: &dyn TranscriptLocator,
+    head: &SessionRef,
+    message: &TranscriptMessage,
+    options: &BackgroundAppend,
+) -> anyhow::Result<Attempt> {
+    if locator.session_exists(&head.next_generation()) {
+        return Ok(Attempt::HeadMoved);
+    }
+    let generation = head.generation;
+    let handle = locator.open_session(head, seed_meta_for_discovered(""))?;
+    let key = options.idempotency_key.as_str();
+    let held = handle.read_display()?.is_some_and(|display| {
+        display.records.iter().any(|record| match record {
+            DisplayRecord::Message(message) => carries_key(message.background.as_ref(), key),
+            DisplayRecord::Compaction(compaction) => compaction
+                .replacement
+                .iter()
+                .any(|message| carries_key(message.background.as_ref(), key)),
+        })
+    });
+    if held {
+        return Ok(Attempt::Done(BackgroundAppendOutcome::Duplicate {
+            generation,
+        }));
+    }
+    let origin = BackgroundOrigin {
+        idempotency_key: options.idempotency_key.clone(),
+        provenance: options.provenance.clone(),
+    };
+    if let Err(error) = handle.append(with_background(message.clone(), &origin)) {
+        // A compaction sealed the head between the check and the write.
+        if locator.session_exists(&head.next_generation()) {
+            return Ok(Attempt::HeadMoved);
+        }
+        return Err(error);
+    }
+    Ok(Attempt::Done(BackgroundAppendOutcome::Appended {
+        generation,
+    }))
+}
+
+fn carries_key(origin: Option<&BackgroundOrigin>, key: &str) -> bool {
+    origin.is_some_and(|origin| origin.idempotency_key == key)
 }
 
 /// The result of one locked attempt against a resolved head.

@@ -4,7 +4,7 @@
 
 use super::history::TranscriptPartial;
 use super::jsonl::{
-    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json,
+    COMPACTION_KIND, CompactionLine, MessageLine, build_message_line, meta_line_json, partial_line,
     serialise_message_lines, tools_line_json,
 };
 use super::markdown::render_markdown;
@@ -30,6 +30,19 @@ pub fn write_transcript(
     meta: &TranscriptMeta,
     last_assistant_turn_usage: Option<&TurnUsage>,
 ) -> Result<()> {
+    write_transcript_with_tools(jsonl_path, messages, meta, last_assistant_turn_usage, None)
+}
+
+/// [`write_transcript`], additionally recording `tools` as the transcript's
+/// latest `{"kind":"tools"}` record, so a full rewrite of a transcript that
+/// recorded its tool declarations keeps them.
+pub(crate) fn write_transcript_with_tools(
+    jsonl_path: &Path,
+    messages: &[TranscriptMessage],
+    meta: &TranscriptMeta,
+    last_assistant_turn_usage: Option<&TurnUsage>,
+    tools: Option<&serde_json::Value>,
+) -> Result<()> {
     if let Some(parent) = jsonl_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("create transcript dir {}", parent.display()))?;
@@ -40,6 +53,10 @@ pub fn write_transcript(
     jsonl_buf.push_str(&meta_line_json(meta)?);
     jsonl_buf.push('\n');
     serialise_message_lines(messages, last_assistant_turn_usage, None, &mut jsonl_buf)?;
+    if let Some(tools) = tools {
+        jsonl_buf.push_str(&tools_line_json(tools)?);
+        jsonl_buf.push('\n');
+    }
 
     atomic_write(jsonl_path, jsonl_buf.as_bytes())
         .with_context(|| format!("write transcript {}", jsonl_path.display()))?;
@@ -331,19 +348,7 @@ fn serialise_interrupted_partial(
     let Some(partial) = partial.filter(|partial| !partial.content.is_empty()) else {
         return Ok(());
     };
-    let mut line = build_message_line(
-        &TranscriptMessage::assistant(&partial.content),
-        None,
-        request_id,
-        true,
-    );
-    line.iteration = partial.iteration;
-    line.reasoning_content = partial
-        .reasoning_content
-        .as_deref()
-        .map(str::trim)
-        .filter(|content| !content.is_empty())
-        .map(str::to_owned);
+    let mut line = partial_line(partial, request_id);
     line.ts = Some(chrono::Utc::now().to_rfc3339());
     buf.push_str(&serde_json::to_string(&line).context("serialise interrupted partial line")?);
     buf.push('\n');

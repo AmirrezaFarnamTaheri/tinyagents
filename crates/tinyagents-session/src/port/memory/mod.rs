@@ -16,8 +16,8 @@ use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 use super::{AgentStores, SessionStoreProvider, TurnStates};
 use crate::testkit::InMemoryTranscriptHistory;
 use crate::transcript::{
-    SessionRef, TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptPartial,
-    TranscriptRead, session_stem,
+    SessionRef, ThreadTranscript, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
+    TranscriptMeta, TranscriptPartial, TranscriptRead, session_stem,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
 
@@ -243,6 +243,74 @@ impl TranscriptLocator for InMemoryTranscriptLocator {
 
     fn root_for_thread(&self, thread_id: &str) -> Option<Arc<dyn TranscriptRead>> {
         self.root_for_thread_scoped(thread_id, None)
+    }
+
+    /// Every written root of the thread and its sub-agents, with the file
+    /// view's rules: roots by `_meta.created` (then generation, then stem),
+    /// pre-identity roots dropped once a session root exists; sub-agents that
+    /// extend a matched root's stem or (unscoped) name the thread, by stem.
+    fn thread_transcripts(
+        &self,
+        thread_id: &str,
+        agent_id: Option<&str>,
+    ) -> Option<ThreadTranscripts> {
+        let thread_id = thread_id.trim();
+        if thread_id.is_empty() {
+            return None;
+        }
+        let written: Vec<(String, bool, TranscriptMeta, Arc<InMemoryTranscriptHistory>)> = self
+            .stems
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter_map(|(stem, is_subagent, history)| {
+                let session = history.read_session().ok().flatten()?;
+                Some((stem.clone(), *is_subagent, session.meta, history.clone()))
+            })
+            .collect();
+        let mut roots: Vec<_> = written
+            .iter()
+            .filter(|(_, is_subagent, meta, _)| {
+                !is_subagent
+                    && meta.thread_id.as_deref() == Some(thread_id)
+                    && agent_id.is_none_or(|agent| meta.agent_id.as_deref() == Some(agent))
+            })
+            .collect();
+        if roots.is_empty() {
+            return None;
+        }
+        roots.sort_by(|a, b| {
+            a.2.created
+                .cmp(&b.2.created)
+                .then_with(|| stem_generation(&a.0).cmp(&stem_generation(&b.0)))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let prefixes: Vec<String> = roots.iter().map(|root| format!("{}__", root.0)).collect();
+        if roots.iter().any(|root| root.2.session_id.is_some()) {
+            roots.retain(|root| root.2.session_id.is_some());
+        }
+        let mut subagents: Vec<_> = written
+            .iter()
+            .filter(|(stem, is_subagent, meta, _)| {
+                *is_subagent
+                    && (prefixes.iter().any(|prefix| stem.starts_with(prefix))
+                        || (agent_id.is_none() && meta.thread_id.as_deref() == Some(thread_id)))
+            })
+            .collect();
+        subagents.sort_by(|a, b| a.0.cmp(&b.0));
+        let listed = |(stem, _, _, history): &&(
+            String,
+            bool,
+            TranscriptMeta,
+            Arc<InMemoryTranscriptHistory>,
+        )| ThreadTranscript {
+            stem: stem.clone(),
+            transcript: history.clone() as Arc<dyn TranscriptRead>,
+        };
+        Some(ThreadTranscripts {
+            roots: roots.iter().map(listed).collect(),
+            subagents: subagents.iter().map(listed).collect(),
+        })
     }
 
     fn root_for_thread_scoped(
@@ -516,6 +584,14 @@ impl TurnStates for InMemoryTurnStates {
         }
         Ok(true)
     }
+}
+
+/// The compaction generation a stem encodes: `n` for `{base}.g{n}`, else 0.
+fn stem_generation(stem: &str) -> u32 {
+    stem.rsplit_once(".g")
+        .filter(|(_, digits)| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|(_, digits)| digits.parse().ok())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -54,6 +54,26 @@ pub async fn lock_session_turn(
     Some(SessionTurnGuard { _guard: guard })
 }
 
+/// [`lock_session_turn`], but never `None`: a locator that names no
+/// destination is keyed by its own address instead, so callers sharing that
+/// one locator instance still serialise. (Another instance over the same store
+/// is not found; nothing could tell the two apart.)
+pub(crate) async fn lock_session_turn_or_identity(
+    locator: &dyn TranscriptLocator,
+    session: &SessionRef,
+) -> SessionTurnGuard {
+    let destination = locator.destination_key().unwrap_or_else(|| {
+        let address = std::ptr::from_ref(locator).cast::<()>() as usize;
+        format!("anonymous-locator:{address:#x}")
+    });
+    let stem = session_stem(&session.first_generation());
+    let lock = registry_lock(destination, stem.clone());
+    tracing::debug!(session = %stem, "[transcript-turn-lock] acquiring");
+    let guard = lock.lock_owned().await;
+    tracing::debug!(session = %stem, "[transcript-turn-lock] acquired");
+    SessionTurnGuard { _guard: guard }
+}
+
 #[doc(hidden)]
 pub(crate) async fn lock_session_turn_with_notification(
     locator: &dyn TranscriptLocator,

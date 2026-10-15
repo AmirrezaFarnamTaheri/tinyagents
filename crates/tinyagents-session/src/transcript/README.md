@@ -72,6 +72,11 @@ Re-exported from `transcript::` (see `../transcript.rs`); reachable as
   `"background": {"idempotency_key", "provenance"}` field, so the
   model-context reader resumes it as an assistant row and the display reader
   exposes the origin as `DisplayMessage::background`.
+- `append_background_message_in(&dyn TranscriptLocator, …)` — the same
+  contract through any locator. A file-backed one (`file_backing()`) writes
+  the identical JSONL line; any other store appends through its history
+  handle and keeps the provenance in the row's `extra_metadata` under
+  `BACKGROUND_METADATA_KEY`, which the display read lifts back out.
 - `lock_session_turn(&dyn TranscriptLocator, &SessionRef) ->
   Option<SessionTurnGuard>` (async) — the per-session, in-process turn lock,
   keyed by `destination_key()` + the generation-0 stem. A live turn holds it
@@ -87,12 +92,22 @@ Re-exported from `transcript::` (see `../transcript.rs`); reachable as
   `.md` reader when no `.jsonl` exists.
 - `read_transcript_display` — display projection: every record in file
   order, including pre-compaction history and interrupted partials.
+- `TranscriptRead::read_display()` — the same projection through any handle
+  (a driver store replays its entry log: a later `set` is a compaction
+  marker, a `clear` an empty one, a partial an interrupted record; entries
+  keep no clock, so markers carry no `ts`).
+- `TranscriptLocator::thread_transcripts(thread_id, agent_id)` — the roots
+  (session chains oldest first, pre-identity roots dropped once a session
+  root exists) and sub-agent transcripts backing a thread, as
+  `ThreadTranscripts`. `view::get_page_in` and `spend::thread_spend_in` take a
+  locator and use it, so a host never names a transcript file.
 
 ### Spend and cost provenance (`spend.rs`)
 
 - `transcript_spend(&SessionTranscript)` sums usage in the logical context.
   Compaction removes older rows from that view; use
-  `thread_spend(workspace_dir, thread_id)` for the full append history.
+  `thread_spend(workspace_dir, thread_id)` (or `thread_spend_in(locator,
+  thread_id)` for any store) for the full append history.
 - `thread_spend` returns `ThreadSpend`: `root` contains the orchestrator's
   own spend, and `subagents` groups descendant runs by archetype, including
   children whose headers name a different worker thread. Retained root rows
