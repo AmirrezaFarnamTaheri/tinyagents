@@ -52,6 +52,9 @@ tracing = ["tinyagents-harness/tracing"]
 storage-drivers = []
 
 [dev-dependencies]
+# Tests build transcript fixtures as classic JSONL and import them through
+# `legacy`, so they need the importer even under `--no-default-features`.
+tinyagents-session = { path = ".", features = ["legacy-import"] }
 tinystoragedrivers-sqlite = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
