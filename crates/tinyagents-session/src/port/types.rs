@@ -38,16 +38,19 @@ impl std::fmt::Debug for AgentStores {
 /// Cloning shares one open backend; the backend closes when the last clone
 /// drops.
 #[derive(Clone)]
+#[cfg(feature = "legacy-import")]
 pub struct WorkspaceStores {
     pub(super) inner: Arc<WorkspaceInner>,
 }
 
+#[cfg(feature = "legacy-import")]
 pub(super) struct WorkspaceInner {
     pub(super) provider: Arc<super::DriverSessionStores>,
     pub(super) stores: AgentStores,
     pub(super) outcome: crate::legacy::OnceOutcome,
 }
 
+#[cfg(feature = "legacy-import")]
 impl std::fmt::Debug for WorkspaceStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WorkspaceStores")

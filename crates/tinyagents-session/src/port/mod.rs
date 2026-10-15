@@ -59,7 +59,9 @@ pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
-pub use types::{AgentStores, WorkspaceStores};
+pub use types::AgentStores;
+#[cfg(feature = "legacy-import")]
+pub use types::WorkspaceStores;
 #[cfg(feature = "legacy-import")]
 pub use workspace::STORE_DIR;
 
