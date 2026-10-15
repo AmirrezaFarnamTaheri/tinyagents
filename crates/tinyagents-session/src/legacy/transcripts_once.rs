@@ -83,10 +83,15 @@ pub fn import_transcripts_once(
     Ok(OnceOutcome::Imported { report, marked })
 }
 
-async fn marker_present(docs: &dyn DocumentStore) -> Result<bool, tinystoragedrivers_core::StorageError> {
+async fn marker_present(
+    docs: &dyn DocumentStore,
+) -> Result<bool, tinystoragedrivers_core::StorageError> {
     docs.ensure_collection(&CollectionSpec::new(MARKER_COLLECTION))
         .await?;
-    Ok(docs.get(MARKER_COLLECTION, TRANSCRIPT_MARKER_ID).await?.is_some())
+    Ok(docs
+        .get(MARKER_COLLECTION, TRANSCRIPT_MARKER_ID)
+        .await?
+        .is_some())
 }
 
 async fn write_marker(
@@ -101,7 +106,12 @@ async fn write_marker(
         "messages": report.messages,
     });
     match docs
-        .put(MARKER_COLLECTION, TRANSCRIPT_MARKER_ID, doc, Precondition::Absent)
+        .put(
+            MARKER_COLLECTION,
+            TRANSCRIPT_MARKER_ID,
+            doc,
+            Precondition::Absent,
+        )
         .await
     {
         // A concurrent launch marked it first; the marker is idempotent.
