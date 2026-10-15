@@ -106,9 +106,33 @@ impl TranscriptLocator for AgentTranscriptFiles {
         thread_id: &str,
         agent_id: Option<&str>,
     ) -> Option<ThreadTranscripts> {
-        self.own
-            .thread_transcripts(thread_id, agent_id)
-            .or_else(|| self.legacy.thread_transcripts(thread_id, agent_id))
+        let own = self.own.thread_transcripts(thread_id, agent_id);
+        let legacy = self.legacy.thread_transcripts(thread_id, agent_id);
+        match (own, legacy) {
+            (Some(mut own), Some(legacy)) => {
+                // The agent's roots supersede the shared ones (an adopted
+                // root is a copy), but sub-agents spawned before the move
+                // exist only in the shared directory: list both, the agent's
+                // copy winning a stem both hold.
+                let held: std::collections::HashSet<String> =
+                    own.subagents.iter().map(|sub| sub.stem.clone()).collect();
+                let shared: Vec<_> = legacy
+                    .subagents
+                    .into_iter()
+                    .filter(|sub| !held.contains(&sub.stem))
+                    .collect();
+                if !shared.is_empty() {
+                    tracing::debug!(
+                        "[session_store] listing {} shared sub-agent transcript(s) beside the agent's own",
+                        shared.len()
+                    );
+                    own.subagents.extend(shared);
+                    own.subagents.sort_by(|a, b| a.stem.cmp(&b.stem));
+                }
+                Some(own)
+            }
+            (own, legacy) => own.or(legacy),
+        }
     }
 
     fn destination_key(&self) -> Option<String> {
