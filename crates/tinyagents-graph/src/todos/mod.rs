@@ -2,20 +2,24 @@
 //!
 //! Where [`graph::goals`](crate::goals) holds a single durable objective
 //! per thread, the todo list holds the concrete steps the run is working
-//! through: an ordered list of [`TodoItem`]s, each `pending`, `in_progress`
-//! or `completed`. This module owns the data model and markdown rendering
-//! ([`types`]), harness-[`Store`](tinyagents_harness::store::Store)-backed
-//! persistence with the single-`InProgress` invariant ([`store`]), and the
-//! model-facing tool ([`tool`]).
+//! through: an ordered list of [`TodoItem`]s, each `pending`, `in_progress`,
+//! `completed` or `cancelled`. This module owns the data model and markdown
+//! rendering ([`types`]), the step order (`sequence`: one step at a time,
+//! top to bottom), harness-[`Store`](tinyagents_harness::store::Store)-backed
+//! persistence that keeps it ([`store`]), the model-facing tool ([`tool`]),
+//! and the middleware that holds a run to its plan ([`middleware`]).
 //!
-//! The list is the shape Claude Code and Codex keep: the model rewrites the
-//! whole list as it works, and nothing else hangs off an item — no ids, no
-//! approvals, no assignment, no run log. A list is always `(Store, thread_id)`.
+//! The model writes the whole list once, then ticks steps off with
+//! `{"complete": N}`; nothing else hangs off an item — no ids, no approvals,
+//! no assignment, no run log. A list is always `(Store, thread_id)`.
 
+pub mod middleware;
+mod sequence;
 pub mod store;
 mod tool;
 mod types;
 
+pub use middleware::{DEFAULT_REMINDER_ROUNDS, TodoSequenceMiddleware};
 pub use tool::{TodoTool, register_todo_tools, todo_tools};
 pub use types::{
     TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, parse_status, render_markdown,

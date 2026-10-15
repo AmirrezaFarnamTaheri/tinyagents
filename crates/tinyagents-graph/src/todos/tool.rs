@@ -1,8 +1,10 @@
 //! `todo` — the harness [`Tool`] over the per-thread todo list.
 //!
-//! One call writes the whole list: `{"todos": [{"content", "status"}]}`. There
-//! is no per-item CRUD; the list is a progress checklist the model rewrites as
-//! it works. Omitting `todos` reads the current list. The list is bound to the
+//! One call writes the whole list: `{"todos": [{"content", "status"}]}`, and
+//! starts its first open step. After that the model ticks steps off in order:
+//! `{"complete": N}` completes step N (1-based) and starts the next,
+//! `{"cancel": N, "reason": "..."}` drops one. The order rules are the
+//! `sequence` module's. No arguments reads the current list. The list is bound to the
 //! caller's [`ToolExecutionContext::thread_id`] (never a tool argument), so a
 //! model can't address another thread's list; the bare [`Tool::call`] entry
 //! point (no context) errors. Returns the updated items plus a markdown
@@ -15,23 +17,25 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::store;
-use super::types::{TodoItem, TodoStatus, parse_status};
-use tinyagents_harness::error::Result;
+use super::types::{TodoItem, TodoStatus, TodosSnapshot, parse_status};
+use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::store::Store;
 use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
-const TODO_TOOL_NAME: &str = "todo";
+pub(super) const TODO_TOOL_NAME: &str = "todo";
 
 /// Paid on every request of every agent that carries the tool, so each rule
 /// is stated once, tersely. The rules themselves are load-bearing: see the
 /// `description_states_…` test for the failure each one prevents.
-const TODO_DESCRIPTION: &str = "This thread's todo list, for work with 3+ steps. Pass the \
-    complete list each time (it replaces the old one); omit `todos` to read it. Keep one item \
-    `in_progress`; mark an item `completed` only after its work has run and its result is in \
-    the conversation. Writing the list is bookkeeping, not work: in the same response (or your \
-    next turn, if you cannot call tools in parallel) do the next step unless the list is finished. \
-    Replace the list at most once per assistant response.";
+const TODO_DESCRIPTION: &str = "This thread's plan, for work with 3+ steps. Write it once with \
+    `todos` (the complete list; it replaces the old one, and step 1 starts). Steps run one at a \
+    time, in order. Tick a step with `{\"complete\": N}` (N from 1) only after its work has run \
+    and its result is in the conversation, before starting the next: that call starts step N+1. \
+    Drop a step with `{\"cancel\": N, \"reason\": \"...\"}`. No arguments reads the list. \
+    Ticking is bookkeeping, not work: in the same response (or your next turn, if you cannot call \
+    tools in parallel) do the next step unless the list is finished. Replace the list at most \
+    once per assistant response.";
 
 /// The `todo` harness [`Tool`], backed by a [`Store`](tinyagents_harness::store::Store).
 pub struct TodoTool {
@@ -96,11 +100,50 @@ impl TodoTool {
                 "arguments must be an object".to_string(),
             ));
         };
+        let unknown = |allowed: &[&str]| {
+            let extra: Vec<&String> = args
+                .keys()
+                .filter(|key| !allowed.contains(&key.as_str()))
+                .collect();
+            (!extra.is_empty()).then(|| {
+                TodoOutcome::Error(format!(
+                    "unknown arguments {extra:?} next to {:?}",
+                    allowed[0]
+                ))
+            })
+        };
+        if let Some(step) = args.get("complete") {
+            if let Some(error) = unknown(&["complete"]) {
+                return Ok(error);
+            }
+            let step = match step_number(step) {
+                Ok(step) => step,
+                Err(message) => return Ok(TodoOutcome::Error(message)),
+            };
+            return Ok(outcome(store::complete(&self.store, thread_id, step).await));
+        }
+        if let Some(step) = args.get("cancel") {
+            if let Some(error) = unknown(&["cancel", "reason"]) {
+                return Ok(error);
+            }
+            let step = match step_number(step) {
+                Ok(step) => step,
+                Err(message) => return Ok(TodoOutcome::Error(message)),
+            };
+            let reason = args
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return Ok(outcome(
+                store::cancel(&self.store, thread_id, step, reason).await,
+            ));
+        }
         let snap = match args.get("todos") {
             None if args.is_empty() => store::list(&self.store, thread_id).await,
             None => {
                 return Ok(TodoOutcome::Error(format!(
-                    "unknown arguments {:?}: pass `todos` or no arguments to read the list",
+                    "unknown arguments {:?}: pass `todos`, `complete`, `cancel`, or no arguments \
+                     to read the list",
                     args.keys().collect::<Vec<_>>()
                 )));
             }
@@ -119,16 +162,35 @@ impl TodoTool {
                 store::replace(&self.store, thread_id, items).await
             }
         };
-        // A domain error (invariant violation) is surfaced to the model rather
-        // than failing the whole run.
-        match snap {
-            Ok(snap) => Ok(TodoOutcome::Ok(json!({
+        Ok(outcome(snap))
+    }
+}
+
+/// A store outcome as the model reads it. A domain error (an order the plan
+/// refuses) is surfaced to the model rather than failing the whole run.
+fn outcome(snap: Result<TodosSnapshot>) -> TodoOutcome {
+    match snap {
+        Ok(snap) => {
+            let mut payload = json!({
                 "threadId": snap.thread_id,
                 "todos": snap.items,
                 "markdown": snap.markdown,
-            }))),
-            Err(e) => Ok(TodoOutcome::Error(e.to_string())),
+            });
+            if !snap.notes.is_empty() {
+                payload["notes"] = json!(snap.notes);
+            }
+            TodoOutcome::Ok(payload)
         }
+        Err(TinyAgentsError::Validation(message)) => TodoOutcome::Error(message),
+        Err(e) => TodoOutcome::Error(e.to_string()),
+    }
+}
+
+/// A 1-based step number.
+fn step_number(raw: &Value) -> std::result::Result<usize, String> {
+    match raw.as_u64() {
+        Some(step) if step >= 1 => Ok(step as usize),
+        _ => Err(format!("a step number is a positive integer, got {raw}")),
     }
 }
 
@@ -164,7 +226,7 @@ fn parameters_schema() -> Value {
         "properties": {
             "todos": {
                 "type": ["array", "null"],
-                "description": "The full list, in order. Pass null to read the current list.",
+                "description": "The full plan, in order. Pass null to read the current list.",
                 "items": {
                     "type": "object",
                     // `content` is the advertised field. It is not
@@ -179,12 +241,24 @@ fn parameters_schema() -> Value {
                             "enum": [
                                 "pending", "todo", "open", "not_started",
                                 "in_progress", "in-progress", "inprogress", "started", "active",
-                                "completed", "complete", "done", "finished"
+                                "completed", "complete", "done", "finished",
+                                "cancelled", "canceled", "skipped"
                             ]
                         }
                     }
                 }
-            }
+            },
+            "complete": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Complete step N (from 1) and start the next one."
+            },
+            "cancel": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Cancel step N (from 1); needs `reason`."
+            },
+            "reason": { "type": "string" }
         },
         "additionalProperties": false
     })
