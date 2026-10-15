@@ -529,3 +529,47 @@ async fn appends_through_one_unnamed_locator_are_serialised() {
         BackgroundAppendOutcome::Appended { generation: 0 }
     );
 }
+
+/// A compaction that keeps the delivered message carries its provenance into
+/// the successor, so a retry is a duplicate there too — as it is for a store
+/// that keeps rows.
+#[tokio::test]
+async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
+    let dir = tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    live_turn(&locator, &session(), &[], &first_turn());
+    let session = session();
+    let deliver = || {
+        append_background_message(
+            &locator,
+            &session,
+            TranscriptMessage::assistant("Time to stretch!"),
+            options("run-1"),
+        )
+    };
+    assert_eq!(
+        deliver().await.unwrap(),
+        BackgroundAppendOutcome::Appended { generation: 0 }
+    );
+
+    // The runtime compacts from the context it read back.
+    let retained = read_transcript(&head_path(dir.path(), &session()))
+        .unwrap()
+        .messages;
+    compact(&locator, &retained);
+
+    assert_eq!(
+        deliver().await.unwrap(),
+        BackgroundAppendOutcome::Duplicate { generation: 1 }
+    );
+    let head = read_transcript_display(&head_path(dir.path(), &session())).unwrap();
+    let carried = head
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            DisplayRecord::Message(message) => message.background.as_ref(),
+            DisplayRecord::Compaction(_) => None,
+        })
+        .count();
+    assert_eq!(carried, 1, "the successor's row keeps its provenance");
+}

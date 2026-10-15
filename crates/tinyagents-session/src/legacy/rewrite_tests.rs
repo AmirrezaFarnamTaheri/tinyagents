@@ -173,3 +173,60 @@ fn symlinks_are_neither_followed_nor_rewritten() {
         "nested"
     );
 }
+
+#[tokio::test]
+async fn a_rewrite_keeps_background_delivery_provenance() {
+    use crate::transcript::{
+        BackgroundAppend, BackgroundAppendOutcome, DisplayRecord, FileTranscriptLocator,
+        SessionRef, TranscriptLocator, append_background_message, read_transcript_display,
+        resolve_keyed_transcript_path, session_stem,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let locator = FileTranscriptLocator::new(dir.path());
+    let session = SessionRef::scoped("thread-1", "orchestrator");
+    locator
+        .open_session(&session, meta())
+        .unwrap()
+        .replace(&[
+            TranscriptMessage::system("keep ### SECRET"),
+            TranscriptMessage::user("hi"),
+        ])
+        .unwrap();
+    let options = || BackgroundAppend::new("run-1", serde_json::json!({"kind": "cron"}));
+    let deliver = || {
+        append_background_message(
+            &locator,
+            &session,
+            TranscriptMessage::assistant("Time to stretch!"),
+            options(),
+        )
+    };
+    assert_eq!(
+        deliver().await.unwrap(),
+        BackgroundAppendOutcome::Appended { generation: 0 }
+    );
+
+    let report = rewrite_legacy_transcripts(dir.path(), |session| {
+        session.messages[0].content = "keep".into();
+        true
+    });
+    assert_eq!(report.rewritten, 1);
+
+    let path = resolve_keyed_transcript_path(dir.path(), &session_stem(&session)).unwrap();
+    let display = read_transcript_display(&path).unwrap();
+    let origin = display
+        .records
+        .iter()
+        .find_map(|record| match record {
+            DisplayRecord::Message(message) => message.background.clone(),
+            DisplayRecord::Compaction(_) => None,
+        })
+        .expect("the rewritten row keeps its provenance");
+    assert_eq!(origin.idempotency_key, "run-1");
+    assert_eq!(
+        deliver().await.unwrap(),
+        BackgroundAppendOutcome::Duplicate { generation: 0 },
+        "the idempotency key survives the rewrite"
+    );
+}
