@@ -404,9 +404,19 @@ pub fn thread_spend(workspace_dir: &Path, thread_id: &str) -> ThreadSpend {
         if let Some((spend, meta)) = file_spend(root, &mut root_requests) {
             out.add_root(spend, meta);
         }
-        for child in descendant_transcripts(root) {
-            if let Some((spend, child_meta)) = file_spend(&child, &mut HashSet::new()) {
-                out.add_subagent(spend, &child_meta);
+        let children = descendant_transcripts(root)
+            .into_iter()
+            .map(|path| (stem_of(&path), path));
+        for chain in subagent_chains(children) {
+            // One run per chain: a compacted sub-agent's `.gN` successors open
+            // with rows carried from the earlier generation, which keep their
+            // `request_id` and must not be counted again.
+            let mut requests = HashSet::new();
+            let mut new_run = true;
+            for child in chain {
+                if let Some((spend, child_meta)) = file_spend(&child, &mut requests) {
+                    out.add_subagent(spend, &child_meta, std::mem::take(&mut new_run));
+                }
             }
         }
     }
@@ -432,13 +442,57 @@ pub fn thread_spend_in(locator: &dyn TranscriptLocator, thread_id: &str) -> Thre
             out.add_root(spend, meta);
         }
     }
-    for child in &listed.subagents {
-        if let Some(display) = read_listed(child) {
-            let (spend, meta) = display_spend(display, &mut HashSet::new());
-            out.add_subagent(spend, &meta);
+    let children = listed
+        .subagents
+        .iter()
+        .map(|child| (child.stem.clone(), child));
+    for chain in subagent_chains(children) {
+        // As in the file walk: one run and one set of counted requests per
+        // compaction chain.
+        let mut requests = HashSet::new();
+        let mut new_run = true;
+        for child in chain {
+            if let Some(display) = read_listed(child) {
+                let (spend, meta) = display_spend(display, &mut requests);
+                out.add_subagent(spend, &meta, std::mem::take(&mut new_run));
+            }
         }
     }
     out
+}
+
+/// Groups sub-agent transcripts into compaction chains: a compaction seals
+/// `{stem}` and opens `{stem}.g1`, `{stem}.g2`, … Chains come out ordered by
+/// their base stem, each one's generations oldest first.
+fn subagent_chains<T>(items: impl IntoIterator<Item = (String, T)>) -> Vec<Vec<T>> {
+    let mut chains: BTreeMap<String, Vec<(u32, String, T)>> = BTreeMap::new();
+    for (stem, item) in items {
+        let (base, generation) = match stem.rsplit_once(".g") {
+            Some((base, digits))
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                (base.to_string(), digits.parse().unwrap_or(u32::MAX))
+            }
+            _ => (stem.clone(), 0),
+        };
+        chains
+            .entry(base)
+            .or_default()
+            .push((generation, stem, item));
+    }
+    chains
+        .into_values()
+        .map(|mut chain| {
+            chain.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            chain.into_iter().map(|(_, _, item)| item).collect()
+        })
+        .collect()
+}
+
+fn stem_of(path: &Path) -> String {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// A listed transcript's display projection; unreadable or missing ones are
@@ -485,8 +539,10 @@ impl ThreadSpend {
         self.updated = Some(meta.updated);
     }
 
-    /// Adds one sub-agent run's own spend to its archetype (`_meta.agent`).
-    fn add_subagent(&mut self, spend: TranscriptSpend, meta: &TranscriptMeta) {
+    /// Adds one sub-agent transcript's own spend to its archetype
+    /// (`_meta.agent`); `new_run` is false for a later generation of a run
+    /// already counted.
+    fn add_subagent(&mut self, spend: TranscriptSpend, meta: &TranscriptMeta, new_run: bool) {
         self.found_transcript = true;
         let entry = self.subagents.entry(meta.agent_name.clone()).or_default();
         entry.0.input_tokens = entry.0.input_tokens.saturating_add(spend.input_tokens);
@@ -501,7 +557,9 @@ impl ThreadSpend {
         if entry.0.model.is_none() {
             entry.0.model = spend.model;
         }
-        entry.1 += 1;
+        if new_run {
+            entry.1 += 1;
+        }
     }
 }
 
