@@ -205,6 +205,7 @@ impl DriverSessionStores {
     /// The document store of `agent_id`'s scope, and whether this provider may
     /// declare collections in it. Used by host-side one-time bookkeeping (the
     /// legacy import marker) that sits beside the session collections.
+    #[cfg(feature = "legacy-import")]
     pub(crate) fn documents_for(
         &self,
         agent_id: &str,
@@ -217,6 +218,7 @@ impl DriverSessionStores {
     }
 
     /// The bridge this provider runs synchronous seams on.
+    #[cfg(feature = "legacy-import")]
     pub(crate) fn bridge(&self) -> &Blocking {
         &self.bridge
     }

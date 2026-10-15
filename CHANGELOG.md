@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased: workspace transcripts on driver ports (tinyagents#453, transcript half)
+
+- `port::WorkspaceStores::open(workspace, agent_id)` (feature `legacy-import`)
+  replaces `FileTranscriptLocator::new(workspace)`: transcripts are served by
+  `DriverSessionStores` over a SQLite backend kept at `<workspace>/session_store/`
+  (an internal driver location), and the caller holds a `TranscriptLocator`
+  port. Handles are cached per workspace and agent.
+- `legacy::import_transcripts_once` imports the classic `session_raw/*.jsonl`
+  files a single time. A marker document in `session_import_markers` records
+  completion (not written while a file is unreadable, so it is retried); legacy
+  files are only read, never modified, renamed or deleted.
+- Not yet moved: `FileTranscriptLocator`/`FileTranscriptHistory` and the
+  path-taking free functions (`write_transcript`, `append_transcript_turn`,
+  `read_transcript`, `spend`, `view`, `adopt_legacy_session_transcripts`)
+  remain until hosts switch to `WorkspaceStores`.
+
 ## Unreleased: tinystoragedrivers by git tag
 
 The workspace takes `tinystoragedrivers-core` / `-sqlite` by git tag `v0.11.0`
