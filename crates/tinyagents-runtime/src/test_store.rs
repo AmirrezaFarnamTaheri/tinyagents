@@ -7,12 +7,11 @@
 use std::sync::Arc;
 
 use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
-use tinystoragedrivers_core::MemoryStorage;
 use tinyagents_session::transcript::{
-    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts,
-    TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead,
-    TranscriptTurn,
+    DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts, TranscriptHistory,
+    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
 };
+use tinystoragedrivers_core::MemoryStorage;
 
 /// An empty transcript store: the production driver-backed locator, over memory.
 pub(crate) fn memory() -> Arc<dyn TranscriptLocator> {

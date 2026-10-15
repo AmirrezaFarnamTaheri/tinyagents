@@ -134,7 +134,10 @@ async fn the_display_reader_shows_the_message_with_its_provenance() {
 
     deliver(locator.as_ref(), "run-1").await.unwrap();
 
-    let display = head(locator.as_ref(), &session()).read_display().unwrap().unwrap();
+    let display = head(locator.as_ref(), &session())
+        .read_display()
+        .unwrap()
+        .unwrap();
     let Some(DisplayRecord::Message(last)) = display.records.last() else {
         panic!("expected a message record last");
     };
@@ -465,7 +468,10 @@ async fn a_delivery_carried_through_a_compaction_is_still_a_duplicate() {
         deliver(locator.as_ref(), "run-1").await.unwrap(),
         BackgroundAppendOutcome::Duplicate { generation: 1 }
     );
-    let display = head(locator.as_ref(), &session()).read_display().unwrap().unwrap();
+    let display = head(locator.as_ref(), &session())
+        .read_display()
+        .unwrap()
+        .unwrap();
     let carried = display
         .records
         .iter()

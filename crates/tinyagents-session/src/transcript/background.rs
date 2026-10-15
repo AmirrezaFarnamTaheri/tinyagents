@@ -34,8 +34,8 @@
 //!   path like every other writer.
 
 use super::display::with_background;
-use super::history::seed_meta_for_discovered;
 use super::history::TranscriptLocator;
+use super::history::seed_meta_for_discovered;
 use super::session::{SessionRef, session_stem};
 use super::turn_lock::lock_session_turn_or_identity;
 use super::types::{

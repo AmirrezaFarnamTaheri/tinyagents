@@ -24,8 +24,7 @@ use crate::transcript::types::TranscriptMessage;
 
 use crate::transcript::{
     DisplaySessionTranscript, SessionAdoption, SessionRef, SessionTranscript, ThreadTranscript,
-    ThreadTranscripts,
-    TranscriptMeta, TurnUsage, session_stem,
+    ThreadTranscripts, TranscriptMeta, TurnUsage, session_stem,
 };
 
 /// The stem a read handle is bound to: its path's last component, without the
@@ -609,4 +608,3 @@ pub(super) fn seed_meta_for_discovered(agent_name: &str) -> TranscriptMeta {
         task_id: None,
     }
 }
-

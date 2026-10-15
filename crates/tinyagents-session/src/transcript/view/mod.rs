@@ -14,9 +14,9 @@ pub mod types;
 
 use serde::Serialize;
 
+pub use project::{project_records, project_thread_in, project_transcripts};
 #[cfg(test)]
 pub(crate) use test_shims::{get_page, project_thread_scoped_with};
-pub use project::{project_records, project_thread_in, project_transcripts};
 
 use crate::transcript::TranscriptLocator;
 #[allow(deprecated)]

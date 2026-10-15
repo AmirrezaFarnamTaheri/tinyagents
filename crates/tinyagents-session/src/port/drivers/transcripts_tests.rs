@@ -688,8 +688,12 @@ fn a_listing_repairs_an_unindexed_subagent_of_an_indexed_root() {
         .unwrap();
     let raw = Arc::clone(&docs);
     on_bridge(async move {
-        raw.delete(INDEX, &doc_key(&["100_root__200_child"]), Precondition::None)
-            .await
+        raw.delete(
+            INDEX,
+            &doc_key(&["100_root__200_child"]),
+            Precondition::None,
+        )
+        .await
     });
 
     let listed = locator.thread_transcripts("t", None).expect("listed");

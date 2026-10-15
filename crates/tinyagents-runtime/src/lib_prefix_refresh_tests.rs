@@ -455,7 +455,10 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
             head.generation, 1,
             "changed committed prefix must seal generation zero"
         );
-        assert_eq!(crate::test_store::fingerprint(sealed.as_ref()), sealed_before);
+        assert_eq!(
+            crate::test_store::fingerprint(sealed.as_ref()),
+            sealed_before
+        );
         let persisted = locator
             .read_session_transcript(&head)
             .unwrap()
@@ -471,11 +474,7 @@ async fn prefix_extension_containing_prior_rows_forces_successor_for_normal_and_
         drop(session);
         let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))
             .codec(Arc::new(RetainedCodec))
-            .session(
-                locator.clone(),
-                identity,
-                meta(),
-            )
+            .session(locator.clone(), identity, meta())
             .build()
             .unwrap();
         assert_eq!(reopened.resume(&options).await.unwrap().history, expected);
@@ -586,11 +585,7 @@ async fn legacy_prefix_contract(compacted: bool, recorded_root: bool) {
     drop(session);
     let mut reopened = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(codec)
-        .session(
-            locator.clone(),
-            identity,
-            meta(),
-        )
+        .session(locator.clone(), identity, meta())
         .build()
         .unwrap();
     assert_eq!(reopened.resume(&options).await.unwrap().history, committed);

@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::types::ProjectedTranscript;
 use super::{SpawnCallLookup, TranscriptPage, get_page_in, project};
-use crate::transcript::test_locator::imported_locator;
 use crate::transcript::history::seed_meta_for_discovered;
+use crate::transcript::test_locator::imported_locator;
 use crate::transcript::{ThreadTranscript, TranscriptRead};
 
 pub(crate) fn get_page(
@@ -29,7 +29,12 @@ pub(crate) fn get_page(
 }
 
 pub(crate) fn project_thread(workspace_dir: &Path, thread_id: &str) -> Option<ProjectedTranscript> {
-    project::project_thread_in(imported_locator(workspace_dir).as_ref(), thread_id, None, None)
+    project::project_thread_in(
+        imported_locator(workspace_dir).as_ref(),
+        thread_id,
+        None,
+        None,
+    )
 }
 
 pub(crate) fn project_thread_scoped_with(

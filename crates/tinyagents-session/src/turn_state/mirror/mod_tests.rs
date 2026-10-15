@@ -2,8 +2,8 @@
 //! ordering keys and interrupted-turn finalization.
 
 use super::*;
-use crate::port::InMemoryTurnStates;
 use crate::port::InMemoryTranscriptLocator;
+use crate::port::InMemoryTurnStates;
 use crate::transcript::{
     DisplayRecord, TranscriptHistory, TranscriptLocator, TranscriptMessage, TranscriptMeta,
 };
@@ -246,7 +246,8 @@ fn finish_appends_interrupted_partial_to_existing_transcript() {
     m.state.streaming_text = "half an answer".into();
     m.finish();
 
-    let model = path.read_session()
+    let model = path
+        .read_session()
         .expect("read model context")
         .expect("transcript present");
     assert!(
@@ -256,7 +257,8 @@ fn finish_appends_interrupted_partial_to_existing_transcript() {
             .any(|msg| msg.content.contains("half an answer")),
         "interrupted partial must be excluded from the model context"
     );
-    let display = path.read_display()
+    let display = path
+        .read_display()
         .expect("read display")
         .expect("transcript present");
     let partial = display
@@ -281,7 +283,8 @@ fn finish_after_completion_writes_no_partial() {
     m.state.streaming_text = "final answer".into();
     m.turn_completed = true;
     m.finish();
-    let display = path.read_display()
+    let display = path
+        .read_display()
         .expect("read display")
         .expect("transcript present");
     assert!(
@@ -307,7 +310,8 @@ fn finish_keeps_a_terminal_outcome_the_driver_already_recorded() {
     m.finish();
     let stored = store.get_turn("thr_settled", "req-s").unwrap().unwrap();
     assert_eq!(stored.lifecycle, TurnLifecycle::Completed);
-    let display = path.read_display()
+    let display = path
+        .read_display()
         .expect("read display")
         .expect("transcript present");
     assert!(
@@ -339,7 +343,8 @@ fn finish_leaves_an_unreadable_snapshot_alone_and_appends_no_partial() {
         TurnLifecycle::Started,
         "an outcome that cannot be read must not be overwritten"
     );
-    let display = path.read_display()
+    let display = path
+        .read_display()
         .expect("read display")
         .expect("transcript present");
     assert!(

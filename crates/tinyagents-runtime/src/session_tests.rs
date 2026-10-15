@@ -1,11 +1,11 @@
 use super::*;
+use crate::test_store::{memory, read, seed};
 use crate::{DriverFailure, DriverOutcome, SessionBuilder, TranscriptCodec};
 use async_trait::async_trait;
 use std::sync::Arc;
-use crate::test_store::{memory, read, seed};
 use tinyagents_session::transcript::{
-    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript,
-    TranscriptMessage, TranscriptMeta, session_stem,
+    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptMessage,
+    TranscriptMeta, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tokio::sync::Notify;
@@ -181,9 +181,9 @@ async fn a_running_turn_holds_off_a_background_append_into_its_session() {
         &session_stem(&locator.head_generation(&session_ref)),
     )
     .messages
-        .into_iter()
-        .map(|message| message.content)
-        .collect();
+    .into_iter()
+    .map(|message| message.content)
+    .collect();
     assert_eq!(
         contents,
         [

@@ -6,11 +6,11 @@
 //! the core actually persists.
 
 use super::*;
-use std::path::Path;
 use crate::transcript::test_locator::{driver_locator, thread_spend};
 use crate::transcript::{
     MessageUsage, TranscriptMessage, TranscriptMeta, TurnUsage, append_transcript_turn,
 };
+use std::path::Path;
 
 const MODEL: &str = "openrouter/deepseek/deepseek-v4-flash";
 

@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::test_store::{Destination, fingerprint, memory, read, read_display, seed, try_read};
 use async_trait::async_trait;
 use tinyagents_harness::{
     context::{RunConfig, RunContext},
@@ -15,7 +16,6 @@ use tinyagents_session::transcript::{
     DisplayRecord, SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator,
     TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn, TurnUsage, session_stem,
 };
-use crate::test_store::{Destination, fingerprint, memory, read, read_display, seed, try_read};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::providers::MockModel;
 use tinytools::{Tool, ToolResult, ToolSpec};
@@ -2539,11 +2539,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
         "when?",
     ))])))
     .codec(Arc::new(Codec::default()))
-    .session(
-        locator.clone(),
-        session_ref.clone(),
-        meta(),
-    )
+    .session(locator.clone(), session_ref.clone(), meta())
     .build()
     .unwrap();
     first
@@ -2565,11 +2561,7 @@ async fn a_restarted_session_continues_the_same_transcript() {
         "about kashmir",
     ))])))
     .codec(Arc::new(Codec::default()))
-    .session(
-        locator.clone(),
-        session_ref.clone(),
-        meta(),
-    )
+    .session(locator.clone(), session_ref.clone(), meta())
     .build()
     .unwrap();
     let resumed = second
@@ -2677,7 +2669,10 @@ async fn a_compaction_opens_the_next_generation_and_leaves_the_sealed_one_intact
         sealed_bytes,
         "the sealed generation must be unchanged after a compaction"
     );
-    let carried = read(locator.as_ref(), &session_stem(&session_ref.next_generation()));
+    let carried = read(
+        locator.as_ref(),
+        &session_stem(&session_ref.next_generation()),
+    );
     assert_eq!(
         carried
             .messages
@@ -3441,9 +3436,9 @@ async fn thread_resume_on_a_session_bound_target_writes_the_head_not_a_sealed_ge
         &session_stem(&session_ref.next_generation()),
     )
     .messages
-        .into_iter()
-        .map(|message| message.content)
-        .collect();
+    .into_iter()
+    .map(|message| message.content)
+    .collect();
     assert!(
         head_contents.contains(&"new turn".to_string()),
         "the new turn must land in the head generation, not the sealed one: {head_contents:?}"
@@ -3800,9 +3795,7 @@ async fn an_exact_tool_turn_carries_recorded_tools_into_a_compaction_generation(
 
     let head = locator.head_generation(&recorded_tools_session());
     assert_eq!(head.generation, 1, "compaction successor must exist");
-    let stored = read(locator.as_ref(), &session_stem(&head))
-        .tools
-        .unwrap();
+    let stored = read(locator.as_ref(), &session_stem(&head)).tools.unwrap();
     assert_eq!(
         tool_names(&ToolSnapshot::from_json(&stored).unwrap()),
         vec!["alpha", "beta"]

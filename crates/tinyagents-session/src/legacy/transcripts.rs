@@ -121,7 +121,9 @@ fn count_markdown_only(workspace_dir: &Path, stems: &std::collections::HashSet<S
 /// field) recorded in its metadata, where a store reads it back from.
 fn stored_row(message: &DisplayMessage) -> TranscriptMessage {
     match &message.background {
-        Some(origin) => crate::transcript::display_with_background_row(message.message.clone(), origin),
+        Some(origin) => {
+            crate::transcript::display_with_background_row(message.message.clone(), origin)
+        }
         None => message.message.clone(),
     }
 }
