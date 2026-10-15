@@ -698,3 +698,59 @@ fn last_call_fields_round_trip_and_default_on_old_lines() {
     assert_eq!(old.last_call_input, 0);
     assert_eq!(old.last_call_output, 0);
 }
+
+/// A compacted sub-agent leaves `{stem}` and `{stem}.g1` behind; the successor
+/// opens with the rows it carried over (same `request_id`). The pair is one
+/// run, and the carried turn is counted once, by the file walk and the
+/// locator walk alike.
+#[test]
+fn a_compacted_subagent_is_one_run_counted_once() {
+    use crate::transcript::FileTranscriptLocator;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let thread = "thread-subagent-generations";
+    let root_stem = "1790000002_orchestrator_generations";
+    write_transcript_turns(
+        tmp.path(),
+        root_stem,
+        &meta("orchestrator", "root", Some(thread)),
+        &[(1_000, 10, 0)],
+    );
+    let child = format!("{root_stem}__1790000003_researcher_sub");
+    write_transcript_turns(
+        tmp.path(),
+        &child,
+        &meta("researcher", "subagent", Some(thread)),
+        &[(5_000, 50, 0)],
+    );
+    // The successor re-writes `req-0` (carried) and adds `req-1`.
+    write_transcript_turns(
+        tmp.path(),
+        &format!("{child}.g1"),
+        &meta("researcher", "subagent", Some(thread)),
+        &[(5_000, 50, 0), (7_000, 70, 0)],
+    );
+
+    for (walk, spend) in [
+        ("files", thread_spend(tmp.path(), thread)),
+        (
+            "locator",
+            thread_spend_in(&FileTranscriptLocator::new(tmp.path()), thread),
+        ),
+    ] {
+        let (researcher, runs) = spend.subagents.get("researcher").expect("child counted");
+        assert_eq!(*runs, 1, "{walk}: one delegation across its generations");
+        assert_eq!(researcher.input_tokens, 12_000, "{walk}: carried turn counted once");
+        assert_eq!(researcher.output_tokens, 120, "{walk}");
+        assert_eq!(researcher.turns, 2, "{walk}");
+    }
+}
+
+#[test]
+fn subagent_chains_order_generations_numerically() {
+    let chains = subagent_chains(
+        ["a.g10", "b", "a.g2", "a", "a.gx"]
+            .into_iter()
+            .map(|stem| (stem.to_string(), stem)),
+    );
+    assert_eq!(chains, vec![vec!["a", "a.g2", "a.g10"], vec!["a.gx"], vec!["b"]]);
+}
