@@ -1023,6 +1023,17 @@ impl TranscriptLocator for DriverTranscriptLocator {
         self.list_thread(thread_id, agent_id)
     }
 
+    /// Folds the thread's pre-identity roots into `session` once; see
+    /// `transcripts_adoption.rs`.
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread_id: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<crate::transcript::SessionAdoption>> {
+        self.adopt(session, thread_id, seed)
+    }
+
     fn session_exists(&self, session: &SessionRef) -> bool {
         let stem = session_stem(session);
         let written = self.run(|docs, declared| async move {
@@ -1165,6 +1176,8 @@ impl DriverTranscriptLocator {
     }
 }
 
+#[path = "transcripts_adoption.rs"]
+mod adoption;
 #[path = "transcripts_display.rs"]
 mod display;
 
