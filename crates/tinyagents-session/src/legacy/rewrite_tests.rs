@@ -79,3 +79,94 @@ fn a_workspace_without_transcripts_is_an_empty_report() {
         LegacyRewriteReport::default()
     );
 }
+
+#[test]
+fn a_rewrite_keeps_the_recorded_tool_declarations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = raw_dir(dir.path()).join("tools.jsonl");
+    write(&path, "keep ### SECRET");
+    let tools = serde_json::json!([{"name": "search"}]);
+    crate::transcript::append_tools_record(&path, &tools).unwrap();
+
+    let report = rewrite_legacy_transcripts(dir.path(), |session| {
+        session.messages[0].content = "keep".into();
+        true
+    });
+
+    assert_eq!(report.rewritten, 1);
+    let rewritten = read_transcript(&path).unwrap();
+    assert_eq!(rewritten.messages[0].content, "keep");
+    assert_eq!(rewritten.tools, Some(tools));
+}
+
+#[test]
+fn an_unreadable_session_raw_is_an_error_not_an_empty_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    // `session_raw` exists but is not a directory: `read_dir` fails with
+    // something other than `NotFound`.
+    std::fs::write(raw_dir(dir.path()), b"not a directory").unwrap();
+
+    let report = rewrite_legacy_transcripts(dir.path(), |_| true);
+
+    assert_eq!(report.scanned, 0);
+    assert_eq!(report.errors, 1, "the failed scan is reported");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_dated_directory_is_counted() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let raw = raw_dir(dir.path());
+    write(&raw.join("flat.jsonl"), "flat");
+    let dated = raw.join("01012026");
+    write(&dated.join("dated.jsonl"), "dated");
+    std::fs::set_permissions(&dated, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A privileged runner (root) can read it anyway; nothing to observe then.
+    let readable = std::fs::read_dir(&dated).is_ok();
+
+    let report = rewrite_legacy_transcripts(dir.path(), |_| false);
+    std::fs::set_permissions(&dated, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    if !readable {
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.errors, 1, "the unreadable child directory is reported");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_are_neither_followed_nor_rewritten() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let raw = raw_dir(dir.path());
+    write(&raw.join("inside.jsonl"), "inside");
+    let target_file = outside.path().join("outside.jsonl");
+    write(&target_file, "outside");
+    let target_dir = outside.path().join("01012026");
+    write(&target_dir.join("nested.jsonl"), "nested");
+    symlink(&target_file, raw.join("linked.jsonl")).unwrap();
+    symlink(&target_dir, raw.join("02012026")).unwrap();
+
+    let report = rewrite_legacy_transcripts(dir.path(), |session| {
+        session.messages[0].content = "rewritten".into();
+        true
+    });
+
+    assert_eq!(report.scanned, 1, "only the real file is scanned");
+    assert_eq!(report.rewritten, 1);
+    assert_eq!(
+        read_transcript(&target_file).unwrap().messages[0].content,
+        "outside"
+    );
+    assert_eq!(
+        read_transcript(&target_dir.join("nested.jsonl"))
+            .unwrap()
+            .messages[0]
+            .content,
+        "nested"
+    );
+}
