@@ -36,7 +36,7 @@ Everything lives wherever the host's storage backend puts it:
 
 ```text
 {host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
-{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once, never written
+{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
 ```
 
 ## Public surface

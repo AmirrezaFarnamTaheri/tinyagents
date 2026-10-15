@@ -1,5 +1,5 @@
 //! Transcript-derived view: project a thread's append-only transcripts into typed display items for the chat renderer, with
-//! newest-first pagination over a bounded in-memory cache.
+//! uncached newest-first pagination.
 //!
 //! Entry point: [`get_page_in`] (used by the `threads.transcript_get` RPC).
 

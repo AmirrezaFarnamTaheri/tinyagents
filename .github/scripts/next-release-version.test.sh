@@ -27,6 +27,8 @@ expect "workspace ahead" "3.0.0 3.1.0" minor 3.0.0 v2.8.0
 expect "no tags" "2.1.4 2.1.5" patch 2.1.4
 # Pre-release and foreign tags never set the base.
 expect "prerelease ignored" "2.8.0 2.9.0" minor 2.1.4 v2.8.0 v3.0.0-rc1 nightly 9.9.9
+# A leading-zero tag is not a release version (08 would be octal).
+expect "leading zero ignored" "2.8.0 2.9.0" minor 2.1.4 v2.8.0 v2.08.0
 # Bad input fails.
 expect "bad bump" "error" hotfix 2.1.4
 expect "bad workspace version" "error" minor 2.1 v2.8.0

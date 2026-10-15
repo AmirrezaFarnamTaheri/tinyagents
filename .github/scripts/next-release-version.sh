@@ -14,7 +14,7 @@ bump="${1:?bump (patch|minor|major) required}"
 workspace_version="${2:?workspace version required}"
 shift 2
 
-semver='^[0-9]+\.[0-9]+\.[0-9]+$'
+semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 if ! [[ "$workspace_version" =~ $semver ]]; then
   echo "Workspace version '${workspace_version}' is not X.Y.Z" >&2
   exit 1

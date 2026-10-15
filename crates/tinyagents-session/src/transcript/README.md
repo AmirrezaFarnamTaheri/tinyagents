@@ -4,9 +4,10 @@ The store-port seam hosts persist conversations through. A transcript lives in
 whatever store the host installed (`crate::port`: the `tinystoragedrivers`
 backed `DriverSessionStores`, or the in-memory double); this module defines
 the traits and types, and nothing in it reads or writes a workspace directory.
-The only reader of classic `session_raw/{stem}.jsonl` files is the one-time,
-read-only import in `crate::legacy` (`import_transcripts_once`,
-`WorkspaceStores`), which parses them with the internal JSONL codec kept here
+The only code touching classic `session_raw/{stem}.jsonl` files is in
+`crate::legacy`: the one-time, read-only import (`import_transcripts_once`,
+`WorkspaceStores`) and `rewrite_legacy_transcripts`, which rewrites them in
+place. Both parse them with the internal JSONL codec kept here
 (`jsonl.rs`, `reader.rs`, `legacy_md.rs`). See the module doc in
 `../transcript.rs` for the append-only log model and the classic line schema.
 

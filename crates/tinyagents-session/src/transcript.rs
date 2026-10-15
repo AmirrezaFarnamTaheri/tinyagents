@@ -5,9 +5,10 @@
 //! (see [`crate::port`]): [`TranscriptLocator`] resolves transcripts by thread,
 //! agent or [`SessionRef`] and binds a write handle, and
 //! [`TranscriptHistory`]/[`TranscriptRead`] are those handles. This crate no
-//! longer reads or writes a workspace directory on that path; the only reader
-//! of classic `session_raw/{stem}.jsonl` files is the one-time, read-only
-//! import in [`crate::legacy`].
+//! longer reads or writes a workspace directory on that path; the only code
+//! touching classic `session_raw/{stem}.jsonl` files is in [`crate::legacy`]:
+//! the one-time, read-only import and `rewrite_legacy_transcripts`, which
+//! rewrites them in place.
 //!
 //! ## Append-only log
 //!
