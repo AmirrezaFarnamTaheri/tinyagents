@@ -30,6 +30,19 @@ driver store:
 The path API is unchanged; `project_from_files` and `thread_spend` now share
 the locator code path.
 
+Review follow-ups: `rewrite_legacy_transcripts` keeps a transcript's recorded
+tool declarations, counts unreadable directories and entries in `errors`
+(a missing `session_raw/` is still an empty report) and skips symlinks.
+Thread spend counts a compacted sub-agent's `.gN` chain as one run with its
+carried rows counted once (`thread_spend` and `thread_spend_in`).
+`AgentTranscriptFiles` adopts a shared session on a background append and
+lists shared sub-agents beside its own. A background append through a
+locator with no destination key is serialised by that locator's identity.
+Driver-backed stores repair the index on a display read, order pre-identity
+roots by `_meta.created`, drop adopted roots beside an unscoped session root,
+bound the sub-agent listing query to the thread, and find roots missing from
+the index before adoption.
+
 ## Unreleased: unapplied steers are back in the run queue when a turn ends
 
 `SteeringForwarderGuard` now drains and delivers under its shutdown gate and
