@@ -283,3 +283,43 @@ fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
         vec!["first", "second"]
     );
 }
+
+#[test]
+fn a_root_missing_from_the_index_is_still_folded() {
+    let locator = locator();
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 0),
+        &["one"],
+    );
+    write_root(
+        &locator,
+        "1700000200_planner",
+        &legacy("planner", "2026-01-02", 1, 0),
+        &["two"],
+    );
+    // The second write was durable but every index refresh after it failed.
+    let docs = Arc::clone(&locator.docs);
+    Blocking::new()
+        .unwrap()
+        .run(async move {
+            docs.delete(
+                super::super::INDEX,
+                &super::super::doc_key(&["1700000200_planner"]),
+                tinystoragedrivers_core::Precondition::None,
+            )
+            .await
+        })
+        .unwrap()
+        .unwrap();
+    let session = SessionRef::scoped(THREAD, "planner");
+
+    let adoption = locator
+        .adopt_legacy(&session, THREAD, &meta(THREAD))
+        .unwrap()
+        .expect("both legacy roots to adopt");
+
+    assert_eq!(adoption.adopted.len(), 2);
+    assert_eq!(contents(&locator, &session), vec!["one", "two"]);
+}
