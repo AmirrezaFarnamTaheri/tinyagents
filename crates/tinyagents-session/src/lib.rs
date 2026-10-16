@@ -138,6 +138,7 @@ pub use port::{
 };
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
+    RebindableSessionStores, SessionStoreRegistry,
 };
 pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;

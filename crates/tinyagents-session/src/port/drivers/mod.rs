@@ -30,6 +30,7 @@
 //! `sha256:` maps to `sha256:<hex>` of the id, so every agent gets a scope of
 //! its own, no raw id can name a hashed scope, and the mapping never changes.
 
+mod rebound;
 mod refused;
 mod transcripts;
 mod turn_states;
@@ -45,6 +46,7 @@ use tinystoragedrivers_core::{
 
 use super::{AgentStores, SessionStoreProvider};
 
+pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
 
