@@ -32,7 +32,8 @@ mod steps;
 ///   `tsd.migrations` record (`session` / `session_raw_jsonl_v1`); the host
 ///   calls `legacy::import_legacy_marker` (which `import_transcripts_once` also
 ///   does itself) after `Registry::prepare`.
-/// - The journal stream belongs to a later change.
+/// - The journal streams are the harness's: `harness.journal/<run>`, declared and
+///   migrated by `tinyagents_harness::storage_schema()`.
 ///
 /// A provider is constructed with the tenant scope (see
 /// `DriverSessionStores::new`) and binds each agent to `tenant.agent(id)`;

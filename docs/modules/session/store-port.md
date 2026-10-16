@@ -172,7 +172,7 @@ literals and providers are unchanged.
 | generation reservations | `tsd.leases` (owner `session`, key = the successor stem) |
 | turn states | `session.turn_states`: one document per `(thread, request)` |
 | key-value | `tsd.kv` (owner `session`) through the harness `DriverStore` |
-| journal | streams `16:session_journal/<name>` (the harness `DriverAppendStore` always writes `<prefix len>:` first) |
+| journal | streams `harness.journal/<name>` (the harness `DriverAppendStore::journal`; declared by `tinyagents_harness::storage_schema()`) |
 
 - **Transcript log.** Each write is one entry, numbered from 0 and claimed
   with an insert-only write. An ordinary turn stores only its new rows

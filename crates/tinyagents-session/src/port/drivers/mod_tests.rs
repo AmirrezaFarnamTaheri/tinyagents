@@ -846,7 +846,9 @@ async fn the_journal_lives_in_the_harness_journal_stream_family() {
         .await
         .unwrap();
 
-    let scoped = backend.for_scope(&provider.scope_for("agent-1").unwrap()).unwrap();
+    let scoped = backend
+        .for_scope(&provider.scope_for("agent-1").unwrap())
+        .unwrap();
     assert_eq!(
         scoped.streams().streams("").await.unwrap(),
         vec!["harness.journal/run.abc".to_owned()]

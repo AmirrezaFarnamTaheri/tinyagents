@@ -16,7 +16,7 @@
 //! | generation reservations | `tsd.leases`, owner `session` |
 //! | turn states | `session.turn_states`, one document per turn |
 //! | key-value | `tsd.kv` owner `session`, through the harness [`DriverStore`] |
-//! | journal | streams `16:session_journal/<name>`, through the harness [`DriverAppendStore`] |
+//! | journal | streams `harness.journal/<name>` (the run journal's family), through the harness [`DriverAppendStore`] |
 //!
 //! # Sync seams
 //!
@@ -56,8 +56,6 @@ pub use turn_states::DriverTurnStates;
 /// The `tsd.kv` owner of the session key-value store, and the `tsd.leases`
 /// owner of its generation reservations.
 const KV_OWNER: &str = "session";
-/// Prefix of each agent's journal streams.
-const JOURNAL_PREFIX: &str = "session_journal/";
 
 /// A [`SessionStoreProvider`] keeping every agent's stores in one
 /// `tinystoragedrivers` backend, each agent in its own principal [`Scope`] of
@@ -369,10 +367,7 @@ impl DriverSessionStores {
                 KV_OWNER,
                 self.schema_admission,
             )),
-            journal: Arc::new(DriverAppendStore::with_prefix(
-                Arc::clone(scoped.streams()),
-                JOURNAL_PREFIX,
-            )),
+            journal: Arc::new(DriverAppendStore::journal(Arc::clone(scoped.streams()))),
         };
         (stores, turn_states)
     }
