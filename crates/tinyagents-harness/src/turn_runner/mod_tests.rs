@@ -536,6 +536,171 @@ async fn parallel_turn_gets_a_private_queue_and_cannot_steal_primary_work() {
 }
 
 #[tokio::test]
+async fn host_authored_turn_gets_private_queue_and_preserves_primary_collects() {
+    let host = Arc::new(QueueOwnershipHost::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "primary-owner".into();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    host.primary_started.notified().await;
+
+    let mut collect = request(QueueDisposition::Collect, false);
+    collect.request_id = "primary-collect".into();
+    assert!(matches!(
+        runner.run(collect).await,
+        Err(TurnRunnerError::Queued)
+    ));
+    let mut background = request(QueueDisposition::Interrupt, true);
+    background.request_id = "host-background".into();
+    runner.run(background).await.unwrap();
+    assert_eq!(
+        runner
+            .queue_status(
+                &request(QueueDisposition::Interrupt, false).scope,
+                "thread-a"
+            )
+            .await
+            .collects,
+        1
+    );
+
+    host.release_primary.notify_one();
+    primary.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn stale_completion_cannot_consume_a_replacement_generations_queue() {
+    let host = Arc::new(ReplacementHost::default());
+    let replies = Arc::new(BlockingOldReplyStore::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        replies.clone(),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut old = request(QueueDisposition::Interrupt, false);
+    old.request_id = "old-generation".into();
+    let old_task = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(old).await })
+    };
+    replies.persist_started.notified().await;
+
+    let mut replacement = request(QueueDisposition::Interrupt, false);
+    replacement.request_id = "replacement-generation".into();
+    let new_task = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(replacement).await })
+    };
+    host.replacement_started.notified().await;
+    for (id, disposition) in [
+        ("replacement-collect", QueueDisposition::Collect),
+        ("replacement-followup", QueueDisposition::Followup),
+    ] {
+        let mut queued = request(disposition, false);
+        queued.request_id = id.into();
+        assert!(matches!(
+            runner.run(queued).await,
+            Err(TurnRunnerError::Queued)
+        ));
+    }
+
+    replies.release_old.notify_one();
+    old_task.await.unwrap().unwrap();
+    let status = runner
+        .queue_status(
+            &request(QueueDisposition::Interrupt, false).scope,
+            "thread-a",
+        )
+        .await;
+    assert_eq!((status.collects, status.followups), (1, 1));
+
+    host.release_replacement.notify_one();
+    new_task.await.unwrap().unwrap();
+}
+
+#[derive(Default)]
+struct BlockingOldReplyStore {
+    persist_started: tokio::sync::Notify,
+    release_old: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl ReplyStore for BlockingOldReplyStore {
+    async fn persist(
+        &self,
+        request: &TurnRequest,
+        _reply_id: &str,
+        _result: &TurnResult,
+    ) -> Result<(), String> {
+        if request.request_id == "old-generation" {
+            self.persist_started.notify_one();
+            self.release_old.notified().await;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ReplacementHost {
+    replacement_started: tokio::sync::Notify,
+    release_replacement: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for ReplacementHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.request_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        if request.request_id == "replacement-generation" {
+            self.replacement_started.notify_one();
+            tokio::select! {
+                _ = self.release_replacement.notified() => {},
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
+            }
+        }
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
 async fn simultaneous_idle_steer_and_followup_admission_has_one_owner() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
