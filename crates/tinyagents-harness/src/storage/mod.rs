@@ -13,3 +13,6 @@ pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// Per-run status snapshots.
 pub(crate) const RUN_STATUS: &str = "harness.run_status";
+
+/// Cached tool-catalogue embedding vectors.
+pub(crate) const EMBEDDING_CACHE: &str = "harness.embedding_cache";

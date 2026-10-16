@@ -7,8 +7,8 @@
 //!
 //! # Layout
 //!
-//! One collection (default [`DriverEmbeddingCache::DEFAULT_COLLECTION`]) with
-//! one document per `(signature, key)`: `{ sig, key, vector }`. `key` is the
+//! The collection `harness.embedding_cache` with one document per
+//! `(signature, key)`, id `Key::of([signature, key])`: `{ sig, key, vector }`. `key` is the
 //! ranker's 64-bit hash, written as 16 hex digits because a JSON/BSON number
 //! cannot carry a full `u64`. Writes are per-entry upserts, so concurrent
 //! writers with disjoint deltas never replace each other's entries and a
@@ -23,11 +23,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, IndexSpec, Precondition};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, IndexSpec, Key, Precondition, WriteOptions,
+};
 use tokio::sync::OnceCell;
 
 use super::EmbeddingCache;
-use crate::driver_ids::hashed_id;
 use crate::error::Result;
 use crate::store::map_driver_error as map_error;
 
@@ -38,42 +39,36 @@ const LOAD_CONCURRENCY: usize = 32;
 #[derive(Debug, Clone)]
 pub struct DriverEmbeddingCache {
     docs: Arc<dyn DocumentStore>,
-    collection: String,
     declared: Arc<OnceCell<()>>,
 }
 
 impl DriverEmbeddingCache {
-    /// The collection used by [`DriverEmbeddingCache::new`].
-    pub const DEFAULT_COLLECTION: &'static str = "harness_embedding_cache";
+    /// The collection every cache uses.
+    pub const COLLECTION: &'static str = crate::storage::EMBEDDING_CACHE;
 
-    /// Cache in [`Self::DEFAULT_COLLECTION`].
+    /// Cache in [`Self::COLLECTION`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
-        Self::with_collection(docs, Self::DEFAULT_COLLECTION)
-    }
-
-    /// Cache in `collection`, so independent caches can share a backend.
-    pub fn with_collection(docs: Arc<dyn DocumentStore>, collection: impl Into<String>) -> Self {
         Self {
             docs,
-            collection: collection.into(),
             declared: Arc::new(OnceCell::new()),
         }
     }
 
-    /// The declaration a cache using `collection` needs.
-    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
-        CollectionSpec::new(collection).index(IndexSpec::new("by_signature", ["sig"]))
+    /// The declaration a cache needs.
+    pub fn collection_spec() -> CollectionSpec {
+        CollectionSpec::new(Self::COLLECTION).index(IndexSpec::new("by_signature", ["sig"]))
     }
 
-    fn id(signature: &str, key: u64) -> String {
-        hashed_id(&[signature, &format!("{key:016x}")])
+    /// `Key::of([signature, key as 16 hex digits])`.
+    pub(crate) fn id(signature: &str, key: &str) -> Result<String> {
+        Ok(Key::of([signature, key]).map_err(map_error)?.as_str().to_owned())
     }
 
     async fn declared(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
                 self.docs
-                    .ensure_collection(&Self::collection_spec(self.collection.clone()))
+                    .ensure_collection(&Self::collection_spec())
                     .await
                     .map_err(map_error)
             })
@@ -89,11 +84,17 @@ impl EmbeddingCache for DriverEmbeddingCache {
         let mut found = HashMap::new();
         for wave in keys.chunks(LOAD_CONCURRENCY) {
             let reads = wave.iter().map(|key| {
-                let id = Self::id(signature, *key);
-                async move { (*key, self.docs.get(&self.collection, &id).await) }
+                let id = Self::id(signature, &format!("{key:016x}"));
+                async move {
+                    let row = match id {
+                        Ok(id) => self.docs.get(Self::COLLECTION, &id).await.map_err(map_error),
+                        Err(error) => Err(error),
+                    };
+                    (*key, row)
+                }
             });
             for (key, row) in futures::future::join_all(reads).await {
-                let Some(row) = row.map_err(map_error)? else {
+                let Some(row) = row? else {
                     continue;
                 };
                 // A document from another signature can only collide by hash
@@ -132,11 +133,12 @@ impl EmbeddingCache for DriverEmbeddingCache {
                 "vector": vector,
             });
             self.docs
-                .put(
-                    &self.collection,
-                    &Self::id(signature, *key),
+                .put_with(
+                    Self::COLLECTION,
+                    &Self::id(signature, &format!("{key:016x}"))?,
                     doc,
                     Precondition::None,
+                    WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
                 )
                 .await
                 .map_err(map_error)?;
