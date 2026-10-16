@@ -28,6 +28,7 @@ impl FailureScopePolicy<()> for Policy {
         &self,
         _ctx: &RunContext<()>,
         _invocation: &ToolInvocationIdentity,
+        _call: &ToolCall,
         _scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment {
@@ -143,6 +144,7 @@ async fn host_can_classify_terminal_failures_with_a_typed_cause() {
             &self,
             _: &RunContext<()>,
             _: &ToolInvocationIdentity,
+            _: &ToolCall,
             _: &FailureScope,
             _: &ToolResult,
         ) -> FailureAssessment {
@@ -190,6 +192,7 @@ async fn classified_budget_uses_shared_tracker_and_host_halt_copy() {
             &self,
             _: &RunContext<()>,
             _: &ToolInvocationIdentity,
+            _: &ToolCall,
             _: &FailureScope,
             _: &ToolResult,
         ) -> FailureAssessment {
@@ -242,6 +245,7 @@ async fn terminal_model_callback_halts_before_tool_accounting() {
             &self,
             _: &RunContext<()>,
             _: &ToolInvocationIdentity,
+            _: &ToolCall,
             _: &FailureScope,
             _: &ToolResult,
         ) -> FailureAssessment {
