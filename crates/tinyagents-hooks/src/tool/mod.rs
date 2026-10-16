@@ -164,7 +164,7 @@ where
         call: &mut tinyinference_llm::tool::ToolCall,
     ) -> tinyagents_harness::error::Result<()> {
         use tinyagents_harness::error::TinyAgentsError;
-        let mut event = ToolHookContext {
+        let event = ToolHookContext {
             event: ToolHookEvent::PreToolUse,
             call_id: call.id.clone(),
             tool_name: call.name.clone(),
@@ -263,6 +263,10 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "tool_tests.rs"]
+mod tests;
 
 #[async_trait]
 impl<Ctx: HookIdentity + Send + Sync> ToolHook<Ctx> for crate::command::HookEngine {
