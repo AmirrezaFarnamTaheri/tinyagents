@@ -1068,6 +1068,91 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
 }
 
 #[tokio::test]
+async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_turns() {
+    use crate::events::{AgentEvent, RecordingListener};
+    use crate::host::{
+        AllowAllSecurityGate, FixedModelResolver, HostCapabilities, StaticContextComposer,
+    };
+    use tinyinference_llm::model::{ModelResolutionSource, ResolvedModel};
+
+    for streaming in [false, true] {
+        let mut response = ModelResponse::assistant("reply");
+        response.usage = Some(Usage::new(8, 3));
+        response.resolved_model = Some(ResolvedModel {
+            name: "backup".into(),
+            requested: None,
+            source: ModelResolutionSource::RegistryDefault,
+        });
+        let model = Arc::new(crate::testkit::ScriptedModel::new(vec![response]));
+        let host = HostCapabilities::new(
+            Arc::new(StaticContextComposer::empty()),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                "helper",
+                "Helper",
+                "test helper",
+            )])),
+            Arc::new(AllowAllSecurityGate),
+            Arc::new(FixedModelResolver::new(model)),
+        );
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.push_model_middleware(Arc::new(crate::middleware::FallbackObserverMiddleware::new(
+            "primary",
+        )));
+        let carried_by_middleware = Arc::clone(&carried);
+        harness.push_model_middleware(Arc::new(
+            crate::middleware::UsageCarryMiddleware::new(move |response| {
+                if response.usage.is_some() {
+                    carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+                }
+            }),
+        ));
+        let context = RunContext::new(
+            RunConfig::new(if streaming { "route-stream" } else { "route-buffer" })
+                .with_thread("workload"),
+            (),
+        );
+        let recorder = Arc::new(RecordingListener::new());
+        context.events.subscribe(recorder.clone());
+        let invocation = AgentInvocation::new(
+            host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            context,
+        );
+        if streaming {
+            harness
+                .invoke_agent_streaming(invocation, &())
+                .await
+                .expect("streaming hosted turn");
+        } else {
+            harness
+                .invoke_agent(invocation, &())
+                .await
+                .expect("buffered hosted turn");
+        }
+        let events = recorder.events();
+        assert_eq!(carried.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, AgentEvent::UsageRecorded { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.event, AgentEvent::FallbackSelected { from, to } if from == "primary" && to == "backup"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
 async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pending() {
     let started = Arc::new(tokio::sync::Notify::new());
     let token = crate::CancellationToken::new();
