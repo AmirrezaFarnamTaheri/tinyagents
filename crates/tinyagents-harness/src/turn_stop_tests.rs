@@ -81,7 +81,7 @@ fn an_incomplete_reason_maps_to_cap_or_breaker() {
         TurnStop::from_incomplete_reason(CLASSIFIED_NOTE, fallback)
             .operation
             .as_deref(),
-        Some("web_answer_tool")
+        None
     );
     assert_eq!(TurnStop::wind_down().status_message(), "stopped: wind_down");
     assert_eq!(
