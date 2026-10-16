@@ -149,7 +149,7 @@ pub use run_ledger::drivers::{
 pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{
     ConversationPurgeStats, ConversationThread, CreateConversationThread, CrossThreadHit,
-    ThreadMessage, ThreadMessagePatch,
+    ThreadMessage, ThreadMessagePatch, conversations_storage_schema,
 };
 pub use transcript::spend::{ThreadSpend, TranscriptSpend, thread_spend_in, transcript_spend};
 pub use turn_state::TurnStateMirror;
