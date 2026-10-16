@@ -184,13 +184,10 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
         !*ran_secret.lock().unwrap(),
         "denied nested tool body must not run"
     );
+    let nested_result = nested_result.lock().unwrap().clone().unwrap();
     assert!(
-        nested_result
-            .lock()
-            .unwrap()
-            .as_deref()
-            .unwrap()
-            .contains("secret blocked")
+        nested_result.contains("secret blocked"),
+        "nested outcome: {nested_result}"
     );
 }
 
