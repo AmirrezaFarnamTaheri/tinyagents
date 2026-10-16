@@ -81,6 +81,7 @@ pub struct SpanCollector {
     cached_calls: HashSet<String>,
     open_tools: HashMap<String, usize>,
     open_subagents: HashMap<String, usize>,
+    linked_subagent_names: HashSet<String>,
     run_roots: HashMap<String, usize>,
     current_run_id: Option<String>,
     root_run_id: Option<String>,
@@ -107,6 +108,7 @@ impl SpanCollector {
             cached_calls: HashSet::new(),
             open_tools: HashMap::new(),
             open_subagents: HashMap::new(),
+            linked_subagent_names: HashSet::new(),
             run_roots: HashMap::new(),
             current_run_id: None,
             root_run_id,
@@ -471,8 +473,7 @@ impl SpanCollector {
                     .copied()
                     .unwrap_or_else(|| {
                         self.open_subagents
-                            .get(name)
-                            .copied()
+                            .remove(name)
                             .unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms))
                     });
                 self.spans[index].name = format!("subagent.{name}");
@@ -482,6 +483,10 @@ impl SpanCollector {
                 self.spans[index]
                     .attributes
                     .insert("subagent.depth".into(), json!(*depth));
+                self.spans[index]
+                    .attributes
+                    .insert("run.id".into(), json_str(run_id.as_str()));
+                self.linked_subagent_names.insert(name.clone());
                 self.run_roots.insert(run_id.as_str().to_owned(), index);
             }
             AgentEvent::SubAgentRunCompleted { run_id } => {
@@ -490,19 +495,22 @@ impl SpanCollector {
                 }
             }
             AgentEvent::SubAgentCompleted { name, .. } => {
-                let index = self
-                    .open_subagents
-                    .remove(name)
-                    .unwrap_or_else(|| self.open_subagent(name, 0, timestamp_ms));
-                self.close_span(index, timestamp_ms, SpanStatus::Ok);
+                if let Some(index) = self.open_subagents.remove(name) {
+                    self.close_span(index, timestamp_ms, SpanStatus::Ok);
+                } else if !self.linked_subagent_names.contains(name) {
+                    let index = self.open_subagent(name, 0, timestamp_ms);
+                    self.close_span(index, timestamp_ms, SpanStatus::Ok);
+                }
             }
             AgentEvent::SubAgentFailed { name, depth, error } => {
-                let index = self
-                    .open_subagents
-                    .remove(name)
-                    .unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
-                self.close_span(index, timestamp_ms, SpanStatus::Error);
-                self.put_error(index, error);
+                if let Some(index) = self.open_subagents.remove(name) {
+                    self.close_span(index, timestamp_ms, SpanStatus::Error);
+                    self.put_error(index, error);
+                } else if !self.linked_subagent_names.contains(name) {
+                    let index = self.open_subagent(name, *depth, timestamp_ms);
+                    self.close_span(index, timestamp_ms, SpanStatus::Error);
+                    self.put_error(index, error);
+                }
             }
             AgentEvent::MessageAppended { role, message, .. } if self.context.capture_content => {
                 if role == "user" && !self.first_input_recorded {
