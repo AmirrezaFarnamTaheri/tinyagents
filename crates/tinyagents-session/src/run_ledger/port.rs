@@ -323,6 +323,18 @@ pub trait RunLedgerStore: Send + Sync {
         member_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
 
+    /// Mark a member idle only if it still owns this exact task execution.
+    /// This compare-and-set prevents cleanup from an older worker from idling
+    /// a member that has since been stopped and assigned a newer run.
+    async fn mark_agent_team_member_idle_if_current(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>>;
+
     /// Release a single `in_progress` task back to `todo`, clearing its claim and
     /// resetting the quality gate. Returns `true` if a row was actually released
     /// (the task existed, belonged to the team, and was `in_progress`). Used by the
@@ -330,6 +342,16 @@ pub trait RunLedgerStore: Send + Sync {
     /// another teammate — the per-task analogue of the bulk release in
     /// `shutdown_agent_team_member`.
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool>;
+
+    /// Release a task only while the specified member still owns the exact
+    /// claim token. The comparison and release are one atomic operation.
+    async fn release_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool>;
 
     /// Records that a tool call has been admitted and is about to execute.
     ///

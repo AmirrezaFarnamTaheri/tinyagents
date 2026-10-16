@@ -92,7 +92,14 @@ pub trait TeamLedger: Send + Sync {
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
     /// Marks a running member idle after its worker finishes.
-    fn mark_member_idle(&self, team_id: &str, member_id: &str) -> Result<bool>;
+    fn mark_member_idle(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<bool>;
     /// Stops a member and releases its claimed tasks, returning the stopped
     /// member and the released task ids.
     fn shutdown_member(
@@ -229,24 +236,18 @@ impl TeamLedger for SessionTeamLedger {
         member_id: &str,
         claim_token: &str,
     ) -> Result<bool> {
-        let Some(task) = self
-            .list_tasks(team_id)?
-            .into_iter()
-            .find(|task| task.id == task_id)
-        else {
-            return Ok(false);
-        };
-        if task.claimed_by_member_id.as_deref() != Some(member_id)
-            || task.claim_token.as_deref() != Some(claim_token)
-        {
-            return Ok(false);
-        }
-        let (ledger, team, task) = (
+        let (ledger, team, task, member, token) = (
             Arc::clone(&self.ledger),
             team_id.to_owned(),
             task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
         );
-        self.run(async move { ledger.release_agent_team_task(&team, &task).await })
+        self.run(async move {
+            ledger
+                .release_agent_team_task_if_claimed(&team, &task, &member, &token)
+                .await
+        })
     }
     fn mark_member_running(
         &self,
@@ -270,15 +271,25 @@ impl TeamLedger for SessionTeamLedger {
                 .await
         })
     }
-    fn mark_member_idle(&self, team_id: &str, member_id: &str) -> Result<bool> {
-        let (ledger, team, member) = (
+    fn mark_member_idle(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<bool> {
+        let (ledger, team, member, task, thread, run) = (
             Arc::clone(&self.ledger),
             team_id.to_owned(),
             member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
         );
         self.run(async move {
             Ok(ledger
-                .mark_agent_team_member_idle(&team, &member)
+                .mark_agent_team_member_idle_if_current(&team, &member, &task, &thread, &run)
                 .await?
                 .is_some())
         })
@@ -323,6 +334,7 @@ struct MemberExecutionCleanup<'a, L: TeamLedger> {
     task_id: &'a str,
     member_id: &'a str,
     claim_token: &'a str,
+    execution: Option<(String, String)>,
     armed: bool,
 }
 
@@ -333,6 +345,7 @@ impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
             self.task_id,
             self.member_id,
             self.claim_token,
+            self.execution.as_ref().map(|(thread, run)| (thread.as_str(), run.as_str())),
         )?;
         self.armed = false;
         Ok(())
@@ -353,6 +366,7 @@ impl<L: TeamLedger> Drop for MemberExecutionCleanup<'_, L> {
                     self.task_id,
                     self.member_id,
                     self.claim_token,
+                    self.execution.as_ref().map(|(thread, run)| (thread.as_str(), run.as_str())),
                 );
         }
     }
@@ -560,6 +574,7 @@ impl<L: TeamLedger> TeamService<L> {
             task_id,
             member_id,
             claim_token: &claim_token,
+            execution: None,
             armed: true,
         };
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
@@ -577,6 +592,10 @@ impl<L: TeamLedger> TeamService<L> {
                 return Err(error.context("mark team member running"));
             }
         };
+        cleanup.execution = Some((
+            member.worker_thread_id.clone().unwrap_or(worker_thread_id.clone()),
+            member.run_id.clone().unwrap_or(run_id.clone()),
+        ));
 
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {
@@ -594,7 +613,13 @@ impl<L: TeamLedger> TeamService<L> {
         };
         match completion {
             Ok(outcome @ CompletionOutcome::Completed(_)) => {
-                self.ledger.mark_member_idle(team_id, member_id)?;
+                self.ledger.mark_member_idle(
+                    team_id,
+                    member_id,
+                    task_id,
+                    member.worker_thread_id.as_deref().unwrap_or(&worker_thread_id),
+                    member.run_id.as_deref().unwrap_or(&run_id),
+                )?;
                 cleanup.disarm();
                 Ok(outcome)
             }
@@ -617,11 +642,15 @@ impl<L: TeamLedger> TeamService<L> {
         task_id: &str,
         member_id: &str,
         claim_token: &str,
+        execution: Option<(&str, &str)>,
     ) -> Result<()> {
         let release = self
             .ledger
             .release_task(team_id, task_id, member_id, claim_token);
-        let idle = self.ledger.mark_member_idle(team_id, member_id);
+        let idle = execution.map_or(Ok(false), |(thread, run)| {
+            self.ledger
+                .mark_member_idle(team_id, member_id, task_id, thread, run)
+        });
         match (release, idle) {
             (Ok(_), Ok(_)) => Ok(()),
             (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
