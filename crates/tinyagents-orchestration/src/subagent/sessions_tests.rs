@@ -21,7 +21,7 @@ fn selector(task_key: &str) -> SubagentSessionSelector {
     SubagentSessionSelector {
         parent_session: "parent".into(),
         parent_thread_id: Some("thread".into()),
-                agent: "researcher".into(),
+        agent_id: "researcher".into(),
         model: Some("model-a".into()),
         sandbox_mode: "read_only".into(),
         action_root: None,
@@ -177,7 +177,7 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
             tinyagents_tasks::OrchestrationTaskSpec::new(
                 tinyagents_harness::ids::TaskId::new("task-record"),
                 tinyagents_tasks::OrchestrationTaskKind::SubAgent {
-                    agent_id: "researcher".into(),
+                    agent: "researcher".into(),
                 },
             )
             .with_lineage(parent_run.clone(), parent_run.clone()),

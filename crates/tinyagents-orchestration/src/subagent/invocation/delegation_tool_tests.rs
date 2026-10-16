@@ -18,7 +18,7 @@ fn multi_target_schema_exposes_only_configured_agents_and_blocking_envelope() {
             ("coder".into(), "Writes code".into()),
             ("reviewer".into(), "Reviews".into()),
         ],
-        |_, _, _| async { Ok(DelegationStageOutput::done("ok")) },
+        |_| async { Ok(DelegationStageOutput::done("ok")) },
     );
     let declaration = tool.with_exposure(ToolExposure::Hidden).tool();
     let schema = declaration.parameters_schema();
@@ -41,6 +41,23 @@ fn delegation_envelope_keeps_structured_instructions_and_mode() {
     assert!(envelope.blocking);
     assert_eq!(envelope.objective.as_deref(), Some("Find regressions"));
     assert_eq!(envelope.must_not_assume.as_deref(), Some("Tests passed"));
+}
+
+#[tokio::test]
+async fn multi_target_blocking_maps_to_subagent_mode_and_validates_target() {
+    use tinyagents_harness::{context::{RunConfig, RunContext}, ids::new_call_id, tool::ToolDispatch};
+    let tool = MultiTargetDelegationTool::<(), (), _, _>::new(
+        "delegate_to", "Delegate", vec![("coder".into(), "Writes code".into())],
+        |request| async move { Ok(DelegationStageOutput::done(request.mode)) },
+    );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let inline = ToolDispatch::<(), ()>::execute(&tool, &(), new_call_id(), json!({"agent":"coder","prompt":"fix","blocking":true}),
+        tinytools::ToolCallOptions::default(), &parent).await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&inline.output()).unwrap();
+    assert_eq!(value["mode"], "inline");
+    let invalid = ToolDispatch::<(), ()>::execute(&tool, &(), new_call_id(), json!({"agent":"unlisted","prompt":"fix"}),
+        tinytools::ToolCallOptions::default(), &parent).await;
+    assert!(invalid.is_err());
 }
 
 #[tokio::test]

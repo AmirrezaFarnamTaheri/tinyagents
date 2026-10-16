@@ -60,7 +60,7 @@ pub struct DelegationRequest {
 pub struct MultiTargetDelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest, DelegationStage, tinyagents_graph::delegation::DelegationState) -> Fut
+    Worker: Fn(DelegationRequest) -> Fut
         + Send
         + Sync
         + 'static,
@@ -77,7 +77,7 @@ where
 impl<State, Ctx, Worker, Fut> MultiTargetDelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest, DelegationStage, tinyagents_graph::delegation::DelegationState) -> Fut
+    Worker: Fn(DelegationRequest) -> Fut
         + Send
         + Sync
         + 'static,
@@ -113,7 +113,7 @@ impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx>
 where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest, DelegationStage, tinyagents_graph::delegation::DelegationState) -> Fut
+    Worker: Fn(DelegationRequest) -> Fut
         + Send
         + Sync
         + 'static,
@@ -160,11 +160,7 @@ where
             .into(),
             envelope,
         };
-        let result = (self.worker)(
-            request.clone(),
-            DelegationStage::Execute,
-            DelegationState::default(),
-        )
+        let result = (self.worker)(request.clone())
         .await
         .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
         Ok(ToolResult::json(
