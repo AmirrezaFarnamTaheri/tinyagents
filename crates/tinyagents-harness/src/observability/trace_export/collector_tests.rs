@@ -735,7 +735,11 @@ fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_spa
         2,
         7,
         AgentEvent::UsageRecorded {
-            usage: Usage { input_tokens: 10, output_tokens: 2, ..Default::default() },
+            usage: Usage {
+                input_tokens: 10,
+                output_tokens: 2,
+                ..Default::default()
+            },
         },
     ));
     collector.record(&observation_in_run(
@@ -869,7 +873,10 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
             2,
             at + 1,
             AgentEvent::UsageRecorded {
-                usage: Usage { input_tokens: 10, ..Default::default() },
+                usage: Usage {
+                    input_tokens: 10,
+                    ..Default::default()
+                },
             },
         ));
         collector.record(&observation_in_run(
@@ -980,16 +987,28 @@ fn host_enrichment_uses_exact_generation_identity_and_preserves_native_costs() {
         )
         .unwrap();
     collector.record(&observation_in_run(
-        "run", None, "run", 2, 3,
+        "run",
+        None,
+        "run",
+        2,
+        3,
         AgentEvent::CostRecorded {
-            cost: crate::cost::CostTotals { total_cost: 0.7, ..Default::default() },
+            cost: crate::cost::CostTotals {
+                total_cost: 0.7,
+                ..Default::default()
+            },
         },
     ));
-    collector.enrich_generation(
-        &RunId::new("run"),
-        &CallId::new("priced"),
-        GenerationEnrichment { estimated_cost_usd: Some(0.4), ..Default::default() },
-    ).unwrap();
+    collector
+        .enrich_generation(
+            &RunId::new("run"),
+            &CallId::new("priced"),
+            GenerationEnrichment {
+                estimated_cost_usd: Some(0.4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let generation = collector
         .spans()
         .iter()
@@ -1058,27 +1077,58 @@ fn host_enrichment_uses_exact_generation_identity_and_preserves_native_costs() {
 
     let mut later_charge = SpanCollector::new(TraceContext::new("trace-later-charge", None));
     later_charge.record(&observation_in_run(
-        "later-run", None, "later-run", 0, 1,
-        AgentEvent::ModelStarted { call_id: CallId::new("later"), model: "model-x".into() },
+        "later-run",
+        None,
+        "later-run",
+        0,
+        1,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("later"),
+            model: "model-x".into(),
+        },
     ));
-    later_charge.enrich_generation(
-        &RunId::new("later-run"),
-        &CallId::new("later"),
-        GenerationEnrichment { estimated_cost_usd: Some(0.4), ..Default::default() },
-    ).unwrap();
+    later_charge
+        .enrich_generation(
+            &RunId::new("later-run"),
+            &CallId::new("later"),
+            GenerationEnrichment {
+                estimated_cost_usd: Some(0.4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     later_charge.record(&observation_in_run(
-        "later-run", None, "later-run", 1, 2,
+        "later-run",
+        None,
+        "later-run",
+        1,
+        2,
         AgentEvent::ModelCompleted {
-            call_id: CallId::new("later"), started_at_ms: Some(1),
-            usage: Some(Usage { charged_amount: Some(ChargedAmount::usd_micros(600_000)), ..Default::default() }),
-            input: None, output: None,
+            call_id: CallId::new("later"),
+            started_at_ms: Some(1),
+            usage: Some(Usage {
+                charged_amount: Some(ChargedAmount::usd_micros(600_000)),
+                ..Default::default()
+            }),
+            input: None,
+            output: None,
         },
     ));
     later_charge.record(&observation_in_run(
-        "later-run", None, "later-run", 2, 3,
+        "later-run",
+        None,
+        "later-run",
+        2,
+        3,
         AgentEvent::UsageRecorded {
-            usage: Usage { charged_amount: Some(ChargedAmount::usd_micros(600_000)), ..Default::default() },
+            usage: Usage {
+                charged_amount: Some(ChargedAmount::usd_micros(600_000)),
+                ..Default::default()
+            },
         },
     ));
-    assert_eq!(later_charge.spans()[0].attributes["gen_ai.usage.cost_usd"], 0.6);
+    assert_eq!(
+        later_charge.spans()[0].attributes["gen_ai.usage.cost_usd"],
+        0.6
+    );
 }

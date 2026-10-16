@@ -668,9 +668,16 @@ impl SpanCollector {
             // the authoritative charge once it arrives.
             "provider_reported" if prior_source == "estimated" => -prior,
             "provider_reported" => 0.0,
-            _ => amount - if prior_source == "estimated" { prior } else { 0.0 },
+            _ => {
+                amount
+                    - if prior_source == "estimated" {
+                        prior
+                    } else {
+                        0.0
+                    }
+            }
         };
-        if delta != 0.0
+        if (delta != 0.0 || source != "provider_reported")
             && let Some(parent) = self.spans[index]
                 .parent_span_id
                 .as_deref()
@@ -778,8 +785,7 @@ impl SpanCollector {
                 ] {
                     span.attributes.insert(key.into(), value);
                 }
-                if provider_cost.is_none()
-                    && !span.attributes.contains_key("gen_ai.usage.cost_usd")
+                if provider_cost.is_none() && !span.attributes.contains_key("gen_ai.usage.cost_usd")
                 {
                     span.attributes
                         .insert("gen_ai.cost.source".into(), json_str("unreported"));
