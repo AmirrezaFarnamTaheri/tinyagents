@@ -604,10 +604,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 ));
             }
             Some(Some("await")) => {
-                let id = object
-                    .get("job_id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `await`"))?;
+                let Some(id) = object.get("job_id").and_then(Value::as_str) else {
+                    let mut tombstones = Vec::new();
+                    for job in self.jobs.list_owned(parent.instance_id()) {
+                        let job = self.jobs.wait_owned(job.id.as_str(), parent.instance_id()).await?;
+                        if job.status.is_terminal() { tombstones.push(serde_json::to_value(job)?); }
+                    }
+                    let awaiting_user = if let Some((sessions, key)) = &self.sessions {
+                        sessions.list_for_parent(&key(parent.instance_id()), None).await?.into_iter()
+                            .filter(|session| session.status == crate::subagent::DurableSubagentStatus::AwaitingUser)
+                            .map(|session| json!({"session_id":session.subagent_session_id,"task_id":session.current_task_id,"status":"awaiting_user","history":session.latest_history}))
+                            .collect()
+                    } else { Vec::<Value>::new() };
+                    return Ok(ToolResult::json(json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user})));
+                };
                 if self.jobs.get_owned(id, parent.instance_id()).is_some() {
                     let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
                     return Ok(ToolResult::json(serde_json::to_value(job)?));

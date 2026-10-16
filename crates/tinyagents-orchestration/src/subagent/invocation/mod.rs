@@ -83,8 +83,9 @@ mod types;
 const LOG_PREFIX: &str = "[subagent-tool]";
 
 pub use delegation_tool::{
-    DELEGATION_MODE_FIELD, DelegationEnvelope, DelegationRequest, DelegationTool,
-    MultiTargetDelegationTool, parse_approval,
+    DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
+    DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
+    MultiTargetDelegationTool, parse_approval, review_stage_output,
 };
 pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
 pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};

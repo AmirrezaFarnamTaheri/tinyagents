@@ -217,7 +217,11 @@ pub const DELEGATION_REVIEW_PROMPT: &str = "Review the latest execution against 
 pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
     let text = text.into();
     let approved = parse_approval(&text);
-    DelegationStageOutput { text, approved, prompt: None }
+    DelegationStageOutput {
+        text,
+        approved,
+        prompt: None,
+    }
 }
 
 /// Single-target graph delegation tool with an injected worker for each stage.
