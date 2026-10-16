@@ -153,17 +153,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Transcript
 
     async fn after_model(
         &self,
-        ctx: &mut RunContext<Ctx>,
+        _ctx: &mut RunContext<Ctx>,
         _state: &State,
         response: &mut ModelResponse,
     ) -> Result<()> {
-        let route = response.resolved_route.clone().or_else(|| {
-            ctx.data
-                .resolved_route
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        });
+        let route = response.resolved_route.clone();
         if let Ok(mut snapshot) = self.sink.lock() {
             snapshot.accepted_len = snapshot.messages.len();
             snapshot.model_calls = snapshot.model_calls.saturating_add(1);

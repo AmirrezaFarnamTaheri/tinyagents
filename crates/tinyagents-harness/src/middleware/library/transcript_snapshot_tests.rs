@@ -39,7 +39,11 @@ fn unanswered_steps_are_plain_text_bounded_and_skip_custom_records() {
         .push(ContentBlock::Text("trailing".into()));
     let messages = vec![
         Message::Assistant(assistant),
-        Message::Custom(serde_json::json!({"opaque": true})),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "opaque".into(),
+            payload: serde_json::json!({"opaque": true}),
+            display: None,
+        }),
     ];
     let rendered = render_unanswered_steps(&messages, 4).expect("rendered steps");
     assert!(rendered.contains("called `search` with"));
