@@ -1619,15 +1619,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
-        run.tool_outcomes.push(crate::host::ToolOutcomeRecord {
-            name: prepared.tool_name.clone(),
-            args_digest,
-            success: !result.is_error,
-            failure_class: result
-                .is_error
-                .then(|| crate::host::classify_tool_failure(&result.text()).to_owned()),
-            duration_ms,
-        });
+        if prepared.executed {
+            run.tool_outcomes.push(crate::host::ToolOutcomeRecord {
+                name: prepared.tool_name.clone(),
+                args_digest,
+                success: !result.is_error,
+                failure_class: result
+                    .is_error
+                    .then(|| crate::host::classify_tool_failure(&result.text()).to_owned()),
+                duration_ms,
+            });
+        }
         let output_bytes = model_output.len() as u64;
         let error = result.is_error.then_some(model_output.clone());
         // The transcript and event both answer the admitted call, never a

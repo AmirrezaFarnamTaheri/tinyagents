@@ -36,3 +36,15 @@ pub mod conformance;
 
 mod in_memory_transcript;
 pub use in_memory_transcript::InMemoryTranscriptHistory;
+
+/// Creates an empty driver-backed transcript locator over in-memory storage.
+///
+/// Use this when a test needs the same locator interface used by production
+/// session stores, but should not touch the filesystem.
+pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
+    crate::transcript::test_locator::driver_locator()
+}
+
+#[cfg(test)]
+#[path = "in_memory_transcript_tests.rs"]
+mod tests;

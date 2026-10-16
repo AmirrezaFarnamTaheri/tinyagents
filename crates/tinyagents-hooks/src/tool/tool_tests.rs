@@ -1,4 +1,5 @@
 use super::*;
+use crate::command::HookOutput;
 use std::sync::{Arc, Mutex};
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::{Middleware, ToolInvocationIdentity};
