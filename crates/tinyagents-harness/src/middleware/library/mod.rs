@@ -92,6 +92,7 @@ mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
 mod wind_down;
+mod workload;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -137,8 +138,8 @@ pub use output_cap::{
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
-    PolicyDecision, SessionToolCeiling, SessionToolListing, ToolCallPolicy, ToolPolicyGate,
-    ToolPolicyGateMiddleware, record_approved,
+    PolicyDecision, SessionToolCeiling, SessionToolListing, StructuredDenialParts, ToolCallPolicy,
+    ToolPolicyGate, ToolPolicyGateMiddleware, record_approved, structured_denial_renderer,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use repeat_progress::{
@@ -178,6 +179,9 @@ pub use verify_before_finish::{
     MIN_REMAINING_MODEL_CALLS, VerifyBeforeFinishMiddleware,
 };
 pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
+pub use workload::{
+    FallbackObserverMiddleware, RequiredCapabilitiesMiddleware, UsageCarryMiddleware,
+};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };

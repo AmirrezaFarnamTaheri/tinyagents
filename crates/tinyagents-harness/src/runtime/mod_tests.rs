@@ -84,6 +84,25 @@ struct SecretAfterModelMiddleware;
 
 struct FallbackGuidance;
 
+struct CarryCountOnUsageEvent {
+    carried: Arc<AtomicUsize>,
+    observed: Arc<Mutex<Vec<usize>>>,
+}
+
+impl crate::events::EventListener for CarryCountOnUsageEvent {
+    fn on_event(&self, record: &crate::events::EventRecord) {
+        if matches!(
+            &record.event,
+            crate::events::AgentEvent::UsageRecorded { .. }
+        ) {
+            self.observed
+                .lock()
+                .expect("usage ordering lock")
+                .push(self.carried.load(Ordering::SeqCst));
+        }
+    }
+}
+
 #[async_trait]
 impl Middleware<()> for FallbackGuidance {
     fn name(&self) -> &str {
@@ -989,6 +1008,23 @@ fn with_policy_replaces_policy() {
 }
 
 #[test]
+fn install_depth_only_narrows_the_existing_limit() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let mut policy = RunPolicy::default();
+    policy.limits.max_depth = 4;
+    harness.with_policy(policy);
+
+    super::install_depth(&mut harness, 2);
+    assert_eq!(harness.policy().limits.max_depth, 2);
+    super::install_depth(&mut harness, 9);
+    assert_eq!(
+        harness.policy().limits.max_depth,
+        2,
+        "installing a later host limit cannot widen the active policy"
+    );
+}
+
+#[test]
 fn default_matches_new() {
     let harness: AgentHarness<()> = AgentHarness::default();
     assert!(harness.models().default_name().is_none());
@@ -1048,6 +1084,105 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
         harness.models().default_name().is_none(),
         "host resolution does not mutate SDK model defaults"
     );
+}
+
+#[tokio::test]
+async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_turns() {
+    use crate::events::{AgentEvent, RecordingListener};
+    use crate::host::{
+        AllowAllSecurityGate, FixedModelResolver, HostCapabilities, StaticContextComposer,
+    };
+    use tinyinference_llm::model::{ModelResolutionSource, ResolvedModel};
+
+    for streaming in [false, true] {
+        let mut response = ModelResponse::assistant("reply");
+        response.usage = Some(Usage::new(8, 3));
+        response.resolved_model = Some(ResolvedModel {
+            name: "backup".into(),
+            requested: None,
+            source: ModelResolutionSource::RegistryDefault,
+        });
+        let model = Arc::new(crate::testkit::ScriptedModel::new(vec![response]));
+        let host = HostCapabilities::new(
+            Arc::new(StaticContextComposer::empty()),
+            Arc::new(InMemoryDefinitionRegistry::new(vec![AgentDefinition::new(
+                "helper",
+                "Helper",
+                "test helper",
+            )])),
+            Arc::new(AllowAllSecurityGate),
+            Arc::new(FixedModelResolver::new(model)),
+        );
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut harness: AgentHarness<()> = AgentHarness::new();
+        harness.push_model_middleware(Arc::new(
+            crate::middleware::FallbackObserverMiddleware::new("primary"),
+        ));
+        let carried_by_middleware = Arc::clone(&carried);
+        harness.push_model_middleware(Arc::new(crate::middleware::UsageCarryMiddleware::new(
+            move |response| {
+                if response.usage.is_some() {
+                    carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+                }
+            },
+        )));
+        let context = RunContext::new(
+            RunConfig::new(if streaming {
+                "route-stream"
+            } else {
+                "route-buffer"
+            })
+            .with_thread("workload"),
+            (),
+        );
+        let recorder = Arc::new(RecordingListener::new());
+        context.events.subscribe(recorder.clone());
+        let carry_order = Arc::new(Mutex::new(Vec::new()));
+        context.events.subscribe(Arc::new(CarryCountOnUsageEvent {
+            carried: Arc::clone(&carried),
+            observed: Arc::clone(&carry_order),
+        }));
+        let invocation = AgentInvocation::new(
+            host,
+            AgentTurnRequest::new(
+                "helper",
+                vec![tinyinference_llm::message::Message::user("go")],
+            ),
+            context,
+        );
+        if streaming {
+            harness
+                .invoke_agent_streaming(invocation, &())
+                .await
+                .expect("streaming hosted turn");
+        } else {
+            harness
+                .invoke_agent(invocation, &())
+                .await
+                .expect("buffered hosted turn");
+        }
+        let events = recorder.events();
+        assert_eq!(carried.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *carry_order.lock().expect("usage ordering lock"),
+            vec![1],
+            "the host usage carry must run before the corresponding UsageRecorded event"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, AgentEvent::UsageRecorded { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(&event.event, AgentEvent::FallbackSelected { from, to } if from == "primary" && to == "backup"))
+                .count(),
+            1
+        );
+    }
 }
 
 #[tokio::test]

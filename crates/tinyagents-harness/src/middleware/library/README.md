@@ -33,6 +33,12 @@ Grouped by extension shape:
   (token bucket); either fails fast (`RateLimitBehavior::Error`) or polls until
   capacity frees up (`RateLimitBehavior::Wait`), with an injectable clock for
   deterministic tests.
+- `RequiredCapabilitiesMiddleware`, `FallbackObserverMiddleware`, and
+  `UsageCarryMiddleware` — stamp a route's capability requirement without
+  replacing a stricter request value, observe a successfully resolved fallback,
+  and hand one completed logical-call response to a host-owned usage sink.
+  Pair these with `tinyagents_registry::WorkloadRouter::from_workload_routes`,
+  supplying the host's vision hint.
 
 ### Tool policy / selection (`Middleware` lifecycle hooks)
 
@@ -58,6 +64,8 @@ Grouped by extension shape:
   resolver handles one or both approval requirements. `with_session_listing`
   and `visible_tool_names` let a host scope a session-specific skill listing
   to the tools already available to the run.
+  `structured_denial_renderer` formats host-authored blocked, why, workaround,
+  and relay text while leaving marker wording under host control.
 
 ### Budget (`Middleware` lifecycle hooks)
 
