@@ -39,7 +39,14 @@ impl<F: Future<Output = ()>> Future for WorkflowDriveFuture<F> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut().future.as_mut().poll(cx)
+        let this = self.get_mut();
+        match this.future.as_mut().poll(cx) {
+            Poll::Ready(()) => {
+                this.supervisor.finish(&this.handle);
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 

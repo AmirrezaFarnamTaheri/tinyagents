@@ -379,6 +379,17 @@ impl TeamLedger for FakeLedger {
     ) -> anyhow::Result<CompletionOutcome> {
         unreachable!()
     }
+    fn complete_task_if_claimed(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &[String],
+        _: bool,
+    ) -> anyhow::Result<CompletionOutcome> {
+        unreachable!()
+    }
     fn release_task(&self, _: &str, _: &str, _: &str, _: &str) -> anyhow::Result<bool> {
         Ok(false)
     }
