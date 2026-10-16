@@ -685,9 +685,13 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     .await
     .unwrap();
     let visible: Value = serde_json::from_str(&visible.output()).unwrap();
-    assert!(visible.as_array().unwrap().iter().any(|row| {
-        row.get("id").and_then(Value::as_str) == Some(task_id.as_str())
-    }));
+    assert!(
+        visible
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row.get("id").and_then(Value::as_str) == Some(task_id.as_str()) })
+    );
     let hidden = ToolDispatch::<(), ()>::execute(
         &list,
         &(),
@@ -698,11 +702,13 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .unwrap();
-    assert!(serde_json::from_str::<Value>(&hidden.output())
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        serde_json::from_str::<Value>(&hidden.output())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     let steer = SubAgentMessageTool::new(jobs.clone())
         .with_tool_name("steer_subagent")
