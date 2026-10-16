@@ -206,7 +206,7 @@ pub fn render_unanswered_steps(messages: &[Message], max_chars: usize) -> Option
         let mut chars = text.chars();
         let clipped: String = chars.by_ref().take(max_chars).collect();
         if chars.next().is_some() {
-            format!("{clipped}…")
+            format!("{}...", clipped.trim_end())
         } else {
             clipped
         }
