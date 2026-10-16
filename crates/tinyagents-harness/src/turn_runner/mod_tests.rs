@@ -1612,6 +1612,56 @@ async fn continuous_progress_cannot_starve_the_wall_deadline() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn wall_deadline_is_polled_while_progress_delivery_is_pending() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(BlockingProgressEvents::default());
+    let runner = Arc::new(TurnRunner::new(
+        Arc::new(FloodProgressHost {
+            started: started.clone(),
+        }),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig {
+            idle_timeout: std::time::Duration::from_secs(60),
+            deadline: Some(std::time::Duration::from_secs(5)),
+            close_timeout: std::time::Duration::from_secs(1),
+        },
+    ));
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
+    };
+    started.notified().await;
+    events.started.notified().await;
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+
+    assert!(
+        matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("wall-clock deadline"))
+    );
+}
+
+#[derive(Default)]
+struct BlockingProgressEvents {
+    started: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl EventSink for BlockingProgressEvents {
+    async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {
+        self.started.notify_one();
+        std::future::pending().await
+    }
+    async fn terminal(&self, _request: &TurnRequest, _event: TerminalEvent) {}
+}
+
 struct FloodProgressHost {
     started: Arc<tokio::sync::Notify>,
 }
