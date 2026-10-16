@@ -1,5 +1,5 @@
 use super::*;
-use crate::steering::{SteeringCommand, SteeringHandle};
+use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 
 #[derive(Clone, Default)]
 struct Metrics {
@@ -283,7 +283,7 @@ async fn stop_hook_success_cleanup_restarts_the_completed_call_tally() {
         .await
         .unwrap();
     middleware
-        .after_agent(&mut context, &(), &mut crate::middleware::AgentRun::new())
+        .after_agent(&mut context, &(), &mut tinyagents_harness::middleware::AgentRun::new())
         .await
         .unwrap();
     middleware
@@ -326,7 +326,7 @@ async fn stop_hook_pause_prevents_the_next_model_call_in_the_native_loop() {
         "read",
         serde_json::json!({}),
     ));
-    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model("model", model.clone());
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
@@ -434,8 +434,8 @@ async fn stop_hook_reports_the_live_model_call_cap_after_policy_narrowing() {
     let middleware =
         StopHookMiddleware::<()>::new("model", vec![Arc::new(CapObserver(seen.clone()))]);
     let mut context = run();
-    context.limits = crate::limits::LimitTracker::new(
-        crate::limits::RunLimits::default().with_max_model_calls(2),
+    context.limits = tinyagents_harness::limits::LimitTracker::new(
+        tinyagents_harness::limits::RunLimits::default().with_max_model_calls(2),
     );
     middleware
         .after_model(&mut context, &(), &mut ModelResponse::assistant("done"))
@@ -457,7 +457,7 @@ async fn stop_hooks_reject_a_steering_policy_that_disallows_pause() {
         })],
     );
     let mut context =
-        run().with_steering(SteeringHandle::new(crate::steering::SteeringPolicy::new()));
+        run().with_steering(SteeringHandle::new(tinyagents_harness::steering::SteeringPolicy::new()));
     let result = middleware.before_agent(&mut context, &()).await;
     assert!(matches!(result, Err(TinyAgentsError::Middleware(_))));
     let result = middleware
@@ -480,7 +480,7 @@ async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
         "read",
         serde_json::json!({}),
     ));
-    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model("model", model.clone());
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
@@ -510,7 +510,7 @@ async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
 async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command() {
     let context = run();
     let handle = context.steering.clone().unwrap();
-    let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model(
         "model",
         Arc::new(tinyinference_llm::providers::MockModel::constant("done")),
@@ -529,12 +529,12 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
         .unwrap();
     assert_eq!(
         outcome.run.terminal.as_ref().unwrap().reason,
-        crate::terminal::TerminalReason::Paused
+        tinyagents_harness::terminal::TerminalReason::Paused
     );
     assert!(handle.is_paused());
     assert!(handle.is_empty());
     handle.resume();
-    let mut next: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
+    let mut next: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
     next.register_model(
         "model",
         Arc::new(tinyinference_llm::providers::MockModel::constant("next")),
@@ -549,7 +549,7 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
         .unwrap();
     assert_eq!(
         outcome.run.terminal.as_ref().unwrap().class,
-        crate::terminal::TerminalClass::Success
+        tinyagents_harness::terminal::TerminalClass::Success
     );
     assert!(!handle.is_paused());
     assert!(handle.is_empty());
