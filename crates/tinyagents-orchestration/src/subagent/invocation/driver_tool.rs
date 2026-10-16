@@ -210,12 +210,13 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             .as_ref()
             .filter(|(_, _, created)| *created)
             .map(|(jobs, id, _)| InlineJobGuard::new(jobs.clone(), id.clone()));
-        if target.is_some()
-            && let Some((jobs, id, false)) = &bridged_job
-        {
-            let job = jobs
-                .get(id.as_str())
-                .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?;
+        if let Some((jobs, id, false)) = &bridged_job {
+            let job = if target.is_some() {
+                jobs.get(id.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?
+            } else {
+                jobs.wait_owned(id.as_str(), owner).await?
+            };
             let status = match job.status {
                 crate::subagent::SubAgentJobStatus::Queued => "queued",
                 crate::subagent::SubAgentJobStatus::Running => "running",

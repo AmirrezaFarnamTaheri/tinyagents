@@ -689,7 +689,11 @@ impl SubAgentJobRegistry {
         Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
     }
 
-    async fn wait_owned(&self, job_id: &str, owner: u64) -> Result<SubAgentJob, SubAgentJobError> {
+    pub(crate) async fn wait_owned(
+        &self,
+        job_id: &str,
+        owner: u64,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
         self.get_owned(job_id, owner)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
         let mut status = {

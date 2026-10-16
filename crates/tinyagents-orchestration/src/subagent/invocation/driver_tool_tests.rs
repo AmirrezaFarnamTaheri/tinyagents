@@ -896,6 +896,134 @@ async fn concurrent_inline_driver_alias_coalesces_and_awaits_shared_result() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_completion() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completion_notified = Arc::new(tokio::sync::Notify::new());
+    let driver = blocking_driver(started.clone(), release.clone(), calls.clone());
+    let schema = json!({
+        "type":"object",
+        "required":["prompt"],
+        "properties":{"prompt":{"type":"string"}}
+    });
+    let make_tool = |background: bool| {
+        let tool = SubAgentTool::new(
+            Arc::new(SubAgent::new(
+                "worker",
+                "worker description",
+                Arc::new(AgentHarness::new()),
+            )),
+            ChildDataPolicy::new(|_: &()| ()),
+        )
+        .with_job_registry(jobs.clone())
+        .with_tool_name(if background {
+            "spawn_async_subagent"
+        } else {
+            "spawn_subagent"
+        })
+        .with_parameters(schema.clone());
+        if background {
+            tool.with_driver_and_completion(
+                driver.clone(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("mixed-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "mixed-mode-task",
+                        (),
+                        args["prompt"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                    .map(|request| request.with_target("worker"))
+                },
+                |_| Some("parent-thread".into()),
+                {
+                    let completions = completions.clone();
+                    let completion_notified = completion_notified.clone();
+                    move |_, result| {
+                        assert!(result.is_ok());
+                        completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        completion_notified.notify_one();
+                    }
+                },
+            )
+        } else {
+            tool.with_driver(
+                driver.clone(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("mixed-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "mixed-mode-task",
+                        (),
+                        args["prompt"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                    .map(|request| request.with_target("worker"))
+                },
+                |_| None,
+            )
+        }
+    };
+    let background = make_tool(true);
+    let inline = make_tool(false);
+    let parent = RunContext::new(RunConfig::new("mixed-parent"), ());
+
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &background,
+        &(),
+        CallId::new("background-first"),
+        json!({"prompt":"same request","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let task_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let inline_result = ToolDispatch::<(), ()>::execute(
+        &inline,
+        &(),
+        CallId::new("inline-immediately-after-background"),
+        json!({"prompt":"same request","mode":"inline"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    tokio::pin!(inline_result);
+    tokio::select! {
+        biased;
+        result = &mut inline_result => panic!("inline alias returned before background winner finished: {result:?}"),
+        _ = started.notified() => {},
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    release.add_permits(1);
+    let inline_result = inline_result.await.unwrap();
+    assert!(!inline_result.is_error);
+    assert_eq!(
+        serde_json::from_str::<Value>(&inline_result.output()).unwrap()["status"],
+        "completed"
+    );
+    completion_notified.notified().await;
+    assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        jobs.get(&task_id).unwrap().status,
+        SubAgentJobStatus::Completed
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
     let jobs = SubAgentJobRegistry::new();
