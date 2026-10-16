@@ -288,6 +288,16 @@ where
         source: &str,
         max_bytes: usize,
     ) -> tinyinference_llm::Result<ResolvedAttachment> {
+        let remote = source.starts_with("http://") || source.starts_with("https://");
+        let remote_allowed = match modality {
+            InputModality::Image => self.config.images.allow_remote_fetch,
+            InputModality::Audio | InputModality::Video | InputModality::Document => {
+                self.config.files.allow_remote_fetch
+            }
+        };
+        if remote && !remote_allowed {
+            return Err(model_error("remote attachment fetch is disabled"));
+        }
         let attachment = self
             .resolver
             .resolve(scope, modality, source, max_bytes)
@@ -432,6 +442,13 @@ where
         self.inner
             .stream(state, self.prepare(state, request).await?)
             .await
+    }
+
+    async fn fetch_deferred(
+        &self,
+        handle: &tinyinference_llm::model::DeferredHandle,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::DeferredStatus> {
+        self.inner.fetch_deferred(handle).await
     }
 }
 

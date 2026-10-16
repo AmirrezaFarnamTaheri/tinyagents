@@ -65,10 +65,9 @@
 //! 1. **Count before resolving.** [`config::FileLimits::files_disabled`] and the
 //!    per-turn caps are checked against the raw markers, before any read
 //!    happens. A cap enforced after the fetch is not a cap.
-//! 2. **Check the sentinel before the clamp.** `max_files == 0` means *none*,
-//!    and [`config::FileLimits::effective`] clamps it to 1. Consulting only the
-//!    clamped value admits exactly one attachment from a source that asked for
-//!    zero.
+//! 2. **Preserve the hard disable.** `max_files == 0` means *none* and stays
+//!    zero in [`config::FileLimits::effective`]. The request decorator checks
+//!    this before calling a host resolver.
 
 pub mod archive;
 pub mod config;
