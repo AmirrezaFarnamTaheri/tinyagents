@@ -117,15 +117,15 @@ impl<State> DriverCheckpointer<State> {
     #[allow(clippy::expect_used, reason = "the collection names are constants")]
     pub fn with_namespace(docs: Arc<dyn DocumentStore>, ns: impl Into<String>) -> Self {
         let options = WriteOptions::new().schema(SCHEMA_VERSION);
-        let repo = |name: &str| {
-            Repo::new(&docs, name)
+        fn repo<T>(docs: &Arc<dyn DocumentStore>, name: &str, options: WriteOptions) -> Repo<T> {
+            Repo::new(docs, name)
                 .expect("graph collections are valid names")
                 .with_options(options)
-        };
+        }
         Self {
-            checkpoints: repo(CHECKPOINTS),
-            threads: repo(THREADS),
-            writes: repo(WRITES),
+            checkpoints: repo(&docs, CHECKPOINTS, options),
+            threads: repo(&docs, THREADS, options),
+            writes: repo(&docs, WRITES, options),
             leases: Leases::new(&docs),
             docs,
             ns: ns.into(),

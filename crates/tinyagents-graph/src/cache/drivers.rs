@@ -7,32 +7,34 @@
 //!
 //! # Layout
 //!
-//! One collection (default [`DriverTaskCache::DEFAULT_COLLECTION`]) with one
-//! document per [`TaskCacheKey`]:
-//! `{ graph, node, hash, value, expiresAtMs }`. The id is derived from the
-//! length-prefixed key parts, so no two keys meet. `expiresAtMs` is a Unix
-//! epoch millisecond instant (or `null` for an entry that never expires).
+//! Entries are documents of the shared `tsd.kv` collection, owned by `graph`:
+//! `{ owner, ns: "task_cache:<graph>", key, value }` with `key` =
+//! `Key::of([node, hash])`, under `Key::of([owner, ns, key])`, so any hash
+//! length is accepted and no two entries meet. A graph's entries share a
+//! namespace, which is what [`clear`](TaskCache::clear) drops. A cache built
+//! with [`with_namespace`](DriverTaskCache::with_namespace) uses
+//! `task_cache:<namespace>:<graph>` so independent caches can share a backend.
 //!
 //! # Expiry
 //!
-//! Expiry is enforced on read, against this process's clock, on every backend:
-//! an entry whose instant has passed is a miss and is removed. When the backend
-//! advertises native TTL support the collection also declares `expiresAtMs` as
-//! its TTL field, so the driver stops serving and may reclaim expired entries
-//! itself; the read-side check keeps behaviour identical where it does not.
+//! The deadline is the record's `expires_ms` metadata, an absolute Unix epoch
+//! millisecond instant that outlives the process. The driver enforces it: an
+//! expired entry reads as absent, which this cache reports as a miss.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tinystoragedrivers_core::{
-    Capability, CollectionSpec, DocumentStore, Filter, IndexSpec, Precondition, StorageError,
+    CollectionSpec, DocumentStore, Filter, IndexSpec, Key, Repo, StorageError, WriteOptions,
+    primitives,
 };
 use tokio::sync::OnceCell;
 
 use super::{TaskCache, TaskCacheKey};
+use crate::storage::{DEFAULT_CACHE_NAMESPACE, KV_OWNER, task_cache_ns};
 use crate::{Result, TinyAgentsError};
 use tinyagents_harness::ids::{GraphId, now_ms};
 
@@ -41,64 +43,73 @@ fn map_error(error: StorageError) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("task cache storage: {error}"))
 }
 
+/// A `tsd.kv` document body.
+#[derive(Debug, Serialize, Deserialize)]
+struct Entry {
+    owner: String,
+    ns: String,
+    key: String,
+    value: Value,
+}
+
 /// A [`TaskCache`] that stores entries in a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
 pub struct DriverTaskCache {
     docs: Arc<dyn DocumentStore>,
-    collection: String,
+    namespace: String,
     declared: Arc<OnceCell<()>>,
 }
 
 impl DriverTaskCache {
-    /// The collection used by [`DriverTaskCache::new`].
-    pub const DEFAULT_COLLECTION: &'static str = "graph_task_cache";
-
-    /// Cache in [`Self::DEFAULT_COLLECTION`].
+    /// Cache in the default namespace.
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
-        Self::with_collection(docs, Self::DEFAULT_COLLECTION)
+        Self::with_namespace(docs, DEFAULT_CACHE_NAMESPACE)
     }
 
-    /// Cache in `collection`, so several independent caches can share a backend.
-    pub fn with_collection(docs: Arc<dyn DocumentStore>, collection: impl Into<String>) -> Self {
+    /// Cache in `namespace`, so several independent caches can share a backend.
+    pub fn with_namespace(docs: Arc<dyn DocumentStore>, namespace: impl Into<String>) -> Self {
         Self {
             docs,
-            collection: collection.into(),
+            namespace: namespace.into(),
             declared: Arc::new(OnceCell::new()),
         }
     }
 
-    /// The declaration a cache using `collection` needs on a backend with or
-    /// without native TTL support.
-    pub fn collection_spec(collection: impl Into<String>, native_ttl: bool) -> CollectionSpec {
-        let spec = CollectionSpec::new(collection).index(IndexSpec::new("by_graph", ["graph"]));
-        if native_ttl {
-            spec.ttl("expiresAtMs")
-        } else {
-            spec
-        }
+    /// The declaration every cache needs: the shared `tsd.kv` collection.
+    pub fn collection_spec() -> CollectionSpec {
+        CollectionSpec::new(primitives::KV)
+            .index(IndexSpec::new("kv_by_key", ["owner", "ns", "key"]))
     }
 
-    /// The document id for `key`: length-prefixed parts, hashed so it fits any
-    /// driver's id limit however long the input hash is.
-    fn id(key: &TaskCacheKey) -> String {
-        let mut digest = Sha256::new();
-        for part in [key.graph_id.as_str(), key.node_id.as_str(), &key.hash] {
-            digest.update((part.len() as u64).to_be_bytes());
-            digest.update(part.as_bytes());
-        }
-        digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+    /// The `tsd.kv` namespace of `graph`'s entries.
+    fn kv_ns(&self, graph: &str) -> String {
+        task_cache_ns(&self.namespace, graph)
+    }
+
+    /// `(entry id, kv key)` of `key`.
+    fn ids(&self, key: &TaskCacheKey) -> Result<(String, String)> {
+        let kv_key = Key::of([key.node_id.as_str(), key.hash.as_str()])
+            .map_err(map_error)?
+            .as_str()
+            .to_owned();
+        let id = Key::of([KV_OWNER, &self.kv_ns(key.graph_id.as_str()), &kv_key])
+            .map_err(map_error)?
+            .as_str()
+            .to_owned();
+        Ok((id, kv_key))
+    }
+
+    fn repo(&self, options: WriteOptions) -> Result<Repo<Entry>> {
+        Ok(Repo::new(&self.docs, primitives::KV)
+            .map_err(map_error)?
+            .with_options(options))
     }
 
     async fn declared(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
-                let native = self.docs.capabilities().contains(Capability::Ttl);
                 self.docs
-                    .ensure_collection(&Self::collection_spec(self.collection.clone(), native))
+                    .ensure_collection(&Self::collection_spec())
                     .await
                     .map_err(map_error)
             })
@@ -111,48 +122,31 @@ impl DriverTaskCache {
 impl TaskCache for DriverTaskCache {
     async fn get(&self, key: &TaskCacheKey) -> Result<Option<Value>> {
         self.declared().await?;
-        let id = Self::id(key);
-        let Some(found) = self
-            .docs
-            .get(&self.collection, &id)
+        let (id, _) = self.ids(key)?;
+        Ok(self
+            .repo(WriteOptions::new())?
+            .get(&id)
             .await
             .map_err(map_error)?
-        else {
-            return Ok(None);
-        };
-        let expired = found
-            .doc
-            .get("expiresAtMs")
-            .and_then(Value::as_u64)
-            .is_some_and(|at| at <= now_ms());
-        if expired {
-            // Only the version we saw: a concurrent fresh `put` must survive.
-            match self
-                .docs
-                .delete(&self.collection, &id, Precondition::Version(found.version))
-                .await
-            {
-                Ok(_) => {}
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
-                Err(error) => return Err(map_error(error)),
-            }
-            return Ok(None);
-        }
-        Ok(found.doc.get("value").cloned())
+            .map(|found| found.doc.value))
     }
 
     async fn put(&self, key: &TaskCacheKey, value: Value, ttl: Option<Duration>) -> Result<()> {
         self.declared().await?;
-        let expires_at = ttl.map(|ttl| now_ms().saturating_add(ttl.as_millis() as u64));
-        let doc = json!({
-            "graph": key.graph_id.as_str(),
-            "node": key.node_id.as_str(),
-            "hash": key.hash,
-            "value": value,
-            "expiresAtMs": expires_at,
-        });
-        self.docs
-            .put(&self.collection, &Self::id(key), doc, Precondition::None)
+        let (id, kv_key) = self.ids(key)?;
+        let mut options = WriteOptions::new();
+        if let Some(ttl) = ttl {
+            let at = now_ms().saturating_add(ttl.as_millis() as u64);
+            options = options.expires_ms(i64::try_from(at).unwrap_or(i64::MAX));
+        }
+        let entry = Entry {
+            owner: KV_OWNER.to_owned(),
+            ns: self.kv_ns(key.graph_id.as_str()),
+            key: kv_key,
+            value,
+        };
+        self.repo(options)?
+            .put(&id, &entry)
             .await
             .map(|_| ())
             .map_err(map_error)
@@ -160,8 +154,12 @@ impl TaskCache for DriverTaskCache {
 
     async fn clear(&self, graph_id: &GraphId) -> Result<()> {
         self.declared().await?;
+        let filter = Filter::eq("owner", KV_OWNER).and(Filter::eq(
+            "ns",
+            self.kv_ns(graph_id.as_str()).as_str(),
+        ));
         self.docs
-            .delete_where(&self.collection, &Filter::eq("graph", graph_id.as_str()))
+            .delete_where(primitives::KV, &filter)
             .await
             .map(|_| ())
             .map_err(map_error)

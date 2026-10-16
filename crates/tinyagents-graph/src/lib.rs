@@ -61,6 +61,7 @@ pub use channel::{
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
 pub use checkpoint::DriverCheckpointer;
+pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
 pub use checkpoint::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
