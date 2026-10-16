@@ -24,8 +24,6 @@ pub trait SessionHookTypes: Send + Sync + 'static {
     type CommitReceipt: Send;
     /// Terminal turn state.
     type Terminal: Send;
-    /// Typed terminal outcome.
-    type TerminalOutcome: Send;
     /// Runtime-specific error type.
     type Error: Send;
 }
@@ -64,11 +62,6 @@ type OnTerminal<T> = dyn Fn(
     ) -> SessionHookFuture<'static, (), <T as SessionHookTypes>::Error>
     + Send
     + Sync;
-type OnTerminalOutcome<T> = dyn Fn(
-        <T as SessionHookTypes>::TerminalOutcome,
-    ) -> SessionHookFuture<'static, (), <T as SessionHookTypes>::Error>
-    + Send
-    + Sync;
 
 /// Closure-backed callbacks for a runtime's session lifecycle.
 pub struct FnSessionHooks<T: SessionHookTypes> {
@@ -77,7 +70,6 @@ pub struct FnSessionHooks<T: SessionHookTypes> {
     before_commit: Arc<BeforeCommit<T>>,
     after_commit: Arc<AfterCommit<T>>,
     on_terminal: Arc<OnTerminal<T>>,
-    on_terminal_outcome: Arc<OnTerminalOutcome<T>>,
 }
 
 impl<T: SessionHookTypes> FnSessionHooks<T> {
@@ -115,10 +107,6 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
             + Send
             + Sync
             + 'static,
-        on_terminal_outcome: impl Fn(T::TerminalOutcome) -> SessionHookFuture<'static, (), T::Error>
-            + Send
-            + Sync
-            + 'static,
     ) -> Self {
         Self {
             before_resume: Arc::new(before_resume),
@@ -126,7 +114,6 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
             before_commit: Arc::new(before_commit),
             after_commit: Arc::new(after_commit),
             on_terminal: Arc::new(on_terminal),
-            on_terminal_outcome: Arc::new(on_terminal_outcome),
         }
     }
 
@@ -162,11 +149,6 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
     /// Run the callback after a durable commit.
     pub async fn after_commit(&self, receipt: T::CommitReceipt) -> Result<(), T::Error> {
         (self.after_commit)(receipt).await
-    }
-
-    /// Run the callback with the typed terminal outcome.
-    pub async fn on_terminal_outcome(&self, outcome: T::TerminalOutcome) -> Result<(), T::Error> {
-        (self.on_terminal_outcome)(outcome).await
     }
 
     /// Run the callback for every terminal turn result.
