@@ -325,6 +325,14 @@ where
             .contains_key(&(scope.clone(), thread_id.to_owned()))
     }
 
+    pub async fn in_flight_request_id(&self, scope: &ScopeKey, thread_id: &str) -> Option<String> {
+        self.active
+            .lock()
+            .await
+            .get(&(scope.clone(), thread_id.to_owned()))
+            .map(|turn| turn.request_id.clone())
+    }
+
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         let result = self.run_one(request.clone()).await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
