@@ -45,6 +45,24 @@ fn a_child_can_never_widen_the_tool_set_it_inherits() {
 }
 
 #[test]
+fn tool_scope_and_skill_filter_narrow_declarations_together() {
+    let tools = snapshot(&["notion__search", "notion__write", "gmail__send", "read"]);
+    let out = restrict_tools_with_scope(
+        &tools,
+        SubagentRole::Orchestrator,
+        None,
+        &[],
+        Some(&tinyagents_definition::ToolScope::Named(vec![
+            "notion__search".into(),
+            "notion__write".into(),
+            "read".into(),
+        ])),
+        Some("notion"),
+    );
+    assert_eq!(names(&out), ["notion__search", "notion__write"]);
+}
+
+#[test]
 fn restriction_preserves_a_one_off_snapshot() {
     let tools = snapshot(&["read", SUBAGENT_JOBS_TOOL]).exact();
     let out = restrict_tools(&tools, SubagentRole::Leaf, None, &[]);
@@ -61,6 +79,19 @@ fn framing_tells_a_leaf_it_cannot_delegate_and_who_it_reports_to() {
     assert!(text.contains("not the end user"));
     assert!(text.contains("background"));
     assert!(text.contains("cannot spawn"));
+    for heading in [
+        "Answer",
+        "Evidence used",
+        "Actions taken",
+        "Open uncertainties",
+        "Failed tool calls",
+        "Recommended next step",
+    ] {
+        assert!(
+            text.contains(heading),
+            "missing result-contract heading {heading}"
+        );
+    }
 }
 
 #[test]

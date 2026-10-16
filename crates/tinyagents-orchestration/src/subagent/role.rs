@@ -143,6 +143,21 @@ pub fn restrict_tools(
     ceiling: Option<&ToolSnapshot>,
     host_delegation_tools: &[String],
 ) -> ToolSnapshot {
+    restrict_tools_with_scope(tools, role, ceiling, host_delegation_tools, None, None)
+}
+
+/// Restricts a child's declarations by inherited ceiling, role, authored
+/// [`ToolScope`], and optional `{skill}__` prefix. Every restriction is an
+/// intersection; no policy can widen the supplied snapshot.
+pub fn restrict_tools_with_scope(
+    tools: &ToolSnapshot,
+    role: SubagentRole,
+    ceiling: Option<&ToolSnapshot>,
+    host_delegation_tools: &[String],
+    scope: Option<&tinyagents_definition::ToolScope>,
+    skill_filter: Option<&str>,
+) -> ToolSnapshot {
+    let skill_prefix = skill_filter.map(|skill| format!("{skill}__"));
     tools.retaining(|spec| {
         let inherited = ceiling.is_none_or(|ceiling| {
             ceiling
@@ -151,7 +166,16 @@ pub fn restrict_tools(
                 .any(|inherited| inherited.name == spec.name)
         });
         let allowed = role.can_delegate() || !is_delegation_tool(&spec.name, host_delegation_tools);
-        inherited && allowed
+        let in_scope = scope.is_none_or(|scope| match scope {
+            tinyagents_definition::ToolScope::Wildcard => true,
+            tinyagents_definition::ToolScope::Named(names) => {
+                names.iter().any(|name| name == &spec.name)
+            }
+        });
+        let matches_skill = skill_prefix
+            .as_deref()
+            .is_none_or(|prefix| spec.name.starts_with(prefix));
+        inherited && allowed && in_scope && matches_skill
     })
 }
 
@@ -175,6 +199,7 @@ pub fn subagent_framing(role: SubagentRole, depth: usize, task: &str) -> String 
          Report your result concisely to your parent; do not address the end user directly.\n\
          Any inherited conversation or context is background, not your assignment; only the assignment above is.\n\
          Work to completion in the background of the parent's turn and finish with a final report.\n\
+         Return a compact result under these headings: Answer, Evidence used, Actions taken, Open uncertainties, Failed tool calls, Recommended next step. Do not state unsupported facts; disclose truncated or partial tool results.\n\
          {delegation}"
     )
 }

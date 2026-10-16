@@ -137,8 +137,7 @@ pub fn orchestration_tools_with_status_overlay(
         .into_iter()
         .map(|kind| {
             Arc::new(
-                OrchestrationTool::new(kind, store.clone())
-                    .with_status_overlay(overlay.clone()),
+                OrchestrationTool::new(kind, store.clone()).with_status_overlay(overlay.clone()),
             )
         })
         .collect()

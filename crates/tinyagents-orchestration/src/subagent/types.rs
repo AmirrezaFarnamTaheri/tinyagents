@@ -317,6 +317,10 @@ pub struct PreparedSubagent<C = ()> {
     /// Names of the host's own [`SubAgentTool`](super::SubAgentTool)s, which a
     /// leaf must not keep (the crate cannot know custom tool names).
     pub delegation_tools: Vec<String>,
+    /// Authored capability scope to intersect with the supplied declarations.
+    pub tool_scope: Option<tinyagents_definition::ToolScope>,
+    /// Optional skill prefix (`{skill}__`) to intersect with the scope.
+    pub skill_filter: Option<String>,
     /// Timeout, retry and budget the driver applies around the execution.
     pub policy: SubAgentPolicy,
     /// How the driver trims and checks the child's final output.
@@ -358,6 +362,8 @@ impl<C> PreparedSubagent<C> {
             role: SubagentRole::default(),
             tool_ceiling: None,
             delegation_tools: Vec::new(),
+            tool_scope: None,
+            skill_filter: None,
             policy: SubAgentPolicy::default(),
             result_policy: ResultPolicy::default(),
             retry_context: None,
@@ -393,6 +399,18 @@ impl<C> PreparedSubagent<C> {
     /// Names the host's delegation tools for a leaf to drop.
     pub fn with_delegation_tools(mut self, names: Vec<String>) -> Self {
         self.delegation_tools = names;
+        self
+    }
+
+    /// Sets an authored capability scope that can only narrow the snapshot.
+    pub fn with_tool_scope(mut self, scope: tinyagents_definition::ToolScope) -> Self {
+        self.tool_scope = Some(scope);
+        self
+    }
+
+    /// Sets a `{skill}__` name prefix that can only narrow the snapshot.
+    pub fn with_skill_filter(mut self, skill: impl Into<String>) -> Self {
+        self.skill_filter = Some(skill.into());
         self
     }
 
@@ -596,6 +614,9 @@ pub struct SubagentOutcome {
     /// Explicit model override used for this run, when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_override: Option<String>,
+    /// Known aggregate cost in USD, when the host can price every call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     /// Final visible text, retained even when cancellation arrives after work.
     pub output: String,
     /// Complete model history without lossy transcript conversion.
@@ -636,6 +657,7 @@ impl SubagentOutcome {
             worker_thread_id: None,
             tier: None,
             model_override: None,
+            cost_usd: None,
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Cancelled,

@@ -5,7 +5,9 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::completion::{CompletionOrigin, deliver};
 use super::policy::{AttemptSource, apply_outcome_policies, may_retry};
-use super::{IncompleteKind, SpawnAdmission, SpawnRejection, SubagentIncomplete, restrict_tools};
+use super::{
+    IncompleteKind, SpawnAdmission, SpawnRejection, SubagentIncomplete, restrict_tools_with_scope,
+};
 use super::{
     PersistedSubagentPause, SubagentError, SubagentExecution, SubagentExecutor, SubagentOutcome,
     SubagentOutcomeKind, SubagentPausePersistenceDisposition, SubagentPersistence,
@@ -336,11 +338,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 .await;
             return Ok(result);
         }
-        prepared.tools = restrict_tools(
+        prepared.tools = restrict_tools_with_scope(
             &prepared.tools,
             prepared.role,
             prepared.tool_ceiling.as_ref(),
             &prepared.delegation_tools,
+            prepared.tool_scope.as_ref(),
+            prepared.skill_filter.as_deref(),
         );
         prepared
             .policy

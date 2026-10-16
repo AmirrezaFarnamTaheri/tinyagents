@@ -170,6 +170,7 @@ impl SubagentExecutor<String> for FakeExecutor {
             worker_thread_id: None,
             tier: None,
             model_override: None,
+            cost_usd: None,
             output: "result".into(),
             history: vec![Message::assistant("result")],
             status,
@@ -492,6 +493,7 @@ impl SubagentExecutor<String> for MismatchedExecutor {
             worker_thread_id: None,
             tier: None,
             model_override: None,
+            cost_usd: None,
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,
@@ -530,6 +532,7 @@ impl SubagentExecutor<String> for PauseThenCompleteExecutor {
             worker_thread_id: None,
             tier: None,
             model_override: None,
+            cost_usd: None,
             output: if call == 1 {
                 "waiting".into()
             } else {
@@ -594,6 +597,7 @@ impl SubagentExecutor<String> for NestedExecutor {
                 worker_thread_id: None,
                 tier: None,
                 model_override: None,
+                cost_usd: None,
                 output: "parent result".into(),
                 history: Vec::new(),
                 status: SubagentOutcomeKind::Completed,
@@ -613,6 +617,7 @@ impl SubagentExecutor<String> for NestedExecutor {
             worker_thread_id: None,
             tier: None,
             model_override: None,
+            cost_usd: None,
             output: "child result".into(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,

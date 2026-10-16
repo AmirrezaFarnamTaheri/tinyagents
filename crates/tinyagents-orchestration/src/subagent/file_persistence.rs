@@ -1,6 +1,9 @@
 //! Filesystem-backed persistence for subagent pauses and terminal outcomes.
 
-use std::{fs::OpenOptions, path::{Path, PathBuf}};
+use std::{
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use fs2::FileExt;
@@ -9,8 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     PersistedSubagentPause, SubagentError, SubagentOutcome, SubagentPausePersistenceDisposition,
-    SubagentPersistence, SubagentResume, SubagentTaskKey,
-    SubagentTerminalPersistenceDisposition,
+    SubagentPersistence, SubagentResume, SubagentTaskKey, SubagentTerminalPersistenceDisposition,
 };
 
 type Result<T, E = SubagentError> = std::result::Result<T, E>;
@@ -83,7 +85,10 @@ impl FileSubagentPersistence {
         let digest = Sha256::digest(bytes);
         Ok(format!(
             "sha256-{}",
-            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         ))
     }
 
@@ -96,11 +101,15 @@ impl FileSubagentPersistence {
     }
 
     fn pause_path(&self, key: &SubagentTaskKey) -> Result<PathBuf, SubagentError> {
-        Ok(self.directory().join(format!("{}.pause.json", Self::key_id(key)?)))
+        Ok(self
+            .directory()
+            .join(format!("{}.pause.json", Self::key_id(key)?)))
     }
 
     fn terminal_path(&self, key: &SubagentTaskKey) -> Result<PathBuf, SubagentError> {
-        Ok(self.directory().join(format!("{}.terminal.json", Self::key_id(key)?)))
+        Ok(self
+            .directory()
+            .join(format!("{}.terminal.json", Self::key_id(key)?)))
     }
 
     fn index_path(&self, task_id: &str) -> Result<PathBuf, SubagentError> {
@@ -125,14 +134,17 @@ impl FileSubagentPersistence {
     }
 
     fn key_lock(&self, key: &SubagentTaskKey) -> Result<std::fs::File, SubagentError> {
-        Ok(self.lock_path(&self.directory().join(format!("{}.lock", Self::key_id(key)?)))?)
+        Ok(self.lock_path(
+            &self
+                .directory()
+                .join(format!("{}.lock", Self::key_id(key)?)),
+        )?)
     }
 
     fn index_lock_path(&self, task_id: &str) -> Result<PathBuf, SubagentError> {
-        Ok(self.directory().join(format!(
-            "task-{}.index.lock",
-            self.task_id(task_id)?
-        )))
+        Ok(self
+            .directory()
+            .join(format!("task-{}.index.lock", self.task_id(task_id)?)))
     }
 
     fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>, SubagentError> {
@@ -143,13 +155,19 @@ impl FileSubagentPersistence {
         }
     }
 
-    fn read_pause(&self, key: &SubagentTaskKey) -> Result<Option<PersistedSubagentPause>, SubagentError> {
+    fn read_pause(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<PersistedSubagentPause>, SubagentError> {
         Self::read_bytes(&self.pause_path(key)?)?
             .map(|bytes| serde_json::from_slice(&bytes).map_err(persistence_error))
             .transpose()
     }
 
-    fn read_terminal(&self, key: &SubagentTaskKey) -> Result<Option<TerminalRecord>, SubagentError> {
+    fn read_terminal(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<TerminalRecord>, SubagentError> {
         let Some(bytes) = Self::read_bytes(&self.terminal_path(key)?)? else {
             return Ok(None);
         };
@@ -198,7 +216,10 @@ impl FileSubagentPersistence {
                 Err(error) => return Err(persistence_error(error)),
             }
         }
-        self.replace_file(&path, serde_json::to_vec(&TaskIndex { keys }).map_err(persistence_error)?)
+        self.replace_file(
+            &path,
+            serde_json::to_vec(&TaskIndex { keys }).map_err(persistence_error)?,
+        )
     }
 
     fn add_index_key(&self, key: &SubagentTaskKey) -> Result<(), SubagentError> {
@@ -210,7 +231,9 @@ impl FileSubagentPersistence {
     }
 
     fn remove_index_key(&self, key: &SubagentTaskKey) -> Result<(), SubagentError> {
-        self.update_index(&key.task_id, |keys| keys.retain(|candidate| candidate != key))
+        self.update_index(&key.task_id, |keys| {
+            keys.retain(|candidate| candidate != key)
+        })
     }
 
     fn replace_file(&self, path: &Path, bytes: Vec<u8>) -> Result<(), SubagentError> {
@@ -255,7 +278,10 @@ fn persistence_error(error: impl std::fmt::Display) -> SubagentError {
 
 #[async_trait]
 impl SubagentPersistence for FileSubagentPersistence {
-    async fn load_terminal(&self, key: &SubagentTaskKey) -> Result<Option<SubagentOutcome>, SubagentError> {
+    async fn load_terminal(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
         let _lock = self.key_lock(key)?;
         Ok(self.read_terminal(key)?.map(|record| record.outcome))
     }
@@ -265,13 +291,18 @@ impl SubagentPersistence for FileSubagentPersistence {
         if self.read_terminal(key)?.is_some() {
             return Ok(None);
         }
-        Ok(self.read_pause(key)?.map(|pause| match pause.outcome.status {
-            super::SubagentOutcomeKind::AwaitingInput(pause) => pause.resume,
-            _ => SubagentResume::default(),
-        }))
+        Ok(self
+            .read_pause(key)?
+            .map(|pause| match pause.outcome.status {
+                super::SubagentOutcomeKind::AwaitingInput(pause) => pause.resume,
+                _ => SubagentResume::default(),
+            }))
     }
 
-    async fn load_pause(&self, key: &SubagentTaskKey) -> Result<Option<SubagentOutcome>, SubagentError> {
+    async fn load_pause(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
         let _lock = self.key_lock(key)?;
         if self.read_terminal(key)?.is_some() {
             return Ok(None);
@@ -279,7 +310,10 @@ impl SubagentPersistence for FileSubagentPersistence {
         Ok(self.read_pause(key)?.map(|pause| pause.outcome))
     }
 
-    async fn save_pause(&self, pause: PersistedSubagentPause) -> Result<SubagentPausePersistenceDisposition, SubagentError> {
+    async fn save_pause(
+        &self,
+        pause: PersistedSubagentPause,
+    ) -> Result<SubagentPausePersistenceDisposition, SubagentError> {
         let _lock = self.key_lock(&pause.key)?;
         if self.read_terminal(&pause.key)?.is_some() {
             return Ok(SubagentPausePersistenceDisposition::TerminalExisting);
@@ -289,11 +323,14 @@ impl SubagentPersistence for FileSubagentPersistence {
         match (&previous, &pause.replaces) {
             (Some(current), Some(expected))
                 if pause_resume(current).is_some_and(|resume| resume == expected) => {}
-            (None, None) => {},
+            (None, None) => {}
             (Some(_), _) => return Ok(SubagentPausePersistenceDisposition::Existing),
             (None, Some(_)) => return Ok(SubagentPausePersistenceDisposition::Existing),
         }
-        self.replace_file(&path, serde_json::to_vec(&pause).map_err(persistence_error)?)?;
+        self.replace_file(
+            &path,
+            serde_json::to_vec(&pause).map_err(persistence_error)?,
+        )?;
         self.add_index_key(&pause.key)?;
         Ok(if previous.is_some() {
             SubagentPausePersistenceDisposition::Replaced
@@ -302,14 +339,21 @@ impl SubagentPersistence for FileSubagentPersistence {
         })
     }
 
-    async fn record_terminal(&self, key: &SubagentTaskKey, outcome: &SubagentOutcome, replaces: Option<&SubagentResume>) -> Result<SubagentTerminalPersistenceDisposition, SubagentError> {
+    async fn record_terminal(
+        &self,
+        key: &SubagentTaskKey,
+        outcome: &SubagentOutcome,
+        replaces: Option<&SubagentResume>,
+    ) -> Result<SubagentTerminalPersistenceDisposition, SubagentError> {
         let _lock = self.key_lock(key)?;
         if self.read_terminal(key)?.is_some() {
             return Ok(SubagentTerminalPersistenceDisposition::Existing);
         }
         let current = self.read_pause(key)?;
         let expected_matches = match (&current, replaces) {
-            (Some(pause), Some(expected)) => pause_resume(pause).is_some_and(|resume| resume == expected),
+            (Some(pause), Some(expected)) => {
+                pause_resume(pause).is_some_and(|resume| resume == expected)
+            }
             (None, None) => true,
             _ => false,
         };

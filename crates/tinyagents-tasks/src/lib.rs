@@ -47,8 +47,8 @@ pub use store_registry::{
 };
 pub use tool::{
     OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema,
-    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_steering,
-    orchestration_tools_with_status_overlay, register_orchestration_tools,
+    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_status_overlay,
+    orchestration_tools_with_steering, register_orchestration_tools,
     register_orchestration_tools_with_status_overlay,
 };
 pub use types::*;

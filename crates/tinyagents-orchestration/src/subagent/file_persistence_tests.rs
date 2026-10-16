@@ -37,17 +37,33 @@ async fn file_store_scopes_indexes_and_compares_pause_replacements() {
     };
 
     assert_eq!(
-        store.save_pause(pause(first.clone(), resume.clone())).await.unwrap(),
+        store
+            .save_pause(pause(first.clone(), resume.clone()))
+            .await
+            .unwrap(),
         SubagentPausePersistenceDisposition::Inserted
     );
     assert_eq!(
-        store.save_pause(pause(second.clone(), SubagentResume::default())).await.unwrap(),
+        store
+            .save_pause(pause(second.clone(), SubagentResume::default()))
+            .await
+            .unwrap(),
         SubagentPausePersistenceDisposition::Inserted
     );
-    assert_eq!(store.keys_for_task("same-task").unwrap(), vec![first.clone(), second]);
+    assert_eq!(
+        store.keys_for_task("same-task").unwrap(),
+        vec![first.clone(), second]
+    );
     assert_eq!(store.load(&first).await.unwrap(), Some(resume.clone()));
     assert_eq!(
-        store.record_terminal(&first, &SubagentOutcome::completed("same-task", "done"), None).await.unwrap(),
+        store
+            .record_terminal(
+                &first,
+                &SubagentOutcome::completed("same-task", "done"),
+                None
+            )
+            .await
+            .unwrap(),
         SubagentTerminalPersistenceDisposition::PauseExisting
     );
 
@@ -59,16 +75,25 @@ async fn file_store_scopes_indexes_and_compares_pause_replacements() {
     );
     let current = store.load(&first).await.unwrap().unwrap();
     assert_eq!(
-        store.record_terminal(
-            &first,
-            &SubagentOutcome::completed("same-task", "done"),
-            Some(&current),
-        ).await.unwrap(),
+        store
+            .record_terminal(
+                &first,
+                &SubagentOutcome::completed("same-task", "done"),
+                Some(&current),
+            )
+            .await
+            .unwrap(),
         SubagentTerminalPersistenceDisposition::Inserted
     );
     assert_eq!(store.load(&first).await.unwrap(), None);
-    assert_eq!(store.load_terminal(&first).await.unwrap().unwrap().output, "done");
-    assert_eq!(store.keys_for_task("same-task").unwrap(), vec![key("parent-b", "same-task")]);
+    assert_eq!(
+        store.load_terminal(&first).await.unwrap().unwrap().output,
+        "done"
+    );
+    assert_eq!(
+        store.keys_for_task("same-task").unwrap(),
+        vec![key("parent-b", "same-task")]
+    );
 }
 
 #[tokio::test]

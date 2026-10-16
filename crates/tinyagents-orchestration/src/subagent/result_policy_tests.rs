@@ -45,6 +45,17 @@ fn task_ids_are_safe_single_filename_components() {
     }
 }
 
+#[test]
+fn tool_call_only_payloads_are_not_accepted_as_results() {
+    assert!(is_unexecuted_tool_call_stub(
+        r#"{"tool_calls":[{"id":"1","type":"function","function":{"name":"search","arguments":"{}"}}]}"#
+    ));
+    assert!(!is_unexecuted_tool_call_stub(
+        "I searched and found three useful pages."
+    ));
+    assert!(frame_unexecuted_outcome("delegate", "timed out").contains("did not complete"));
+}
+
 #[tokio::test]
 async fn the_default_policy_changes_nothing() {
     let applied = ResultPolicy::default()

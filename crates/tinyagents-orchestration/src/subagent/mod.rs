@@ -56,11 +56,12 @@ pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
 pub use policy::{SubAgentBudget, SubAgentPolicy};
 pub use result_policy::{
-    AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, is_safe_task_id, truncate_head_tail,
+    AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, frame_unexecuted_outcome,
+    is_safe_task_id, is_unexecuted_tool_call_stub, truncate_head_tail,
 };
 pub use role::{
     FLEET_TOOLS, FleetToolSet, SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole,
-    is_delegation_tool, restrict_tools, subagent_framing,
+    is_delegation_tool, restrict_tools, restrict_tools_with_scope, subagent_framing,
 };
 pub use sessions::{
     DriverSubagentSessionStore, DurableSubagentSession, DurableSubagentSessionSummary,
