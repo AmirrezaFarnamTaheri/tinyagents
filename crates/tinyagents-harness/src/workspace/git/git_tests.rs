@@ -97,6 +97,37 @@ fn create_then_status_reports_clean_worktree() {
     assert!(status.path.ends_with(Path::new(".claude/worktrees/run-1")));
 }
 
+#[tokio::test]
+async fn isolation_applies_policy_prefix_and_calls_lifecycle_hook() {
+    if !git_available() {
+        return;
+    }
+    #[derive(Debug, Default)]
+    struct Hook(std::sync::Mutex<Vec<&'static str>>);
+    #[async_trait]
+    impl GitWorktreeLifecycleHook for Hook {
+        async fn prepared(&self, _: &WorkspaceDescriptor) -> crate::Result<()> {
+            self.0.lock().unwrap().push("prepared");
+            Ok(())
+        }
+        async fn cleaned(&self, _: &WorkspaceDescriptor, error: Option<&str>) -> crate::Result<()> {
+            assert!(error.is_none());
+            self.0.lock().unwrap().push("cleaned");
+            Ok(())
+        }
+    }
+
+    let (_tmp, root) = init_repo();
+    let hook = Arc::new(Hook::default());
+    let isolation = GitWorktreeIsolation::new(&root)
+        .with_policy_id_prefix("openhuman.worktree:")
+        .with_lifecycle_hook(hook.clone());
+    let descriptor = isolation.prepare("run-1", Some("agent-a")).await.unwrap();
+    assert_eq!(descriptor.policy_id, "openhuman.worktree:agent-a:run-1");
+    isolation.cleanup(&descriptor).await.unwrap();
+    assert_eq!(*hook.0.lock().unwrap(), ["prepared", "cleaned"]);
+}
+
 #[test]
 fn list_includes_created_worktrees() {
     if !git_available() {

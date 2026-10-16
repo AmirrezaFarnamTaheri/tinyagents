@@ -858,6 +858,109 @@ async fn scoped_member_lifecycle_and_task_release_preserve_history() {
     assert_eq!(released.source_run_id.as_deref(), Some("source"));
 }
 
+/// Fenced cleanup from an older worker cannot idle or release successor state.
+#[tokio::test]
+async fn stale_team_execution_cleanup_preserves_successor_claim_and_run() {
+    let (ledger, _) = ledgers();
+    ledger
+        .upsert_agent_team_member(AgentTeamMemberUpsert {
+            id: "member".into(),
+            team_id: "team".into(),
+            name: "name".into(),
+            agent_id: None,
+            member_status: AgentTeamMemberStatus::Pending,
+            current_task_id: None,
+            worker_thread_id: None,
+            run_id: None,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    for (task, thread, run) in [
+        ("task", "thread-old", "run-old"),
+        ("task", "thread-new", "run-new"),
+    ] {
+        ledger
+            .mark_agent_team_member_running("team", "member", task, thread, run)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    assert!(
+        ledger
+            .mark_agent_team_member_idle_if_current(
+                "team",
+                "member",
+                "task",
+                "thread-old",
+                "run-old"
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let member = ledger
+        .get_agent_team_member("member")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(member.member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(member.worker_thread_id.as_deref(), Some("thread-new"));
+    assert_eq!(member.run_id.as_deref(), Some("run-new"));
+
+    ledger
+        .upsert_agent_team_task(AgentTeamTaskUpsert {
+            id: "task".into(),
+            team_id: "team".into(),
+            title: "title".into(),
+            objective: None,
+            status: AgentTeamTaskStatus::InProgress,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    ledger
+        .merge(TASKS, "task", |previous: Option<AgentTeamTask>| {
+            let mut row = previous.unwrap();
+            row.claimed_by_member_id = Some("member".into());
+            row.claim_token = Some("successor-token".into());
+            row
+        })
+        .await
+        .unwrap();
+    assert!(
+        !ledger
+            .release_agent_team_task_if_claimed("team", "task", "member", "stale-token")
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        ledger
+            .complete_agent_team_task_if_claimed(
+                "team",
+                "task",
+                "member",
+                "stale-token",
+                &["stale evidence".into()],
+                false,
+            )
+            .await
+            .unwrap(),
+        CompletionOutcome::NotClaimed
+    ));
+    let task = ledger.get_agent_team_task("task").await.unwrap().unwrap();
+    assert_eq!(task.status, AgentTeamTaskStatus::InProgress);
+    assert_eq!(task.claim_token.as_deref(), Some("successor-token"));
+    assert!(task.evidence.is_empty());
+}
+
 /// Nonfinite JSON numeric fields cannot turn a readable rollup into a persisted null.
 #[tokio::test]
 async fn scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes() {

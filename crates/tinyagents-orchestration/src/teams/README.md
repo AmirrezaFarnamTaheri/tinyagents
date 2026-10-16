@@ -11,6 +11,9 @@ completions, and inter-member messages.
 - **`TeamService<L: TeamLedger>`** — the main API: creates teams, adds members,
   creates tasks, handles claims and completions, and routes messages. Generic
   over a durable ledger.
+- **`TeamMemberExecutor` / `TeamService::start_member`** — runs a claimed task
+  through a host-supplied executor, persists its evidence, and releases the
+  task and idles the member when execution fails or completion is rejected.
 - **`TeamLedger`** — the trait for durable team state: CRUD operations for
   teams, members, tasks, and events. Implementations handle all persistence.
 - **`SessionTeamLedger`** — built-in ledger backed by `tinyagents-session`'s
