@@ -68,10 +68,11 @@ impl TurnHost for Host {
     }
 
     async fn checkin(&self, request: &TurnRequest) {
-        if self.hold_checkin && request.request_id == "first" {
-            if let Some(release) = &self.release {
-                release.notified().await;
-            }
+        if self.hold_checkin
+            && request.request_id == "first"
+            && let Some(release) = &self.release
+        {
+            release.notified().await;
         }
         self.checkins
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
