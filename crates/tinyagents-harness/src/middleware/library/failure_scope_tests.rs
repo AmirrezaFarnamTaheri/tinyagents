@@ -152,3 +152,109 @@ async fn host_can_classify_terminal_failures_with_a_typed_cause() {
             .any(|command| matches!(command, SteeringCommand::Pause))
     );
 }
+
+#[tokio::test]
+async fn classified_budget_uses_shared_tracker_and_host_halt_copy() {
+    struct ClassifiedPolicy;
+    impl crate::no_progress::FailurePolicy for ClassifiedPolicy {
+        fn identical_halt_summary(&self, _: &str, _: u32, _: &str) -> String {
+            String::new()
+        }
+        fn no_progress_halt_summary(&self, _: u32, _: &str, _: &str) -> String {
+            String::new()
+        }
+    }
+    impl FailureScopePolicy<()> for ClassifiedPolicy {
+        fn assess(
+            &self,
+            _: &RunContext<()>,
+            _: &ToolInvocationIdentity,
+            _: &FailureScope,
+            _: &ToolResult,
+        ) -> FailureAssessment {
+            FailureAssessment::ClassifiedFailure {
+                class: "permission".into(),
+                budget: 0,
+                error: "denied".into(),
+                nudge: None,
+            }
+        }
+
+        fn halt_copy(&self, kind: FailureStopKind, summary: String, _: &str) -> String {
+            assert_eq!(kind, FailureStopKind::Classified);
+            format!("host copy: {summary}")
+        }
+    }
+
+    let handle = SteeringHandle::allow_all();
+    let summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware =
+        FailureScopeMiddleware::new(handle.clone(), summary.clone(), Arc::new(ClassifiedPolicy));
+    fail_once(&middleware, "classified").await;
+
+    let summary = summary.lock().unwrap();
+    let summary = summary
+        .as_deref()
+        .expect("classified budget halts on its first failure");
+    assert!(summary.starts_with("host copy:"));
+    assert!(
+        handle
+            .drain()
+            .iter()
+            .any(|command| matches!(command, SteeringCommand::Pause))
+    );
+}
+
+#[tokio::test]
+async fn terminal_model_callback_halts_before_tool_accounting() {
+    struct ModelPolicy;
+    impl crate::no_progress::FailurePolicy for ModelPolicy {
+        fn identical_halt_summary(&self, _: &str, _: u32, _: &str) -> String {
+            String::new()
+        }
+        fn no_progress_halt_summary(&self, _: u32, _: &str, _: &str) -> String {
+            String::new()
+        }
+    }
+    impl FailureScopePolicy<()> for ModelPolicy {
+        fn assess(
+            &self,
+            _: &RunContext<()>,
+            _: &ToolInvocationIdentity,
+            _: &FailureScope,
+            _: &ToolResult,
+        ) -> FailureAssessment {
+            FailureAssessment::Ignore
+        }
+
+        fn terminal_model_halt(
+            &self,
+            _: &RunContext<()>,
+            _: &tinyinference_llm::model::ModelResponse,
+        ) -> Option<(String, Option<ClassifiedStopCause>)> {
+            Some(("provider budget exhausted".into(), None))
+        }
+    }
+
+    let handle = SteeringHandle::allow_all();
+    let summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware =
+        FailureScopeMiddleware::new(handle.clone(), summary.clone(), Arc::new(ModelPolicy));
+    let mut ctx = context();
+    let mut response = tinyinference_llm::model::ModelResponse::assistant("unavailable");
+    middleware
+        .after_model(&mut ctx, &(), &mut response)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        summary.lock().unwrap().as_deref(),
+        Some("provider budget exhausted")
+    );
+    assert!(
+        handle
+            .drain()
+            .iter()
+            .any(|command| matches!(command, SteeringCommand::Pause))
+    );
+}

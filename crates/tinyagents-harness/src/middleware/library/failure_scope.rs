@@ -143,7 +143,12 @@ impl RunFailureState {
     }
 }
 
-/// Shared run-scoped driver for no-progress and recoverable tool failures.
+/// Shared driver for no-progress and classified/recoverable tool failures.
+///
+/// Construct one instance for each active run because the steering handle and
+/// halt-summary slot belong to that run. Run counters and call correlation are
+/// keyed by `RunContext::instance_id`; lifecycle hooks discard them at the end
+/// of each run.
 pub struct FailureScopeMiddleware<Ctx: Send + Sync> {
     label: &'static str,
     handle: SteeringHandle,
