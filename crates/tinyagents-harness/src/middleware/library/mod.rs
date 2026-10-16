@@ -68,6 +68,7 @@ mod context;
 mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
+mod failure_scope;
 mod image_trim;
 mod loop_guards;
 mod memory_protocol;
@@ -113,6 +114,7 @@ pub use credential_scrub::{
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
+pub use failure_scope::{FailureAssessment, FailureScope, FailureScopeMiddleware, FailureScopePolicy};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
