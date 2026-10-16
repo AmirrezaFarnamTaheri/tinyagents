@@ -1,5 +1,6 @@
 use super::*;
 use tinyagents_graph::delegation::DelegationStageOutput;
+use tinytools::ToolExposure;
 
 #[test]
 fn approval_parser_requires_a_standalone_approve_token() {
@@ -19,13 +20,15 @@ fn multi_target_schema_exposes_only_configured_agents_and_blocking_envelope() {
         ],
         |_, _, _| async { Ok(DelegationStageOutput::done("ok")) },
     );
-    let schema = tool.tool().parameters_schema();
+    let declaration = tool.with_exposure(ToolExposure::Hidden).tool();
+    let schema = declaration.parameters_schema();
     assert_eq!(
         schema["properties"]["agent"]["enum"],
         json!(["coder", "reviewer"])
     );
     assert_eq!(schema["properties"]["blocking"]["type"], "boolean");
     assert_eq!(DELEGATION_MODE_FIELD, SUBAGENT_MODE_FIELD);
+    assert_eq!(declaration.exposure(), ToolExposure::Hidden);
 }
 
 #[test]

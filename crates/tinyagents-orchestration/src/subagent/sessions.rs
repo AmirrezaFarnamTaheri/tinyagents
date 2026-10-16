@@ -426,7 +426,16 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                         if !current.status.reusable() || !current.reusable {
                             return false;
                         }
-                        *current = session.clone();
+                        current.lifecycle_key = session.lifecycle_key.clone();
+                        current.worker_thread_id = session.worker_thread_id.clone();
+                        current.display_name = session.display_name.clone();
+                        current.task_title = session.task_title.clone();
+                        current.current_task_id = session.current_task_id.clone();
+                        current.status = DurableSubagentStatus::Running;
+                        current.reusable = true;
+                        current.latest_error = None;
+                        current.updated_at = session.updated_at.clone();
+                        current.last_used_at = session.last_used_at.clone();
                         true
                     })
                     .await?;
@@ -486,7 +495,15 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                     }
                 }
             }
-            Ok((session, decision))
+            let current = this
+                .docs
+                .get(COLLECTION, &session_id)
+                .await
+                .map_err(|error| SubagentError::Persistence(format!("session store: {error}")))?
+                .ok_or_else(|| SubagentError::Persistence("claimed session disappeared".into()))?;
+            let current = serde_json::from_value(current.doc)
+                .map_err(|error| SubagentError::Persistence(format!("session decode: {error}")))?;
+            Ok((current, decision))
         })
     }
 

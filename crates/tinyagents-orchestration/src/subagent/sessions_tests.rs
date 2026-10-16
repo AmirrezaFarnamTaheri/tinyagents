@@ -127,15 +127,21 @@ async fn stale_completion_cannot_overwrite_a_reassigned_or_closed_session() {
     assert_eq!(current.current_task_id.as_deref(), Some("task-2"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_first_upserts_claim_one_durable_session_for_a_selector() {
     let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let left_store = store.clone();
+    let right_store = store.clone();
     let (left, right) = tokio::join!(
-        store.upsert_running(upsert(false, "task-left")),
-        store.upsert_running(upsert(false, "task-right")),
+        tokio::spawn(async move { left_store.upsert_running(upsert(false, "task-left")).await }),
+        tokio::spawn(async move {
+            right_store
+                .upsert_running(upsert(false, "task-right"))
+                .await
+        }),
     );
-    let (left, _) = left.unwrap();
-    let (right, _) = right.unwrap();
+    let (left, _) = left.unwrap().unwrap();
+    let (right, _) = right.unwrap().unwrap();
     assert_eq!(left.subagent_session_id, right.subagent_session_id);
     let sessions = store.list_for_parent("parent", None).await.unwrap();
     assert_eq!(sessions.len(), 1);

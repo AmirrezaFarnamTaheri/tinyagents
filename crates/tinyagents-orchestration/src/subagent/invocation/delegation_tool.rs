@@ -10,7 +10,7 @@ use tinyagents_graph::delegation::{
     DelegationConfig, DelegationStage, DelegationStageOutput, DelegationState, run_delegation,
 };
 use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
-use tinytools::{Tool, ToolResult};
+use tinytools::{Tool, ToolExposure, ToolResult};
 
 use crate::subagent::SUBAGENT_MODE_FIELD;
 
@@ -71,6 +71,7 @@ where
     agents: Vec<(String, String)>,
     worker: Arc<Worker>,
     _context: PhantomData<fn(&State, &Ctx)>,
+    exposure: ToolExposure,
 }
 
 impl<State, Ctx, Worker, Fut> MultiTargetDelegationTool<State, Ctx, Worker, Fut>
@@ -95,7 +96,14 @@ where
             agents,
             worker: Arc::new(worker),
             _context: PhantomData,
+            exposure: ToolExposure::Direct,
         }
+    }
+
+    /// Sets whether the tool is directly advertised, deferred, or host-only.
+    pub fn with_exposure(mut self, exposure: ToolExposure) -> Self {
+        self.exposure = exposure;
+        self
     }
 }
 
@@ -122,6 +130,7 @@ where
                 "expected_output":{"type":"string"},"citation_requirement":{"type":"string"},
                 "model":{"type":"string"},"blocking":{"type":"boolean","description":"Wait for the target result when true."}
             }}),
+            exposure: self.exposure,
         })
     }
 
@@ -168,6 +177,7 @@ struct DelegationDeclaration {
     name: String,
     description: String,
     parameters: Value,
+    exposure: ToolExposure,
 }
 #[async_trait]
 impl Tool for DelegationDeclaration {
@@ -179,6 +189,9 @@ impl Tool for DelegationDeclaration {
     }
     fn parameters_schema(&self) -> Value {
         self.parameters.clone()
+    }
+    fn exposure(&self) -> ToolExposure {
+        self.exposure
     }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         anyhow::bail!("delegation requires typed-parent dispatch")
@@ -235,6 +248,7 @@ where
             name: "delegate_graph".into(),
             description: "Plan, execute, and review delegated work.".into(),
             parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
+            exposure: ToolExposure::Direct,
         })
     }
     async fn execute(

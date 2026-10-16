@@ -680,6 +680,48 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         self
     }
 
+    /// Like [`Self::with_driver`], with a host callback for detached completion.
+    /// The callback receives the resolved delivery target and the neutral
+    /// outcome (or failure), allowing the host to persist/route completion.
+    pub fn with_driver_and_completion<H>(
+        mut self,
+        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
+        request_factory: impl Fn(
+            &State,
+            &RunContext<Ctx>,
+            &Value,
+            &tinyagents_harness::ids::CallId,
+        ) -> std::result::Result<
+            crate::subagent::SubagentRequest<Ctx, H>,
+            crate::subagent::SubagentError,
+        > + Send
+        + Sync
+        + 'static,
+        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
+        + Send
+        + Sync
+        + 'static,
+        completion: impl Fn(&str, std::result::Result<crate::subagent::SubagentOutcome, String>)
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self
+    where
+        H: Send + Sync + 'static,
+    {
+        let dispatch = DriverSubAgentTool::new(
+            self.tool_name.clone(),
+            self.subagent.description().to_owned(),
+            driver,
+            request_factory,
+            delivery_target,
+        )
+        .with_parameters(self.parameters.clone())
+        .with_completion_handler(completion);
+        self.driver_dispatch = Some(Arc::new(dispatch));
+        self
+    }
+
     /// Applies a timeout/retry/budget policy to every spawned child.
     ///
     /// Call caps tighten the child's run limits; token caps are checked when it

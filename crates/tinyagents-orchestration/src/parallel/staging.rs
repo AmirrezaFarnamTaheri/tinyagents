@@ -36,7 +36,7 @@ pub enum AdmissionVerdict {
 
 /// Host policy: identity, allowlists, sandbox mode and whether a branch can
 /// write. Everything product-specific lives behind this trait.
-pub trait AdmissionPolicy<P> {
+pub trait AdmissionPolicy<P>: Send + Sync {
     fn admit(&self, index: usize, task: &Task<P>) -> AdmissionVerdict;
 }
 
@@ -175,7 +175,7 @@ impl<P> Plan<P> {
     /// admission policy still receives the original task index.
     pub async fn stage_with_preflight<F, Fut>(
         self,
-        policy: &impl AdmissionPolicy<P>,
+        policy: &dyn AdmissionPolicy<P>,
         mut preflight: F,
     ) -> Vec<Preflight<P>>
     where
@@ -198,12 +198,12 @@ impl<P> Plan<P> {
     }
 }
 
-struct PreflightAdmission<'a, Policy> {
-    policy: &'a Policy,
+struct PreflightAdmission<'a, P> {
+    policy: &'a dyn AdmissionPolicy<P>,
     failures: HashMap<usize, String>,
 }
 
-impl<P, Policy: AdmissionPolicy<P>> AdmissionPolicy<P> for PreflightAdmission<'_, Policy> {
+impl<P> AdmissionPolicy<P> for PreflightAdmission<'_, P> {
     fn admit(&self, index: usize, task: &Task<P>) -> AdmissionVerdict {
         match self.failures.get(&index) {
             Some(reason) => AdmissionVerdict::Reject(reason.clone()),
