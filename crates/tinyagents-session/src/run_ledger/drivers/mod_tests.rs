@@ -876,21 +876,34 @@ async fn stale_team_execution_cleanup_preserves_successor_claim_and_run() {
         })
         .await
         .unwrap();
-    for (task, thread, run) in [("task", "thread-old", "run-old"), ("task", "thread-new", "run-new")] {
+    for (task, thread, run) in [
+        ("task", "thread-old", "run-old"),
+        ("task", "thread-new", "run-new"),
+    ] {
         ledger
             .mark_agent_team_member_running("team", "member", task, thread, run)
             .await
             .unwrap()
             .unwrap();
     }
-    assert!(ledger
-        .mark_agent_team_member_idle_if_current(
-            "team", "member", "task", "thread-old", "run-old"
-        )
+    assert!(
+        ledger
+            .mark_agent_team_member_idle_if_current(
+                "team",
+                "member",
+                "task",
+                "thread-old",
+                "run-old"
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let member = ledger
+        .get_agent_team_member("member")
         .await
         .unwrap()
-        .is_none());
-    let member = ledger.get_agent_team_member("member").await.unwrap().unwrap();
+        .unwrap();
     assert_eq!(member.member_status, AgentTeamMemberStatus::Active);
     assert_eq!(member.worker_thread_id.as_deref(), Some("thread-new"));
     assert_eq!(member.run_id.as_deref(), Some("run-new"));
@@ -922,10 +935,12 @@ async fn stale_team_execution_cleanup_preserves_successor_claim_and_run() {
         })
         .await
         .unwrap();
-    assert!(!ledger
-        .release_agent_team_task_if_claimed("team", "task", "member", "stale-token")
-        .await
-        .unwrap());
+    assert!(
+        !ledger
+            .release_agent_team_task_if_claimed("team", "task", "member", "stale-token")
+            .await
+            .unwrap()
+    );
     let task = ledger.get_agent_team_task("task").await.unwrap().unwrap();
     assert_eq!(task.status, AgentTeamTaskStatus::InProgress);
     assert_eq!(task.claim_token.as_deref(), Some("successor-token"));

@@ -74,7 +74,10 @@ async fn start_member_runs_and_completes_claimed_task() {
     assert!(matches!(outcome, CompletionOutcome::Completed(_)));
     let executed_member = executed_member.lock().unwrap().clone().unwrap();
     assert_eq!(executed_member.member_status, AgentTeamMemberStatus::Active);
-    assert_eq!(executed_member.current_task_id.as_deref(), Some(task.id.as_str()));
+    assert_eq!(
+        executed_member.current_task_id.as_deref(),
+        Some(task.id.as_str())
+    );
     assert!(executed_member.worker_thread_id.is_some());
     assert!(executed_member.run_id.is_some());
     assert_eq!(
@@ -198,10 +201,12 @@ fn stale_claim_cleanup_cannot_release_a_successor_claim() {
     else {
         panic!("first generation should claim the task");
     };
-    assert!(service
-        .ledger()
-        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
-        .unwrap());
+    assert!(
+        service
+            .ledger()
+            .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+            .unwrap()
+    );
     let ClaimOutcome::Claimed(second_claim) = service
         .claim_task(&team.team.id, &task.id, &member.id, "successor-generation")
         .unwrap()
@@ -209,11 +214,17 @@ fn stale_claim_cleanup_cannot_release_a_successor_claim() {
         panic!("successor should claim the released task");
     };
 
-    assert!(!service
+    assert!(
+        !service
+            .ledger()
+            .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+            .unwrap()
+    );
+    let current = service
         .ledger()
-        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
-        .unwrap());
-    let current = service.ledger().list_tasks(&team.team.id).unwrap().remove(0);
+        .list_tasks(&team.team.id)
+        .unwrap()
+        .remove(0);
     assert_eq!(current.claim_token.as_deref(), Some("successor-generation"));
     assert_eq!(current.claim_token, second_claim.claim_token);
     assert_ne!(first_claim.claim_token, second_claim.claim_token);

@@ -8,12 +8,20 @@ fn stale_generation_cannot_cancel_its_resumed_successor() {
     >::new()));
     let first_pending = pending.clone();
     let second_pending = pending.clone();
-    let first = supervisor.start("run", |_| async {}, move |future| {
-        first_pending.lock().unwrap().push(Box::pin(future));
-    });
-    let second = supervisor.resume("run", |_| async {}, move |future| {
-        second_pending.lock().unwrap().push(Box::pin(future));
-    });
+    let first = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            first_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
+    let second = supervisor.resume(
+        "run",
+        |_| async {},
+        move |future| {
+            second_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
 
     assert!(first.cancellation_token().is_cancelled());
     assert!(!supervisor.stop_generation(&first));
@@ -31,12 +39,20 @@ fn finish_only_removes_the_generation_that_finished() {
     >::new()));
     let old_pending = pending.clone();
     let current_pending = pending.clone();
-    let old = supervisor.start("run", |_| async {}, move |future| {
-        old_pending.lock().unwrap().push(Box::pin(future));
-    });
-    let current = supervisor.start("run", |_| async {}, move |future| {
-        current_pending.lock().unwrap().push(Box::pin(future));
-    });
+    let old = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            old_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
+    let current = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            current_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
 
     assert!(!supervisor.finish(&old));
     assert!(supervisor.stop("run"));
@@ -57,13 +73,17 @@ fn dropping_unpolled_drive_clears_its_generation() {
 #[test]
 fn completed_drive_clears_its_generation_and_stale_drop_preserves_successor() {
     let supervisor = WorkflowRunSupervisor::default();
-    let old_pending = Arc::new(std::sync::Mutex::new(None::<
-        Pin<Box<dyn Future<Output = ()> + Send>>,
-    >));
+    let old_pending = Arc::new(std::sync::Mutex::new(
+        None::<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    ));
     let slot = old_pending.clone();
-    let old = supervisor.start("run", |_| async {}, move |future| {
-        *slot.lock().unwrap() = Some(Box::pin(future));
-    });
+    let old = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            *slot.lock().unwrap() = Some(Box::pin(future));
+        },
+    );
     let successor = supervisor.resume("run", |_| async {}, futures::executor::block_on);
     assert!(old.cancellation_token().is_cancelled());
     futures::executor::block_on(old_pending.lock().unwrap().take().unwrap());

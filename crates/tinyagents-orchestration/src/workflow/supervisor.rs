@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use tinyagents_harness::CancellationToken;
 

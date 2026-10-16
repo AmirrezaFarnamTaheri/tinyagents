@@ -345,7 +345,9 @@ impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
             self.task_id,
             self.member_id,
             self.claim_token,
-            self.execution.as_ref().map(|(thread, run)| (thread.as_str(), run.as_str())),
+            self.execution
+                .as_ref()
+                .map(|(thread, run)| (thread.as_str(), run.as_str())),
         )?;
         self.armed = false;
         Ok(())
@@ -359,15 +361,15 @@ impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
 impl<L: TeamLedger> Drop for MemberExecutionCleanup<'_, L> {
     fn drop(&mut self) {
         if self.armed {
-            let _ = self
-                .service
-                .release_and_idle(
-                    self.team_id,
-                    self.task_id,
-                    self.member_id,
-                    self.claim_token,
-                    self.execution.as_ref().map(|(thread, run)| (thread.as_str(), run.as_str())),
-                );
+            let _ = self.service.release_and_idle(
+                self.team_id,
+                self.task_id,
+                self.member_id,
+                self.claim_token,
+                self.execution
+                    .as_ref()
+                    .map(|(thread, run)| (thread.as_str(), run.as_str())),
+            );
         }
     }
 }
@@ -593,7 +595,10 @@ impl<L: TeamLedger> TeamService<L> {
             }
         };
         cleanup.execution = Some((
-            member.worker_thread_id.clone().unwrap_or(worker_thread_id.clone()),
+            member
+                .worker_thread_id
+                .clone()
+                .unwrap_or(worker_thread_id.clone()),
             member.run_id.clone().unwrap_or(run_id.clone()),
         ));
 
@@ -617,7 +622,10 @@ impl<L: TeamLedger> TeamService<L> {
                     team_id,
                     member_id,
                     task_id,
-                    member.worker_thread_id.as_deref().unwrap_or(&worker_thread_id),
+                    member
+                        .worker_thread_id
+                        .as_deref()
+                        .unwrap_or(&worker_thread_id),
                     member.run_id.as_deref().unwrap_or(&run_id),
                 )?;
                 cleanup.disarm();
