@@ -833,6 +833,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     ))));
     let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> =
         Arc::new(|_| "durable-parent-session".into());
+    let continuation_key = lifecycle_key.clone();
     let driver = Arc::new(
         SubagentDriver::new(SubagentCapabilities {
             planner: Some(Arc::new(Planner)),
@@ -868,7 +869,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
             let request = if args["continue"] == true {
                 SubagentRequest::continue_with_task_key(
-                    lifecycle_key.clone(),
+                    continuation_key.clone(),
                     child,
                     (),
                     args["prompt"].as_str().unwrap_or_default(),
