@@ -285,7 +285,10 @@ fn classified_halt_preserves_typed_cause_for_run_finalization() {
             summary: "note wording can change".into(),
         },
     );
-    assert_eq!(ctx.halted_by_guard.as_deref(), Some("note wording can change"));
+    assert_eq!(
+        ctx.halted_by_guard.as_deref(),
+        Some("note wording can change")
+    );
     let cause = ctx.take_halted_by_guard_cause().expect("typed cause");
     assert_eq!(cause.class, "permission");
     assert_eq!(cause.operation, "file_write");

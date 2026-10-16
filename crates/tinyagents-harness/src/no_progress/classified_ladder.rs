@@ -47,6 +47,14 @@ pub struct ClassifiedStopCause {
     pub summary: String,
 }
 
+impl std::ops::Deref for ClassifiedStopCause {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.summary
+    }
+}
+
 /// What one classified failure asks of the driver.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClassifiedStep {

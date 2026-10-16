@@ -125,7 +125,11 @@ fn typed_breaker_cause_prevents_a_cap_classification() {
     };
     let mut run = AgentRun::default();
     run.model_calls = 1;
-    assert!(!detect_hit_cap_with_cause(&run, &inputs, Some(&failure_cause)));
+    assert!(!detect_hit_cap_with_cause(
+        &run,
+        &inputs,
+        Some(&failure_cause)
+    ));
     let stop = turn_stop_for_with_cause(
         Some("different prose"),
         Some(failure_cause),
