@@ -82,9 +82,7 @@ impl TranscriptSnapshotMiddleware {
 }
 
 #[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
-    for TranscriptSnapshotMiddleware
-{
+impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for TranscriptSnapshotMiddleware {
     fn name(&self) -> &str {
         "transcript_snapshot"
     }
@@ -96,7 +94,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
         call: &mut tinyinference_llm::tool::ToolCall,
     ) -> Result<()> {
         if let Ok(mut started) = self.started.lock() {
-            started.insert(call.id.to_string(), (Instant::now(), call.arguments.clone()));
+            started.insert(
+                call.id.to_string(),
+                (Instant::now(), call.arguments.clone()),
+            );
         }
         Ok(())
     }
@@ -173,7 +174,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
                 snapshot.last_call_input_tokens = usage.input_tokens;
                 snapshot.last_call_output_tokens = usage.output_tokens;
                 if !response.served_from_cache {
-                    snapshot.input_tokens = snapshot.input_tokens.saturating_add(usage.input_tokens);
+                    snapshot.input_tokens =
+                        snapshot.input_tokens.saturating_add(usage.input_tokens);
                     snapshot.output_tokens =
                         snapshot.output_tokens.saturating_add(usage.output_tokens);
                     snapshot.cached_input_tokens = snapshot
@@ -206,7 +208,8 @@ pub fn render_unanswered_steps(messages: &[Message], max_chars: usize) -> Option
             clipped
         }
     };
-    let mut out = String::from("The request that failed also carried these steps, recorded here as text:\n");
+    let mut out =
+        String::from("The request that failed also carried these steps, recorded here as text:\n");
     for message in messages {
         match message {
             Message::Assistant(assistant) if !assistant.tool_calls.is_empty() => {
@@ -218,7 +221,9 @@ pub fn render_unanswered_steps(messages: &[Message], max_chars: usize) -> Option
             Message::Assistant(_) => {
                 out.push_str(&format!("- assistant: {}\n", clip(&message.text())));
             }
-            Message::Tool(_) => out.push_str(&format!("- tool result: {}\n", clip(&message.text()))),
+            Message::Tool(_) => {
+                out.push_str(&format!("- tool result: {}\n", clip(&message.text())))
+            }
             Message::User(_) | Message::System(_) => {
                 out.push_str(&format!("- message: {}\n", clip(&message.text())));
             }
