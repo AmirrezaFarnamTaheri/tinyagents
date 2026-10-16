@@ -110,8 +110,11 @@ async fn fail_once(middleware: &FailureScopeMiddleware<()>, run_id: u64, id: &st
 async fn repeated_failures_nudge_before_halt() {
     let handle = SteeringHandle::allow_all();
     let halt_summary = Arc::new(std::sync::Mutex::new(None));
-    let middleware =
-        FailureScopeMiddleware::new(handle.clone(), halt_summary.clone(), Arc::new(Policy::default()));
+    let middleware = FailureScopeMiddleware::new(
+        handle.clone(),
+        halt_summary.clone(),
+        Arc::new(Policy::default()),
+    );
 
     fail_once(&middleware, 41, "one").await;
     assert!(halt_summary.lock().unwrap().is_none());
@@ -173,6 +176,54 @@ async fn separate_run_instances_keep_halts_and_pause_handles_isolated() {
     assert!(second_summary.lock().unwrap().is_some());
     assert!(
         second_handle
+            .drain()
+            .iter()
+            .any(|c| matches!(c, SteeringCommand::Pause))
+    );
+}
+
+#[tokio::test]
+async fn memory_and_repeat_guard_exemptions_do_not_change_failure_budget_or_step() {
+    let handle = SteeringHandle::allow_all();
+    let summary = Arc::new(std::sync::Mutex::new(None));
+    let policy = Arc::new(Policy::default());
+    let middleware = FailureScopeMiddleware::new(handle.clone(), summary.clone(), policy.clone());
+
+    fail_once(&middleware, 61, "first").await;
+    for n in 0..8 {
+        observe_once(
+            &middleware,
+            61,
+            &format!("memory-{n}"),
+            "memory_search",
+            json!({"query": "x"}),
+            ToolResult::error("memory budget reached"),
+        )
+        .await;
+        observe_once(
+            &middleware,
+            61,
+            &format!("guard-{n}"),
+            "repeat_guard",
+            json!({"path": "a.txt"}),
+            ToolResult::error("repeat guard refused"),
+        )
+        .await;
+    }
+    assert_eq!(policy.guard_refusals.load(Ordering::SeqCst), 8);
+    assert!(summary.lock().unwrap().is_none());
+    assert!(handle.drain().is_empty());
+
+    fail_once(&middleware, 61, "second").await;
+    let nudge = middleware.nudges.drain_for(&context(61));
+    assert_eq!(nudge.len(), 1);
+    assert!(nudge[0].starts_with("[no progress since step 2]"));
+    assert!(summary.lock().unwrap().is_none());
+
+    fail_once(&middleware, 61, "third").await;
+    assert!(summary.lock().unwrap().is_some());
+    assert!(
+        handle
             .drain()
             .iter()
             .any(|c| matches!(c, SteeringCommand::Pause))
