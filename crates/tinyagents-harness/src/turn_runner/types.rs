@@ -340,7 +340,7 @@ where
     }
 
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
-        let result = self.run_one(request.clone()).await;
+        let result = self.run_one(request.clone(), false).await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
             let mut owner = request.clone();
             loop {
@@ -353,7 +353,7 @@ where
                     .await;
                 let Some(followup) = followup else { break };
                 owner = followup.clone();
-                if self.run_one(followup).await.is_err() {
+                if self.run_one(followup, true).await.is_err() {
                     self.clear_queue(&owner.scope, &owner.thread_id).await;
                     self.clear_tracking(&owner).await;
                     break;
@@ -365,7 +365,11 @@ where
         result
     }
 
-    async fn run_one(&self, mut request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
+    async fn run_one(
+        &self,
+        mut request: TurnRequest<P>,
+        queued_dispatch: bool,
+    ) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
             IngressStage::Guardrail,
@@ -396,7 +400,8 @@ where
                 );
             } else {
                 let mut active = self.active.lock().await;
-                if let Some(lane) = queue_lane(request.disposition)
+                if !queued_dispatch
+                    && let Some(lane) = queue_lane(request.disposition)
                     && active.contains_key(&key)
                 {
                     let queue = self.queue_for(key.clone()).await;
@@ -413,7 +418,9 @@ where
                 drop(active);
                 if let Some(previous) = previous {
                     previous.cancel.cancel();
-                    self.clear_queue(&request.scope, &request.thread_id).await;
+                    if request.disposition == QueueDisposition::Interrupt {
+                        self.clear_queue(&request.scope, &request.thread_id).await;
+                    }
                 }
             }
         }

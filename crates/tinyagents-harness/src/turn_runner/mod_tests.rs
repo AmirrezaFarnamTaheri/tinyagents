@@ -408,6 +408,89 @@ async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
 }
 
 #[tokio::test]
+async fn unscoped_cancel_stops_primary_and_parallel_turns_together() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(Arc::new(tokio::sync::Notify::new())),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let primary_request = request(QueueDisposition::Interrupt, false);
+    let parallel_request = request(QueueDisposition::Parallel, false);
+    let scope = primary_request.scope.clone();
+    let thread = primary_request.thread_id.clone();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    let parallel = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while host.runs.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(runner.cancel(&scope, &thread, None).await);
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(matches!(
+        parallel.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+}
+
+#[tokio::test]
+async fn cancelling_a_followup_discards_later_followups_still_in_the_queue() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let primary_request = request(QueueDisposition::Interrupt, false);
+    let scope = primary_request.scope.clone();
+    let thread = primary_request.thread_id.clone();
+    let outer = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    started.notified().await;
+    for id in ["first-followup", "second-followup"] {
+        let mut followup = request(QueueDisposition::Followup, false);
+        followup.request_id = id.into();
+        assert!(matches!(
+            runner.run(followup).await,
+            Err(TurnRunnerError::Queued)
+        ));
+    }
+    release.notify_one();
+    started.notified().await;
+    assert!(runner.cancel(&scope, &thread, Some("first-followup")).await);
+    assert!(outer.await.unwrap().is_ok());
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(runner.queue_status(&scope, &thread).await.total, 0);
+}
+
+#[tokio::test]
 async fn closed_progress_stream_does_not_starve_the_completed_run() {
     let runner = runner(
         Arc::new(Host::default()),
