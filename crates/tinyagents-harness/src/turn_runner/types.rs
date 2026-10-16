@@ -27,6 +27,13 @@ pub struct TurnRequest {
     pub idle_timeout: Option<Duration>,
 }
 
+/// Host-owned identity and fingerprint for the checked-out durable session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnSession {
+    pub session_id: String,
+    pub fingerprint: Option<String>,
+}
+
 /// Pipeline stages are called in this order for every submitted request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngressStage {
@@ -73,11 +80,15 @@ pub enum TerminalEvent {
 #[async_trait]
 pub trait TurnHost: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
-    async fn checkout(&self, request: &TurnRequest) -> Result<(), String>;
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String>;
+    /// Build the host's origin value (channel, actor and request attribution).
+    fn run_origin(&self, request: &TurnRequest) -> serde_json::Value;
     /// Run the actual harness/session turn. Progress is forwarded to the sink.
     async fn run(
         &self,
         request: &TurnRequest,
+        session: &TurnSession,
+        origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
         progress: mpsc::Sender<AgentProgress>,
     ) -> Result<TurnResult, String>;
@@ -273,11 +284,13 @@ where
         } else {
             Some(lock.lock_owned().await)
         };
-        if let Err(error) = self.host.checkout(&request).await {
-            return self.fail(&request, error).await;
-        }
+        let session = match self.host.checkout(&request).await {
+            Ok(session) => session,
+            Err(error) => return self.fail(&request, error).await,
+        };
+        let origin = self.host.run_origin(&request);
 
-        let result = self.run_guarded(&request, cancellation.clone()).await;
+        let result = self.run_guarded(&request, &session, &origin, cancellation.clone()).await;
         self.host.checkin(&request).await;
         if !request.host_authored {
             let mut active = self.active.lock().await;
@@ -308,9 +321,9 @@ where
         }
     }
 
-    async fn run_guarded(&self, request: &TurnRequest, cancellation: crate::CancellationToken) -> Result<TurnResult, String> {
+    async fn run_guarded(&self, request: &TurnRequest, session: &TurnSession, origin: &serde_json::Value, cancellation: crate::CancellationToken) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
-        let run = self.host.run(request, cancellation.clone(), progress_tx);
+        let run = self.host.run(request, session, origin, cancellation.clone(), progress_tx);
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
         let deadline = request.deadline.or(self.config.deadline);
         let started = Instant::now();
@@ -373,5 +386,10 @@ pub fn deterministic_reply_id(scope: &ScopeKey, thread_id: &str, request_id: &st
     hash.update(thread_id.as_bytes());
     hash.update([0]);
     hash.update(request_id.as_bytes());
-    format!("reply-{:x}", hash.finalize())
+    let encoded = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("reply-{encoded}")
 }
