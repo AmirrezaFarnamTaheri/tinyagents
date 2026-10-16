@@ -163,13 +163,14 @@ impl ToolOutcomeClassifier for ErrorFieldClassifier {
     }
 }
 
-/// A conservative classifier backed by `tinytools::status::classify`.
+/// The stock mapping from `tinytools::status::classify` to harness outcomes.
 ///
-/// Service and model connection failures are safe to retry because the
-/// request did not reach the tool. Timeouts and unknown failures remain
-/// permanent: the host cannot infer whether an effect committed before the
-/// result was lost. Hosts with stronger, per-tool knowledge can provide their
-/// own [`ToolOutcomeClassifier`].
+/// Service-unavailable and model-connection classifications map to retryable;
+/// timeout, unknown, policy, and other classifications map to permanent.
+/// This is an advisory taxonomy only: classifying an error from its text cannot
+/// prove whether a tool performed a side effect. Hosts remain responsible for
+/// per-tool effect safety and may provide their own [`ToolOutcomeClassifier`]
+/// or override this mapping where repeating a call is unsafe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ToolStatusClassifier;
 
