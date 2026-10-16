@@ -15,6 +15,7 @@ mod completion;
 mod detached;
 mod driver;
 mod executor;
+mod file_persistence;
 mod invocation;
 mod outcome_status_map;
 mod persistence;
@@ -42,6 +43,7 @@ pub use detached::{
 };
 pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
+pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,

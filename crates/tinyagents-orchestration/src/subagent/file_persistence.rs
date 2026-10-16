@@ -13,6 +13,8 @@ use super::{
     SubagentTerminalPersistenceDisposition,
 };
 
+type Result<T> = std::result::Result<T, SubagentError>;
+
 /// File-backed subagent persistence with per-key process locks and atomic
 /// record replacement.
 #[derive(Clone, Debug)]
@@ -274,7 +276,8 @@ impl SubagentPersistence for FileSubagentPersistence {
         let path = self.pause_path(&pause.key)?;
         let previous = self.read_pause(&pause.key)?;
         match (&previous, &pause.replaces) {
-            (Some(current), Some(expected)) if current.outcome.status == super::SubagentOutcomeKind::AwaitingInput(super::SubagentPause { reason: String::new(), resume: expected.clone() }) => {},
+            (Some(current), Some(expected))
+                if pause_resume(current).is_some_and(|resume| resume == expected) => {}
             (None, None) => {},
             (Some(_), _) => return Ok(SubagentPausePersistenceDisposition::Existing),
             (None, Some(_)) => return Ok(SubagentPausePersistenceDisposition::Existing),
@@ -294,9 +297,12 @@ impl SubagentPersistence for FileSubagentPersistence {
             return Ok(SubagentTerminalPersistenceDisposition::Existing);
         }
         let current = self.read_pause(key)?;
-        if current.as_ref().is_some_and(|pause| {
-            !matches!((&pause.outcome.status, replaces), (super::SubagentOutcomeKind::AwaitingInput(old), Some(expected)) if &old.resume == expected)
-        }) || (current.is_none() && replaces.is_some()) {
+        let expected_matches = match (&current, replaces) {
+            (Some(pause), Some(expected)) => pause_resume(pause).is_some_and(|resume| resume == expected),
+            (None, None) => true,
+            _ => false,
+        };
+        if !expected_matches {
             return Ok(SubagentTerminalPersistenceDisposition::PauseExisting);
         }
         let record = TerminalRecord { key: key.clone(), outcome: outcome.clone() };
@@ -314,6 +320,13 @@ impl SubagentPersistence for FileSubagentPersistence {
             tracing::warn!(task_id = %key.task_id, %error, "[subagent-persistence] terminal committed but index cleanup failed");
         }
         Ok(SubagentTerminalPersistenceDisposition::Inserted)
+    }
+}
+
+fn pause_resume(pause: &PersistedSubagentPause) -> Option<&SubagentResume> {
+    match &pause.outcome.status {
+        super::SubagentOutcomeKind::AwaitingInput(state) => Some(&state.resume),
+        _ => None,
     }
 }
 
