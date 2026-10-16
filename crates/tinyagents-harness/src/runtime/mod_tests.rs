@@ -856,6 +856,18 @@ impl Tool for NoopTool {
     }
 }
 
+struct ReportedFailureTool;
+
+#[async_trait]
+impl Tool for ReportedFailureTool {
+    fn name(&self) -> &str { "reported_failure" }
+    fn description(&self) -> &str { "reports a classified error" }
+    fn parameters_schema(&self) -> serde_json::Value { json!({"type":"object"}) }
+    async fn execute(&self, _arguments: serde_json::Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::error("permission denied for /secret/file"))
+    }
+}
+
 #[async_trait]
 impl Tool for BlockedTool {
     fn name(&self) -> &str {
@@ -2760,6 +2772,49 @@ async fn denied_tool_calls_do_not_enter_terminal_executed_tool_summary() {
         summaries[0].tools_invoked.is_empty(),
         "denied calls never reached a tool executor"
     );
+}
+
+#[tokio::test]
+async fn learning_summary_contains_digested_success_and_classified_failure_outcomes() {
+    let mut response = tinyinference_llm::model::ModelResponse::assistant("");
+    response.message.tool_calls.extend([
+        tinyinference_llm::tool::ToolCall::new("ok-call", "noop", json!({"value":"safe"})),
+        tinyinference_llm::tool::ToolCall::new("failed-call", "reported_failure", json!({"path":"/secret/file"})),
+    ]);
+    let learning = Arc::new(RecordingLearning::default());
+    let host = crate::host::HostCapabilities::new(
+        Arc::new(StaticContextComposer::empty()),
+        Arc::new(InMemoryDefinitionRegistry::new(vec![
+            AgentDefinition::new("helper", "Helper", "test helper").with_tools(["noop", "reported_failure"]),
+        ])),
+        Arc::new(AllowAllSecurityGate),
+        Arc::new(FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+            response,
+            tinyinference_llm::model::ModelResponse::assistant("finished"),
+        ])))),
+    ).with_learning(learning.clone());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_tool(Arc::new(NoopTool));
+    harness.register_tool(Arc::new(ReportedFailureTool));
+    harness.invoke_agent(
+        AgentInvocation::new(
+            host,
+            AgentTurnRequest::new("helper", vec![tinyinference_llm::message::Message::user("run tools")]),
+            RunContext::new(RunConfig::new("learning-outcomes"), ()),
+        ),
+        &(),
+    ).await.expect("turn completes");
+    yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
+    let summaries = learning.summaries.lock().expect("learning lock");
+    let outcomes = &summaries[0].tool_outcomes;
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes[0].success);
+    assert!(outcomes[0].duration_ms < 10_000);
+    assert_eq!(outcomes[0].args_digest, format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"safe"})).unwrap())));
+    assert!(!outcomes[1].success);
+    assert_eq!(outcomes[1].failure_class.as_deref(), Some("permission_denied"));
+    assert!(outcomes[1].duration_ms < 10_000);
+    assert!(!serde_json::to_string(&summaries[0]).unwrap().contains("/secret/file"));
 }
 
 #[tokio::test]
