@@ -433,13 +433,9 @@ impl HistoryInner {
                 fields.insert("seq".into(), json!(seq));
             }
             match self
-                .docs
-                .put(
-                    ENTRIES,
-                    &entry_id(&self.stem, seq),
-                    doc,
-                    Precondition::Absent,
-                )
+                .tables
+                .entries
+                .insert(&entry_id(&self.stem, seq)?, &doc)
                 .await
             {
                 Ok(_) => {
@@ -480,60 +476,27 @@ impl HistoryInner {
     }
 
     /// Claims the generation reservation this handle was opened with, once,
-    /// before its first write: a compare-and-swap from the reserved version.
-    /// If another process took the reservation over in the meantime (this
-    /// one stalled past [`STALE_RESERVATION_MS`]), the generation is theirs
-    /// and this handle's writes are refused instead of overwriting it.
+    /// before its first write: a renewal of the lease it reserved. If another
+    /// process took the reservation over in the meantime (this one stalled
+    /// past the reservation's lifetime), the generation is theirs and this
+    /// handle's writes are refused instead of overwriting it.
     async fn claim_reservation(&self, replay: &mut Replay) -> anyhow::Result<()> {
-        let Some(reserved) = replay.reservation else {
+        let Some(held) = replay.reservation.as_ref() else {
             return Ok(());
         };
-        let claim = json!({
-            "stem": self.stem,
-            "subagent": is_subagent(&self.stem),
-            "written": false,
-            "created_at": now_rfc3339(),
-            "reserved_at": chrono::Utc::now().timestamp_millis(),
-        });
-        match self
-            .docs
-            .put(
-                INDEX,
-                &doc_key(&[&self.stem]),
-                claim,
-                Precondition::Version(reserved),
-            )
-            .await
-        {
-            Ok(_) => {
-                replay.reservation = None;
-                Ok(())
-            }
-            Err(error) if error.kind() == ErrorKind::Conflict => anyhow::bail!(
-                "session generation {} was taken over by another writer; reload the session",
-                self.stem
-            ),
-            Err(error) => Err(error.into()),
-        }
+        reservation::claim(&self.tables.leases, &self.stem, held).await?;
+        replay.reservation = None;
+        Ok(())
     }
 
     /// Releases the reservation of a generation this handle never wrote.
     async fn release_reservation(&self, replay: &mut Replay) -> Result<(), StorageError> {
-        let Some(reserved) = replay.reservation.take() else {
+        let Some(held) = replay.reservation.take() else {
             return Ok(());
         };
-        match self
-            .docs
-            .delete(
-                INDEX,
-                &doc_key(&[&self.stem]),
-                Precondition::Version(reserved),
-            )
+        reservation::release(&self.tables.leases, &self.stem, &held)
             .await
-        {
-            Err(error) if error.kind() != ErrorKind::Conflict => Err(error),
-            _ => Ok(()),
-        }
+            .map(drop)
     }
 
     /// Brings the index up to this replay on a read, best effort. A write
@@ -557,7 +520,7 @@ impl HistoryInner {
     /// Fenced by log position: the document records the entry it was built
     /// from (`indexed_seq`), and a handle whose replay is older than that
     /// leaves it alone, so a delayed writer never puts back stale lookup
-    /// fields. The write itself is a compare-and-swap on the version read.
+    /// fields. The write itself is one [`Repo::update`] compare-and-swap.
     async fn index(&self, replay: &mut Replay) -> Result<(), StorageError> {
         if !replay.written {
             return Ok(());
@@ -575,46 +538,28 @@ impl HistoryInner {
             return Ok(());
         }
         let seq = replay.next_seq.saturating_sub(1);
-        let id = doc_key(&[&self.stem]);
-        for _ in 0..CAS_ATTEMPTS {
-            let existing = self.docs.get(INDEX, &id).await?;
-            let newer = existing.as_ref().is_some_and(|found| {
-                found.doc.get("written") == Some(&json!(true))
-                    && found
-                        .doc
-                        .get("indexed_seq")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|indexed| indexed >= seq)
-            });
-            if newer {
-                // Someone indexed this entry or a later one: the document is
-                // at least as fresh as this replay.
-                replay.indexed = Some(fields);
-                return Ok(());
-            }
-            let created_at = existing
-                .as_ref()
-                .and_then(|found| found.doc.get("created_at").cloned())
-                .unwrap_or_else(|| json!(now_rfc3339()));
-            let precondition = existing
-                .as_ref()
-                .map_or(Precondition::Absent, |found| found.unchanged());
-            let mut doc = fields.clone();
-            doc["created_at"] = created_at;
-            doc["indexed_seq"] = json!(seq);
-            match self.docs.put(INDEX, &id, doc, precondition).await {
-                Ok(_) => {
-                    replay.indexed = Some(fields);
-                    return Ok(());
+        self.tables
+            .index
+            .update(&index_id(&self.stem)?, |existing| {
+                let newer = existing.as_ref().is_some_and(|found| {
+                    found.get("written") == Some(&json!(true))
+                        && found
+                            .get("indexed_seq")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|indexed| indexed >= seq)
+                });
+                if newer {
+                    // Someone indexed this entry or a later one: the document
+                    // is at least as fresh as this replay.
+                    return Ok(None);
                 }
-                Err(error) if error.kind() == ErrorKind::Conflict => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Err(StorageError::conflict(format!(
-            "transcript index for {} kept changing under {CAS_ATTEMPTS} attempts",
-            self.stem
-        )))
+                let mut doc = fields.clone();
+                doc["indexed_seq"] = json!(seq);
+                Ok(Some(doc))
+            })
+            .await?;
+        replay.indexed = Some(fields);
+        Ok(())
     }
 }
 
@@ -804,6 +749,7 @@ impl TranscriptHistory for DriverTranscriptHistory {
 #[derive(Clone)]
 pub struct DriverTranscriptLocator {
     docs: Arc<dyn DocumentStore>,
+    tables: Arc<Tables>,
     bridge: Blocking,
     label: String,
     declared: Arc<Declared>,
@@ -836,6 +782,7 @@ impl DriverTranscriptLocator {
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
+            tables: Arc::new(Tables::new(&docs)),
             docs,
             bridge,
             label: label.into(),
@@ -856,11 +803,12 @@ impl DriverTranscriptLocator {
         &self,
         stem: &str,
         seed: TranscriptMeta,
-        reservation: Option<Version>,
+        reservation: Option<Reservation>,
     ) -> DriverTranscriptHistory {
         DriverTranscriptHistory {
             inner: Arc::new(HistoryInner {
                 docs: Arc::clone(&self.docs),
+                tables: Arc::clone(&self.tables),
                 declared: Arc::clone(&self.declared),
                 stem: stem.to_string(),
                 seed,
