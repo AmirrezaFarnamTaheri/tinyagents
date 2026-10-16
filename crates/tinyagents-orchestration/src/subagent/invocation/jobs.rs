@@ -18,6 +18,9 @@ use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, Tool
 
 use crate::subagent::{
     AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
+    DetachedSubagentStatus, WaitError, WaitOutcome, list_subagent_records, record_agent_id,
+    record_subagent_session_id, record_to_wait_outcome, subagent_record_for_task,
+    task_id_for_session_in_records,
 };
 
 use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
@@ -908,6 +911,7 @@ pub struct SubAgentJobsTool {
     scope: ToolScope,
     category: ToolCategory,
     timeout: ToolTimeout,
+    task_thread_scope: Option<Arc<dyn Fn(u64) -> Option<String> + Send + Sync>>,
 }
 
 impl SubAgentJobsTool {
@@ -929,6 +933,7 @@ impl SubAgentJobsTool {
             scope: ToolScope::All,
             category: ToolCategory::System,
             timeout: ToolTimeout::Inherit,
+            task_thread_scope: None,
         }
     }
 
@@ -1044,6 +1049,65 @@ impl SubAgentJobsTool {
         self.tasks = Some((tasks, Arc::new(parent_run_id)));
         self
     }
+
+    /// Restricts task overlays to the authenticated parent thread.
+    ///
+    /// This is applied to both task listings and durable wait recovery. A
+    /// missing thread is an exact `None` scope, not permission to read tasks
+    /// from every thread owned by the parent session.
+    pub fn with_task_thread_scope(
+        mut self,
+        thread_id: impl Fn(u64) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.task_thread_scope = Some(Arc::new(thread_id));
+        self
+    }
+}
+
+fn durable_wait_snapshot(record: tinyagents_tasks::OrchestrationTaskRecord) -> Value {
+    let task_id = record.spec.task_id.as_str().to_owned();
+    let session_id = record_subagent_session_id(&record).map(str::to_owned);
+    let agent_id = record_agent_id(&record);
+    let (status, output, error, iterations) = match record_to_wait_outcome(record) {
+        WaitOutcome::Terminal(DetachedSubagentStatus::Running) => {
+            ("running", String::new(), None, 0)
+        }
+        WaitOutcome::Terminal(DetachedSubagentStatus::Completed { output, iterations }) => {
+            ("completed", output, None, iterations)
+        }
+        WaitOutcome::Terminal(DetachedSubagentStatus::AwaitingUser { question }) => {
+            ("awaiting_user", question, None, 0)
+        }
+        WaitOutcome::Terminal(DetachedSubagentStatus::Failed { error }) => {
+            ("failed", String::new(), Some(error), 0)
+        }
+        WaitOutcome::TimedOut(DetachedSubagentStatus::Running) => {
+            ("running", String::new(), None, 0)
+        }
+        WaitOutcome::TimedOut(DetachedSubagentStatus::Completed { output, iterations }) => {
+            ("completed", output, None, iterations)
+        }
+        WaitOutcome::TimedOut(DetachedSubagentStatus::AwaitingUser { question }) => {
+            ("awaiting_user", question, None, 0)
+        }
+        WaitOutcome::TimedOut(DetachedSubagentStatus::Failed { error }) => {
+            ("failed", String::new(), Some(error), 0)
+        }
+    };
+    json!({
+        "task_id": task_id,
+        "session_id": session_id,
+        "agent": agent_id,
+        "status": status,
+        "output": output,
+        "error": error,
+        "iterations": iterations,
+        "extensions": {
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "iterations": iterations,
+        }
+    })
 }
 
 #[async_trait]
@@ -1234,6 +1298,55 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
+                if let Some((tasks, parent_run_id)) = &self.tasks {
+                    let parent_run_id = parent_run_id(parent.instance_id());
+                    let thread_id = self
+                        .task_thread_scope
+                        .as_ref()
+                        .map(|scope| scope(parent.instance_id()));
+                    let records = list_subagent_records(tasks.as_ref())
+                        .into_iter()
+                        .filter(|record| {
+                            record.spec.parent_run_id.as_ref() == Some(&parent_run_id)
+                                && thread_id.as_ref().is_none_or(|thread| {
+                                    record.spec.thread_id.as_ref().map(ToString::to_string)
+                                        == *thread
+                                })
+                        })
+                        .collect::<Vec<_>>();
+                    let task_id = match subagent_record_for_task(
+                        tasks.as_ref(),
+                        id,
+                        parent_run_id.as_str(),
+                    ) {
+                        Ok(record)
+                            if record.spec.parent_run_id.as_ref() == Some(&parent_run_id)
+                                && thread_id.as_ref().is_none_or(|thread| {
+                                    record.spec.thread_id.as_ref().map(ToString::to_string)
+                                        == *thread
+                                }) =>
+                        {
+                            Some(record.spec.task_id.as_str().to_owned())
+                        }
+                        Err(WaitError::Unknown) => {
+                            task_id_for_session_in_records(
+                                records.clone(),
+                                id,
+                                parent_run_id.as_str(),
+                            )
+                            .ok()
+                        }
+                        Err(_) => None,
+                        Ok(_) => None,
+                    };
+                    if let Some(task_id) = task_id
+                        && let Some(record) = records
+                            .into_iter()
+                            .find(|record| record.spec.task_id.as_str() == task_id)
+                    {
+                        return Ok(ToolResult::json(durable_wait_snapshot(record)));
+                    }
+                }
                 if let Some((sessions, key)) = &self.sessions
                     && let Some(session) = sessions
                         .get(id)
@@ -1287,7 +1400,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         } else {
             let mut rows = self
                 .jobs
-                .list_owned(parent.instance_id())
+                .list_owned(&owner)
                 .into_iter()
                 .map(|job| {
                     serde_json::to_value(job).map(|mut v| {
@@ -1313,11 +1426,19 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 );
             }
             if let Some((tasks, parent_run_id)) = &self.tasks {
+                let thread_id = self
+                    .task_thread_scope
+                    .as_ref()
+                    .map(|scope| scope(parent.instance_id()));
                 let filter = OrchestrationTaskFilter {
                     parent_run_id: Some(parent_run_id(parent.instance_id())),
                     ..OrchestrationTaskFilter::default()
                 };
-                rows.extend(tasks.list(filter).into_iter().map(|task| {
+                rows.extend(tasks.list(filter).into_iter().filter(|task| {
+                    thread_id.as_ref().is_none_or(|thread| {
+                        task.spec.thread_id.as_ref().map(ToString::to_string) == *thread
+                    })
+                }).map(|task| {
                     let mut value = serde_json::to_value(task).unwrap_or(Value::Null);
                     value["kind"] = Value::String("task".into());
                     value
