@@ -20,7 +20,7 @@ use tinytools::WorkspaceDescriptor;
 
 /// Host callbacks for observing a git-worktree isolation lifecycle.
 #[async_trait]
-pub trait GitWorktreeLifecycleHook: Send + Sync + std::fmt::Debug {
+pub trait GitWorktreeLifecycleHook: Send + Sync {
     /// Called after the worktree descriptor has been prepared.
     async fn prepared(&self, descriptor: &WorkspaceDescriptor) -> Result<()>;
 
@@ -77,7 +77,7 @@ pub struct GitWorktreeStatus {
 }
 
 /// [`WorkspaceIsolation`] implementation backed by `git worktree`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GitWorktreeIsolation {
     repo_root: PathBuf,
     base_ref: GitWorktreeBaseRef,
@@ -85,6 +85,19 @@ pub struct GitWorktreeIsolation {
     trusted_roots: Vec<PathBuf>,
     policy_id_prefix: String,
     lifecycle_hook: Option<Arc<dyn GitWorktreeLifecycleHook>>,
+}
+
+impl std::fmt::Debug for GitWorktreeIsolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitWorktreeIsolation")
+            .field("repo_root", &self.repo_root)
+            .field("base_ref", &self.base_ref)
+            .field("sandbox", &self.sandbox)
+            .field("trusted_roots", &self.trusted_roots)
+            .field("policy_id_prefix", &self.policy_id_prefix)
+            .field("has_lifecycle_hook", &self.lifecycle_hook.is_some())
+            .finish()
+    }
 }
 
 impl GitWorktreeIsolation {
