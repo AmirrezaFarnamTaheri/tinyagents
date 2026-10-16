@@ -46,6 +46,7 @@ pub struct SpanCollector {
     first_input_recorded: bool,
     finished: bool,
     last_offset: Option<u64>,
+    stream_run_id: Option<String>,
 }
 
 impl SpanCollector {
@@ -62,11 +63,17 @@ impl SpanCollector {
             first_input_recorded: false,
             finished: false,
             last_offset: None,
+            stream_run_id: None,
         }
     }
 
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
+        let run_id = observation.run_id.as_str();
+        if self.stream_run_id.as_deref().is_some_and(|current| current != run_id) {
+            return;
+        }
+        self.stream_run_id.get_or_insert_with(|| run_id.to_owned());
         if self
             .last_offset
             .is_some_and(|offset| observation.offset <= offset)
@@ -298,9 +305,7 @@ impl SpanCollector {
                     self.spans[root].output = Some(capture_model_content(message));
                 }
             }
-            AgentEvent::RunCompleted { .. } => {
-                self.close_root(timestamp_ms, SpanStatus::Ok, "completed")
-            }
+            AgentEvent::RunCompleted { outcome, .. } => self.close_completed_run(outcome.as_ref(), timestamp_ms),
             AgentEvent::RunFailed { error, .. } => {
                 self.close_root(timestamp_ms, SpanStatus::Error, "failed");
                 if let Some(root) = self.root {
@@ -604,6 +609,46 @@ impl SpanCollector {
                 .insert("error".into(), Value::Bool(true));
         }
         self.close_span(root, at, status);
+    }
+
+    fn close_completed_run(&mut self, outcome: Option<&crate::terminal::TerminalOutcome>, at: u64) {
+        use crate::terminal::TerminalReason;
+        let Some(outcome) = outcome else {
+            self.close_root(at, SpanStatus::Ok, "completed");
+            return;
+        };
+        match outcome.reason {
+            TerminalReason::Completed => self.close_root(at, SpanStatus::Ok, "completed"),
+            TerminalReason::Cancelled => {
+                self.close_root(at, SpanStatus::Unset, "cancelled");
+                if let Some(root) = self.root {
+                    self.spans[root].attributes.insert("observation.level".into(), json_str("WARNING"));
+                    self.put_error(root, if outcome.message.is_empty() { "Run cancelled" } else { &outcome.message });
+                }
+            }
+            TerminalReason::LimitReached(_) | TerminalReason::Halted | TerminalReason::Paused | TerminalReason::Deferred => {
+                self.close_root(at, SpanStatus::Unset, "stopped");
+                if let Some(root) = self.root {
+                    let kind = match outcome.reason {
+                        TerminalReason::LimitReached(_) => "iteration_cap",
+                        TerminalReason::Paused => "wind_down",
+                        TerminalReason::Halted => "breaker",
+                        _ => "deferred",
+                    };
+                    let status_message = format!("stopped: {kind}");
+                    self.spans[root].attributes.insert("observation.level".into(), json_str("WARNING"));
+                    self.spans[root].attributes.insert("turn.stop_kind".into(), json_str(kind));
+                    self.spans[root].attributes.insert("observation.status_message".into(), json_str(&status_message));
+                    self.spans[root].attributes.insert("error.message".into(), json_str(&status_message));
+                }
+            }
+            _ => {
+                self.close_root(at, SpanStatus::Error, "failed");
+                if let Some(root) = self.root {
+                    self.put_error(root, &outcome.message);
+                }
+            }
+        }
     }
 
     fn put_error(&mut self, index: usize, error: &str) {
