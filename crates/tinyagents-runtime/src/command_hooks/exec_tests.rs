@@ -81,7 +81,7 @@ mod spawner {
             cwd: None,
             payload: HookPayload::Shell(ShellPayload {
                 command: "ls".into(),
-                cwd: None,
+                sandbox: false,
                 output: None,
                 duration_ms: None,
             }),
