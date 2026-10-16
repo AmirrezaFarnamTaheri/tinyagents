@@ -35,7 +35,7 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
         specs[2].indexes,
         vec![IndexSpec::new("by_thread", ["thread_id"])]
     );
-    assert_eq!(specs[3], DriverStore::collection_spec("session_kv"));
+    assert_eq!(specs[3], DriverStore::collection_spec());
     for spec in specs {
         spec.validate().unwrap();
         assert!(spec.ttl_field.is_none());
@@ -58,9 +58,9 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
         scoped
             .documents()
             .put(
-                "session_kv",
+                "tsd.kv",
                 "bootstrap-control",
-                serde_json::json!({"ns": "control", "value": "retained"}),
+                serde_json::json!({"owner": "session", "ns": "control", "key": "k", "value": "retained"}),
                 tinystoragedrivers_core::Precondition::Absent,
             )
             .await
@@ -71,7 +71,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
         assert_eq!(
             scoped
                 .documents()
-                .get("session_kv", "bootstrap-control")
+                .get("tsd.kv", "bootstrap-control")
                 .await
                 .unwrap()
                 .unwrap()

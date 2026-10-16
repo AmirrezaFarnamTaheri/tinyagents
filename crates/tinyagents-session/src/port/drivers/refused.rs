@@ -41,7 +41,7 @@ pub(super) fn stores(error: &StorageError, bridge: &Blocking) -> AgentStores {
             "refused",
         )),
         turn_states: Arc::new(DriverTurnStates::new(Arc::clone(&docs), bridge.clone())),
-        kv: Arc::new(DriverStore::new(docs)),
+        kv: Arc::new(DriverStore::with_owner(docs, "session")),
         journal: Arc::new(DriverAppendStore::new(streams)),
     }
 }
