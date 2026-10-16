@@ -1207,6 +1207,69 @@ async fn closed_progress_stream_does_not_starve_the_completed_run() {
     .unwrap();
 }
 
+#[derive(Default)]
+struct OrderedEvents(Mutex<Vec<&'static str>>);
+
+#[async_trait::async_trait]
+impl EventSink for OrderedEvents {
+    async fn progress(&self, _request: &TurnRequest, event: crate::progress::AgentProgress) {
+        let label = match event {
+            crate::progress::AgentProgress::TurnStarted => "progress",
+            _ => "other-progress",
+        };
+        self.0.lock().unwrap().push(label);
+    }
+
+    async fn terminal(&self, _request: &TurnRequest, _event: TerminalEvent) {
+        self.0.lock().unwrap().push("terminal");
+    }
+}
+
+struct FastProgressHost;
+
+#[async_trait::async_trait]
+impl TurnHost for FastProgressHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        _cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        progress.send(TurnSignal::Progress(Box::new(crate::progress::AgentProgress::TurnStarted))).await.unwrap();
+        Ok(TurnResult { reply: "fast".into(), data: serde_json::Value::Null })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
+async fn accepted_progress_is_delivered_before_terminal_when_run_finishes_immediately() {
+    let events = Arc::new(OrderedEvents::default());
+    let runner = TurnRunner::new(
+        Arc::new(FastProgressHost),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    );
+
+    runner.run(request(QueueDisposition::Interrupt, false)).await.unwrap();
+
+    assert_eq!(*events.0.lock().unwrap(), ["progress", "terminal"]);
+}
+
 #[tokio::test]
 async fn a_superseded_turn_waiting_for_the_session_lock_never_starts() {
     let started = Arc::new(tokio::sync::Notify::new());
