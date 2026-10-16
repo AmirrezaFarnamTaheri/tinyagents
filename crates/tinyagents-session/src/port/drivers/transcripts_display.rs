@@ -134,8 +134,7 @@ impl DriverTranscriptLocator {
     pub(super) fn indexed(&self, filter: Filter, what: &'static str) -> Vec<Indexed> {
         let found = self.run(|docs, declared| async move {
             declared.ensure(&docs).await?;
-            let query = Query::filter(filter.and(Filter::eq("written", true)))
-                .sort(Sort::asc("created_at"));
+            let query = oldest_first(Query::filter(filter.and(Filter::eq("written", true))));
             docs.query_all(INDEX, &query).await
         });
         match found {

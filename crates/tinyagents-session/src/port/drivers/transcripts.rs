@@ -206,14 +206,19 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
     ]
 }
 
-/// Newest first: by creation time, ties broken by id so the order is stable.
-fn newest_first() -> [Sort; 2] {
-    [Sort::desc(CREATED_FIELD), Sort::desc(ID_FIELD)]
+/// `query` ordered newest first by the index document's creation time, ties
+/// broken by id so the order is stable.
+fn newest_first(query: Query) -> Query {
+    query
+        .sort(Sort::desc(CREATED_FIELD))
+        .sort(Sort::desc(ID_FIELD))
 }
 
-/// Oldest first, with the same stable tie-break.
-pub(super) fn oldest_first() -> [Sort; 2] {
-    [Sort::asc(CREATED_FIELD), Sort::asc(ID_FIELD)]
+/// `query` ordered oldest first, with the same stable tie-break.
+pub(super) fn oldest_first(query: Query) -> Query {
+    query
+        .sort(Sort::asc(CREATED_FIELD))
+        .sort(Sort::asc(ID_FIELD))
 }
 
 /// Admits the collections (and the lease collection reservations use), once
@@ -838,12 +843,11 @@ impl DriverTranscriptLocator {
     fn newest_root_stem(&self, filter: Filter, what: &str) -> Option<String> {
         let found = self.run(|docs, declared| async move {
             declared.ensure(&docs).await?;
-            let query = Query::filter(
+            let query = newest_first(Query::filter(
                 filter
                     .and(Filter::eq("subagent", false))
                     .and(Filter::eq("written", true)),
-            )
-            .sort(Sort::desc("created_at"))
+            ))
             .limit(1);
             Ok(docs
                 .query(INDEX, &query)
@@ -877,47 +881,6 @@ impl DriverTranscriptLocator {
             let seed = discovered_seed(&stem);
             Arc::new(self.handle(&stem, seed)) as Arc<dyn TranscriptRead>
         })
-    }
-
-    /// Reserves `stem` as a new generation: succeeds when nothing is written
-    /// there and no live reservation holds it.
-    async fn reserve(docs: &Arc<dyn DocumentStore>, stem: &str) -> anyhow::Result<Version> {
-        let written = docs
-            .count(
-                ENTRIES,
-                &Filter::eq("stem", stem).and(Filter::eq("written", true)),
-            )
-            .await?;
-        anyhow::ensure!(written == 0, "session generation already exists");
-        let id = doc_key(&[stem]);
-        let now = chrono::Utc::now().timestamp_millis();
-        let reservation = json!({
-            "stem": stem,
-            "subagent": is_subagent(stem),
-            "written": false,
-            "created_at": now_rfc3339(),
-            "reserved_at": now,
-        });
-        let precondition = match docs.get(INDEX, &id).await? {
-            None => Precondition::Absent,
-            Some(found) => {
-                let stale = found.doc.get("written") == Some(&json!(false))
-                    && found
-                        .doc
-                        .get("reserved_at")
-                        .and_then(Value::as_i64)
-                        .is_some_and(|at| now - at >= STALE_RESERVATION_MS);
-                anyhow::ensure!(stale, "session generation already exists or is reserved");
-                found.unchanged()
-            }
-        };
-        match docs.put(INDEX, &id, reservation, precondition).await {
-            Ok(version) => Ok(version),
-            Err(error) if error.kind() == ErrorKind::Conflict => {
-                anyhow::bail!("session generation already exists or is reserved")
-            }
-            Err(error) => Err(error.into()),
-        }
     }
 }
 
@@ -1101,10 +1064,11 @@ impl DriverTranscriptLocator {
         let reservation = {
             let stem = stem.clone();
             let docs = Arc::clone(&self.docs);
+            let tables = Arc::clone(&self.tables);
             let declared = Arc::clone(&self.declared);
             run_on(&self.bridge, async move {
                 declared.ensure(&docs).await?;
-                Ok(Self::reserve(&docs, &stem).await)
+                Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
             })??
         };
         let predecessor_stem = session_stem(session);
@@ -1119,20 +1083,14 @@ impl DriverTranscriptLocator {
         Ok((successor, Arc::new(handle)))
     }
 
-    /// Drops the reservation of `stem` this call made, at the version it
-    /// wrote: if another process has since taken it over or written the
-    /// successor, the document is theirs and stays.
-    fn release(&self, stem: &str, reservation: Version) {
-        let docs = Arc::clone(&self.docs);
-        let id = doc_key(&[stem]);
+    /// Drops the reservation of `stem` this call made, at the epoch it
+    /// took: if another process has since taken it over, the reservation is
+    /// theirs and stays.
+    fn release(&self, stem: &str, held: &Reservation) {
+        let tables = Arc::clone(&self.tables);
+        let (stem_owned, held_owned) = (stem.to_owned(), held.clone());
         let released = run_on(&self.bridge, async move {
-            match docs
-                .delete(INDEX, &id, Precondition::Version(reservation))
-                .await
-            {
-                Err(error) if error.kind() == ErrorKind::Conflict => Ok(false),
-                other => other,
-            }
+            reservation::release(&tables.leases, &stem_owned, &held_owned).await
         });
         if let Err(error) = released {
             tracing::warn!(
