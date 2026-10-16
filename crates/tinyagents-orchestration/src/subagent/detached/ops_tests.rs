@@ -138,7 +138,10 @@ async fn awaiting_user_wait_keeps_completion_slot_for_later_resume() {
     )
     .await
     .unwrap();
-    assert!(matches!(paused, WaitOutcome::Terminal(DetachedSubagentStatus::AwaitingUser { .. })));
+    assert!(matches!(
+        paused,
+        WaitOutcome::Terminal(DetachedSubagentStatus::AwaitingUser { .. })
+    ));
     assert!(completion_store.get("task-paused").is_none());
 
     record_status(
@@ -160,8 +163,13 @@ async fn awaiting_user_wait_keeps_completion_slot_for_later_resume() {
     )
     .await
     .unwrap();
-    assert!(matches!(finished, WaitOutcome::Terminal(DetachedSubagentStatus::Completed { output, .. }) if output == "resumed"));
-    assert_eq!(completion_store.get("task-paused").unwrap().state, tinyagents_tasks::CompletionState::Tombstoned);
+    assert!(
+        matches!(finished, WaitOutcome::Terminal(DetachedSubagentStatus::Completed { output, .. }) if output == "resumed")
+    );
+    assert_eq!(
+        completion_store.get("task-paused").unwrap().state,
+        tinyagents_tasks::CompletionState::Tombstoned
+    );
 }
 
 #[test]
