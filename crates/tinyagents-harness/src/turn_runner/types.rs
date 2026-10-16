@@ -345,16 +345,9 @@ where
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
             let mut owner = request.clone();
             let mut current = state.clone();
-            loop {
-                let Some(owner_state) = current.as_ref() else {
-                    break;
-                };
+            while let Some(owner_generation) = current.as_ref().map(|state| state.generation) {
                 let followup = self
-                    .take_next_followup_or_release(
-                        &owner.scope,
-                        &owner.thread_id,
-                        owner_state.generation,
-                    )
+                    .take_next_followup_or_release(&owner.scope, &owner.thread_id, owner_generation)
                     .await;
                 let Some((followup, reserved)) = followup else {
                     break;
@@ -626,6 +619,16 @@ where
             .await
             .into_iter()
             .next();
+        let next = if next.is_none() {
+            current
+                .queue
+                .take(QueueLane::Steer, QueueMode::OneAtATime)
+                .await
+                .into_iter()
+                .next()
+        } else {
+            next
+        };
         if let Some(request) = next {
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),

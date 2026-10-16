@@ -637,6 +637,7 @@ async fn stale_completion_cannot_consume_a_replacement_generations_queue() {
     for (id, disposition) in [
         ("replacement-collect", QueueDisposition::Collect),
         ("replacement-followup", QueueDisposition::Followup),
+        ("replacement-steer", QueueDisposition::Steer),
     ] {
         let mut queued = request(disposition, false);
         queued.request_id = id.into();
@@ -658,6 +659,7 @@ async fn stale_completion_cannot_consume_a_replacement_generations_queue() {
 
     host.release_replacement.notify_one();
     new_task.await.unwrap().unwrap();
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 4);
 }
 
 #[derive(Default)]
@@ -686,6 +688,7 @@ impl ReplyStore for BlockingOldReplyStore {
 struct ReplacementHost {
     replacement_started: tokio::sync::Notify,
     release_replacement: tokio::sync::Notify,
+    runs: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -711,6 +714,7 @@ impl TurnHost for ReplacementHost {
         _queue: Arc<RunQueue<TurnRequest>>,
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if request.request_id == "replacement-generation" {
             self.replacement_started.notify_one();
             tokio::select! {

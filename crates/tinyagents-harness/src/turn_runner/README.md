@@ -12,7 +12,9 @@ intercept approval replies, then run before-submit hooks. A consumed approval
 reply or a policy rejection never starts a turn. The runner owns TinyAgents'
 `RunQueue` and its Steer, Followup, and Collect lanes. Accepted work retains
 its generic, typed host payload in that queue; Followup requests dispatch as
-fresh turns after the current turn completes. `Interrupt` cancels the prior
+fresh turns after the current turn completes. Steer requests still pending at
+that boundary also dispatch as fresh turns, so an accepted steer cannot be
+lost after host execution has stopped. `Interrupt` cancels the prior
 primary generation; `Parallel` uses a host-created fork session and a separate
 request-scoped cancellation slot, without serializing against the primary.
 
