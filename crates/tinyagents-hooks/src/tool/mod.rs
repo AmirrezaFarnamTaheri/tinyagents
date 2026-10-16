@@ -133,7 +133,7 @@ where Ctx: HookIdentity + Send + Sync {
     }
 
     async fn after_tool(&self, ctx: &mut tinyagents_harness::context::RunContext<Ctx>, _state: &(), invocation: &tinyagents_harness::middleware::ToolInvocationIdentity, result: &mut tinytools::ToolResult) -> tinyagents_harness::error::Result<()> {
-        let args = self.arguments.lock().unwrap_or_else(|e| e.into_inner()).remove(invocation.call_id().as_ref()).unwrap_or(serde_json::Value::Null);
+        let args = self.arguments.lock().unwrap_or_else(|e| e.into_inner()).remove(&invocation.call_id().to_string()).unwrap_or(serde_json::Value::Null);
         let text = result.text();
         let mut event = ToolHookContext {
             event: ToolHookEvent::PostToolUse, call_id: invocation.call_id().to_string(), tool_name: invocation.tool_name().to_owned(), arguments: args,
@@ -145,8 +145,6 @@ where Ctx: HookIdentity + Send + Sync {
             if let Some(additional) = hook.after_tool_context(&event).await {
                 result.content.push(tinytools::ToolContent::Text { text: additional });
             }
-            // The context is immutable to callbacks; retain this assignment as
-            // a reminder that each observer sees the same normalized arguments.
             event.arguments = event.arguments.clone();
         }
         Ok(())
