@@ -125,7 +125,12 @@ impl SpanCollector {
                 }
             }
             AgentEvent::ModelDelta { call_id, delta, .. } => {
-                if let Some(call) = self.open_models.get_mut(call_id.as_str()) {
+                let has_content = !delta.text.is_empty()
+                    || !delta.reasoning.is_empty()
+                    || delta.tool_call.is_some();
+                if has_content
+                    && let Some(call) = self.open_models.get_mut(call_id.as_str())
+                {
                     call.first_delta_ms.get_or_insert(timestamp_ms);
                     if !delta.text.is_empty() {
                         call.first_text_ms.get_or_insert(timestamp_ms);
@@ -759,9 +764,22 @@ impl SpanCollector {
     }
 
     fn close_span(&mut self, index: usize, at: u64, status: SpanStatus) {
+        let Some(span) = self.spans.get(index) else {
+            return;
+        };
+        let end = at.max(span.start_unix_ms);
+        let parent_id = span.parent_span_id.clone();
         if let Some(span) = self.spans.get_mut(index) {
-            span.end_unix_ms = Some(at.max(span.start_unix_ms));
+            span.end_unix_ms = Some(end);
             span.status = status;
+        }
+        if let Some(parent) = parent_id
+            .as_deref()
+            .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
+            && let Some(parent_end) = self.spans[parent].end_unix_ms
+            && end > parent_end
+        {
+            self.spans[parent].end_unix_ms = Some(end);
         }
     }
 
