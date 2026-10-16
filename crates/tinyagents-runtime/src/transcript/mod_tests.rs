@@ -268,11 +268,18 @@ fn reasoning_only_replay_does_not_add_an_empty_text_block() {
     ));
 }
 
-/// Marker lifting is a host compatibility policy, not this typed conversion core.
+/// Untyped transcript text lifts legacy image references while leaving other
+/// product marker syntax untouched.
 #[test]
-fn untyped_user_text_is_preserved_without_interpreting_legacy_markers() {
+fn untyped_user_text_lifts_images_and_preserves_other_marker_text() {
     let row = TranscriptMessage::user("literal [IMAGE:old-path] and [FILE:file]");
-    assert_eq!(transcript_to_message(&row).text(), row.content);
+    let Message::User(user) = transcript_to_message(&row) else {
+        panic!("user");
+    };
+    assert_eq!(user.content.len(), 3);
+    assert!(matches!(&user.content[0], ContentBlock::Text(text) if text == "literal"));
+    assert!(matches!(&user.content[1], ContentBlock::Image(image) if image.url == "old-path"));
+    assert!(matches!(&user.content[2], ContentBlock::Text(text) if text == "and [FILE:file]"));
     let row = TranscriptMessage::user_with_parts(Vec::new());
     let Message::User(user) = transcript_to_message(&row) else {
         panic!("user");
