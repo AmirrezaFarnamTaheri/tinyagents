@@ -88,7 +88,9 @@ pub use delegation_tool::{
     MultiTargetDelegationTool, parse_approval, review_stage_output,
 };
 pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
-pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
+pub use jobs::{
+    SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
+};
 pub use types::*;
 
 #[cfg(test)]
