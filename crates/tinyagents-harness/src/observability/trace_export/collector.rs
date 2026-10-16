@@ -178,14 +178,31 @@ impl SpanCollector {
                 error,
                 ..
             } => {
-                let call = self.open_models.remove(call_id.as_str()).unwrap_or_else(|| {
-                    let parent = self.active_parent(timestamp_ms);
-                    let mut attrs = BTreeMap::new();
-                    attrs.insert("gen_ai.request.model".into(), json_str(model));
-                    let (index, _) = self.open_span(SpanKind::Generation, format!("llm.{}", nonempty(model, "unknown")), Some(parent), started_at_ms.unwrap_or(timestamp_ms), attrs);
-                    CallStart { index, parent_index: parent, started_at_ms: started_at_ms.unwrap_or(timestamp_ms), first_delta_ms: None, first_text_ms: None }
-                });
-                let start = started_at_ms.unwrap_or(call.started_at_ms).min(timestamp_ms);
+                let call = self
+                    .open_models
+                    .remove(call_id.as_str())
+                    .unwrap_or_else(|| {
+                        let parent = self.active_parent(timestamp_ms);
+                        let mut attrs = BTreeMap::new();
+                        attrs.insert("gen_ai.request.model".into(), json_str(model));
+                        let (index, _) = self.open_span(
+                            SpanKind::Generation,
+                            format!("llm.{}", nonempty(model, "unknown")),
+                            Some(parent),
+                            started_at_ms.unwrap_or(timestamp_ms),
+                            attrs,
+                        );
+                        CallStart {
+                            index,
+                            parent_index: parent,
+                            started_at_ms: started_at_ms.unwrap_or(timestamp_ms),
+                            first_delta_ms: None,
+                            first_text_ms: None,
+                        }
+                    });
+                let start = started_at_ms
+                    .unwrap_or(call.started_at_ms)
+                    .min(timestamp_ms);
                 self.close_span(call.index, timestamp_ms, SpanStatus::Error);
                 self.put_error(call.index, error);
                 self.spans[call.index].start_unix_ms = start;
@@ -235,7 +252,14 @@ impl SpanCollector {
                     let mut attrs = BTreeMap::new();
                     attrs.insert("tool.name".into(), json_str(tool_name));
                     attrs.insert("tool.call_id".into(), json_str(call_id.as_str()));
-                    self.open_span(SpanKind::Tool, format!("tool.{tool_name}"), Some(parent), started_at_ms.unwrap_or(timestamp_ms), attrs).0
+                    self.open_span(
+                        SpanKind::Tool,
+                        format!("tool.{tool_name}"),
+                        Some(parent),
+                        started_at_ms.unwrap_or(timestamp_ms),
+                        attrs,
+                    )
+                    .0
                 });
                 {
                     let index = index;
@@ -290,7 +314,14 @@ impl SpanCollector {
                     let mut attrs = BTreeMap::new();
                     attrs.insert("tool.name".into(), json_str(tool_name));
                     attrs.insert("tool.call_id".into(), json_str(call_id.as_str()));
-                    self.open_span(SpanKind::Tool, format!("tool.{tool_name}"), Some(parent), started_at_ms.unwrap_or(timestamp_ms), attrs).0
+                    self.open_span(
+                        SpanKind::Tool,
+                        format!("tool.{tool_name}"),
+                        Some(parent),
+                        started_at_ms.unwrap_or(timestamp_ms),
+                        attrs,
+                    )
+                    .0
                 });
                 {
                     let index = index;
@@ -306,11 +337,17 @@ impl SpanCollector {
                 self.open_subagents.insert(name.clone(), index);
             }
             AgentEvent::SubAgentCompleted { name, .. } => {
-                let index = self.open_subagents.remove(name).unwrap_or_else(|| self.open_subagent(name, 0, timestamp_ms));
+                let index = self
+                    .open_subagents
+                    .remove(name)
+                    .unwrap_or_else(|| self.open_subagent(name, 0, timestamp_ms));
                 self.close_span(index, timestamp_ms, SpanStatus::Ok);
             }
             AgentEvent::SubAgentFailed { name, depth, error } => {
-                let index = self.open_subagents.remove(name).unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
+                let index = self
+                    .open_subagents
+                    .remove(name)
+                    .unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
                 self.close_span(index, timestamp_ms, SpanStatus::Error);
                 self.put_error(index, error);
             }
@@ -732,8 +769,10 @@ impl SpanCollector {
         if let Some(span) = self.spans.get_mut(index) {
             span.end_unix_ms = Some(at.max(span.start_unix_ms));
             span.status = SpanStatus::Unset;
-            span.attributes.insert("force_closed".into(), Value::Bool(true));
-            span.attributes.insert("observation.level".into(), json_str("WARNING"));
+            span.attributes
+                .insert("force_closed".into(), Value::Bool(true));
+            span.attributes
+                .insert("observation.level".into(), json_str("WARNING"));
         }
     }
 
