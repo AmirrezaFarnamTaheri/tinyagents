@@ -276,12 +276,9 @@ where
             {
                 Ok(attachment) => attachment,
                 Err(error) if historical => {
-                    if let Some(placeholder) = self.recover_history(
-                        scope,
-                        InputModality::Image,
-                        &source,
-                        &error,
-                    ) {
+                    if let Some(placeholder) =
+                        self.recover_history(scope, InputModality::Image, &source, &error)
+                    {
                         image_fallback.push(placeholder);
                         continue;
                     }
@@ -315,12 +312,9 @@ where
             {
                 Ok(attachment) => attachment,
                 Err(error) if historical => {
-                    if let Some(placeholder) = self.recover_history(
-                        scope,
-                        InputModality::Document,
-                        &source,
-                        &error,
-                    ) {
+                    if let Some(placeholder) =
+                        self.recover_history(scope, InputModality::Document, &source, &error)
+                    {
                         file_fallback_text.push(placeholder);
                         continue;
                     }

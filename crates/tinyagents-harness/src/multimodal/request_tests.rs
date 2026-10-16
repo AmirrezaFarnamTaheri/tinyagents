@@ -161,6 +161,31 @@ impl MediaHistoryFallback<String> for SafeHistory {
     }
 }
 
+#[derive(Default)]
+struct RecordingHistory {
+    unavailable: Mutex<Vec<(InputModality, String, String)>>,
+}
+
+impl MediaHistoryFallback<String> for RecordingHistory {
+    fn omitted(&self, _scope: &String, _modality: InputModality, _source: &str) -> String {
+        "[Earlier attachment omitted by history budget]".into()
+    }
+
+    fn unavailable(
+        &self,
+        _scope: &String,
+        modality: InputModality,
+        source: &str,
+        error: &str,
+    ) -> Option<String> {
+        self.unavailable
+            .lock()
+            .unwrap()
+            .push((modality, source.to_string(), error.to_string()));
+        Some("[Earlier attachment unavailable: safe-hint]".into())
+    }
+}
+
 fn attachment(name: &str, mime: &str, bytes: &[u8]) -> ResolvedAttachment {
     ResolvedAttachment {
         bytes: bytes.to_vec(),
@@ -552,6 +577,80 @@ async fn missing_history_media_degrades_safely_but_missing_latest_media_fails() 
         error
             .to_string()
             .contains("missing test source latest-missing")
+    );
+}
+
+#[tokio::test]
+async fn historical_text_recovers_each_failed_marker_without_losing_prose_or_valid_media() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    sources.insert(
+        "good-image".into(),
+        attachment("good.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let history = Arc::new(RecordingHistory::default());
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig {
+            images: ImageLimits {
+                allow_remote_fetch: false,
+                ..ImageLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        resolver,
+        Arc::default(),
+    )
+    .with_history_fallback(history.clone());
+    let mut request = ModelRequest::default();
+    request.messages = vec![
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text(
+                "Caption [IMAGE:good-image] then [IMAGE:https://example.test/photo?token=secret]"
+                    .into(),
+            )],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("latest text".into())],
+        }),
+    ];
+
+    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
+
+    let captured = model.requests.lock().unwrap();
+    let Message::User(old_user) = &captured[0].messages[0] else {
+        panic!("historical message retained")
+    };
+    let rendered = old_user
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Caption"));
+    assert!(rendered.contains("safe-hint"));
+    assert!(!rendered.contains("token=secret"));
+    assert!(
+        old_user
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image(_)))
+    );
+    drop(captured);
+    assert_eq!(
+        history.unavailable.lock().unwrap().as_slice(),
+        &[(
+            InputModality::Image,
+            "https://example.test/photo?token=secret".into(),
+            "Model error: remote attachment fetch is disabled".into(),
+        )]
     );
 }
 
