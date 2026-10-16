@@ -148,11 +148,11 @@ impl WorkspaceIsolation for GitWorktreeIsolation {
         for root in &self.trusted_roots {
             descriptor = descriptor.with_trusted_root(root.clone());
         }
-        if let Some(hook) = &self.lifecycle_hook {
-            if let Err(error) = hook.prepared(&descriptor).await {
-                let _ = remove_git_worktree(&self.repo_root, &descriptor.root, true);
-                return Err(error);
-            }
+        if let Some(hook) = &self.lifecycle_hook
+            && let Err(error) = hook.prepared(&descriptor).await
+        {
+            let _ = remove_git_worktree(&self.repo_root, &descriptor.root, true);
+            return Err(error);
         }
         Ok(descriptor)
     }
