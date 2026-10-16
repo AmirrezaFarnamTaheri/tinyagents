@@ -155,7 +155,10 @@ pub trait ReplyStore<P = serde_json::Value>: Send + Sync {
 }
 
 #[async_trait]
-pub trait EventSink<P = serde_json::Value>: Send + Sync {
+pub trait EventSink<P = serde_json::Value>: Send + Sync
+where
+    P: Send + Sync,
+{
     async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
     async fn suggestions(&self, _request: &TurnRequest<P>, _suggestions: Vec<String>) {}
@@ -325,16 +328,27 @@ where
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         let result = self.run_one(request.clone()).await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
-            let followups = self
+            let mut pending: std::collections::VecDeque<_> = self
                 .take_queued(
                     &request.scope,
                     &request.thread_id,
                     QueueLane::Followup,
                     QueueMode::All,
                 )
-                .await;
-            for followup in followups {
-                let _ = self.run(followup).await;
+                .await
+                .into();
+            while let Some(followup) = pending.pop_front() {
+                if self.run_one(followup.clone()).await.is_ok() {
+                    pending.extend(
+                        self.take_queued(
+                            &followup.scope,
+                            &followup.thread_id,
+                            QueueLane::Followup,
+                            QueueMode::All,
+                        )
+                        .await,
+                    );
+                }
             }
         }
         result

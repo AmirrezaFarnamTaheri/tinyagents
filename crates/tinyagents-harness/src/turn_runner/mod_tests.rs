@@ -1,5 +1,5 @@
 use super::*;
-use crate::run_queue::{QueueLane, QueueMode};
+use crate::run_queue::{QueueLane, QueueMode, RunQueue};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
