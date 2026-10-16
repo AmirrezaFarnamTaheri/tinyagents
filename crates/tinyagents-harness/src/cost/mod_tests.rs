@@ -62,7 +62,10 @@ fn nested_usage_rollup_counts_root_child_and_grandchild_once() {
         input_tokens: 3,
         output_tokens: 2,
         cached_input_tokens: 1,
-        cost: CostTally { known_usd: 0.3, source: CostSource::Charged },
+        cost: CostTally {
+            known_usd: 0.3,
+            source: CostSource::Charged,
+        },
         children: Vec::new(),
     };
     let child = SubagentUsage {
@@ -71,14 +74,20 @@ fn nested_usage_rollup_counts_root_child_and_grandchild_once() {
         input_tokens: 5,
         output_tokens: 4,
         cached_input_tokens: 2,
-        cost: CostTally { known_usd: 0.5, source: CostSource::Charged },
+        cost: CostTally {
+            known_usd: 0.5,
+            source: CostSource::Charged,
+        },
         children: vec![grandchild.clone()],
     };
     let rollup = roll_up_subagent_usage(
         10,
         8,
         4,
-        CostTally { known_usd: 1.0, source: CostSource::Charged },
+        CostTally {
+            known_usd: 1.0,
+            source: CostSource::Charged,
+        },
         [child, grandchild],
     );
     assert_eq!(rollup.input_tokens, 18);

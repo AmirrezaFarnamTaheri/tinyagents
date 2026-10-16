@@ -14,13 +14,13 @@ use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_core::{StorageBackend, StorageError};
 
 use super::{AgentStores, SessionStoreProvider, TurnStates};
-use crate::port::types::TurnLifecycle;
+use crate::DriverSessionStores;
 use crate::port::TurnState;
+use crate::port::types::TurnLifecycle;
 use crate::transcript::{
     SessionAdoption, SessionRef, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
     TranscriptMeta, TranscriptPartial, TranscriptRead,
 };
-use crate::DriverSessionStores;
 
 /// Scopes live provider handles so one test or runtime can rebind its own
 /// stores without moving unrelated providers.
@@ -108,7 +108,9 @@ impl RebindableSessionStores {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .filter_map(|(agent_id, weak)| weak.upgrade().map(|binding| (agent_id.clone(), binding)))
+            .filter_map(|(agent_id, weak)| {
+                weak.upgrade().map(|binding| (agent_id.clone(), binding))
+            })
             .collect::<Vec<_>>();
 
         // Prepare every replacement before publishing any, so a failed scope
@@ -122,7 +124,10 @@ impl RebindableSessionStores {
             .collect::<Result<Vec<_>, _>>()?;
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
         for (binding, stores) in replacements {
-            *binding.current.write().unwrap_or_else(PoisonError::into_inner) = stores;
+            *binding
+                .current
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = stores;
         }
         Ok(())
     }
@@ -180,7 +185,12 @@ impl AppendStore for LiveAppendStore {
         let store = self.0.snapshot().journal;
         store.read_from(stream, offset).await
     }
-    async fn read_window(&self, stream: &str, offset: u64, limit: usize) -> Result<Vec<(u64, Value)>> {
+    async fn read_window(
+        &self,
+        stream: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Vec<(u64, Value)>> {
         let store = self.0.snapshot().journal;
         store.read_window(stream, offset, limit).await
     }
@@ -196,64 +206,187 @@ struct LiveTurnStates(Arc<LiveAgentStores>);
 struct LiveTranscriptLocator(Arc<LiveAgentStores>);
 
 impl TurnStates for LiveTurnStates {
-    fn put(&self, state: &TurnState) -> Result<(), String> { self.0.snapshot().turn_states.put(state) }
-    fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> { self.0.snapshot().turn_states.put_unless_completed(state) }
-    fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> { self.0.snapshot().turn_states.get(thread_id) }
-    fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> { self.0.snapshot().turn_states.get_turn(thread_id, request_id) }
-    fn delete(&self, thread_id: &str) -> Result<bool, String> { self.0.snapshot().turn_states.delete(thread_id) }
-    fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> { self.0.snapshot().turn_states.delete_turn(thread_id, request_id) }
-    fn list(&self) -> Result<Vec<TurnState>, String> { self.0.snapshot().turn_states.list() }
-    fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> { self.0.snapshot().turn_states.list_thread(thread_id) }
-    fn clear_all(&self) -> Result<usize, String> { self.0.snapshot().turn_states.clear_all() }
-    fn mark_all_interrupted(&self, now: &str) -> Result<usize, String> { self.0.snapshot().turn_states.mark_all_interrupted(now) }
-    fn settle_turn(&self, thread_id: &str, request_id: &str, lifecycle: TurnLifecycle, now: &str) -> Result<bool, String> { self.0.snapshot().turn_states.settle_turn(thread_id, request_id, lifecycle, now) }
+    fn put(&self, state: &TurnState) -> Result<(), String> {
+        self.0.snapshot().turn_states.put(state)
+    }
+    fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> {
+        self.0.snapshot().turn_states.put_unless_completed(state)
+    }
+    fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> {
+        self.0.snapshot().turn_states.get(thread_id)
+    }
+    fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> {
+        self.0
+            .snapshot()
+            .turn_states
+            .get_turn(thread_id, request_id)
+    }
+    fn delete(&self, thread_id: &str) -> Result<bool, String> {
+        self.0.snapshot().turn_states.delete(thread_id)
+    }
+    fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
+        self.0
+            .snapshot()
+            .turn_states
+            .delete_turn(thread_id, request_id)
+    }
+    fn list(&self) -> Result<Vec<TurnState>, String> {
+        self.0.snapshot().turn_states.list()
+    }
+    fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> {
+        self.0.snapshot().turn_states.list_thread(thread_id)
+    }
+    fn clear_all(&self) -> Result<usize, String> {
+        self.0.snapshot().turn_states.clear_all()
+    }
+    fn mark_all_interrupted(&self, now: &str) -> Result<usize, String> {
+        self.0.snapshot().turn_states.mark_all_interrupted(now)
+    }
+    fn settle_turn(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        lifecycle: TurnLifecycle,
+        now: &str,
+    ) -> Result<bool, String> {
+        self.0
+            .snapshot()
+            .turn_states
+            .settle_turn(thread_id, request_id, lifecycle, now)
+    }
 }
 
 impl TranscriptLocator for LiveTranscriptLocator {
-    fn destination_key(&self) -> Option<String> { self.0.snapshot().transcripts.destination_key() }
-    fn latest_for_agent(&self, agent: &str) -> Option<Arc<dyn TranscriptRead>> { self.0.snapshot().transcripts.latest_for_agent(agent) }
-    fn root_for_thread(&self, thread: &str) -> Option<Arc<dyn TranscriptRead>> { self.0.snapshot().transcripts.root_for_thread(thread) }
-    fn root_for_thread_scoped(&self, thread: &str, agent: Option<&str>) -> Option<Arc<dyn TranscriptRead>> { self.0.snapshot().transcripts.root_for_thread_scoped(thread, agent) }
-    fn thread_transcripts(&self, thread: &str, agent: Option<&str>) -> Option<ThreadTranscripts> { self.0.snapshot().transcripts.thread_transcripts(thread, agent) }
-    fn open_stem(&self, stem: &str, seed: TranscriptMeta) -> anyhow::Result<Arc<dyn TranscriptHistory>> { self.0.snapshot().transcripts.open_stem(stem, seed) }
-    fn adopt_legacy(&self, session: &SessionRef, thread: &str, seed: &TranscriptMeta) -> anyhow::Result<Option<SessionAdoption>> { self.0.snapshot().transcripts.adopt_legacy(session, thread, seed) }
-    fn append_interrupted_partial(&self, thread: &str, agent: Option<&str>, partial: &TranscriptPartial, request: Option<&str>) -> anyhow::Result<bool> { self.0.snapshot().transcripts.append_interrupted_partial(thread, agent, partial, request) }
+    fn destination_key(&self) -> Option<String> {
+        self.0.snapshot().transcripts.destination_key()
+    }
+    fn latest_for_agent(&self, agent: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.0.snapshot().transcripts.latest_for_agent(agent)
+    }
+    fn root_for_thread(&self, thread: &str) -> Option<Arc<dyn TranscriptRead>> {
+        self.0.snapshot().transcripts.root_for_thread(thread)
+    }
+    fn root_for_thread_scoped(
+        &self,
+        thread: &str,
+        agent: Option<&str>,
+    ) -> Option<Arc<dyn TranscriptRead>> {
+        self.0
+            .snapshot()
+            .transcripts
+            .root_for_thread_scoped(thread, agent)
+    }
+    fn thread_transcripts(&self, thread: &str, agent: Option<&str>) -> Option<ThreadTranscripts> {
+        self.0
+            .snapshot()
+            .transcripts
+            .thread_transcripts(thread, agent)
+    }
+    fn open_stem(
+        &self,
+        stem: &str,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.0.snapshot().transcripts.open_stem(stem, seed)
+    }
+    fn adopt_legacy(
+        &self,
+        session: &SessionRef,
+        thread: &str,
+        seed: &TranscriptMeta,
+    ) -> anyhow::Result<Option<SessionAdoption>> {
+        self.0
+            .snapshot()
+            .transcripts
+            .adopt_legacy(session, thread, seed)
+    }
+    fn append_interrupted_partial(
+        &self,
+        thread: &str,
+        agent: Option<&str>,
+        partial: &TranscriptPartial,
+        request: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        self.0
+            .snapshot()
+            .transcripts
+            .append_interrupted_partial(thread, agent, partial, request)
+    }
 }
 
 /// Each resolved trait object is stable, while its backing stores are replaced
 /// atomically when the owning provider rebinds.
 impl SessionStoreProvider for RebindableSessionStores {
     fn for_agent(&self, agent_id: &str) -> AgentStores {
-        if let Some(binding) = self.live.lock().unwrap_or_else(PoisonError::into_inner).get(agent_id).and_then(Weak::upgrade) {
+        if let Some(binding) = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(agent_id)
+            .and_then(Weak::upgrade)
+        {
             return binding.handles();
         }
         let stores = self.current().for_agent(agent_id);
-        let binding = Arc::new(LiveAgentStores { current: RwLock::new(stores) });
-        self.live.lock().unwrap_or_else(PoisonError::into_inner).insert(agent_id.to_owned(), Arc::downgrade(&binding));
+        let binding = Arc::new(LiveAgentStores {
+            current: RwLock::new(stores),
+        });
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(agent_id.to_owned(), Arc::downgrade(&binding));
         binding.handles()
     }
 
     fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
-        if let Some(binding) = self.live.lock().unwrap_or_else(PoisonError::into_inner).get(agent_id).and_then(Weak::upgrade) {
+        if let Some(binding) = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(agent_id)
+            .and_then(Weak::upgrade)
+        {
             return Ok(binding.handles());
         }
         let stores = self.current().try_for_agent(agent_id)?;
-        let binding = Arc::new(LiveAgentStores { current: RwLock::new(stores) });
-        self.live.lock().unwrap_or_else(PoisonError::into_inner).insert(agent_id.to_owned(), Arc::downgrade(&binding));
+        let binding = Arc::new(LiveAgentStores {
+            current: RwLock::new(stores),
+        });
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(agent_id.to_owned(), Arc::downgrade(&binding));
         Ok(binding.handles())
     }
 
-    fn bind_actor(&self, backend: Arc<dyn StorageBackend>) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+    fn bind_actor(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         self.current().bind_actor(backend)
     }
-    fn bind_actor_with_schema_admission(&self, backend: Arc<dyn StorageBackend>, admission: tinyagents_harness::store::SchemaAdmission) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        self.current().bind_actor_with_schema_admission(backend, admission)
+    fn bind_actor_with_schema_admission(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+        admission: tinyagents_harness::store::SchemaAdmission,
+    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+        self.current()
+            .bind_actor_with_schema_admission(backend, admission)
     }
-    fn run_ledger_for_agent(&self, agent_id: &str) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
+    fn run_ledger_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::run_ledger::LedgerResult<Option<Arc<dyn crate::run_ledger::RunLedgerStore>>> {
         self.current().run_ledger_for_agent(agent_id)
     }
-    fn conversations_for_agent(&self, agent_id: &str) -> crate::threads::ConversationResult<Option<Arc<dyn crate::threads::ConversationPersistence>>> {
+    fn conversations_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> crate::threads::ConversationResult<Option<Arc<dyn crate::threads::ConversationPersistence>>>
+    {
         self.current().conversations_for_agent(agent_id)
     }
-    fn recover(&self) -> anyhow::Result<()> { self.current().recover() }
+    fn recover(&self) -> anyhow::Result<()> {
+        self.current().recover()
+    }
 }

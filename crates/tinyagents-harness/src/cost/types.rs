@@ -146,11 +146,7 @@ pub fn roll_up_subagent_usage(
         cost,
         subagents: Vec::new(),
     };
-    fn visit(
-        result: &mut UsageRollup,
-        seen: &mut HashSet<String>,
-        child: SubagentUsage,
-    ) {
+    fn visit(result: &mut UsageRollup, seen: &mut HashSet<String>, child: SubagentUsage) {
         if !seen.insert(child.run_id.clone()) {
             return;
         }
