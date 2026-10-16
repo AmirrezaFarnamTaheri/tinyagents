@@ -164,7 +164,7 @@ where
         call: &mut tinyinference_llm::tool::ToolCall,
     ) -> tinyagents_harness::error::Result<()> {
         use tinyagents_harness::error::TinyAgentsError;
-        let event = ToolHookContext {
+        let mut event = ToolHookContext {
             event: ToolHookEvent::PreToolUse,
             call_id: call.id.clone(),
             tool_name: call.name.clone(),
@@ -237,7 +237,7 @@ where
                 Vec::new(),
             ));
         let text = result.text();
-        let mut event = ToolHookContext {
+        let event = ToolHookContext {
             event: ToolHookEvent::PostToolUse,
             call_id: invocation.call_id().to_string(),
             tool_name: invocation.tool_name().to_owned(),
