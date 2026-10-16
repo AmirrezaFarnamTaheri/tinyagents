@@ -441,6 +441,42 @@ async fn fixed_job_alias_rejects_missing_identifiers_and_defaults_stay_compatibl
 }
 
 #[tokio::test]
+async fn job_alias_falls_back_to_durable_session_identifier() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    let alias = SubAgentJobsTool::new(jobs)
+        .with_tool_name("wait_subagent")
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_fields("task_id", "subagent_session_id")
+        .with_required_identifier();
+
+    assert_eq!(
+        alias.parameters_schema()["properties"]["task_id"]["type"],
+        "string"
+    );
+    assert_eq!(
+        alias.parameters_schema()["properties"]["subagent_session_id"]["type"],
+        "string"
+    );
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &alias,
+        &(),
+        new_call_id(),
+        json!({"task_id":"", "subagent_session_id":job_id.as_str()}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.output()).unwrap()["id"],
+        job_id.as_str()
+    );
+}
+
+#[tokio::test]
 async fn named_message_alias_routes_mapped_id_and_message_fields() {
     let jobs = SubAgentJobRegistry::new();
     let parent = RunContext::new(RunConfig::new("parent"), ());
