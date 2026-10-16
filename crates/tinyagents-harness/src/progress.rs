@@ -193,7 +193,7 @@ pub enum AgentProgress {
         /// breaker or iteration cap) and handed back as incomplete. The trace
         /// collector closes the subagent span at `WARNING` with it. `None` for
         /// a sub-agent that finished normally.
-        stop: Option<tinyagents_harness::turn_stop::TurnStop>,
+        stop: Option<crate::turn_stop::TurnStop>,
     },
 
     /// A sub-agent failed.
@@ -434,7 +434,7 @@ pub enum AgentProgress {
         /// completion path. Content-free; the trace collector closes the turn
         /// span at `WARNING` with it. `None` for a turn that finished on its
         /// own.
-        stop: Option<tinyagents_harness::turn_stop::TurnStop>,
+        stop: Option<crate::turn_stop::TurnStop>,
     },
 
     /// The turn's content: the user's prompt and the model's final reply.

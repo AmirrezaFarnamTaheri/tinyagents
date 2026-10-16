@@ -22,6 +22,7 @@ pub struct TurnRequest {
     pub request_id: String,
     pub text: String,
     pub host_authored: bool,
+    pub disposition: QueueDisposition,
     pub deadline: Option<Duration>,
     pub idle_timeout: Option<Duration>,
 }
@@ -84,6 +85,11 @@ pub trait TurnHost: Send + Sync {
     async fn checkin(&self, request: &TurnRequest);
     /// Cancel child runs belonging to this parent request.
     async fn cancel_children(&self, request: &TurnRequest);
+    /// Accept an incoming request into the host's turn queue. Return `true`
+    /// when it was queued instead of run immediately.
+    async fn queue(&self, _request: &TurnRequest, _mode: QueueDisposition) -> Result<bool, String> {
+        Ok(false)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +109,7 @@ pub trait ReplyStore: Send + Sync {
 pub trait EventSink: Send + Sync {
     async fn progress(&self, request: &TurnRequest, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest, event: TerminalEvent);
+    async fn suggestions(&self, _request: &TurnRequest, _suggestions: Vec<String>) {}
 }
 
 pub trait FailureClassifier: Send + Sync {
@@ -142,6 +149,8 @@ impl Default for TurnRunnerConfig {
 pub enum TurnRunnerError {
     #[error("turn was consumed by ingress policy")]
     Consumed,
+    #[error("turn was accepted into the host queue")]
+    Queued,
     #[error("turn rejected: {0}")]
     Rejected(String),
     #[error("turn failed: {0}")]
@@ -152,6 +161,7 @@ pub enum TurnRunnerError {
 
 struct ActiveTurn {
     request_id: String,
+    request: TurnRequest,
     cancel: crate::CancellationToken,
 }
 
@@ -230,28 +240,41 @@ where
         }
 
         let key = (request.scope.clone(), request.thread_id.clone());
+        let cancellation = crate::CancellationToken::new();
+        if !request.host_authored {
+            if !matches!(request.disposition, QueueDisposition::Interrupt | QueueDisposition::Parallel)
+                && self.host.queue(&request, request.disposition).await.unwrap_or(false)
+            {
+                return Err(TurnRunnerError::Queued);
+            }
+            let previous = if request.disposition == QueueDisposition::Parallel {
+                None
+            } else {
+                self.active.lock().await.insert(
+                    key.clone(),
+                    ActiveTurn {
+                        request_id: request.request_id.clone(),
+                        request: request.clone(),
+                        cancel: cancellation.clone(),
+                    },
+                )
+            };
+            if let Some(previous) = previous {
+                previous.cancel.cancel();
+                self.host.cancel_children(&previous.request).await;
+            }
+        }
         let lock = {
             let mut locks = self.locks.lock().await;
             Arc::clone(locks.entry(key.clone()).or_insert_with(|| Arc::new(Mutex::new(()))))
         };
-        let _session_guard = lock.lock().await;
+        let _session_guard = if request.disposition == QueueDisposition::Parallel {
+            None
+        } else {
+            Some(lock.lock_owned().await)
+        };
         if let Err(error) = self.host.checkout(&request).await {
             return self.fail(&request, error).await;
-        }
-
-        let cancellation = crate::CancellationToken::new();
-        if !request.host_authored {
-            let mut active = self.active.lock().await;
-            if let Some(previous) = active.insert(
-                key.clone(),
-                ActiveTurn {
-                    request_id: request.request_id.clone(),
-                    cancel: cancellation.clone(),
-                },
-            ) {
-                previous.cancel.cancel();
-                self.host.cancel_children(&request).await;
-            }
         }
 
         let result = self.run_guarded(&request, cancellation.clone()).await;
@@ -269,14 +292,15 @@ where
                 if let Err(error) = self.replies.persist(&request, &reply_id, &result).await {
                     return self.fail(&request, error).await;
                 }
-                let _suggestions = self.summarizer.suggestions(&request, &result).await;
+                let suggestions = self.summarizer.suggestions(&request, &result).await;
+                self.events.suggestions(&request, suggestions).await;
                 self.events.terminal(
                     &request,
                     TerminalEvent::Completed { request_id: request.request_id.clone(), reply_id },
                 ).await;
                 Ok(result)
             }
-            Err(error) if cancellation.is_cancelled() => {
+            Err(_error) if cancellation.is_cancelled() => {
                 self.events.terminal(&request, TerminalEvent::Cancelled { request_id: request.request_id.clone() }).await;
                 Err(TurnRunnerError::Cancelled)
             }
@@ -349,5 +373,5 @@ pub fn deterministic_reply_id(scope: &ScopeKey, thread_id: &str, request_id: &st
     hash.update(thread_id.as_bytes());
     hash.update([0]);
     hash.update(request_id.as_bytes());
-    format!("reply-{}", hex::encode(hash.finalize()))
+    format!("reply-{:x}", hash.finalize())
 }
