@@ -125,20 +125,20 @@ pub fn sanitize_tool_output(output: &str, tool_name: &str, success: bool) -> Str
     format!("{tool_name}: failed ({class})")
 }
 
+type PendingCallKey = (u64, String);
+
+/// Invocation state retained until its post-tool hook runs or its run ends.
+struct PendingCall {
+    arguments: serde_json::Value,
+    started_at: std::time::Instant,
+    additional_context: Vec<String>,
+    run_liveness: std::sync::Weak<()>,
+}
+
 /// Deliver typed callbacks through the harness middleware lifecycle.
 pub struct ToolHooksMiddleware<Ctx> {
     hooks: Vec<std::sync::Arc<dyn ToolHook<Ctx>>>,
-    arguments: std::sync::Mutex<
-        std::collections::HashMap<
-            (u64, String),
-            (
-                serde_json::Value,
-                std::time::Instant,
-                Vec<String>,
-                std::sync::Weak<()>,
-            ),
-        >,
-    >,
+    arguments: std::sync::Mutex<std::collections::HashMap<PendingCallKey, PendingCall>>,
     marker: std::marker::PhantomData<fn() -> Ctx>,
 }
 
@@ -214,15 +214,15 @@ where
         // Calls refused by a later middleware never reach `after_tool`. Prune
         // their entries once the owning run has gone away, while retaining
         // every live parallel run's pending calls.
-        pending.retain(|_, (_, _, _, run)| run.strong_count() > 0);
+        pending.retain(|_, pending_call| pending_call.run_liveness.strong_count() > 0);
         pending.insert(
             (ctx.instance_id(), call.id.clone()),
-            (
-                call.arguments.clone(),
-                std::time::Instant::now(),
+            PendingCall {
+                arguments: call.arguments.clone(),
+                started_at: std::time::Instant::now(),
                 additional_context,
-                ctx.lifecycle_token(),
-            ),
+                run_liveness: ctx.lifecycle_token(),
+            },
         );
         Ok(())
     }
@@ -234,25 +234,32 @@ where
         invocation: &tinyagents_harness::middleware::ToolInvocationIdentity,
         result: &mut tinytools::ToolResult,
     ) -> tinyagents_harness::error::Result<()> {
-        let (args, started, mut additional_context, _run_liveness) = self
+        let pending_call = self
             .arguments
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&(ctx.instance_id(), invocation.call_id().to_string()))
-            .unwrap_or((
-                serde_json::Value::Null,
-                std::time::Instant::now(),
-                Vec::new(),
-                ctx.lifecycle_token(),
-            ));
+            .unwrap_or(PendingCall {
+                arguments: serde_json::Value::Null,
+                started_at: std::time::Instant::now(),
+                additional_context: Vec::new(),
+                run_liveness: ctx.lifecycle_token(),
+            });
+        let mut additional_context = pending_call.additional_context;
         let text = result.text();
         let event = ToolHookContext {
             event: ToolHookEvent::PostToolUse,
             call_id: invocation.call_id().to_string(),
             tool_name: invocation.tool_name().to_owned(),
-            arguments: args,
+            arguments: pending_call.arguments,
             success: Some(!result.is_error),
-            duration_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
+            duration_ms: Some(
+                pending_call
+                    .started_at
+                    .elapsed()
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+            ),
             output: (!result.is_error).then(|| text.clone()),
             error: result.is_error.then_some(text),
             session_id: ctx.data.session_id(),
@@ -345,8 +352,7 @@ impl<Ctx: HookIdentity + Send + Sync> ToolHook<Ctx> for crate::command::HookEngi
             cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
             ..Default::default()
         };
-        let output = self.dispatch_tool_hooks(context, identity, true).await;
-        output
+        self.dispatch_tool_hooks(context, identity, true).await
     }
 
     async fn after_tool_context(&self, host: &Ctx, context: &ToolHookContext) -> Option<String> {
