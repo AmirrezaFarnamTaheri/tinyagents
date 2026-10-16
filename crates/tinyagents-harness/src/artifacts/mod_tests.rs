@@ -116,6 +116,31 @@ async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
     assert_eq!(std::fs::read_dir(&root).expect("read root").count(), 0);
 }
 
+#[tokio::test]
+async fn filesystem_offload_materializes_only_the_redacted_stored_body() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+    let offload = ArtifactOffload::in_memory("worker", "materialized")
+        .with_redactor(Arc::new(TestRedactor));
+    let output = format!("before {SECRET} after");
+
+    let (pointer, artifact) = offload_oversized_result_to_fs(
+        output,
+        &offload,
+        1,
+        READ_TOOL,
+        &root,
+    )
+    .await;
+
+    let artifact = artifact.expect("offloaded artifact");
+    assert!(pointer.contains(&artifact.relative_path));
+    let materialized = std::fs::read_to_string(root.join(&artifact.relative_path)).expect("read materialized file");
+    assert_eq!(materialized, format!("before {REDACTION} after"));
+    assert!(!materialized.contains(SECRET));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() {

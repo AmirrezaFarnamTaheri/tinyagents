@@ -34,7 +34,10 @@ impl Tool for PlanExitTool {
     }
 
     fn description(&self) -> &str {
-        "Exit plan mode and hand off the plan to execution. Call this once the plan is complete."
+        "Exit plan mode and hand off the plan to execution. Call this once \
+         the plan is complete — the wrapped harness will switch to build \
+         mode (when wired). The `plan` argument is the user-facing plan \
+         text that downstream agents will execute against."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
