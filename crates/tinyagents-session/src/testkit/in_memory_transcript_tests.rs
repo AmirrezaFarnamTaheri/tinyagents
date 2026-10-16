@@ -25,8 +25,10 @@ fn in_memory_transcript_starts_empty() {
     };
 
     let transcript = locator.open_stem("fixture", meta).expect("bind transcript");
-    assert!(transcript
-        .read_session()
-        .expect("read empty transcript")
-        .is_none());
+    assert!(
+        transcript
+            .read_session()
+            .expect("read empty transcript")
+            .is_none()
+    );
 }
