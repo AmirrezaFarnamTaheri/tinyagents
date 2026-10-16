@@ -92,6 +92,57 @@ async fn stored_bodies(offload: &ArtifactOffload) -> Vec<(String, String)> {
     out
 }
 
+#[tokio::test]
+async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("private");
+    std::fs::create_dir_all(&root).expect("create root");
+    let offload = ArtifactOffload::in_memory("worker", "denied")
+        .with_path_policy(Arc::new(TestPolicy::rooted_at(root.clone())));
+
+    let output = "sensitive result".repeat(100);
+    let (text, artifact) = offload_oversized_result_to_fs(
+        output.clone(),
+        &offload,
+        1,
+        READ_TOOL,
+        &root,
+    )
+    .await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(stored_bodies(&offload).await.is_empty(), "denied targets must not create blob records");
+    assert_eq!(std::fs::read_dir(&root).expect("read root").count(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::os::unix::fs::symlink(&outside, root.join("outputs")).expect("symlink outputs");
+    let offload = ArtifactOffload::in_memory("worker", "symlink");
+
+    let output = "must remain inline".repeat(100);
+    let (text, artifact) = offload_oversized_result_to_fs(
+        output.clone(),
+        &offload,
+        1,
+        READ_TOOL,
+        &root,
+    )
+    .await;
+
+    assert_eq!(text, output);
+    assert!(artifact.is_none());
+    assert!(stored_bodies(&offload).await.is_empty());
+    assert_eq!(std::fs::read_dir(&outside).expect("read outside").count(), 0);
+}
+
 // ── Kinds and directories ─────────────────────────────────────────────────────
 
 #[test]

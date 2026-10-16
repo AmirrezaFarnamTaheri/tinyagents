@@ -83,7 +83,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx>
 }
 
 struct BoundUseSkillDispatch<State: Send + Sync, Ctx: Send + Sync> {
-    pinned: Arc<super::tool::PinnedPackCall>,
+    pinned: Arc<super::PinnedPackCall>,
     selected: Option<Arc<dyn ToolDispatch<State, Ctx>>>,
 }
 
@@ -108,9 +108,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx>
     }
 
     fn call_options(&self, arguments: &Value) -> ToolCallOptions {
+        let inner_arguments = self
+            .pinned
+            .selection()
+            .map(|selection| selection.arguments().clone())
+            .unwrap_or_else(|| arguments.clone());
         self.selected.as_ref().map_or_else(
             || self.pinned.supports_markdown().then_some(ToolCallOptions { prefer_markdown: true }).unwrap_or_default(),
-            |dispatch| dispatch.call_options(arguments),
+            |dispatch| dispatch.call_options(&inner_arguments),
         )
     }
 

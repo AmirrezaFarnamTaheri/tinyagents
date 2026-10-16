@@ -80,3 +80,7 @@ impl Tool for PlanExitTool {
         Ok(ToolResult::success(format!("{PLAN_EXIT_MARKER}\n{plan}")))
     }
 }
+
+#[cfg(test)]
+#[path = "plan_exit_tests.rs"]
+mod tests;
