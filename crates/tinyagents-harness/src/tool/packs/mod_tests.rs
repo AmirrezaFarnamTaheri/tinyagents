@@ -436,10 +436,12 @@ async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch(
             ])),
         )
         .register_tool_dispatch(Arc::new(UseSkillDispatch::new(outer, selector)));
-    let mut policy = crate::runtime::RunPolicy::default();
-    policy.tool_rules = crate::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
-        tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["a_one"]),
-    ));
+    let policy = crate::runtime::RunPolicy {
+        tool_rules: crate::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
+            tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["a_one"]),
+        )),
+        ..Default::default()
+    };
     harness.with_policy(policy);
 
     let run = harness
