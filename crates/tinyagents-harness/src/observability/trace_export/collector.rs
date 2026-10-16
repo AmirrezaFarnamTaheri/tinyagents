@@ -489,9 +489,8 @@ impl SpanCollector {
             }
             AgentEvent::RunFailed { error, .. } => {
                 self.close_root(timestamp_ms, SpanStatus::Error, "failed");
-                if let Some(root) = self.root {
-                    self.put_error(root, error);
-                }
+                let root = self.ensure_run_root(timestamp_ms);
+                self.put_error(root, error);
             }
             _ => {}
         }
@@ -830,7 +829,7 @@ impl SpanCollector {
     }
 
     fn close_root(&mut self, at: u64, status: SpanStatus, outcome: &str) {
-        let root = self.ensure_root(at);
+        let root = self.ensure_run_root(at);
         self.spans[root]
             .attributes
             .insert("turn.outcome".into(), json_str(outcome));
@@ -852,7 +851,7 @@ impl SpanCollector {
             TerminalReason::Completed => self.close_root(at, SpanStatus::Ok, "completed"),
             TerminalReason::Cancelled => {
                 self.close_root(at, SpanStatus::Unset, "cancelled");
-                if let Some(root) = self.root {
+                if let Some(root) = self.run_roots.get(&self.active_run_id()).copied() {
                     self.spans[root]
                         .attributes
                         .insert("observation.level".into(), json_str("WARNING"));
@@ -871,7 +870,7 @@ impl SpanCollector {
             | TerminalReason::Paused
             | TerminalReason::Deferred => {
                 self.close_root(at, SpanStatus::Unset, "stopped");
-                if let Some(root) = self.root {
+                if let Some(root) = self.run_roots.get(&self.active_run_id()).copied() {
                     let kind = match outcome.reason {
                         TerminalReason::LimitReached(_) => "limit_reached",
                         TerminalReason::Paused => "paused",
