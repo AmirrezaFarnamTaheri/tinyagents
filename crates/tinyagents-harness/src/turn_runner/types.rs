@@ -412,7 +412,6 @@ where
             };
             if let Some(previous) = previous {
                 previous.cancel.cancel();
-                self.host.cancel_children(&previous.request).await;
                 self.clear_queue(&request.scope, &request.thread_id).await;
             }
         }

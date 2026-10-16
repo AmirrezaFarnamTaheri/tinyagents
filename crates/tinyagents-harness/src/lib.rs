@@ -159,6 +159,7 @@ pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
+pub use progress::AgentProgress;
 pub use run_queue::{
     ForwardEvent, ForwardEventSink, ForwarderCleanup, QueueLane, QueueMode, QueueStatus,
     QueuedMessage, RunQueue, RunQueueHandle, SteeringForwarderGuard,

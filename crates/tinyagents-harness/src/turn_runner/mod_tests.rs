@@ -208,12 +208,13 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
         (status.steers, status.followups, status.collects),
         (1, 1, 1)
     );
+    let steers = runner
+        .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+        .await;
+    assert_eq!(steers[0].request_id, "steered");
     assert_eq!(
-        runner
-            .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
-            .await[0]
-            .request_id,
-        "steered"
+        steers[0].payload,
+        serde_json::json!({"attachment": "file-token"})
     );
     assert_eq!(
         runner
@@ -232,6 +233,7 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
     assert_eq!(runner.clear_queue(&scope, "thread-a").await, 0);
     release.notify_one();
     primary.await.unwrap().unwrap();
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
     let ingress = ingress.0.lock().unwrap();
     assert_eq!(ingress.len(), 4 * 4);
     assert_eq!(
@@ -333,15 +335,120 @@ async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
             .cancel(&another_agent, &thread, Some("current-request"))
             .await
     );
+    for mode in [
+        QueueDisposition::Steer,
+        QueueDisposition::Followup,
+        QueueDisposition::Collect,
+    ] {
+        assert!(matches!(
+            runner.run(request(mode, false)).await,
+            Err(TurnRunnerError::Queued)
+        ));
+    }
+    assert_eq!(runner.queue_status(&scope, &thread).await.total, 3);
     assert!(
         runner
             .cancel(&scope, &thread, Some("current-request"))
             .await
     );
+    assert_eq!(runner.queue_status(&scope, &thread).await.total, 0);
     assert!(matches!(
         run.await.unwrap(),
         Err(TurnRunnerError::Cancelled)
     ));
+}
+
+#[tokio::test]
+async fn closed_progress_stream_does_not_starve_the_completed_run() {
+    let runner = runner(
+        Arc::new(Host::default()),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        runner.run(request(QueueDisposition::Interrupt, false)),
+    )
+    .await
+    .expect("closed progress stream must not starve the run result")
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_superseded_turn_waiting_for_the_session_lock_never_starts() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut first = request(QueueDisposition::Interrupt, false);
+    first.request_id = "first".into();
+    let first_run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(first).await })
+    };
+    started.notified().await;
+
+    let mut waiting = request(QueueDisposition::Interrupt, false);
+    waiting.request_id = "waiting".into();
+    let waiting_run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(waiting).await })
+    };
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while runner
+            .in_flight_request_id(&scope, "thread-a")
+            .await
+            .as_deref()
+            != Some("waiting")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("waiting request must own the cancellation generation");
+
+    let mut replacement = request(QueueDisposition::Interrupt, false);
+    replacement.request_id = "replacement".into();
+    let replacement_run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(replacement).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while runner
+            .in_flight_request_id(&scope, "thread-a")
+            .await
+            .as_deref()
+            != Some("replacement")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("replacement must supersede the waiting request");
+
+    started.notified().await;
+    release.notify_one();
+    assert!(matches!(
+        first_run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(matches!(
+        waiting_run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    replacement_run.await.unwrap().unwrap();
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -403,6 +510,42 @@ async fn two_agents_can_run_the_same_thread_id_concurrently() {
     .await
     .expect("agent-scoped sessions must not share a lock");
     assert_eq!(host.sessions.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn separate_threads_for_one_agent_do_not_share_a_session_lock() {
+    let host = Arc::new(ConcurrentHost {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        sessions: Mutex::default(),
+    });
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let first = request(QueueDisposition::Interrupt, false);
+    let mut second = first.clone();
+    second.thread_id = "thread-b".into();
+    second.request_id = "request-b".into();
+    let first = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(first).await })
+    };
+    let second = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(second).await })
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+    })
+    .await
+    .expect("distinct threads must own independent session locks");
 }
 
 struct ConcurrentHost {
