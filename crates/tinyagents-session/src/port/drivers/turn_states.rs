@@ -31,8 +31,8 @@ use super::super::TurnStates;
 use super::super::memory::{
     COMPLETED_RETENTION, completed_newest_first, is_terminal, newest_first,
 };
-use storage::{decode as decode_body, encode};
 use crate::turn_state::{TurnLifecycle, TurnState};
+use storage::{decode as decode_body, encode};
 use tinyagents_harness::store::SchemaAdmission;
 
 /// The collection turn snapshots live in.
@@ -353,7 +353,11 @@ impl TurnStates for DriverTurnStates {
             inner.declared().await?;
             inner
                 .docs
-                .delete(COLLECTION, &id(&thread_id, &request_id)?, Precondition::None)
+                .delete(
+                    COLLECTION,
+                    &id(&thread_id, &request_id)?,
+                    Precondition::None,
+                )
                 .await
         })
     }

@@ -52,7 +52,9 @@ pub(super) fn encode(state: &TurnState) -> Result<Value, StorageError> {
             .and_then(|value| value.as_str().map(str::to_owned))
             .ok_or_else(|| invalid(format!("turn state has no {wire_name}")))?;
         let parsed = chrono::DateTime::parse_from_rfc3339(&text).map_err(|error| {
-            invalid(format!("turn state {wire_name} {text:?} is not RFC 3339: {error}"))
+            invalid(format!(
+                "turn state {wire_name} {text:?} is not RFC 3339: {error}"
+            ))
         })?;
         stored.insert(stored_name.to_owned(), parsed.timestamp_millis().into());
     }
@@ -122,7 +124,11 @@ fn map_keys(value: Value, rename: fn(&str) -> String) -> Value {
                 .into_iter()
                 .map(|(name, value)| {
                     let opaque = name == OPAQUE;
-                    let value = if opaque { value } else { map_keys(value, rename) };
+                    let value = if opaque {
+                        value
+                    } else {
+                        map_keys(value, rename)
+                    };
                     (rename(&name), value)
                 })
                 .collect(),

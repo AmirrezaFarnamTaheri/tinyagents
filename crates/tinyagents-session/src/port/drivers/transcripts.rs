@@ -43,13 +43,13 @@ use tinystoragedrivers_core::{
 use tokio::sync::{Mutex, OnceCell};
 
 use super::super::memory::MAX_GENERATIONS;
-use reservation::Reservation;
-pub(super) use reservation::leases_spec;
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
     same_transcript_messages, session_stem, stamped_rows,
 };
+use reservation::Reservation;
+pub(super) use reservation::leases_spec;
 
 /// One document per transcript stem: the lookup fields.
 pub(super) const INDEX: &str = "session.transcripts";
@@ -58,7 +58,6 @@ pub(super) const ENTRIES: &str = "session.transcript_entries";
 
 /// The body version both collections are written at.
 pub(crate) const SCHEMA_VERSION: u32 = 2;
-
 
 /// Index refresh attempts after a durable write before leaving the repair
 /// to the next write or read.
@@ -201,7 +200,10 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
         CollectionSpec::new(INDEX)
             .index(IndexSpec::new("by_thread", ["thread_id", CREATED_FIELD]))
-            .index(IndexSpec::new("by_agent_name", ["agent_name", CREATED_FIELD]))
+            .index(IndexSpec::new(
+                "by_agent_name",
+                ["agent_name", CREATED_FIELD],
+            ))
             .index(IndexSpec::new("by_agent_id", ["agent_id", CREATED_FIELD])),
     ]
 }
@@ -1105,10 +1107,10 @@ impl DriverTranscriptLocator {
 
 #[path = "transcripts_adoption.rs"]
 mod adoption;
-#[path = "transcripts_reservation.rs"]
-mod reservation;
 #[path = "transcripts_display.rs"]
 mod display;
+#[path = "transcripts_reservation.rs"]
+mod reservation;
 
 #[cfg(test)]
 #[path = "transcripts_tests.rs"]

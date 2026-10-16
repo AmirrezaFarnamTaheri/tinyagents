@@ -121,11 +121,6 @@ pub(super) async fn release(
     reservation: &Reservation,
 ) -> Result<bool, StorageError> {
     leases
-        .release(
-            LEASE_OWNER,
-            stem,
-            &reservation.holder,
-            reservation.epoch,
-        )
+        .release(LEASE_OWNER, stem, &reservation.holder, reservation.epoch)
         .await
 }

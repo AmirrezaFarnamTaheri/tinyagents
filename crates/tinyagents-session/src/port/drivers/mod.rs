@@ -229,19 +229,14 @@ impl DriverSessionStores {
         })
     }
 
-    /// The document store of `agent_id`'s scope, and whether this provider may
+    /// The storage of `agent_id`'s scope, and whether this provider may
     /// declare collections in it. Used by host-side one-time bookkeeping (the
-    /// legacy import marker) that sits beside the session collections.
+    /// legacy import marker in `tsd.migrations`) that sits beside the session
+    /// collections.
     #[cfg(feature = "legacy-import")]
-    pub(crate) fn documents_for(
-        &self,
-        agent_id: &str,
-    ) -> Result<(Arc<dyn DocumentStore>, bool), StorageError> {
+    pub(crate) fn scoped_for(&self, agent_id: &str) -> Result<(ScopedStorage, bool), StorageError> {
         let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
-        Ok((
-            Arc::clone(scoped.documents()),
-            self.schema_admission == SchemaAdmission::Declare,
-        ))
+        Ok((scoped, self.schema_admission == SchemaAdmission::Declare))
     }
 
     /// The bridge this provider runs synchronous seams on.
