@@ -17,7 +17,7 @@ async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
         .documents()
         .put(
             TELEMETRY,
-            &storage::key(&[id]),
+            &storage::key(&[id]).unwrap(),
             storage::encode(&row).unwrap(),
             Precondition::None,
         )
@@ -48,7 +48,7 @@ async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
         .documents()
         .put(
             TELEMETRY,
-            &storage::key(&["undated"]),
+            &storage::key(&["undated"]).unwrap(),
             storage::encode(&undated).unwrap(),
             Precondition::None,
         )
@@ -183,7 +183,7 @@ impl DocumentStore for RetentionBoundary {
             self.inner
                 .put(
                     TELEMETRY,
-                    &storage::key(&["old"]),
+                    &storage::key(&["old"]).unwrap(),
                     value.clone(),
                     Precondition::None,
                 )

@@ -174,7 +174,7 @@ async fn independent_event_allocators_replay_without_duplicates_and_keep_cursor_
         .for_scope(&scope)
         .unwrap()
         .streams()
-        .read_window(&format!("run_events:{}", storage::key(&["run"])), 0, 10)
+        .read_window(&storage::event_stream("run").unwrap(), 0, 10)
         .await
         .unwrap();
     assert_eq!(entries.len(), 2);
@@ -501,7 +501,7 @@ async fn projection_refuses_an_existing_stream_that_disagrees_with_committed_rec
     scoped
         .streams()
         .append(
-            &format!("run_events:{}", storage::key(&["run"])),
+            &storage::event_stream("run").unwrap(),
             json!({"foreign":true}),
         )
         .await
@@ -577,7 +577,7 @@ async fn projection_refuses_a_valid_receipt_that_skips_an_earlier_committed_even
         })
         .await
         .unwrap();
-    let stream = format!("run_events:{}", storage::key(&["run"]));
+    let stream = storage::event_stream("run").unwrap();
     native
         .streams()
         .append(&stream, serde_json::to_value(second).unwrap())

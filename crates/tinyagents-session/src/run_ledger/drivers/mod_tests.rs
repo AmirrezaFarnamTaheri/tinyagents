@@ -342,7 +342,7 @@ async fn scoped_workflow_rejects_malformed_document_schema() {
         .documents()
         .put(
             WORKFLOWS,
-            &storage::key(&["workflow"]),
+            &storage::key(&["workflow"]).unwrap(),
             json!({"schemaVersion":999, "record":{}}),
             tinystoragedrivers_core::Precondition::Absent,
         )
@@ -873,7 +873,7 @@ async fn scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes() {
     let before = ledger
         .scoped
         .documents()
-        .get(TELEMETRY, &storage::key(&["run"]))
+        .get(TELEMETRY, &storage::key(&["run"]).unwrap())
         .await
         .unwrap();
     for cost in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -884,7 +884,7 @@ async fn scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes() {
             ledger
                 .scoped
                 .documents()
-                .get(TELEMETRY, &storage::key(&["run"]))
+                .get(TELEMETRY, &storage::key(&["run"]).unwrap())
                 .await
                 .unwrap(),
             before

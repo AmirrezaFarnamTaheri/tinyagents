@@ -123,7 +123,7 @@ async fn last_signed_event_sequence_commits_with_bson_representable_head() {
         .documents()
         .put(
             storage::EVENT_HEADS,
-            &storage::key(&["run"]),
+            &storage::key(&["run"]).unwrap(),
             serde_json::json!({"schemaVersion":1,"record":{"next":i64::MAX}}),
             Precondition::None,
         )
@@ -140,7 +140,7 @@ async fn last_signed_event_sequence_commits_with_bson_representable_head() {
     );
     let head = native
         .documents()
-        .get(storage::EVENT_HEADS, &storage::key(&["run"]))
+        .get(storage::EVENT_HEADS, &storage::key(&["run"]).unwrap())
         .await
         .unwrap()
         .unwrap();

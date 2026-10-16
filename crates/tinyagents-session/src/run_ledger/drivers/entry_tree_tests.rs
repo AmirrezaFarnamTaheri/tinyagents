@@ -599,7 +599,7 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         .documents()
         .put(
             super::entry_tree::HEADS,
-            &super::storage::key(&["append"]),
+            &super::storage::key(&["append"]).unwrap(),
             serde_json::json!({"schemaVersion": 1, "record": {
                 "sessionId": "append", "nextOrdinal": i64::MAX,
                 "nextInsertion": 0, "tip": null
@@ -636,7 +636,7 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         let row = native
             .scoped
             .documents()
-            .get(super::entry_tree::HEADS, &super::storage::key(&[session]))
+            .get(super::entry_tree::HEADS, &super::storage::key(&[session]).unwrap())
             .await
             .unwrap()
             .unwrap();
