@@ -380,10 +380,6 @@ impl ArtifactOffload {
         let parent = target
             .parent()
             .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
-        #[cfg(not(unix))]
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
         let checked = self.validate_materialization_target(root, key).await?;
         if checked != target {
             return Err(OffloadError::Materialization(
@@ -416,41 +412,24 @@ impl ArtifactOffload {
         }
         #[cfg(not(unix))]
         {
-            static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let mut temp = None;
-            for _ in 0..32 {
-                let id = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let path = parent.join(format!(".artifact-{}-{id}.tmp", std::process::id()));
-                match tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .await
-                {
-                    Ok(mut file) => {
-                        use tokio::io::AsyncWriteExt;
-                        if let Err(error) = file.write_all(body.as_bytes()).await {
-                            let _ = tokio::fs::remove_file(&path).await;
-                            return Err(OffloadError::Materialization(error.to_string()));
-                        }
-                        file.sync_all()
-                            .await
-                            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
-                        drop(file);
-                        temp = Some(path);
-                        break;
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => return Err(OffloadError::Materialization(error.to_string())),
-                }
-            }
-            let temp = temp.ok_or_else(|| {
-                OffloadError::Materialization("could not allocate temporary artifact file".into())
-            })?;
-            if let Err(error) = tokio::fs::rename(&temp, &target).await {
-                let _ = tokio::fs::remove_file(&temp).await;
-                return Err(OffloadError::Materialization(error.to_string()));
-            }
+            let relative_parent = parent
+                .strip_prefix(root)
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?
+                .to_path_buf();
+            let file_name = target
+                .file_name()
+                .ok_or_else(|| {
+                    OffloadError::Materialization("artifact target has no file name".into())
+                })?
+                .to_os_string();
+            let root = root.to_path_buf();
+            let bytes = body.into_bytes();
+            tokio::task::spawn_blocking(move || {
+                atomic_write_with_capability(&root, &relative_parent, &file_name, &bytes)
+            })
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
         }
         Ok(target)
     }
@@ -476,6 +455,55 @@ impl ArtifactOffload {
     pub fn blobs(&self) -> &Arc<dyn BlobStore> {
         &self.blobs
     }
+}
+
+#[cfg(not(unix))]
+fn atomic_write_with_capability(
+    root: &Path,
+    relative_parent: &Path,
+    target_name: &std::ffi::OsStr,
+    body: &[u8],
+) -> std::io::Result<()> {
+    use cap_std::ambient_authority;
+    use cap_std::fs::Dir;
+    use std::{
+        fs::OpenOptions,
+        io::Write,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let root = Dir::open_ambient_dir(root, ambient_authority())?;
+    root.create_dir_all(relative_parent)?;
+    let parent = root.open_dir(relative_parent)?;
+    let mut temp = None;
+    for _ in 0..32 {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".artifact-{}-{id}.tmp", std::process::id());
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        match parent.open_with(&name, &options) {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(body) {
+                    let _ = parent.remove_file(&name);
+                    return Err(error);
+                }
+                file.sync_all()?;
+                temp = Some(name);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    let temp = temp.ok_or_else(|| {
+        std::io::Error::other("could not allocate temporary artifact file")
+    })?;
+    if let Err(error) = parent.rename(&temp, &parent, target_name) {
+        let _ = parent.remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
 }
 
 async fn canonicalize_existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf), OffloadError> {
