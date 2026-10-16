@@ -1,13 +1,13 @@
 use super::*;
-use std::sync::Arc;
+use crate::subagent::*;
 use async_trait::async_trait;
 use serde_json::json;
+use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_runtime::ToolSnapshot;
 use tinyinference_llm::message::Message;
-use crate::subagent::*;
 
 struct Planner;
 
@@ -90,7 +90,7 @@ async fn background_request_without_delivery_target_runs_inline() {
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("worker-child"), ())
-            .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
             SubagentRequest::fresh_from_parent(
                 parent,
                 child,

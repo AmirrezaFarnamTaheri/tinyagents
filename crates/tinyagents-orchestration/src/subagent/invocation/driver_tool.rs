@@ -14,9 +14,7 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{Tool, ToolResult};
 
-use crate::subagent::{
-    SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
-};
+use crate::subagent::{SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest};
 
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
 ///
@@ -52,18 +50,15 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         description: impl Into<String>,
         driver: Arc<SubagentDriver<Ctx, H>>,
         request_factory: impl Fn(
-                &State,
-                &RunContext<Ctx>,
-                &Value,
-                &CallId,
-            ) -> std::result::Result<SubagentRequest<Ctx, H>, SubagentError>
-            + Send
-            + Sync
-            + 'static,
-        delivery_target: impl Fn(&SubagentRequest<Ctx, H>) -> Option<String>
-            + Send
-            + Sync
-            + 'static,
+            &State,
+            &RunContext<Ctx>,
+            &Value,
+            &CallId,
+        ) -> std::result::Result<SubagentRequest<Ctx, H>, SubagentError>
+        + Send
+        + Sync
+        + 'static,
+        delivery_target: impl Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync + 'static,
     ) -> Self {
         Self {
             name: name.into(),
@@ -119,9 +114,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
 
     fn requested_mode(args: &Value) -> Result<crate::subagent::SubAgentMode, String> {
         match args.get("mode") {
-            None | Some(Value::Null) => {
-                Ok(crate::subagent::SubAgentMode::Background)
-            }
+            None | Some(Value::Null) => Ok(crate::subagent::SubAgentMode::Background),
             Some(Value::String(mode)) if mode == "background" => {
                 Ok(crate::subagent::SubAgentMode::Background)
             }

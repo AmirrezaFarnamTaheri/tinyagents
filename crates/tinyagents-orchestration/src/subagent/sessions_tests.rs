@@ -1,8 +1,8 @@
 use super::*;
 use crate::subagent::SubagentRequest;
 use std::sync::Arc;
-use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 use tinyagents_harness::context::{RunConfig, RunContext};
+use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -81,7 +81,11 @@ async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
     assert!(store.close(&session.subagent_session_id).await.unwrap());
     assert!(!store.close("missing").await.unwrap());
 
-    let closed = store.get(&session.subagent_session_id).await.unwrap().unwrap();
+    let closed = store
+        .get(&session.subagent_session_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(closed.status, DurableSubagentStatus::Closed);
     assert!(!closed.reusable);
     assert!(find_reusable_session([closed], &selector("analysis")).is_none());

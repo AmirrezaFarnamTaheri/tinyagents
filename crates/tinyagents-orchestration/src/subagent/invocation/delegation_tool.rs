@@ -1,14 +1,15 @@
 //! Model-facing multi-target delegation adapter.
 
 use std::sync::Arc;
+use std::marker::PhantomData;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
 use tinyagents_graph::delegation::{
     DelegationConfig, DelegationStage, DelegationStageOutput, DelegationState, run_delegation,
 };
+use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
 use tinytools::{Tool, ToolResult};
 
 use crate::subagent::SUBAGENT_MODE_FIELD;
@@ -69,6 +70,7 @@ where
     description: String,
     agents: Vec<(String, String)>,
     worker: Arc<Worker>,
+    _context: PhantomData<fn(&State, &Ctx)>,
 }
 
 impl<State, Ctx, Worker, Fut> MultiTargetDelegationTool<State, Ctx, Worker, Fut>
@@ -87,22 +89,32 @@ where
         agents: Vec<(String, String)>,
         worker: Worker,
     ) -> Self {
-        Self { name: name.into(), description: description.into(), agents, worker: Arc::new(worker) }
+        Self {
+            name: name.into(),
+            description: description.into(),
+            agents,
+            worker: Arc::new(worker),
+            _context: PhantomData,
+        }
     }
 }
 
 #[async_trait]
-impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx> for MultiTargetDelegationTool<State, Ctx, Worker, Fut>
+impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx>
+    for MultiTargetDelegationTool<State, Ctx, Worker, Fut>
 where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
     Worker: Fn(DelegationRequest, DelegationStage, tinyagents_graph::delegation::DelegationState) -> Fut
-        + Send + Sync + 'static,
+        + Send
+        + Sync
+        + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     fn tool(&self) -> Arc<dyn Tool> {
         Arc::new(DelegationDeclaration {
-            name: self.name.clone(), description: self.description.clone(),
+            name: self.name.clone(),
+            description: self.description.clone(),
             parameters: json!({"type":"object","required":["agent","prompt"],"properties":{
                 "agent":{"type":"string","enum":self.agents.iter().map(|(id,_)|id).collect::<Vec<_>>()},
                 "prompt":{"type":"string"},"objective":{"type":"string"},"evidence":{"type":"string"},
@@ -113,31 +125,70 @@ where
         })
     }
 
-    async fn execute(&self, state: &State, _call_id: CallId, args: Value,
-        _options: tinytools::ToolCallOptions, parent: &RunContext<Ctx>) -> anyhow::Result<ToolResult> {
-        let agent = args.get("agent").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("agent must be a string"))?;
+    async fn execute(
+        &self,
+        _state: &State,
+        _call_id: CallId,
+        args: Value,
+        _options: tinytools::ToolCallOptions,
+        _parent: &RunContext<Ctx>,
+    ) -> anyhow::Result<ToolResult> {
+        let agent = args
+            .get("agent")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("agent must be a string"))?;
         if !self.agents.iter().any(|(id, _)| id == agent) {
             anyhow::bail!("agent is not an available delegation target");
         }
         let envelope: DelegationEnvelope = serde_json::from_value(args.clone())?;
-        let request = DelegationRequest { agent: agent.into(), mode: if envelope.blocking {"inline"} else {"background"}.into(), envelope };
-        let result = (self.worker)(request.clone(), DelegationStage::Execute, DelegationState::default())
-            .await.map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
-        Ok(ToolResult::json(json!({"agent":agent,"mode":request.mode,"output":result.text})))
+        let request = DelegationRequest {
+            agent: agent.into(),
+            mode: if envelope.blocking {
+                "inline"
+            } else {
+                "background"
+            }
+            .into(),
+            envelope,
+        };
+        let result = (self.worker)(
+            request.clone(),
+            DelegationStage::Execute,
+            DelegationState::default(),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
+        Ok(ToolResult::json(
+            json!({"agent":agent,"mode":request.mode,"output":result.text}),
+        ))
     }
 }
 
-struct DelegationDeclaration { name: String, description: String, parameters: Value }
+struct DelegationDeclaration {
+    name: String,
+    description: String,
+    parameters: Value,
+}
 #[async_trait]
 impl Tool for DelegationDeclaration {
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { &self.description }
-    fn parameters_schema(&self) -> Value { self.parameters.clone() }
-    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> { anyhow::bail!("delegation requires typed-parent dispatch") }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn parameters_schema(&self) -> Value {
+        self.parameters.clone()
+    }
+    async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
+        anyhow::bail!("delegation requires typed-parent dispatch")
+    }
 }
 
 /// Parses a reviewer approval exactly when the whole normalized response is `APPROVE`.
-pub fn parse_approval(text: &str) -> bool { text.trim().eq_ignore_ascii_case("APPROVE") }
+pub fn parse_approval(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("APPROVE")
+}
 
 /// Tool argument field used to map blocking mode into the subagent invocation mode.
 pub const DELEGATION_MODE_FIELD: &str = SUBAGENT_MODE_FIELD;
@@ -163,7 +214,12 @@ where
     pub fn new(
         config: impl Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync + 'static,
         worker: Worker,
-    ) -> Self { Self { config: Arc::new(config), worker: Arc::new(worker) } }
+    ) -> Self {
+        Self {
+            config: Arc::new(config),
+            worker: Arc::new(worker),
+        }
+    }
 }
 
 #[async_trait]
@@ -175,13 +231,31 @@ where
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     fn tool(&self) -> Arc<dyn Tool> {
-        Arc::new(DelegationDeclaration { name: "delegate_graph".into(), description: "Plan, execute, and review delegated work.".into(), parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}) })
+        Arc::new(DelegationDeclaration {
+            name: "delegate_graph".into(),
+            description: "Plan, execute, and review delegated work.".into(),
+            parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
+        })
     }
-    async fn execute(&self, state: &State, _call_id: CallId, args: Value, _options: tinytools::ToolCallOptions, parent: &RunContext<Ctx>) -> anyhow::Result<ToolResult> {
-        if args.get("task").and_then(Value::as_str).is_none() { anyhow::bail!("task must be a string"); }
+    async fn execute(
+        &self,
+        state: &State,
+        _call_id: CallId,
+        args: Value,
+        _options: tinytools::ToolCallOptions,
+        parent: &RunContext<Ctx>,
+    ) -> anyhow::Result<ToolResult> {
+        if args.get("task").and_then(Value::as_str).is_none() {
+            anyhow::bail!("task must be a string");
+        }
         let worker = Arc::clone(&self.worker);
-        let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| worker(stage, graph))
-            .await.map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
-        Ok(ToolResult::json(json!({"output":result.final_output,"approved":result.approved,"cancelled":result.cancelled})))
+        let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
+            worker(stage, graph)
+        })
+        .await
+        .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
+        Ok(ToolResult::json(
+            json!({"output":result.final_output,"approved":result.approved,"cancelled":result.cancelled}),
+        ))
     }
 }

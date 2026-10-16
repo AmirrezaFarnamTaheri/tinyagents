@@ -39,15 +39,14 @@ impl FleetToolSet {
 
     /// Resolves fleet visibility from a definition's tool scope and denylist.
     /// A trailing `*` denies every fleet name with that prefix.
-    pub fn from_scope(
-        scope: &tinyagents_definition::ToolScope,
-        disallowed: &[String],
-    ) -> Self {
+    pub fn from_scope(scope: &tinyagents_definition::ToolScope, disallowed: &[String]) -> Self {
         let denied = |name: &str| {
-            disallowed.iter().any(|entry| match entry.strip_suffix('*') {
-                Some(prefix) => name.starts_with(prefix),
-                None => entry == name,
-            })
+            disallowed
+                .iter()
+                .any(|entry| match entry.strip_suffix('*') {
+                    Some(prefix) => name.starts_with(prefix),
+                    None => entry == name,
+                })
         };
         let available = FLEET_TOOLS
             .iter()

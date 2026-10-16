@@ -73,19 +73,22 @@
 //!   typed-parent dispatcher).
 //! - `*_tests.rs` files hold the focused tests.
 
+mod delegation_tool;
+mod driver_tool;
 mod jobs;
 mod policy_run;
-mod driver_tool;
-mod delegation_tool;
 mod status_map;
 mod types;
 
 const LOG_PREFIX: &str = "[subagent-tool]";
 
+pub use delegation_tool::{
+    DELEGATION_MODE_FIELD, DelegationEnvelope, DelegationRequest, DelegationTool,
+    MultiTargetDelegationTool, parse_approval,
+};
+pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
 pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
 pub use types::*;
-pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
-pub use delegation_tool::{DELEGATION_MODE_FIELD, DelegationEnvelope, DelegationRequest, DelegationTool, MultiTargetDelegationTool, parse_approval};
 
 #[cfg(test)]
 #[path = "delegation_tool_tests.rs"]
@@ -646,23 +649,20 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         self,
         driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
         request_factory: impl Fn(
-                &State,
-                &RunContext<Ctx>,
-                &Value,
-                &tinyagents_harness::ids::CallId,
-            ) -> std::result::Result<
-                crate::subagent::SubagentRequest<Ctx, H>,
-                crate::subagent::SubagentError,
-            >
-            + Send
-            + Sync
-            + 'static,
-        delivery_target: impl Fn(
-                &crate::subagent::SubagentRequest<Ctx, H>,
-            ) -> Option<String>
-            + Send
-            + Sync
-            + 'static,
+            &State,
+            &RunContext<Ctx>,
+            &Value,
+            &tinyagents_harness::ids::CallId,
+        ) -> std::result::Result<
+            crate::subagent::SubagentRequest<Ctx, H>,
+            crate::subagent::SubagentError,
+        > + Send
+        + Sync
+        + 'static,
+        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
+        + Send
+        + Sync
+        + 'static,
     ) -> DriverSubAgentTool<State, Ctx, H>
     where
         H: Send + Sync + 'static,

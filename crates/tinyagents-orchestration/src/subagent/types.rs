@@ -150,10 +150,9 @@ impl<C, H> SubagentRequest<C, H> {
         input: impl Into<String>,
         resume: Option<SubagentResume>,
     ) -> Result<Self, SubagentError> {
-        let session = sessions
-            .get(session_id)
-            .await?
-            .ok_or_else(|| SubagentError::InvalidRequest(format!("unknown subagent session `{session_id}`")))?;
+        let session = sessions.get(session_id).await?.ok_or_else(|| {
+            SubagentError::InvalidRequest(format!("unknown subagent session `{session_id}`"))
+        })?;
         Self::continue_with_key(
             session.lifecycle_key,
             fresh_owned_context,

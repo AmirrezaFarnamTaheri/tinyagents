@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tinyinference_llm::message::Message;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Precondition, Query,
 };
 use tokio::sync::OnceCell;
-use tinyinference_llm::message::Message;
 
 use super::{SubagentError, SubagentTaskKey};
 
@@ -277,12 +277,13 @@ impl DriverSubagentSessionStore {
         let doc = serde_json::to_value(session)
             .map_err(|error| SubagentError::Persistence(format!("session encode: {error}")))?;
         for _ in 0..CAS_ATTEMPTS {
-            let precondition = match self.docs.get(COLLECTION, &id).await.map_err(|error| {
-                SubagentError::Persistence(format!("session store: {error}"))
-            })? {
-                Some(found) => found.unchanged(),
-                None => Precondition::Absent,
-            };
+            let precondition =
+                match self.docs.get(COLLECTION, &id).await.map_err(|error| {
+                    SubagentError::Persistence(format!("session store: {error}"))
+                })? {
+                    Some(found) => found.unchanged(),
+                    None => Precondition::Absent,
+                };
             match self
                 .docs
                 .put(COLLECTION, &id, doc.clone(), precondition)
@@ -291,7 +292,9 @@ impl DriverSubagentSessionStore {
                 Ok(_) => return Ok(()),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => {
-                    return Err(SubagentError::Persistence(format!("session store: {error}")));
+                    return Err(SubagentError::Persistence(format!(
+                        "session store: {error}"
+                    )));
                 }
             }
         }
@@ -318,9 +321,9 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                 .into_iter()
                 .filter(|session| {
                     session.parent_session == parent_session
-                        && parent_thread_id
-                            .as_deref()
-                            .is_none_or(|thread| session.parent_thread_id.as_deref() == Some(thread))
+                        && parent_thread_id.as_deref().is_none_or(|thread| {
+                            session.parent_thread_id.as_deref() == Some(thread)
+                        })
                 })
                 .collect();
             rows.sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
@@ -333,13 +336,16 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         let id = id.to_owned();
         self.run(async move {
             this.declare().await?;
-            let found = this.docs.get(COLLECTION, &id).await.map_err(|error| {
-                SubagentError::Persistence(format!("session store: {error}"))
-            })?;
+            let found =
+                this.docs.get(COLLECTION, &id).await.map_err(|error| {
+                    SubagentError::Persistence(format!("session store: {error}"))
+                })?;
             found
-                .map(|document| serde_json::from_value(document.doc).map_err(|error| {
-                    SubagentError::Persistence(format!("session decode: {error}"))
-                }))
+                .map(|document| {
+                    serde_json::from_value(document.doc).map_err(|error| {
+                        SubagentError::Persistence(format!("session decode: {error}"))
+                    })
+                })
                 .transpose()
         })
     }
@@ -460,10 +466,7 @@ pub fn find_reusable_session(
 }
 
 /// Classifies the selection result for telemetry or a tool response.
-pub fn reuse_decision(
-    reuse: Option<&DurableSubagentSession>,
-    force_fresh: bool,
-) -> ReuseDecision {
+pub fn reuse_decision(reuse: Option<&DurableSubagentSession>, force_fresh: bool) -> ReuseDecision {
     if force_fresh {
         return ReuseDecision::ForcedFresh;
     }
@@ -494,7 +497,10 @@ pub fn normalize_task_key(input: &str) -> String {
         return if input.trim().is_empty() {
             "untitled-task".into()
         } else {
-            format!("task-{}", tinyagents_harness::driver_ids::hashed_id(&[input]))
+            format!(
+                "task-{}",
+                tinyagents_harness::driver_ids::hashed_id(&[input])
+            )
         };
     }
     if output.len() > 96 {
