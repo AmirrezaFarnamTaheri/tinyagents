@@ -325,7 +325,11 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
-            child_run_id: Some(child_run_id.clone()),
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
 
         let run = if streaming {
@@ -339,8 +343,8 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
-            child_run_id: Some(child_run_id),
         });
+        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
 
         Ok(run)
     }
@@ -396,7 +400,11 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
-            child_run_id: Some(child_run_id.clone()),
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         let run = match self
             .harness
@@ -413,8 +421,8 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
-            child_run_id: Some(child_run_id),
         });
+        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
         Ok(run)
     }
 }
@@ -571,7 +579,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.subagent.name.clone(),
             depth,
-            child_run_id: Some(child_run_id.clone()),
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.subagent.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         if self.turn > 0 {
             events.emit(AgentEvent::SubAgentReused {
@@ -591,8 +603,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.subagent.name.clone(),
             depth,
-            child_run_id: Some(child_run_id),
         });
+        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
 
         // Carry the produced assistant/tool messages forward. `run.messages` is
         // the working transcript the loop ended with (everything we passed plus
