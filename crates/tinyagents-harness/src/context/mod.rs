@@ -533,7 +533,7 @@ impl<Ctx> RunContext<Ctx> {
     /// can use it to reclaim state when callers abandon a run before terminal
     /// callbacks fire.
     pub fn lifecycle_token(&self) -> std::sync::Weak<()> {
-        Arc::downgrade(&self.lifecycle)
+        std::sync::Arc::downgrade(&self.lifecycle)
     }
 
     /// Records that the middleware stack already dispatched `on_error` for the
