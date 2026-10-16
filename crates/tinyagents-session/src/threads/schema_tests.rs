@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinystoragedrivers_core::{
     CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope,
-    ScopeClass, ScopedStorage, StepBody, StorageBackend, WriteOptions,
+    ScopeClass, ScopedStorage, StorageBackend, WriteOptions, schema::StepBody,
 };
 
 const INCARNATION: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
