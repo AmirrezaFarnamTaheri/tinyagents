@@ -132,7 +132,7 @@ async fn jobs_await_waits_for_the_terminal_snapshot() {
     let result = waiter.await.unwrap();
     let value: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
     assert_eq!(value["status"], "completed");
-    assert_eq!(value["output"], "done");
+    assert_eq!(value["output"], "finished later");
 }
 
 #[tokio::test]
