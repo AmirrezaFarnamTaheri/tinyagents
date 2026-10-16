@@ -656,8 +656,13 @@ fn serve_once_with(
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        let (mut auth, mut version, mut custom, mut injected, mut len) =
-            (String::new(), String::new(), String::new(), String::new(), 0_usize);
+        let (mut auth, mut version, mut custom, mut injected, mut len) = (
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            0_usize,
+        );
         loop {
             let mut header = String::new();
             reader.read_line(&mut header).unwrap();

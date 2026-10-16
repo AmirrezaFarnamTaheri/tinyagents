@@ -6,9 +6,9 @@
 //! and the progress-event collector that produces the spans; they pass an
 //! [`ExportBrand`] so product identity strings stay out of this crate.
 
+pub mod collector;
 pub mod ingestion_batch;
 pub mod ingestion_otlp;
-pub mod collector;
 #[cfg(feature = "langfuse")]
 pub mod journal_export;
 pub mod otlp;
