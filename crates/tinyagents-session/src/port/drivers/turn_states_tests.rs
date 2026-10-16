@@ -1,7 +1,7 @@
 use super::*;
-use crate::turn_state::types::SubagentTranscriptItem;
+use crate::turn_state::types::{SubagentTranscriptItem, TranscriptItem};
 use crate::turn_state::{
-    SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus, TranscriptItem,
+    SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus,
 };
 
 use serde_json::json;
