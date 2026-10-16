@@ -71,6 +71,32 @@ fn dropping_unpolled_drive_clears_its_generation() {
 }
 
 #[test]
+fn ready_drive_clears_its_generation_while_future_is_retained() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let pending = Arc::new(std::sync::Mutex::new(
+        None::<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    ));
+    let slot = pending.clone();
+    let handle = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            *slot.lock().unwrap() = Some(Box::pin(future));
+        },
+    );
+    let mut future = pending.lock().unwrap().take().unwrap();
+    let waker = futures::task::noop_waker();
+    let mut context = Context::from_waker(&waker);
+
+    assert!(matches!(
+        future.as_mut().poll(&mut context),
+        Poll::Ready(())
+    ));
+    assert!(!supervisor.stop_generation(&handle));
+    drop(future);
+}
+
+#[test]
 fn completed_drive_clears_its_generation_and_stale_drop_preserves_successor() {
     let supervisor = WorkflowRunSupervisor::default();
     let old_pending = Arc::new(std::sync::Mutex::new(

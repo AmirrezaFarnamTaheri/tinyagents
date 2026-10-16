@@ -39,6 +39,20 @@ impl TeamMemberExecutor for HangingExecutor {
     }
 }
 
+struct PausedExecutor {
+    entered: Arc<tokio::sync::Notify>,
+    resume: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl TeamMemberExecutor for PausedExecutor {
+    async fn execute(&self, _: &AgentTeamMember, _: &AgentTeamTask) -> Result<Vec<String>> {
+        self.entered.notify_one();
+        self.resume.notified().await;
+        Ok(vec!["stale completion".into()])
+    }
+}
+
 #[tokio::test]
 async fn start_member_runs_and_completes_claimed_task() {
     let dir = TempDir::new().unwrap();
@@ -174,6 +188,82 @@ async fn cancelling_start_member_releases_task_and_idles_member() {
         service.ledger().list_members(&team.team.id).unwrap()[0].member_status,
         AgentTeamMemberStatus::Idle
     );
+}
+
+#[tokio::test]
+async fn stale_executor_cannot_complete_successor_claim_for_same_member() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let resume = Arc::new(tokio::sync::Notify::new());
+    let executor = Arc::new(PausedExecutor {
+        entered: entered.clone(),
+        resume: resume.clone(),
+    });
+    let worker_service = service.clone();
+    let (team_id, task_id, member_id) = (team.team.id.clone(), task.id.clone(), member.id.clone());
+    let worker = tokio::spawn(async move {
+        worker_service
+            .start_member(&team_id, &task_id, &member_id, executor.as_ref(), false)
+            .await
+    });
+    entered.notified().await;
+
+    service.shutdown_member(&team.team.id, &member.id).unwrap();
+    let ClaimOutcome::Claimed(_) = service
+        .ledger()
+        .claim_task(&team.team.id, &task.id, &member.id, "successor-token")
+        .unwrap()
+    else {
+        panic!("successor should reclaim the released task");
+    };
+    service
+        .ledger()
+        .mark_member_running(
+            &team.team.id,
+            &member.id,
+            &task.id,
+            "successor-thread",
+            "successor-run",
+        )
+        .unwrap()
+        .unwrap();
+
+    resume.notify_one();
+    assert!(matches!(
+        worker.await.unwrap().unwrap(),
+        CompletionOutcome::NotClaimed
+    ));
+    let current_task = service
+        .ledger()
+        .list_tasks(&team.team.id)
+        .unwrap()
+        .remove(0);
+    assert_eq!(current_task.status, AgentTeamTaskStatus::InProgress);
+    assert_eq!(current_task.claim_token.as_deref(), Some("successor-token"));
+    assert!(current_task.evidence.is_empty());
+    let current_member = service
+        .ledger()
+        .list_members(&team.team.id)
+        .unwrap()
+        .remove(0);
+    assert_eq!(current_member.member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(current_member.run_id.as_deref(), Some("successor-run"));
 }
 
 #[test]

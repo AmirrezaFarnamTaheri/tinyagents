@@ -645,16 +645,14 @@ impl<L: TeamLedger> TeamService<L> {
 
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {
-            Ok(evidence) => {
-                self.ledger.complete_task_if_claimed(
-                    team_id,
-                    task_id,
-                    member_id,
-                    &claim_token,
-                    &evidence,
-                    require_evidence,
-                )
-            }
+            Ok(evidence) => self.ledger.complete_task_if_claimed(
+                team_id,
+                task_id,
+                member_id,
+                &claim_token,
+                &evidence,
+                require_evidence,
+            ),
             Err(error) => {
                 return match cleanup.cleanup() {
                     Ok(()) => Err(error.context("team member execution failed")),

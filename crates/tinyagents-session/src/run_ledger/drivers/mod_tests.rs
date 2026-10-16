@@ -941,9 +941,24 @@ async fn stale_team_execution_cleanup_preserves_successor_claim_and_run() {
             .await
             .unwrap()
     );
+    assert!(matches!(
+        ledger
+            .complete_agent_team_task_if_claimed(
+                "team",
+                "task",
+                "member",
+                "stale-token",
+                &["stale evidence".into()],
+                false,
+            )
+            .await
+            .unwrap(),
+        CompletionOutcome::NotClaimed
+    ));
     let task = ledger.get_agent_team_task("task").await.unwrap().unwrap();
     assert_eq!(task.status, AgentTeamTaskStatus::InProgress);
     assert_eq!(task.claim_token.as_deref(), Some("successor-token"));
+    assert!(task.evidence.is_empty());
 }
 
 /// Nonfinite JSON numeric fields cannot turn a readable rollup into a persisted null.
