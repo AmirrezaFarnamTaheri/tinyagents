@@ -60,16 +60,13 @@ fn render_tool_results_spends_the_budget_on_newest_results() {
 }
 
 #[test]
-fn verdict_parser_accepts_only_an_exact_verdict_line() {
+fn verdict_parser_uses_the_last_standalone_verdict_token() {
     assert_eq!(
-        parse_close_verdict("ACCEPT\nLooks good"),
-        CloseVerdict::Accept
+        parse_close_verdict("reasoning ACCEPT\nREJECT"),
+        CloseVerdict::Reject
     );
     assert_eq!(parse_close_verdict("REJECT"), CloseVerdict::Reject);
-    assert_eq!(
-        parse_close_verdict("probably ACCEPT"),
-        CloseVerdict::Unclear
-    );
+    assert_eq!(parse_close_verdict("probably ACCEPT"), CloseVerdict::Accept);
     assert_eq!(parse_close_verdict(""), CloseVerdict::Unclear);
 }
 

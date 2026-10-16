@@ -115,6 +115,54 @@ fn a_stop_is_reported_only_for_an_early_end() {
 }
 
 #[test]
+fn typed_breaker_cause_prevents_a_cap_classification() {
+    let mut inputs = inputs();
+    inputs.pause_at_cap = true;
+    inputs.max_iterations = 1;
+    inputs.failure_cause = Some(crate::no_progress::ClassifiedStopCause {
+        class: "permission".into(),
+        operation: "write_file".into(),
+        summary: "human-readable note may change".into(),
+    });
+    let mut run = AgentRun::default();
+    run.model_calls = 1;
+    assert!(!detect_hit_cap(&run, &inputs));
+    let stop = turn_stop_for_with_cause(
+        Some("different prose"),
+        inputs.failure_cause,
+        false,
+        true,
+        |_| "ignored",
+    )
+    .expect("typed cause yields a stop");
+    assert_eq!(stop.status_message(), "stopped: breaker permission on write_file");
+}
+
+#[test]
+fn typed_breaker_cause_prevents_a_cap_classification() {
+    let mut inputs = inputs();
+    inputs.pause_at_cap = true;
+    inputs.max_iterations = 1;
+    inputs.failure_cause = Some(crate::no_progress::ClassifiedStopCause {
+        class: "permission".into(),
+        operation: "write_file".into(),
+        summary: "human-readable note may change".into(),
+    });
+    let mut run = AgentRun::default();
+    run.model_calls = 1;
+    assert!(!detect_hit_cap(&run, &inputs));
+    let stop = turn_stop_for_with_cause(
+        Some("different prose"),
+        inputs.failure_cause,
+        false,
+        true,
+        |_| "ignored",
+    )
+    .expect("typed cause yields a stop");
+    assert_eq!(stop.status_message(), "stopped: breaker permission on write_file");
+}
+
+#[test]
 fn only_leading_system_messages_count_as_the_frozen_prefix() {
     let messages = vec![
         Message::system("abc"),
