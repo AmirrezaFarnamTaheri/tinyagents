@@ -195,6 +195,8 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) driver_dispatch: Option<Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>>,
     /// Optional shared job/control registry bridged by driver-backed aliases.
     pub(crate) job_registry: Option<SubAgentJobRegistry>,
+    /// Host-owned stable owner key for jobs that outlive a single run context.
+    pub(crate) job_owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync>,
 }
 
 /// Stable identifier returned immediately when a subagent job is spawned.
@@ -354,7 +356,7 @@ pub(crate) struct JobControl {
 pub(crate) struct DriverJobRegistration {
     pub(crate) key: crate::subagent::SubagentTaskKey,
     pub(crate) agent: String,
-    pub(crate) owner: u64,
+    pub(crate) owner: String,
     pub(crate) cancellation: CancellationToken,
     pub(crate) steering: Option<tinyagents_harness::steering::SteeringHandle>,
     pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,

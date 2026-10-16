@@ -73,6 +73,24 @@ impl SubAgentJobAction {
 struct JobArgumentNames {
     action: String,
     identifier: String,
+    fallback_identifier: Option<String>,
+}
+
+impl JobArgumentNames {
+    fn identifier<'a>(&self, object: &'a serde_json::Map<String, Value>) -> Option<&'a str> {
+        object
+            .get(&self.identifier)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                self.fallback_identifier.as_ref().and_then(|field| {
+                    object
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                })
+            })
+    }
 }
 
 #[derive(Clone)]
@@ -97,6 +115,7 @@ impl Default for JobArgumentNames {
         Self {
             action: "action".into(),
             identifier: "job_id".into(),
+            fallback_identifier: None,
         }
     }
 }
@@ -213,7 +232,7 @@ impl SubAgentJobRegistry {
         if let Err(error) = self.insert_job(
             id.clone(),
             agent,
-            owner,
+            owner.to_string(),
             link,
             JobExecutionControls {
                 cancellation,
@@ -230,7 +249,7 @@ impl SubAgentJobRegistry {
         &self,
         id: SubAgentJobId,
         agent: &str,
-        owner: u64,
+        owner: String,
         link: JobLink,
         execution: JobExecutionControls,
     ) -> Result<(), SubAgentJobError> {
@@ -260,7 +279,7 @@ impl SubAgentJobRegistry {
             .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
-            owner.to_string(),
+            owner,
             JobMeta,
             watcher,
             execution.cancellation.clone(),
@@ -311,7 +330,7 @@ impl SubAgentJobRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(id) = driver_jobs.get(&key) {
-            if self.get_owned(id.as_str(), owner).is_none() {
+            if self.get_owned(id.as_str(), &owner).is_none() {
                 return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
             }
             let controls = self.controls();
@@ -619,7 +638,7 @@ impl SubAgentJobRegistry {
     pub(crate) fn cancel_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let mut controls = self.controls();
@@ -654,7 +673,7 @@ impl SubAgentJobRegistry {
     }
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
-    pub(crate) fn get_owned(&self, job_id: &str, owner: u64) -> Option<SubAgentJob> {
+    pub(crate) fn get_owned(&self, job_id: &str, owner: impl ToString) -> Option<SubAgentJob> {
         match self
             .tasks
             .snapshot(&TaskId::new(job_id), &owner.to_string())
@@ -685,14 +704,14 @@ impl SubAgentJobRegistry {
     }
 
     /// Returns this run's jobs in stable id order.
-    fn list_owned(&self, owner: u64) -> Vec<SubAgentJob> {
+    fn list_owned(&self, owner: impl ToString) -> Vec<SubAgentJob> {
         Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
     }
 
     pub(crate) async fn wait_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
         self.get_owned(job_id, owner)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
@@ -748,7 +767,7 @@ impl SubAgentJobRegistry {
     pub(crate) fn send_message_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
     ) -> Result<(), SubAgentJobError> {
         self.send_message_with_request_id(job_id, owner, message, None)
@@ -763,7 +782,7 @@ impl SubAgentJobRegistry {
     pub(crate) fn send_message_with_request_id(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
         request_id: Option<&str>,
     ) -> Result<bool, SubAgentJobError> {
@@ -773,7 +792,7 @@ impl SubAgentJobRegistry {
     fn send_message_with_lane_and_request_id(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
         request_id: Option<&str>,
         lane: Option<QueueLane>,
@@ -858,6 +877,7 @@ pub struct SubAgentJobsTool {
     argument_names: JobArgumentNames,
     await_timeout: Option<AwaitTimeout>,
     require_identifier: bool,
+    owner_scope: OwnerScope,
 }
 
 impl SubAgentJobsTool {
@@ -874,6 +894,7 @@ impl SubAgentJobsTool {
             argument_names: JobArgumentNames::default(),
             await_timeout: None,
             require_identifier: false,
+            owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -905,6 +926,19 @@ impl SubAgentJobsTool {
     /// Maps a host schema identifier field to the generic job/session id.
     pub fn with_identifier_field(mut self, identifier: impl Into<String>) -> Self {
         self.argument_names.identifier = identifier.into();
+        self.argument_names.fallback_identifier = None;
+        self
+    }
+
+    /// Uses a primary job id and falls back to a durable session id when the
+    /// primary field is missing, empty, or not a string.
+    pub fn with_identifier_fields(
+        mut self,
+        primary: impl Into<String>,
+        fallback: impl Into<String>,
+    ) -> Self {
+        self.argument_names.identifier = primary.into();
+        self.argument_names.fallback_identifier = Some(fallback.into());
         self
     }
 
@@ -923,6 +957,17 @@ impl SubAgentJobsTool {
             default_secs: default_secs.clamp(1, max_secs),
             max_secs,
         });
+        self
+    }
+
+    /// Resolves a per-turn run owner to a stable host-owned authorization key.
+    /// Use the same resolver for spawn, job, and message aliases when run
+    /// contexts are recreated between turns.
+    pub fn with_owner_scope(
+        mut self,
+        resolve: OwnerScope,
+    ) -> Self {
+        self.owner_scope = resolve;
         self
     }
 
@@ -965,17 +1010,20 @@ impl Tool for SubAgentJobsTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        self.parameters.clone().unwrap_or_else(|| json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
+        self.parameters.clone().unwrap_or_else(|| {
+            let mut properties = json!({
+                self.argument_names.identifier.clone(): { "type": "string" },
                 "action": {
                     "type": "string",
                     "enum": ["query", "cancel", "close", "await"],
                     "description": "`query` reads a job/session or lists work; `cancel` stops a live job; `close` prevents a durable session from being reused; `await` waits for the named live job."
                 }
+            });
+            if let Some(fallback) = &self.argument_names.fallback_identifier {
+                properties[fallback] = json!({ "type": "string" });
             }
-        }))
+            json!({"type":"object","properties":properties})
+        })
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -1001,6 +1049,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         let object = args
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("arguments must be an object"))?;
+        let owner = (self.owner_scope)(parent.instance_id());
+        let identifier = self.argument_names.identifier(object);
         let action = match self.fixed_action {
             Some(action) => Some(Some(action.as_str())),
             None => object
@@ -1008,30 +1058,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .filter(|value| !value.is_null())
                 .map(Value::as_str),
         };
-        if self.require_identifier
-            && object
-                .get(&self.argument_names.identifier)
-                .and_then(Value::as_str)
-                .is_none()
-        {
+        if self.require_identifier && identifier.is_none() {
             anyhow::bail!("a job or session identifier is required");
         }
         match action {
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
-                let job_id = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("job_id must be a string for action `cancel`")
-                    })?;
-                let job = self.jobs.cancel_owned(job_id, parent.instance_id())?;
+                let job_id = identifier.ok_or_else(|| {
+                    anyhow::anyhow!("job_id must be a string for action `cancel`")
+                })?;
+                let job = self.jobs.cancel_owned(job_id, &owner)?;
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
             Some(Some("close")) => {
-                let id = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
+                let id = identifier
                     .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
                 let (sessions, key) = self
                     .sessions
@@ -1048,16 +1088,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 ));
             }
             Some(Some("await")) => {
-                let Some(id) = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
-                else {
+                let Some(id) = identifier else {
                     let mut tombstones = Vec::new();
-                    for job in self.jobs.list_owned(parent.instance_id()) {
-                        let job = self
-                            .jobs
-                            .wait_owned(job.id.as_str(), parent.instance_id())
-                            .await?;
+                    for job in self.jobs.list_owned(&owner) {
+                        let job = self.jobs.wait_owned(job.id.as_str(), &owner).await?;
                         if job.status.is_terminal() {
                             tombstones.push(serde_json::to_value(job)?);
                         }
@@ -1087,24 +1121,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user}),
                     ));
                 };
-                if self.jobs.get_owned(id, parent.instance_id()).is_some() {
+                if self.jobs.get_owned(id, &owner).is_some() {
                     let job = if let Some(timeout) = &self.await_timeout {
                         let duration =
                             std::time::Duration::from_secs(timeout.requested_secs(object));
-                        match tokio::time::timeout(
-                            duration,
-                            self.jobs.wait_owned(id, parent.instance_id()),
-                        )
-                        .await
+                        match tokio::time::timeout(duration, self.jobs.wait_owned(id, &owner)).await
                         {
                             Ok(result) => result?,
                             Err(_) => self
                                 .jobs
-                                .get_owned(id, parent.instance_id())
+                                .get_owned(id, &owner)
                                 .ok_or_else(|| SubAgentJobError::NotFound(id.to_owned()))?,
                         }
                     } else {
-                        self.jobs.wait_owned(id, parent.instance_id()).await?
+                        self.jobs.wait_owned(id, &owner).await?
                     };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
@@ -1141,11 +1171,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
-        if let Some(value) = object.get(&self.argument_names.identifier) {
-            let job_id = value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
-            let job = self.jobs.get_owned(job_id, parent.instance_id());
+        if let Some(job_id) = identifier {
+            let job = self.jobs.get_owned(job_id, &owner);
             if let Some(job) = job {
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
@@ -1216,6 +1243,7 @@ pub struct SubAgentMessageTool {
     argument_names: MessageArgumentNames,
     lane: Option<QueueLane>,
     lane_field: Option<String>,
+    owner_scope: OwnerScope,
 }
 
 impl SubAgentMessageTool {
@@ -1230,6 +1258,7 @@ impl SubAgentMessageTool {
             argument_names: MessageArgumentNames::default(),
             lane: None,
             lane_field: None,
+            owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -1242,6 +1271,16 @@ impl SubAgentMessageTool {
     /// Uses a host-facing description for a named steering alias.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Resolves a per-turn run id to the stable owner key used by the matching
+    /// spawn and Jobs aliases.
+    pub fn with_owner_scope(
+        mut self,
+        resolve: OwnerScope,
+    ) -> Self {
+        self.owner_scope = resolve;
         self
     }
 
@@ -1387,13 +1426,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 }
             })
         });
-        let duplicate = self.jobs.send_message_with_lane_and_request_id(
-            &job_id,
-            parent.instance_id(),
-            message,
-            request_id,
-            lane,
-        )?;
+        let owner = (self.owner_scope)(parent.instance_id());
+        let duplicate = self
+            .jobs
+            .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)?;
         let mut payload = json!({
             "job_id": job_id,
             "status": "message_queued"
@@ -1414,3 +1450,4 @@ pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
         .register_dispatch(Arc::new(SubAgentJobsTool::new(jobs.clone())))
         .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
+type OwnerScope = Arc<dyn Fn(u64) -> String + Send + Sync>;

@@ -46,6 +46,7 @@ type RequestFactory<State, Ctx, H> = dyn Fn(&State, &RunContext<Ctx>, &Value, &C
 type DeliveryTarget<Ctx, H> = dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync;
 type CompletionCallback =
     dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync;
+type OwnerScope = dyn Fn(u64) -> String + Send + Sync;
 
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
 ///
@@ -63,6 +64,7 @@ pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     delivery_target: Arc<DeliveryTarget<Ctx, H>>,
     completion: Option<Arc<CompletionCallback>>,
     jobs: Option<SubAgentJobRegistry>,
+    owner_scope: Arc<OwnerScope>,
     _state: PhantomData<fn(&State)>,
 }
 
@@ -104,6 +106,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             delivery_target: Arc::new(delivery_target),
             completion: None,
             jobs: None,
+            owner_scope: Arc::new(|owner| owner.to_string()),
             _state: PhantomData,
         }
     }
@@ -147,6 +150,17 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
+    /// Resolves a per-turn run id to a stable host-owned authorization scope.
+    /// The same resolver must be configured on the corresponding Jobs and
+    /// Message aliases when a host recreates run contexts between turns.
+    pub fn with_owner_scope(
+        mut self,
+        resolve: Arc<OwnerScope>,
+    ) -> Self {
+        self.owner_scope = resolve;
+        self
+    }
+
     /// Installs the host callback that publishes a detached result to its target.
     /// The callback is invoked for successful and failed runs; hosts can persist
     /// completion state or route a notification without moving policy into this crate.
@@ -175,7 +189,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         &self,
         mut request: SubagentRequest<Ctx, H>,
         target: Option<String>,
-        owner: u64,
+        owner: String,
     ) -> anyhow::Result<ToolResult>
     where
         Ctx: Send + 'static,
@@ -188,7 +202,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 jobs.register_driver_job(DriverJobRegistration {
                     key: request.task_key().clone(),
                     agent: request.target().unwrap_or(&self.name).to_owned(),
-                    owner,
+                    owner: owner.clone(),
                     cancellation: request.run_context().cancellation.clone(),
                     steering: request.run_context().steering.clone(),
                     run_queue: request.run_context().run_queue.clone(),
@@ -215,7 +229,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 jobs.get(id.as_str())
                     .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?
             } else {
-                jobs.wait_owned(id.as_str(), owner).await?
+                jobs.wait_owned(id.as_str(), &owner).await?
             };
             let status = match job.status {
                 crate::subagent::SubAgentJobStatus::Queued => "queued",
@@ -357,7 +371,7 @@ where
         } else {
             None
         };
-        self.execute_request(request, target, parent.instance_id())
+        self.execute_request(request, target, (self.owner_scope)(parent.instance_id()))
             .await
     }
 }

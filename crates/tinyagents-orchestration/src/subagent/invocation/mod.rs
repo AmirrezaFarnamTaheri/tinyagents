@@ -668,6 +668,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             result_policy: crate::subagent::ResultPolicy::default(),
             driver_dispatch: None,
             job_registry: None,
+            job_owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -708,7 +709,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             request_factory,
             delivery_target,
         )
-        .with_parameters(self.parameters.clone());
+        .with_parameters(self.parameters.clone())
+        .with_owner_scope(self.job_owner_scope.clone());
         if let Some(jobs) = &self.job_registry {
             dispatch = dispatch.with_job_registry(jobs.clone());
         }
@@ -753,6 +755,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             delivery_target,
         )
         .with_parameters(self.parameters.clone())
+        .with_owner_scope(self.job_owner_scope.clone())
         .with_completion_handler(completion);
         if let Some(jobs) = &self.job_registry {
             dispatch = dispatch.with_job_registry(jobs.clone());
@@ -843,6 +846,17 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     pub fn with_job_registry(mut self, jobs: SubAgentJobRegistry) -> Self {
         self.jobs = jobs.clone();
         self.job_registry = Some(jobs);
+        self
+    }
+
+    /// Resolves ephemeral turn run ids to a stable host-owned job scope.
+    /// Configure the same resolver on this spawn tool and its Jobs/Message
+    /// aliases when the host recreates run contexts between turns.
+    pub fn with_job_owner_scope(
+        mut self,
+        resolve: Arc<dyn Fn(u64) -> String + Send + Sync>,
+    ) -> Self {
+        self.job_owner_scope = resolve;
         self
     }
 

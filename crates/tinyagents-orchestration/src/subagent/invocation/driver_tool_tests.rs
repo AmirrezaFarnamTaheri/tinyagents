@@ -479,6 +479,18 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let driver = blocking_driver(started.clone(), release.clone(), calls.clone());
+    let owner_keys = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = {
+        let owner_keys = owner_keys.clone();
+        Arc::new(move |run_id| {
+            owner_keys
+                .lock()
+                .unwrap()
+                .get(&run_id)
+                .cloned()
+                .unwrap_or_else(|| format!("run:{run_id}"))
+        })
+    };
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
@@ -493,6 +505,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         ChildDataPolicy::new(|_: &()| ()),
     )
     .with_job_registry(jobs.clone())
+    .with_job_owner_scope(owner_scope.clone())
     .with_tool_name("spawn_async_subagent")
     .with_description("Run the allowed worker in the background.")
     .with_parameters(schema)
@@ -521,6 +534,13 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         },
     );
     let parent = RunContext::new(RunConfig::new("parent"), ());
+    let next_turn = RunContext::new(RunConfig::new("parent-next-turn"), ());
+    let foreign = RunContext::new(RunConfig::new("foreign-parent"), ());
+    owner_keys.lock().unwrap().extend([
+        (parent.instance_id(), "durable-parent-session".into()),
+        (next_turn.instance_id(), "durable-parent-session".into()),
+        (foreign.instance_id(), "unrelated-parent-session".into()),
+    ]);
 
     let first = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -558,6 +578,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let query = SubAgentJobsTool::new(jobs.clone())
         .with_fixed_action(SubAgentJobAction::Query)
         .with_identifier_field("task_id")
+        .with_owner_scope(owner_scope.clone())
         .with_required_identifier();
     let listed = ToolDispatch::<(), ()>::execute(
         &query,
@@ -565,7 +586,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         CallId::new("list"),
         json!({"task_id":task_id}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();
@@ -577,14 +598,15 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let steer = SubAgentMessageTool::new(jobs.clone())
         .with_tool_name("steer_subagent")
         .with_argument_fields("task_id", "session_id", "message", "request_id")
-        .with_lane_field("mode");
+        .with_lane_field("mode")
+        .with_owner_scope(owner_scope.clone());
     ToolDispatch::<(), ()>::execute(
         &steer,
         &(),
         CallId::new("collect"),
         json!({"task_id":task_id,"message":"quiet context","mode":"collect"}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();
@@ -596,7 +618,6 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].text(), "quiet context");
 
-    let foreign = RunContext::new(RunConfig::new("foreign-parent"), ());
     assert!(
         ToolDispatch::<(), ()>::execute(
             &query,
@@ -631,14 +652,15 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         .with_fixed_action(SubAgentJobAction::Await)
         .with_identifier_field("task_id")
         .with_required_identifier()
-        .with_await_timeout_field("timeout_secs", 120, 3600);
+        .with_await_timeout_field("timeout_secs", 120, 3600)
+        .with_owner_scope(owner_scope.clone());
     let pending_wait = ToolDispatch::<(), ()>::execute(
         &wait,
         &(),
         CallId::new("wait"),
         json!({"task_id":task_id,"timeout_secs":1}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     );
     tokio::pin!(pending_wait);
     tokio::select! {
