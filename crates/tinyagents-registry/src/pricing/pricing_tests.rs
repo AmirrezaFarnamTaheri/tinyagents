@@ -177,13 +177,13 @@ fn free_model_pricing_is_zero_and_does_not_change_reported_charges() {
             Some(&pricing),
             &tinyagents_harness::cost::CallUsage {
                 usage,
-                charged_amount_usd: Some(0.004),
+                charged_amount_usd: 0.004,
                 cost_is_estimate: false,
                 charge_reported: true,
             },
         )
-        .usd,
-        0.004,
+        .usd(),
+        Some(0.004),
         "provider-reported billing remains authoritative for free-labeled models"
     );
 }
