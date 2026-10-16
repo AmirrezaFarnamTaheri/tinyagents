@@ -567,15 +567,6 @@ where
         }
     }
 
-    async fn queue_for(&self, key: ThreadLockKey) -> Arc<RunQueue<TurnRequest<P>>> {
-        let mut queues = self.queues.lock().await;
-        Arc::clone(
-            queues
-                .entry(key)
-                .or_insert_with(|| Arc::new(RunQueue::new())),
-        )
-    }
-
     async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<TurnRequest<P>>> {
         let mut queues = self.parallel_queues.lock().await;
         Arc::clone(
@@ -589,29 +580,38 @@ where
         &self,
         scope: &ScopeKey,
         thread_id: &str,
-        owner_request_id: &str,
-    ) -> Option<TurnRequest<P>> {
+        owner_generation: u64,
+    ) -> Option<(TurnRequest<P>, ActiveTurn<P>)> {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
         if active
             .get(&key)
-            .is_none_or(|turn| turn.request_id != owner_request_id)
+            .is_none_or(|turn| turn.generation != owner_generation)
         {
             return None;
         }
-        let queue = self.queues.lock().await.get(&key).cloned();
-        let next = match queue {
-            Some(queue) => queue
-                .take(QueueLane::Followup, QueueMode::OneAtATime)
-                .await
-                .into_iter()
-                .next(),
-            None => None,
-        };
-        if next.is_none() {
+        let current = active.get(&key)?.clone();
+        let next = current
+            .queue
+            .take(QueueLane::Followup, QueueMode::OneAtATime)
+            .await
+            .into_iter()
+            .next();
+        if let Some(request) = next {
+            let reserved = ActiveTurn {
+                request_id: request.request_id.clone(),
+                cancel: crate::CancellationToken::new(),
+                generation: self
+                    .next_generation
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                queue: current.queue,
+            };
+            active.insert(key, reserved.clone());
+            Some((request, reserved))
+        } else {
             active.remove(&key);
+            None
         }
-        next
     }
 
     /// Take queued work from one lane. `OneAtATime` is useful for steering;
@@ -624,7 +624,7 @@ where
         mode: QueueMode,
     ) -> Vec<TurnRequest<P>> {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.queues.lock().await.get(&key).cloned();
+        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.take(lane, mode).await,
             None => Vec::new(),
@@ -633,7 +633,7 @@ where
 
     pub async fn queue_status(&self, scope: &ScopeKey, thread_id: &str) -> QueueStatus {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.queues.lock().await.get(&key).cloned();
+        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.status().await,
             None => QueueStatus {
@@ -647,7 +647,7 @@ where
 
     pub async fn clear_queue(&self, scope: &ScopeKey, thread_id: &str) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.queues.lock().await.get(&key).cloned();
+        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.clear().await,
             None => 0,
@@ -661,7 +661,7 @@ where
         request_id: &str,
     ) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.queues.lock().await.get(&key).cloned();
+        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => {
                 queue
