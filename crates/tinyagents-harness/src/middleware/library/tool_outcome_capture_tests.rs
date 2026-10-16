@@ -85,7 +85,10 @@ async fn middleware_pipeline_captures_after_inner_result_transformers() {
 
     let mut ctx = RunContext::new(RunConfig::new("pipeline-capture"), ());
     let mut call = ToolCall::new("call-1", "search", serde_json::json!({"q": "raw"}));
-    stack.run_before_tool(&mut ctx, &(), &mut call).await.unwrap();
+    stack
+        .run_before_tool(&mut ctx, &(), &mut call)
+        .await
+        .unwrap();
     let invocation = ToolInvocationIdentity::new("call-1", "search");
     let mut result = ToolResult::success("raw result");
     stack
