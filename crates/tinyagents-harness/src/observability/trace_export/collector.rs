@@ -812,8 +812,11 @@ impl SpanCollector {
         let end = at.max(span.start_unix_ms);
         let parent_id = span.parent_span_id.clone();
         if let Some(span) = self.spans.get_mut(index) {
-            span.end_unix_ms = Some(end);
-            span.status = status;
+            let already_closed = span.end_unix_ms.is_some();
+            span.end_unix_ms = Some(span.end_unix_ms.unwrap_or(end).max(end));
+            if !already_closed {
+                span.status = status;
+            }
         }
         if let Some(parent) = parent_id
             .as_deref()
