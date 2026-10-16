@@ -302,6 +302,9 @@ where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
+    if timeout.is_some_and(|limit| limit.is_zero()) {
+        return None;
+    }
     let mut messages = history.to_vec();
     messages.push(Message::user(prompt));
     let request = ModelRequest::new(messages)
