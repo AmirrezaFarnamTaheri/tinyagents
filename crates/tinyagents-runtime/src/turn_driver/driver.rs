@@ -30,7 +30,7 @@ use tinyagents_harness::middleware::{
 use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_harness::tool::EarlyExitHook;
-use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap};
+use tinyagents_harness::turn_run_finalize::{TurnEndInputs, detect_hit_cap_with_cause};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ChatModel;
 

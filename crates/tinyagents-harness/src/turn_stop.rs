@@ -45,6 +45,14 @@ impl TurnFailureClass {
     }
 }
 
+impl std::ops::Deref for TurnFailureClass {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
 impl TurnStopKind {
     /// Stable wire / trace label.
     pub fn as_str(self) -> &'static str {
