@@ -1,7 +1,7 @@
 //! Model-facing multi-target delegation adapter.
 
-use std::sync::Arc;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

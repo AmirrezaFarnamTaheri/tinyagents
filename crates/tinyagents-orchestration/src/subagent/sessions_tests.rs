@@ -92,6 +92,56 @@ async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
 }
 
 #[tokio::test]
+async fn stale_completion_cannot_overwrite_a_reassigned_or_closed_session() {
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
+    store.upsert_running(upsert(false, "task-2")).await.unwrap();
+    assert!(
+        !store
+            .mark_finished(
+                &session.subagent_session_id,
+                "task-1",
+                DurableSubagentStatus::Idle,
+                Vec::new()
+            )
+            .await
+            .unwrap()
+    );
+    assert!(store.close(&session.subagent_session_id).await.unwrap());
+    assert!(
+        !store
+            .mark_failed(
+                &session.subagent_session_id,
+                "task-2",
+                "late failure".into()
+            )
+            .await
+            .unwrap()
+    );
+    let current = store
+        .get(&session.subagent_session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.status, DurableSubagentStatus::Closed);
+    assert_eq!(current.current_task_id.as_deref(), Some("task-2"));
+}
+
+#[tokio::test]
+async fn concurrent_first_upserts_claim_one_durable_session_for_a_selector() {
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let (left, right) = tokio::join!(
+        store.upsert_running(upsert(false, "task-left")),
+        store.upsert_running(upsert(false, "task-right")),
+    );
+    let (left, _) = left.unwrap();
+    let (right, _) = right.unwrap();
+    assert_eq!(left.subagent_session_id, right.subagent_session_id);
+    let sessions = store.list_for_parent("parent", None).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+}
+
+#[tokio::test]
 async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
     let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();

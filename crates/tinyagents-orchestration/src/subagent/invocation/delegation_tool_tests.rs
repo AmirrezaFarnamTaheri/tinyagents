@@ -1,5 +1,5 @@
 use super::*;
-use tinyagents_graph::delegation::{DelegationConfig, DelegationStageOutput};
+use tinyagents_graph::delegation::DelegationStageOutput;
 
 #[test]
 fn approval_parser_requires_a_standalone_approve_token() {

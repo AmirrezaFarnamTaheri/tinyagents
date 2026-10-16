@@ -5,9 +5,11 @@ use serde_json::json;
 use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::CallId;
+use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_runtime::ToolSnapshot;
 use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::MockModel;
 
 struct Planner;
 
@@ -160,6 +162,54 @@ async fn background_request_with_delivery_target_returns_task_reference() {
     assert_eq!(value["status"], "running");
     assert_eq!(value["delivery_target"], "parent-thread");
     assert_eq!(value["task_id"], "worker-task");
+}
+
+#[tokio::test]
+async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
+    let mut harness = AgentHarness::new();
+    harness.register_model(
+        "child",
+        Arc::new(MockModel::constant("legacy harness result")),
+    );
+    let legacy = Arc::new(crate::subagent::SubAgent::new(
+        "worker",
+        "worker description",
+        Arc::new(harness),
+    ));
+    let tool =
+        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+            .with_driver(
+                driver(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("worker-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "driver-task",
+                        (),
+                        args["input"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                },
+                |_| None,
+            );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("driver-route"),
+        json!({"input":"do work", "mode":"inline"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
+        "driver result"
+    );
 }
 
 fn driver() -> Arc<SubagentDriver<(), ()>> {

@@ -634,6 +634,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             role: crate::subagent::SubagentRole::default(),
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
+            driver_dispatch: None,
         }
     }
 
@@ -646,7 +647,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// detached only when `delivery_target` returns a destination; otherwise
     /// the request is executed inline and its result is returned.
     pub fn with_driver<H>(
-        self,
+        mut self,
         driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
         request_factory: impl Fn(
             &State,
@@ -663,18 +664,20 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         + Send
         + Sync
         + 'static,
-    ) -> DriverSubAgentTool<State, Ctx, H>
+    ) -> Self
     where
         H: Send + Sync + 'static,
     {
-        DriverSubAgentTool::new(
-            self.tool_name,
+        let dispatch = DriverSubAgentTool::new(
+            self.tool_name.clone(),
             self.subagent.description().to_owned(),
             driver,
             request_factory,
             delivery_target,
         )
-        .with_parameters(self.parameters)
+        .with_parameters(self.parameters.clone());
+        self.driver_dispatch = Some(Arc::new(dispatch));
+        self
     }
 
     /// Applies a timeout/retry/budget policy to every spawned child.
@@ -1049,6 +1052,9 @@ where
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch.tool();
+        }
         // Built once and cached (M-4): `tool()` is called several times per
         // admitted call and once per tool per run for `schemas()`, and a
         // fresh `Arc<SubAgentToolDeclaration>` with a cloned `parameters`
@@ -1064,6 +1070,9 @@ where
     }
 
     fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch.output_origin();
+        }
         tinyagents_harness::host::ContentOrigin::Agent
     }
 
@@ -1075,6 +1084,11 @@ where
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch
+                .execute(state, call_id, arguments, options, parent)
+                .await;
+        }
         self.invoke_in_parent_context_for_call(state, arguments, options, parent, Some(&call_id))
             .await
             .map_err(anyhow::Error::from)

@@ -15,6 +15,15 @@ use super::{SubagentError, SubagentTaskKey};
 const COLLECTION: &str = "subagent_sessions";
 const CAS_ATTEMPTS: usize = 32;
 
+fn session_id_for_selector(selector: &SubagentSessionSelector) -> String {
+    let encoded =
+        serde_json::to_string(selector).expect("serializing a session selector is infallible");
+    format!(
+        "subsess-{}",
+        tinyagents_harness::driver_ids::hashed_id(&[&encoded])
+    )
+}
+
 /// Durable state of a reusable subagent session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,9 +85,11 @@ pub struct DurableSubagentSession {
 impl DurableSubagentSession {
     /// Whether this session is reusable for `selector`.
     pub fn matches_selector(&self, selector: &SubagentSessionSelector) -> bool {
-        self.reusable
-            && self.status.reusable()
-            && self.parent_session == selector.parent_session
+        self.reusable && self.status.reusable() && self.same_selector(selector)
+    }
+
+    fn same_selector(&self, selector: &SubagentSessionSelector) -> bool {
+        self.parent_session == selector.parent_session
             && self.parent_thread_id == selector.parent_thread_id
             && self.agent_id == selector.agent_id
             && self.model == selector.model
@@ -271,25 +282,30 @@ impl DriverSubagentSessionStore {
             .collect()
     }
 
-    async fn save(&self, session: DurableSubagentSession) -> Result<(), SubagentError> {
+    async fn mutate(
+        &self,
+        id: &str,
+        mut apply: impl FnMut(&mut DurableSubagentSession) -> bool,
+    ) -> Result<bool, SubagentError> {
         self.declare().await?;
-        let id = session.subagent_session_id.clone();
-        let doc = serde_json::to_value(session)
-            .map_err(|error| SubagentError::Persistence(format!("session encode: {error}")))?;
         for _ in 0..CAS_ATTEMPTS {
-            let precondition =
-                match self.docs.get(COLLECTION, &id).await.map_err(|error| {
+            let Some(found) =
+                self.docs.get(COLLECTION, id).await.map_err(|error| {
                     SubagentError::Persistence(format!("session store: {error}"))
-                })? {
-                    Some(found) => found.unchanged(),
-                    None => Precondition::Absent,
-                };
-            match self
-                .docs
-                .put(COLLECTION, &id, doc.clone(), precondition)
-                .await
-            {
-                Ok(_) => return Ok(()),
+                })?
+            else {
+                return Ok(false);
+            };
+            let precondition = found.unchanged();
+            let mut session: DurableSubagentSession = serde_json::from_value(found.doc)
+                .map_err(|error| SubagentError::Persistence(format!("session decode: {error}")))?;
+            if !apply(&mut session) {
+                return Ok(false);
+            }
+            let doc = serde_json::to_value(session)
+                .map_err(|error| SubagentError::Persistence(format!("session encode: {error}")))?;
+            match self.docs.put(COLLECTION, id, doc, precondition).await {
+                Ok(_) => return Ok(true),
                 Err(error) if error.kind() == ErrorKind::Conflict => continue,
                 Err(error) => {
                     return Err(SubagentError::Persistence(format!(
@@ -357,6 +373,9 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         let this = self.clone();
         self.run(async move {
             let all = this.load_all().await?;
+            let prior_selector = all
+                .iter()
+                .any(|session| session.same_selector(&upsert.selector));
             let reuse = if upsert.force_fresh {
                 None
             } else {
@@ -364,8 +383,12 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             };
             let decision = reuse_decision(reuse.as_ref(), upsert.force_fresh);
             let now = chrono::Utc::now().to_rfc3339();
-            let mut session = reuse.unwrap_or_else(|| DurableSubagentSession {
-                subagent_session_id: format!("subsess-{}", uuid::Uuid::new_v4()),
+            let mut session = reuse.clone().unwrap_or_else(|| DurableSubagentSession {
+                subagent_session_id: if upsert.force_fresh || prior_selector {
+                    format!("subsess-{}", uuid::Uuid::new_v4())
+                } else {
+                    session_id_for_selector(&upsert.selector)
+                },
                 parent_session: upsert.selector.parent_session.clone(),
                 parent_thread_id: upsert.selector.parent_thread_id.clone(),
                 worker_thread_id: upsert.worker_thread_id.clone(),
@@ -396,21 +419,86 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             session.latest_error = None;
             session.updated_at = now.clone();
             session.last_used_at = now;
-            this.save(session.clone()).await?;
+            let session_id = session.subagent_session_id.clone();
+            if reuse.is_some() {
+                let update = this
+                    .mutate(&session_id, |current| {
+                        if !current.status.reusable() || !current.reusable {
+                            return false;
+                        }
+                        *current = session.clone();
+                        true
+                    })
+                    .await?;
+                if !update {
+                    return Err(SubagentError::Persistence(
+                        "reusable session was concurrently closed or reassigned".into(),
+                    ));
+                }
+            } else {
+                let doc = serde_json::to_value(&session).map_err(|error| {
+                    SubagentError::Persistence(format!("session encode: {error}"))
+                })?;
+                match this
+                    .docs
+                    .put(COLLECTION, &session_id, doc, Precondition::Absent)
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == ErrorKind::Conflict && !upsert.force_fresh => {
+                        let mut reused = false;
+                        for _ in 0..CAS_ATTEMPTS {
+                            let should_update = this
+                                .mutate(&session_id, |current| {
+                                    if !current.matches_selector(&upsert.selector) {
+                                        return false;
+                                    }
+                                    current.lifecycle_key = session.lifecycle_key.clone();
+                                    current.worker_thread_id = session
+                                        .worker_thread_id
+                                        .clone()
+                                        .or(current.worker_thread_id.clone());
+                                    current.current_task_id = session.current_task_id.clone();
+                                    current.task_title = session.task_title.clone();
+                                    current.status = DurableSubagentStatus::Running;
+                                    current.reusable = true;
+                                    current.updated_at = session.updated_at.clone();
+                                    current.last_used_at = session.last_used_at.clone();
+                                    true
+                                })
+                                .await?;
+                            if should_update {
+                                reused = true;
+                                break;
+                            }
+                            break;
+                        }
+                        if !reused {
+                            return Err(SubagentError::Persistence(
+                                "matching session was concurrently closed".into(),
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        return Err(SubagentError::Persistence(format!(
+                            "session store: {error}"
+                        )));
+                    }
+                }
+            }
             Ok((session, decision))
         })
     }
 
     async fn close(&self, id: &str) -> Result<bool, SubagentError> {
-        let Some(mut session) = self.get(id).await? else {
-            return Ok(false);
-        };
-        session.status = DurableSubagentStatus::Closed;
-        session.reusable = false;
-        session.updated_at = chrono::Utc::now().to_rfc3339();
-        session.last_used_at = session.updated_at.clone();
-        self.save(session).await?;
-        Ok(true)
+        self.mutate(id, |session| {
+            session.status = DurableSubagentStatus::Closed;
+            session.reusable = false;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
     }
 
     async fn mark_finished(
@@ -420,18 +508,21 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         status: DurableSubagentStatus,
         history: Vec<Message>,
     ) -> Result<bool, SubagentError> {
-        let Some(mut session) = self.get(id).await? else {
-            return Ok(false);
-        };
-        session.current_task_id = Some(task_id.to_owned());
-        session.status = status;
-        session.reusable = status.reusable();
-        session.latest_history = Some(history);
-        session.latest_error = None;
-        session.updated_at = chrono::Utc::now().to_rfc3339();
-        session.last_used_at = session.updated_at.clone();
-        self.save(session).await?;
-        Ok(true)
+        self.mutate(id, |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id)
+            {
+                return false;
+            }
+            session.status = status;
+            session.reusable = status.reusable();
+            session.latest_history = Some(history.clone());
+            session.latest_error = None;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
     }
 
     async fn mark_failed(
@@ -440,17 +531,20 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         task_id: &str,
         error: String,
     ) -> Result<bool, SubagentError> {
-        let Some(mut session) = self.get(id).await? else {
-            return Ok(false);
-        };
-        session.current_task_id = Some(task_id.to_owned());
-        session.status = DurableSubagentStatus::Failed;
-        session.reusable = false;
-        session.latest_error = Some(error);
-        session.updated_at = chrono::Utc::now().to_rfc3339();
-        session.last_used_at = session.updated_at.clone();
-        self.save(session).await?;
-        Ok(true)
+        self.mutate(id, |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id)
+            {
+                return false;
+            }
+            session.status = DurableSubagentStatus::Failed;
+            session.reusable = false;
+            session.latest_error = Some(error.clone());
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
     }
 }
 

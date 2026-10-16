@@ -39,6 +39,8 @@ pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
             + Sync,
     >,
     delivery_target: Arc<dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync>,
+    completion:
+        Option<Arc<dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync>>,
     _state: PhantomData<fn(&State)>,
 }
 
@@ -78,6 +80,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             driver,
             request_factory: Arc::new(request_factory),
             delivery_target: Arc::new(delivery_target),
+            completion: None,
             _state: PhantomData,
         }
     }
@@ -112,6 +115,17 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
+    /// Installs the host callback that publishes a detached result to its target.
+    /// The callback is invoked for successful and failed runs; hosts can persist
+    /// completion state or route a notification without moving policy into this crate.
+    pub fn with_completion_handler(
+        mut self,
+        handler: impl Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync + 'static,
+    ) -> Self {
+        self.completion = Some(Arc::new(handler));
+        self
+    }
+
     fn requested_mode(args: &Value) -> Result<crate::subagent::SubAgentMode, String> {
         match args.get("mode") {
             None | Some(Value::Null) => Ok(crate::subagent::SubAgentMode::Background),
@@ -138,10 +152,23 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         if let Some(target) = target {
             let cancellation = request.run_context().cancellation.clone();
             let driver = Arc::clone(&self.driver);
+            let completion = self.completion.clone();
             let detached_task_id = task_id.clone();
+            let completion_target = target.clone();
             tokio::spawn(async move {
-                if let Err(error) = driver.run(request, cancellation).await {
-                    tracing::error!(task_id = %detached_task_id, error = %error, "driver-backed subagent failed");
+                match driver.run(request, cancellation).await {
+                    Ok(result) => {
+                        if let Some(completion) = completion {
+                            completion(&completion_target, Ok(result.outcome));
+                        }
+                    }
+                    Err(error) => {
+                        let error = error.to_string();
+                        if let Some(completion) = completion {
+                            completion(&completion_target, Err(error.clone()));
+                        }
+                        tracing::error!(task_id = %detached_task_id, error, "driver-backed subagent failed");
+                    }
                 }
             });
             return Ok(ToolResult::json(json!({
