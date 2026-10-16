@@ -555,6 +555,7 @@ where
             )
             .await;
         self.host.checkin(&request).await;
+        drop(_session_guard);
 
         match result {
             Ok(result) => {

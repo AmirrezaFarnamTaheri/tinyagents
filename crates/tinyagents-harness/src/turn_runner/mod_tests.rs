@@ -593,7 +593,6 @@ async fn host_authored_turn_gets_private_queue_and_preserves_primary_collects() 
     );
     let mut background = request(QueueDisposition::Interrupt, true);
     background.request_id = "host-background".into();
-    runner.run(background).await.unwrap();
     let background_task = {
         let runner = runner.clone();
         tokio::spawn(async move { runner.run(background).await })
