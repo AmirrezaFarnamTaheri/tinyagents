@@ -9,16 +9,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tinystoragedrivers_core::MemoryStorage;
-
 use super::TranscriptLocator;
-use crate::port::{DriverSessionStores, SessionStoreProvider};
 
 /// An empty driver-backed locator (the production store, over memory).
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
-    let provider = DriverSessionStores::new(Arc::new(MemoryStorage::new()))
-        .expect("driver session stores over memory");
-    provider.for_agent("test").transcripts
+    crate::testkit::in_memory_transcript()
 }
 
 /// A driver-backed locator holding every transcript under
