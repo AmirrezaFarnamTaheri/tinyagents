@@ -5,8 +5,9 @@
 //! instruction so product policy and prompt wording remain outside the neutral
 //! runtime.
 
-use tinyinference_llm::message::{Message, Usage};
+use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ToolChoice};
+use tinyinference_llm::usage::Usage;
 use tinytools_agent::dialect::{DialectResponse, ToolDialect};
 
 /// One completed tool call captured by the host before transcript compaction.
@@ -176,7 +177,7 @@ where
         .with_tools(Vec::new())
         .with_tool_choice(ToolChoice::None);
     let response = model.invoke(state, request).await.ok()?;
-    let text = response.text();
+    let text = response.text().to_owned();
     let has_tool_call = !response.message.tool_calls.is_empty()
         || !dialect.parse_response(&DialectResponse { text: Some(text.clone()), tool_calls: Vec::new() }).1.is_empty();
     let usage = response.usage.into_iter().collect();
