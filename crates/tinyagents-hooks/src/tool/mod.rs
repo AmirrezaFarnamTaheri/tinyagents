@@ -131,7 +131,12 @@ pub struct ToolHooksMiddleware<Ctx> {
     arguments: std::sync::Mutex<
         std::collections::HashMap<
             (u64, String),
-            (serde_json::Value, std::time::Instant, Vec<String>),
+            (
+                serde_json::Value,
+                std::time::Instant,
+                Vec<String>,
+                std::sync::Weak<()>,
+            ),
         >,
     >,
     marker: std::marker::PhantomData<fn() -> Ctx>,
@@ -205,15 +210,18 @@ where
                 additional_context.push(context);
             }
         }
-        self.arguments
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(
+        let mut pending = self.arguments.lock().unwrap_or_else(|e| e.into_inner());
+        // Calls refused by a later middleware never reach `after_tool`. Prune
+        // their entries once the owning run has gone away, while retaining
+        // every live parallel run's pending calls.
+        pending.retain(|_, (_, _, _, run)| run.strong_count() > 0);
+        pending.insert(
                 (ctx.instance_id(), call.id.clone()),
                 (
                     call.arguments.clone(),
                     std::time::Instant::now(),
                     additional_context,
+                    ctx.lifecycle_token(),
                 ),
             );
         Ok(())
@@ -226,7 +234,7 @@ where
         invocation: &tinyagents_harness::middleware::ToolInvocationIdentity,
         result: &mut tinytools::ToolResult,
     ) -> tinyagents_harness::error::Result<()> {
-        let (args, started, mut additional_context) = self
+        let (args, started, mut additional_context, _run_liveness) = self
             .arguments
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -235,6 +243,7 @@ where
                 serde_json::Value::Null,
                 std::time::Instant::now(),
                 Vec::new(),
+                ctx.lifecycle_token(),
             ));
         let text = result.text();
         let event = ToolHookContext {
