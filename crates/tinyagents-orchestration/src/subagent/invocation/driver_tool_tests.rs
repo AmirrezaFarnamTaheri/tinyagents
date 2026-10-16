@@ -83,10 +83,15 @@ impl SubagentExecutor<()> for PauseThenCompleteExecutor {
             });
             Ok(outcome)
         } else {
-            Ok(SubagentOutcome::completed(
+            let mut outcome = SubagentOutcome::completed(
                 execution.prepared.task_id,
                 "resumed completion",
-            ))
+            );
+            outcome.worker_thread_id = Some("worker-thread".into());
+            outcome
+                .extensions
+                .insert("iterations".into(), json!(3));
+            Ok(outcome)
         }
     }
 }
@@ -919,7 +924,9 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     let paused_value = serde_json::from_str::<Value>(&paused.output()).unwrap();
     assert_eq!(paused_value["status"], "awaiting_input");
     assert!(persistence.pause.lock().unwrap().is_some());
-    let public_id = jobs.driver_job_for_task("pause-then-continue", "durable-parent-session").unwrap();
+    let public_id = jobs
+        .driver_job_for_key(&lifecycle_key, "durable-parent-session")
+        .unwrap();
     assert!(!jobs.get(public_id.as_str()).unwrap().status.is_terminal());
     assert!(jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
 
@@ -969,6 +976,8 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     let completed_value = serde_json::from_str::<Value>(&completed.output()).unwrap();
     assert_eq!(completed_value["status"], "completed");
     assert_eq!(completed_value["output"], "resumed completion");
+    assert_eq!(completed_value["worker_thread_id"], "worker-thread");
+    assert_eq!(completed_value["extensions"]["iterations"], 3);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 

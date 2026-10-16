@@ -586,9 +586,9 @@ impl SubAgentJobRegistry {
 
     /// Finds a driver-backed public job by its host-stable task id, while
     /// enforcing the same owner scope as direct job-id lookups.
-    pub(crate) fn driver_job_for_task(
+    pub(crate) fn driver_job_for_key(
         &self,
-        task_id: &str,
+        key: &crate::subagent::SubagentTaskKey,
         owner: &str,
     ) -> Option<SubAgentJobId> {
         let candidates = self
@@ -596,7 +596,7 @@ impl SubAgentJobRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .filter(|(key, _)| key.task_id == task_id)
+            .filter(|(candidate, _)| *candidate == key)
             .map(|(_, id)| id.clone())
             .collect::<Vec<_>>();
         candidates
@@ -1154,12 +1154,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .get(id)
                         .await?
                         .filter(|session| session.parent_session == key(parent.instance_id()))
-                        .and_then(|session| session.current_task_id)
-                        .and_then(|task_id| {
+                        .and_then(|session| {
                             self.jobs
-                                .driver_job_for_task(&task_id, &owner)
+                                .driver_job_for_key(&session.lifecycle_key, &owner)
                                 .map(|job_id| job_id.as_str().to_owned())
                                 .or_else(|| {
+                                    let task_id = session.current_task_id?;
                                     self.jobs
                                         .get_owned(&task_id, &owner)
                                         .map(|_| task_id)
@@ -1451,7 +1451,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .current_task_id
                 .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?;
             self.jobs
-                .driver_job_for_task(&task_id, &owner)
+                .driver_job_for_key(&session.lifecycle_key, &owner)
                 .map(|job_id| job_id.as_str().to_owned())
                 .or_else(|| self.jobs.get_owned(&task_id, &owner).map(|_| task_id.clone()))
                 .unwrap_or(task_id)
