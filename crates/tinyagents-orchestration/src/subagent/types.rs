@@ -144,8 +144,9 @@ impl<C, H> SubagentRequest<C, H> {
 
     /// Continues an authorized durable lifecycle with a fresh owned context.
     ///
-    /// Hosts must authorize and recover `original_key` from their own durable
-    /// record; do not derive a replacement key from the fresh context.
+    /// Pass the original [`SubagentTaskKey`] or a durable session id. Session
+    /// ids are resolved through `sessions`; hosts must authorize them before
+    /// calling. Never derive a replacement key from the fresh context.
     pub async fn continue_with_key(
         target: impl Into<SubagentContinuationTarget>,
         fresh_owned_context: RunContext<C>,
