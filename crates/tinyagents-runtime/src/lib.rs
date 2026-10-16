@@ -7,7 +7,7 @@
 
 mod builder;
 mod capability_projection;
-pub mod command_hooks;
+pub use tinyagents_hooks::command as command_hooks;
 mod driver;
 mod error;
 mod hooks;
