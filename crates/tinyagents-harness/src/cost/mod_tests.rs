@@ -55,6 +55,26 @@ fn subagent_usage_rollup_deduplicates_replayed_runs_but_keeps_distinct_runs() {
 }
 
 #[test]
+fn model_budget_clones_share_the_same_ledger() {
+    use tinyinference_llm::model::budget::{Budget, SpendLimits};
+
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(50),
+            cost_micros: Some(100),
+        }),
+        tinyinference_llm::model::budget::CallBudget {
+            input_tokens: 1_000,
+            output_tokens: 10,
+            cost_micros: 20,
+        },
+    );
+    let child = budget.clone();
+    assert_eq!(child.ledger.snapshot(), budget.ledger.snapshot());
+    assert_eq!(child.ledger.snapshot().spent.tokens, 0);
+}
+
+#[test]
 fn nested_usage_rollup_counts_root_child_and_grandchild_once() {
     let grandchild = SubagentUsage {
         run_id: "grandchild-run".into(),
