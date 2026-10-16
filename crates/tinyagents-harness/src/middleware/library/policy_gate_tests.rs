@@ -89,6 +89,23 @@ impl ToolCallPolicy<Host> for SessionCeiling {
     }
 }
 
+struct SessionApproval;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionApproval {
+    fn name(&self) -> &str {
+        "session_approval"
+    }
+
+    async fn check(&self, _ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "rm" || call.name == "send" {
+            PolicyDecision::require_approval("session requires approval")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
 #[derive(Default)]
 struct Resolver {
     verdict: Mutex<Option<ApprovalResolution>>,
@@ -522,6 +539,73 @@ async fn session_ceiling_runs_before_builder_policy() {
     assert!(result.is_error);
     assert!(result.output().contains("session ceiling"));
     assert_eq!(*runs.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn session_approval_cannot_bypass_builder_denial() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("rm"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn both_policies_requiring_approval_prompt_once_then_run() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("send"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(!result.is_error);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 1);
+    assert_eq!(*runs.lock().unwrap(), 1);
+    assert_eq!(
+        resolver.recorded.lock().unwrap().as_slice(),
+        &[("approved".into(), false)]
+    );
 }
 
 #[test]
