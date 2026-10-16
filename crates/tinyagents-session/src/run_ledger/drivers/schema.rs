@@ -57,3 +57,7 @@ pub fn history_storage_schema() -> Schema {
     }
     schema
 }
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod tests;
