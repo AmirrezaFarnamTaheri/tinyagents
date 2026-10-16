@@ -240,10 +240,12 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 let attempt = ToolAttempt::success(tool, &argument_key);
                 let _ = run.tracker.record(step, &attempt);
                 run.recoverable.reset_streak();
+                clear_recovered(&run.classified, tool, &scope.scope);
             }
             FailureAssessment::Halt { summary, cause } => {
                 run.tracker.reset();
                 run.recoverable.reset_streak();
+                let summary = self.policy.halt_copy(FailureStopKind::Terminal, summary, "");
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {
@@ -251,8 +253,28 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     run.recoverable
                         .record(self.policy.as_ref(), tool, &argument_key, &error)
                 {
+                    let summary = self.policy.halt_copy(FailureStopKind::Recoverable, summary, &error);
                     self.halt(ctx, summary, None);
                     run.recoverable.reset_streak();
+                }
+            }
+            FailureAssessment::ClassifiedFailure {
+                class,
+                budget,
+                error,
+                nudge,
+            } => {
+                run.recoverable.reset_streak();
+                match classified_step_with_cause(&run.classified, &class, tool, &scope.scope, budget, &error) {
+                    ClassifiedStepWithCause::Within => {}
+                    ClassifiedStepWithCause::Nudge(instruction) => {
+                        self.nudges.push(ctx, nudge.unwrap_or(instruction));
+                    }
+                    ClassifiedStepWithCause::Halt(cause) => {
+                        run.tracker.reset();
+                        let summary = self.policy.halt_copy(FailureStopKind::Classified, cause.summary.clone(), &error);
+                        self.halt(ctx, summary.clone(), Some(crate::no_progress::ClassifiedStopCause { summary, ..cause }));
+                    }
                 }
             }
             FailureAssessment::Failure {
@@ -273,6 +295,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
                     NoProgress::Halt(summary) => {
                         run.tracker.reset();
+                        let summary = self.policy.halt_copy(FailureStopKind::NoProgress, summary, &error);
                         self.halt(ctx, summary, None);
                     }
                 }
@@ -300,6 +323,19 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
 
     fn is_observer(&self) -> bool {
         true
+    }
+
+    async fn after_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _state: &(),
+        response: &mut ModelResponse,
+    ) -> Result<()> {
+        if let Some((summary, cause)) = self.policy.terminal_model_halt(ctx, response) {
+            let summary = self.policy.halt_copy(FailureStopKind::Terminal, summary, "");
+            self.halt(ctx, summary, cause);
+        }
+        Ok(())
     }
 
     async fn before_tool(
