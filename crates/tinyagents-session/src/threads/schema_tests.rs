@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinystoragedrivers_core::{
     CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage, StorageBackend, WriteOptions, schema::StepBody,
+    ScopedStorage, StorageBackend, WriteOptions,
+    schema::{StepBody, StreamStepFn},
 };
 
 const INCARNATION: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
@@ -108,11 +109,7 @@ fn message(id: &str, content: &str) -> ThreadMessage {
     }
 }
 
-fn stream_step() -> Arc<
-    dyn Fn(String, Vec<Value>) -> tinystoragedrivers_core::Result<Option<(String, Vec<Value>)>>
-        + Send
-        + Sync,
-> {
+fn stream_step() -> StreamStepFn {
     let step = conversations_storage_schema()
         .steps
         .into_iter()
