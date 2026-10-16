@@ -24,7 +24,6 @@ const UNSTREAMED_DELTA_WINDOW_MS: u64 = 100;
 struct CallStart {
     index: usize,
     started_at_ms: u64,
-    parent_index: usize,
     first_delta_ms: Option<u64>,
     first_text_ms: Option<u64>,
 }
@@ -210,7 +209,6 @@ impl SpanCollector {
                     self.scoped_id(call_id.as_str()),
                     CallStart {
                         index,
-                        parent_index: parent,
                         started_at_ms: timestamp_ms,
                         first_delta_ms: None,
                         first_text_ms: None,
@@ -241,28 +239,24 @@ impl SpanCollector {
             } => {
                 let call_key = self.scoped_id(call_id.as_str());
                 let cache_hit = self.cached_calls.remove(&call_key);
-                let call = self
-                    .open_models
-                    .remove(&call_key)
-                    .unwrap_or_else(|| {
-                        let parent = self.active_parent(timestamp_ms);
-                        let mut attrs = BTreeMap::new();
-                        attrs.insert("gen_ai.request.model".into(), json_str("unknown"));
-                        let (index, _) = self.open_span(
-                            SpanKind::Generation,
-                            "llm.unknown".into(),
-                            Some(parent),
-                            started_at_ms.unwrap_or(timestamp_ms),
-                            attrs,
-                        );
-                        CallStart {
-                            index,
-                            parent_index: parent,
-                            started_at_ms: started_at_ms.unwrap_or(timestamp_ms),
-                            first_delta_ms: None,
-                            first_text_ms: None,
-                        }
-                    });
+                let call = self.open_models.remove(&call_key).unwrap_or_else(|| {
+                    let parent = self.active_parent(timestamp_ms);
+                    let mut attrs = BTreeMap::new();
+                    attrs.insert("gen_ai.request.model".into(), json_str("unknown"));
+                    let (index, _) = self.open_span(
+                        SpanKind::Generation,
+                        "llm.unknown".into(),
+                        Some(parent),
+                        started_at_ms.unwrap_or(timestamp_ms),
+                        attrs,
+                    );
+                    CallStart {
+                        index,
+                        started_at_ms: started_at_ms.unwrap_or(timestamp_ms),
+                        first_delta_ms: None,
+                        first_text_ms: None,
+                    }
+                });
                 self.generation_by_call
                     .entry(call_key)
                     .or_insert(call.index);
@@ -318,7 +312,6 @@ impl SpanCollector {
                         );
                         CallStart {
                             index,
-                            parent_index: parent,
                             started_at_ms: started_at_ms.unwrap_or(timestamp_ms),
                             first_delta_ms: None,
                             first_text_ms: None,
