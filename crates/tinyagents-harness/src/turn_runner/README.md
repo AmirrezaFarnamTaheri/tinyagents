@@ -9,16 +9,20 @@ or suggestions.
 
 Ingress policies run in a fixed order: stage attachments, apply the guardrail,
 intercept approval replies, then run before-submit hooks. A consumed approval
-reply or a policy rejection never starts a turn. Accepted `Steer`, `Followup`,
-and `Collect` work is handed to the host queue; `Interrupt` cancels the prior
-primary generation; `Parallel` uses its own request-scoped cancellation slot
-and does not serialize against the primary session lock.
+reply or a policy rejection never starts a turn. The runner owns TinyAgents'
+`RunQueue` and its Steer, Followup, and Collect lanes. Accepted work retains
+its generic, typed host payload in that queue; Followup requests dispatch as
+fresh turns after the current turn completes. `Interrupt` cancels the prior
+primary generation; `Parallel` uses a host-created fork session and a separate
+request-scoped cancellation slot, without serializing against the primary.
 
 Primary sessions serialize by `(agent_id, profile_id, thread_id)`. The active
 slot is installed before waiting for that lock, so an interrupt can stop the
 current owner and stale cancellation ids cannot stop its replacement.
 Host-authored turns use the same session checkout and reply store but never
-occupy the user cancellation slot. The runner persists a deterministic reply
+occupy the user cancellation slot. Hosts own session identity and checkout,
+including fork isolation for parallel runs, and must check a session back in
+after every successful checkout. The runner persists a deterministic reply
 id before emitting exactly one terminal event.
 
 The idle guard defaults to 900 seconds and resets on progress. Hosts signal

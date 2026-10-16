@@ -254,6 +254,48 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
 }
 
 #[tokio::test]
+async fn accepted_followup_is_dispatched_as_a_fresh_turn_after_primary_finishes() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let events = Arc::new(Events::default());
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+    ));
+
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
+    };
+    started.notified().await;
+    let mut followup = request(QueueDisposition::Followup, false);
+    followup.request_id = "followup-fresh".into();
+    assert!(matches!(
+        runner.run(followup).await,
+        Err(TurnRunnerError::Queued)
+    ));
+
+    release.notify_one();
+    started.notified().await;
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    release.notify_one();
+    primary.await.unwrap().unwrap();
+
+    assert_eq!(events.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn host_authored_turn_persists_reply_without_an_inflight_slot() {
     let events = Arc::new(Events::default());
     let replies = Arc::new(Replies::default());
