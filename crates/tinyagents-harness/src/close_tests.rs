@@ -82,8 +82,8 @@ fn harness_quote_matching_normalizes_whitespace_but_ignores_short_phrases() {
 
 #[test]
 fn repair_prompt_inserts_the_violation_into_host_template() {
-    let prompt = close_repair_instruction("{repair_reason}\nTry again", CloseViolation::Unverified);
-    assert!(prompt.starts_with("Your previous answer was not verified"));
+    let prompt = close_repair_instruction("{repair_reason}\nTry again", "bad evidence");
+    assert_eq!(prompt, "bad evidence\nTry again");
 }
 
 #[tokio::test]
@@ -96,7 +96,7 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
         &[Message::user("original request")],
         "close prompt",
         |reply| format!("verify {reply}"),
-        "Repair: {repair_reason}",
+        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
         &[],
         None,
         || "fallback".to_owned(),
@@ -124,7 +124,7 @@ async fn unclear_verification_and_failed_repair_use_the_deterministic_fallback()
         &[],
         "close prompt",
         |reply| format!("verify {reply}"),
-        "Repair: {repair_reason}",
+        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
         &[],
         None,
         || "deterministic fallback".to_owned(),

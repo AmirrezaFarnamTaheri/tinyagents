@@ -87,7 +87,10 @@ fn typed_stop_identifiers_reject_free_text_and_paths() {
         TurnFailureClass::new("permission from /home/alice"),
         Some("write_file /home/alice/private".into()),
     );
-    assert_eq!(stop.failure_class.as_ref().map(TurnFailureClass::as_str), Some("unknown"));
+    assert_eq!(
+        stop.failure_class.as_ref().map(TurnFailureClass::as_str),
+        Some("unknown")
+    );
     assert_eq!(stop.operation, None);
     assert_eq!(stop.status_message(), "stopped: breaker unknown");
 }
