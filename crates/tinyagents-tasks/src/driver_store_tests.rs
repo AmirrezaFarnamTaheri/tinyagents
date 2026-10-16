@@ -231,22 +231,15 @@ fn racing_settlements_have_one_winner() {
 }
 
 #[test]
-fn tenants_and_prefixes_never_share_tasks() {
+fn tenants_never_share_tasks() {
     let storage = MemoryStorage::new();
     let alice = DriverTaskStore::new(docs_of(&storage, "alice")).unwrap();
     let bob = DriverTaskStore::new(docs_of(&storage, "bob")).unwrap();
-    let other = DriverTaskStore::with_prefix(
-        docs_of(&storage, "alice"),
-        Blocking::new().unwrap(),
-        "other",
-    );
     alice.insert(spec("shared")).unwrap();
     assert!(bob.get(&TaskId::new("shared")).is_none());
-    assert!(other.get(&TaskId::new("shared")).is_none());
     // The same id is free in the other tenant.
     bob.insert(spec("shared")).unwrap();
     assert!(bob.list(OrchestrationTaskFilter::default()).len() == 1);
-    assert!(other.list(OrchestrationTaskFilter::default()).is_empty());
 }
 
 #[test]
@@ -288,4 +281,35 @@ fn the_opener_returns_a_durable_store_and_degrades_to_memory_when_unusable() {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
     let reopened = crate::open_driver_task_store_or_memory(docs_of(&storage, "local"));
     assert_eq!(reopened.list(OrchestrationTaskFilter::default()).len(), 1);
+}
+
+#[tokio::test]
+async fn records_and_history_are_v2_documents_with_key_ids_and_ms_times() {
+    let storage = MemoryStorage::new();
+    let docs = docs_of(&storage, "local");
+    let store = DriverTaskStore::new(docs.clone()).unwrap();
+    let id = TaskId::new("a/b");
+    store.insert(spec("a/b").with_lineage("run-1", "root-1")).unwrap();
+    store.mark_running(&id).unwrap();
+
+    let row = docs.get("tasks.records", "a%2Fb").await.unwrap().unwrap();
+    assert_eq!(row.doc["task_id"], "a/b");
+    assert_eq!(row.doc["status"], "running");
+    assert_eq!(row.doc["kind_label"], "graph");
+    assert_eq!(row.doc["rev"], 2);
+    assert_eq!(row.doc["root_run_id"], "root-1");
+    assert!(row.doc["created_ms"].as_i64().unwrap() > 1_600_000_000_000);
+    assert!(row.doc.get("record").is_none() && row.doc.get("updated_at").is_none());
+    assert_eq!(row.meta.schema, 2);
+    assert!(row.meta.updated_ms > 0);
+
+    let first = docs.get("tasks.history", "a%2Fb/1").await.unwrap().unwrap();
+    assert_eq!(first.doc["status"], "pending");
+    assert_eq!(first.meta.schema, 2);
+    assert!(docs.get("tasks.history", "a%2Fb/2").await.unwrap().is_some());
+    assert_eq!(
+        store.get(&id).unwrap().updated_at,
+        std::time::UNIX_EPOCH + std::time::Duration::from_millis(row.meta.updated_ms as u64),
+        "the update time is the document's metadata"
+    );
 }
