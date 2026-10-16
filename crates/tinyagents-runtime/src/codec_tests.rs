@@ -65,3 +65,33 @@ fn default_reconcile_stamps_only_new_rows() {
     assert_eq!(rows[0].request_id.as_deref(), Some("old-request"));
     assert_eq!(rows[1].request_id.as_deref(), Some("current"));
 }
+
+#[test]
+fn default_reconcile_matches_reordered_rows_to_their_original_metadata() {
+    let mut alpha = TranscriptMessage::user("alpha");
+    alpha.extra_metadata = Some(serde_json::json!({"source": "alpha"}));
+    let mut beta = TranscriptMessage::system("beta");
+    beta.extra_metadata = Some(serde_json::json!({"source": "beta"}));
+    let rows = Codec
+        .reconcile(
+            &[alpha, beta],
+            &[Message::user("alpha"), Message::system("beta")],
+            &[Message::system("beta"), Message::user("alpha")],
+            &TranscriptTurnOptions {
+                request_id: Some("new-turn".into()),
+                thread_id: None,
+                stream: false,
+                resume: ResumeMode::Never,
+                context: (),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        rows[0].extra_metadata,
+        Some(serde_json::json!({"source": "beta"}))
+    );
+    assert_eq!(
+        rows[1].extra_metadata,
+        Some(serde_json::json!({"source": "alpha"}))
+    );
+}
