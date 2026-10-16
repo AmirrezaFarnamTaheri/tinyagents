@@ -368,7 +368,7 @@ where
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
                 file_payloads.push(payload);
                 if let Some(text) = archive_text {
-                    file_fallback_text.push(text);
+                    file_fallback_text.push(self.limit_context(text));
                 }
             }
         }
@@ -422,9 +422,11 @@ where
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
                 let rendered = compose_multimodal_message("", &[], &[payload]);
                 match archive_text {
-                    Some(archive) if !rendered.is_empty() => format!("{rendered}\n\n{archive}"),
+                    Some(archive) if !rendered.is_empty() => {
+                        self.limit_context(format!("{rendered}\n\n{archive}"))
+                    }
                     Some(archive) => archive,
-                    None => rendered,
+                    None => self.limit_context(rendered),
                 }
             }
         };
@@ -496,10 +498,10 @@ where
                 .map_err(|error| model_error(&error))?,
             None => "Image contents are unavailable to this text-only model.".to_string(),
         };
-        Ok(format!(
+        Ok(self.limit_context(format!(
             "[Image attachment: {} bytes; mime={mime}]\nImage readout (untrusted):\n{details}",
             image.bytes.len()
-        ))
+        )))
     }
 
     async fn file_fallback(
@@ -537,7 +539,7 @@ where
                     None,
                     self.config.files.effective().2,
                 ),
-                Some(text),
+                Some(self.limit_context(text)),
             );
         }
 
@@ -608,6 +610,15 @@ where
         self.history_fallback
             .as_ref()?
             .unavailable(scope, modality, source, &error.to_string())
+    }
+
+    fn limit_context(&self, mut text: String) -> String {
+        let limit = self.config.files.effective().2;
+        if text.chars().count() > limit {
+            text = text.chars().take(limit).collect();
+            text.push_str("\n[Attachment context truncated]");
+        }
+        text
     }
 }
 
