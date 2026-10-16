@@ -129,9 +129,12 @@ fn attachment(name: &str, mime: &str, bytes: &[u8]) -> ResolvedAttachment {
 }
 
 fn request(text: &str) -> ModelRequest {
-    ModelRequest::new(vec![Message::User(UserMessage {
-        content: vec![ContentBlock::Text(text.into())],
-    })])
+    ModelRequest {
+        messages: vec![Message::User(UserMessage {
+            content: vec![ContentBlock::Text(text.into())],
+        })],
+        ..ModelRequest::default()
+    }
 }
 
 fn wrapper(
@@ -273,7 +276,18 @@ async fn nonvision_fallback_reads_images_and_uses_the_pdf_extractor() {
         .unwrap();
 
     let calls = model.requests.lock().unwrap();
-    let rendered = calls[0].messages[0].text();
+    let rendered = match &calls[0].messages[0] {
+        Message::User(user) => user
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => panic!("prepared user message retained"),
+    };
     assert!(rendered.contains("a small red square"));
     assert!(rendered.contains("PDF text layer from fake parser"));
     assert_eq!(
@@ -311,7 +325,19 @@ async fn nonvision_archive_fallback_lists_entries_without_extracting_them() {
         .await
         .unwrap();
 
-    let rendered = model.requests.lock().unwrap()[0].messages[0].text();
+    let captured = model.requests.lock().unwrap();
+    let Message::User(user) = &captured[0].messages[0] else {
+        panic!("prepared user message retained")
+    };
+    let rendered = user
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(rendered.contains("Archive listing"));
     assert!(rendered.contains("notes/readme.txt"));
     assert!(rendered.contains("original was not extracted"));

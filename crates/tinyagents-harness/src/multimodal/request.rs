@@ -21,7 +21,7 @@ use tinyinference_llm::{
 
 use super::{
     ArchiveFormat, FileLimits, FilePayload, ImageLimits, ResolvedAttachment,
-    TextExtractor, UnknownMimePolicy,
+    TextExtractor,
     archive::{ArchiveLimits, inspect_archive},
     data_uri::encode_data_uri,
     markers::{parse_file_markers, parse_image_markers},
