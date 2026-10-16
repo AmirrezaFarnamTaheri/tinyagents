@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    future::Future,
     hash::Hash,
     sync::{Arc, Weak},
     time::Duration,
@@ -397,27 +398,49 @@ where
         state_out: &mut Option<ActiveTurn<P>>,
         next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
-        for stage in [
-            IngressStage::StageAttachments,
-            IngressStage::Guardrail,
-            IngressStage::ApprovalInterception,
-            IngressStage::BeforeSubmit,
-        ] {
-            match self.ingress.apply(stage, &mut request).await {
-                Ok(IngressDecision::Continue) => {}
-                Ok(IngressDecision::Consumed) => return Err(TurnRunnerError::Consumed),
-                Ok(IngressDecision::Reject(reason)) => {
-                    return Err(TurnRunnerError::Rejected(reason));
-                }
-                Err(error) => return self.fail(&request, error).await,
-            }
-        }
-
-        let key = (request.scope.clone(), request.thread_id.clone());
+        let started = Instant::now();
+        let deadline = request
+            .deadline
+            .or(self.config.deadline)
+            .map(|duration| started + duration);
         let cancellation = reservation
             .as_ref()
             .map(|state| state.cancel.clone())
             .unwrap_or_default();
+        if reservation.is_none() {
+            for stage in [
+                IngressStage::StageAttachments,
+                IngressStage::Guardrail,
+                IngressStage::ApprovalInterception,
+                IngressStage::BeforeSubmit,
+            ] {
+                match self
+                    .before_deadline(
+                        deadline,
+                        &cancellation,
+                        self.ingress.apply(stage, &mut request),
+                    )
+                    .await
+                {
+                    Ok(Ok(IngressDecision::Continue)) => {}
+                    Ok(Ok(IngressDecision::Consumed)) => return Err(TurnRunnerError::Consumed),
+                    Ok(Ok(IngressDecision::Reject(reason))) => {
+                        return Err(TurnRunnerError::Rejected(reason));
+                    }
+                    Ok(Err(error)) => return self.fail_generation(&request, error, None).await,
+                    Err(PreRunStop::Cancelled) => {
+                        return self.cancel_generation(&request, None).await;
+                    }
+                    Err(PreRunStop::Deadline) => {
+                        return self
+                            .fail_generation(&request, "turn wall-clock deadline".into(), None)
+                            .await;
+                    }
+                }
+            }
+        }
+
+        let key = (request.scope.clone(), request.thread_id.clone());
         let mut primary_queue = reservation.as_ref().map(|state| state.queue.clone());
         let mut active_generation = reservation.as_ref().map(|state| state.generation);
         if !request.host_authored {
@@ -437,15 +460,9 @@ where
                     .is_none_or(|current| current.generation != reserved.generation)
                 {
                     drop(active);
-                    self.events
-                        .terminal(
-                            &request,
-                            TerminalEvent::Cancelled {
-                                request_id: request.request_id.clone(),
-                            },
-                        )
+                    return self
+                        .cancel_generation(&request, Some(reserved.generation))
                         .await;
-                    return Err(TurnRunnerError::Cancelled);
                 }
                 let mut state = reserved.clone();
                 state.request_id = request.request_id.clone();
@@ -508,39 +525,81 @@ where
         let _session_guard = if request.disposition == QueueDisposition::Parallel {
             None
         } else {
-            match tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => None,
-                guard = lock.lock_owned() => Some(guard),
-            } {
-                Some(guard) => Some(guard),
-                None => {
-                    self.events
-                        .terminal(
+            match self
+                .before_deadline(deadline, &cancellation, lock.lock_owned())
+                .await
+            {
+                Ok(guard) => Some(guard),
+                Err(PreRunStop::Cancelled) => {
+                    return self.cancel_generation(&request, active_generation).await;
+                }
+                Err(PreRunStop::Deadline) => {
+                    return self
+                        .fail_generation(
                             &request,
-                            TerminalEvent::Cancelled {
-                                request_id: request.request_id.clone(),
-                            },
+                            "turn wall-clock deadline".into(),
+                            active_generation,
                         )
                         .await;
-                    return Err(TurnRunnerError::Cancelled);
                 }
             }
         };
         let checkout = if request.disposition == QueueDisposition::Parallel {
-            self.host.checkout_fork(&request).await
+            self.before_deadline(deadline, &cancellation, self.host.checkout_fork(&request))
+                .await
         } else {
-            self.host.checkout(&request).await
+            self.before_deadline(deadline, &cancellation, self.host.checkout(&request))
+                .await
         };
         let session = match checkout {
-            Ok(session) => session,
-            Err(error) => {
-                return self.fail(&request, error).await;
+            Ok(Ok(session)) => session,
+            Ok(Err(error)) => {
+                return self
+                    .fail_generation(&request, error, active_generation)
+                    .await;
+            }
+            Err(PreRunStop::Cancelled) => {
+                return self.cancel_generation(&request, active_generation).await;
+            }
+            Err(PreRunStop::Deadline) => {
+                return self
+                    .fail_generation(
+                        &request,
+                        "turn wall-clock deadline".into(),
+                        active_generation,
+                    )
+                    .await;
             }
         };
-        if let Err(error) = self.host.validate_fingerprint(&request, &session).await {
-            self.host.checkin(&request).await;
-            return self.fail(&request, error).await;
+        match self
+            .before_deadline(
+                deadline,
+                &cancellation,
+                self.host.validate_fingerprint(&request, &session),
+            )
+            .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                self.host.checkin(&request).await;
+                return self
+                    .fail_generation(&request, error, active_generation)
+                    .await;
+            }
+            Err(PreRunStop::Cancelled) => {
+                self.host.checkin(&request).await;
+                return self.cancel_generation(&request, active_generation).await;
+            }
+            Err(PreRunStop::Deadline) => {
+                self.host.checkin(&request).await;
+                return self
+                    .fail_generation(
+                        &request,
+                        "turn wall-clock deadline".into(),
+                        active_generation,
+                    )
+                    .await;
+            }
         }
         let origin = self.host.run_origin(&request);
 
@@ -551,6 +610,8 @@ where
                 &origin,
                 cancellation.clone(),
                 Arc::clone(&run_queue),
+                started,
+                deadline,
             )
             .await;
         self.host.checkin(&request).await;
@@ -561,7 +622,9 @@ where
                 let reply_id =
                     deterministic_reply_id(&request.scope, &request.thread_id, &request.request_id);
                 if let Err(error) = self.replies.persist(&request, &reply_id, &result).await {
-                    return self.fail(&request, error).await;
+                    return self
+                        .fail_generation(&request, error, active_generation)
+                        .await;
                 }
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
@@ -589,17 +652,12 @@ where
                 Ok(result)
             }
             Err(_error) if cancellation.is_cancelled() => {
-                self.events
-                    .terminal(
-                        &request,
-                        TerminalEvent::Cancelled {
-                            request_id: request.request_id.clone(),
-                        },
-                    )
-                    .await;
-                Err(TurnRunnerError::Cancelled)
+                self.cancel_generation(&request, active_generation).await
             }
-            Err(error) => self.fail(&request, error).await,
+            Err(error) => {
+                self.fail_generation(&request, error, active_generation)
+                    .await
+            }
         }
     }
 
@@ -610,6 +668,111 @@ where
                 .entry(key)
                 .or_insert_with(|| Arc::new(RunQueue::new())),
         )
+    }
+
+    async fn before_deadline<T>(
+        &self,
+        deadline: Option<Instant>,
+        cancellation: &crate::CancellationToken,
+        future: impl Future<Output = T>,
+    ) -> Result<T, PreRunStop> {
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(PreRunStop::Cancelled),
+            _ = async {
+                if let Some(deadline) = deadline {
+                    tokio::time::sleep_until(deadline).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            }, if deadline.is_some() => Err(PreRunStop::Deadline),
+            result = future => Ok(result),
+        }
+    }
+
+    async fn retire_generation(
+        &self,
+        request: &TurnRequest<P>,
+        generation: Option<u64>,
+    ) -> Vec<TurnRequest<P>> {
+        let Some(generation) = generation else {
+            return Vec::new();
+        };
+        let key = (request.scope.clone(), request.thread_id.clone());
+        let mut active = self.active.lock().await;
+        let Some(turn) = active
+            .get(&key)
+            .filter(|turn| turn.generation == generation)
+            .cloned()
+        else {
+            return Vec::new();
+        };
+        active.remove(&key);
+        let mut queued = Vec::new();
+        for lane in [QueueLane::Steer, QueueLane::Followup, QueueLane::Collect] {
+            queued.extend(turn.queue.take(lane, QueueMode::All).await);
+        }
+        queued
+    }
+
+    async fn cancel_generation(
+        &self,
+        request: &TurnRequest<P>,
+        generation: Option<u64>,
+    ) -> Result<TurnResult, TurnRunnerError> {
+        let queued = self.retire_generation(request, generation).await;
+        for queued_request in queued {
+            self.events
+                .terminal(
+                    &queued_request,
+                    TerminalEvent::Cancelled {
+                        request_id: queued_request.request_id.clone(),
+                    },
+                )
+                .await;
+        }
+        self.events
+            .terminal(
+                request,
+                TerminalEvent::Cancelled {
+                    request_id: request.request_id.clone(),
+                },
+            )
+            .await;
+        Err(TurnRunnerError::Cancelled)
+    }
+
+    async fn fail_generation<T>(
+        &self,
+        request: &TurnRequest<P>,
+        error: String,
+        generation: Option<u64>,
+    ) -> Result<T, TurnRunnerError> {
+        let (class, message) = self.failures.classify(&error);
+        let queued = self.retire_generation(request, generation).await;
+        for queued_request in queued {
+            self.events
+                .terminal(
+                    &queued_request,
+                    TerminalEvent::Failed {
+                        request_id: queued_request.request_id.clone(),
+                        message: format!("queued turn was not run: {message}"),
+                        class: class.clone(),
+                    },
+                )
+                .await;
+        }
+        self.events
+            .terminal(
+                request,
+                TerminalEvent::Failed {
+                    request_id: request.request_id.clone(),
+                    message: message.clone(),
+                    class,
+                },
+            )
+            .await;
+        Err(TurnRunnerError::Failed(message))
     }
 
     async fn finalize_generation(
@@ -632,14 +795,14 @@ where
         let collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
         let next = current
             .queue
-            .take(QueueLane::Followup, QueueMode::OneAtATime)
+            .take(QueueLane::Steer, QueueMode::OneAtATime)
             .await
             .into_iter()
             .next();
         let next = if next.is_none() {
             current
                 .queue
-                .take(QueueLane::Steer, QueueMode::OneAtATime)
+                .take(QueueLane::Followup, QueueMode::OneAtATime)
                 .await
                 .into_iter()
                 .next()
@@ -745,6 +908,8 @@ where
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
         queue: Arc<RunQueue<TurnRequest<P>>>,
+        started: Instant,
+        deadline: Option<Instant>,
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
         let task_cancellation = crate::CancellationToken::new();
@@ -757,15 +922,19 @@ where
             progress_tx,
         );
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
-        let deadline = request.deadline.or(self.config.deadline);
-        let started = Instant::now();
         let mut last_progress = started;
         let mut work_in_flight = 0usize;
         let mut progress_open = true;
         tokio::pin!(run);
         loop {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                task_cancellation.cancel();
+                self.host.cancel_children(request).await;
+                return self
+                    .close_or_timeout(request, "wall-clock deadline", &cancellation)
+                    .await;
+            }
             let idle_left = idle.saturating_sub(last_progress.elapsed());
-            let deadline_left = deadline.map(|d| d.saturating_sub(started.elapsed()));
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {
@@ -773,6 +942,12 @@ where
                     self.host.cancel_children(request).await;
                     return Err("turn cancelled".into());
                 }
+                _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.is_some() => {
+                    task_cancellation.cancel();
+                    self.host.cancel_children(request).await;
+                    return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
+                }
+                result = &mut run => return result,
                 signal = progress_rx.recv(), if progress_open => match signal {
                     Some(signal) => match signal {
                         TurnSignal::Progress(event) => {
@@ -789,16 +964,10 @@ where
                     },
                     None => progress_open = false,
                 },
-                result = &mut run => return result,
                 _ = tokio::time::sleep(idle_left), if work_in_flight == 0 => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
-                    return self.close_or_timeout(request, "idle timeout").await;
-                }
-                _ = async { if let Some(left) = deadline_left { tokio::time::sleep(left).await } else { std::future::pending().await } }, if deadline_left.is_some() => {
-                    task_cancellation.cancel();
-                    self.host.cancel_children(request).await;
-                    return self.close_or_timeout(request, "wall-clock deadline").await;
+                    return self.close_or_timeout(request, "idle timeout", &cancellation).await;
                 }
             }
         }
@@ -808,15 +977,19 @@ where
         &self,
         request: &TurnRequest<P>,
         reason: &str,
+        cancellation: &crate::CancellationToken,
     ) -> Result<TurnResult, String> {
-        match tokio::time::timeout(
-            self.config.close_timeout,
-            self.summarizer.grounded_close(request, reason),
-        )
-        .await
-        {
-            Ok(Some(result)) => Ok(result),
-            _ => Err(format!("turn {reason}")),
+        tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err("turn cancelled".into()),
+            result = tokio::time::timeout(
+                self.config.close_timeout,
+                self.summarizer.grounded_close(request, reason),
+            ) => match result {
+                Ok(Some(result)) if !cancellation.is_cancelled() => Ok(result),
+                _ if cancellation.is_cancelled() => Err("turn cancelled".into()),
+                _ => Err(format!("turn {reason}")),
+            }
         }
     }
 
@@ -840,21 +1013,12 @@ where
         self.parallel_active.lock().await.remove(&key);
         self.parallel_queues.lock().await.remove(&key);
     }
+}
 
-    async fn fail<T>(&self, request: &TurnRequest<P>, error: String) -> Result<T, TurnRunnerError> {
-        let (class, message) = self.failures.classify(&error);
-        self.events
-            .terminal(
-                request,
-                TerminalEvent::Failed {
-                    request_id: request.request_id.clone(),
-                    message: message.clone(),
-                    class,
-                },
-            )
-            .await;
-        Err(TurnRunnerError::Failed(message))
-    }
+#[derive(Debug, Clone, Copy)]
+enum PreRunStop {
+    Cancelled,
+    Deadline,
 }
 
 /// Stable reply identity for idempotent host persistence.

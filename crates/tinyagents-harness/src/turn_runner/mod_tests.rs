@@ -333,7 +333,11 @@ async fn natural_finish_dispatches_steer_before_followup() {
     ));
     let primary = {
         let runner = runner.clone();
-        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
     };
     host.started.notified().await;
     for (request_id, disposition) in [
@@ -342,12 +346,18 @@ async fn natural_finish_dispatches_steer_before_followup() {
     ] {
         let mut queued = request(disposition, false);
         queued.request_id = request_id.into();
-        assert!(matches!(runner.run(queued).await, Err(TurnRunnerError::Queued)));
+        assert!(matches!(
+            runner.run(queued).await,
+            Err(TurnRunnerError::Queued)
+        ));
     }
     host.release.notify_one();
     primary.await.unwrap().unwrap();
 
-    assert_eq!(host.started_ids.lock().unwrap().as_slice(), ["request-a", "urgent", "deferred"]);
+    assert_eq!(
+        host.started_ids.lock().unwrap().as_slice(),
+        ["request-a", "urgent", "deferred"]
+    );
 }
 
 #[derive(Default)]
@@ -360,12 +370,17 @@ struct OrderedHost {
 #[async_trait::async_trait]
 impl TurnHost for OrderedHost {
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        Ok(TurnSession { session_id: request.request_id.clone(), fingerprint: None })
+        Ok(TurnSession {
+            session_id: request.request_id.clone(),
+            fingerprint: None,
+        })
     }
     async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
         self.checkout(request).await
     }
-    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     async fn run(
         &self,
         request: &TurnRequest,
@@ -375,12 +390,18 @@ impl TurnHost for OrderedHost {
         _queue: Arc<RunQueue<TurnRequest>>,
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
-        self.started_ids.lock().unwrap().push(request.request_id.clone());
+        self.started_ids
+            .lock()
+            .unwrap()
+            .push(request.request_id.clone());
         if request.request_id == "request-a" {
             self.started.notify_one();
             self.release.notified().await;
         }
-        Ok(TurnResult { reply: "ok".into(), data: serde_json::Value::Null })
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
     }
     async fn checkin(&self, _request: &TurnRequest) {}
     async fn cancel_children(&self, _request: &TurnRequest) {}
@@ -417,7 +438,10 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
     let late_result = runner.run(late).await;
 
     events.release_terminal.notify_one();
-    assert!(matches!(first.await.unwrap(), Err(TurnRunnerError::Failed(_))));
+    assert!(matches!(
+        first.await.unwrap(),
+        Err(TurnRunnerError::Failed(_))
+    ));
     assert!(matches!(late_result, Err(TurnRunnerError::Failed(_))));
     assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
@@ -1181,7 +1205,9 @@ async fn wall_deadline_covers_fingerprint_validation_and_checks_session_back_in(
     started.notified().await;
     tokio::time::advance(std::time::Duration::from_secs(6)).await;
 
-    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("deadline")));
+    assert!(
+        matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("deadline"))
+    );
     assert_eq!(host.checkins.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -1429,7 +1455,9 @@ async fn idle_guard_restarts_when_quiet_work_finishes() {
 async fn continuous_progress_cannot_starve_the_wall_deadline() {
     let started = Arc::new(tokio::sync::Notify::new());
     let runner = Arc::new(TurnRunner::new(
-        Arc::new(FloodProgressHost { started: started.clone() }),
+        Arc::new(FloodProgressHost {
+            started: started.clone(),
+        }),
         Arc::new(Ingress::default()),
         Arc::new(Replies::default()),
         Arc::new(Events::default()),
@@ -1443,24 +1471,39 @@ async fn continuous_progress_cannot_starve_the_wall_deadline() {
     ));
     let run = {
         let runner = runner.clone();
-        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
     };
     started.notified().await;
     tokio::task::yield_now().await;
     tokio::time::advance(std::time::Duration::from_secs(6)).await;
 
-    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("wall-clock deadline")));
+    assert!(
+        matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("wall-clock deadline"))
+    );
 }
 
-struct FloodProgressHost { started: Arc<tokio::sync::Notify> }
+struct FloodProgressHost {
+    started: Arc<tokio::sync::Notify>,
+}
 
 #[async_trait::async_trait]
 impl TurnHost for FloodProgressHost {
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
     }
-    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> { self.checkout(request).await }
-    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     async fn run(
         &self,
         _request: &TurnRequest,
@@ -1506,9 +1549,14 @@ async fn cancellation_during_grounded_close_prevents_persisting_completion() {
         let runner = runner.clone();
         tokio::spawn(async move { runner.run(turn).await })
     };
+    let close_started_at = tokio::time::Instant::now();
     summary.started.notified().await;
     assert!(runner.cancel(&scope, "thread-a", Some("request-a")).await);
-    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(close_started_at.elapsed() < std::time::Duration::from_secs(1));
     assert!(replies.0.lock().unwrap().is_empty());
 }
 
@@ -1517,10 +1565,17 @@ struct PendingHost;
 #[async_trait::async_trait]
 impl TurnHost for PendingHost {
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
     }
-    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> { self.checkout(request).await }
-    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     async fn run(
         &self,
         _request: &TurnRequest,
@@ -1538,7 +1593,9 @@ impl TurnHost for PendingHost {
 }
 
 #[derive(Default)]
-struct BlockingSummary { started: tokio::sync::Notify }
+struct BlockingSummary {
+    started: tokio::sync::Notify,
+}
 
 #[async_trait::async_trait]
 impl Summarizer for BlockingSummary {
