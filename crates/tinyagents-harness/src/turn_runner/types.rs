@@ -144,20 +144,20 @@ pub struct TurnResult {
 }
 
 #[async_trait]
-pub trait ReplyStore: Send + Sync {
+pub trait ReplyStore<P = serde_json::Value>: Send + Sync {
     async fn persist(
         &self,
-        request: &TurnRequest,
+        request: &TurnRequest<P>,
         reply_id: &str,
         result: &TurnResult,
     ) -> Result<(), String>;
 }
 
 #[async_trait]
-pub trait EventSink: Send + Sync {
-    async fn progress(&self, request: &TurnRequest, event: AgentProgress);
-    async fn terminal(&self, request: &TurnRequest, event: TerminalEvent);
-    async fn suggestions(&self, _request: &TurnRequest, _suggestions: Vec<String>) {}
+pub trait EventSink<P = serde_json::Value>: Send + Sync {
+    async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
+    async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
+    async fn suggestions(&self, _request: &TurnRequest<P>, _suggestions: Vec<String>) {}
 }
 
 pub trait FailureClassifier: Send + Sync {
@@ -165,13 +165,13 @@ pub trait FailureClassifier: Send + Sync {
 }
 
 #[async_trait]
-pub trait Summarizer: Send + Sync {
+pub trait Summarizer<P = serde_json::Value>: Send + Sync {
     /// Optional next-message suggestions for a successfully completed turn.
-    async fn suggestions(&self, _request: &TurnRequest, _result: &TurnResult) -> Vec<String> {
+    async fn suggestions(&self, _request: &TurnRequest<P>, _result: &TurnResult) -> Vec<String> {
         Vec::new()
     }
     /// Ground a bounded close in the work completed so far after a guard fires.
-    async fn grounded_close(&self, request: &TurnRequest, reason: &str) -> Option<TurnResult>;
+    async fn grounded_close(&self, request: &TurnRequest<P>, reason: &str) -> Option<TurnResult>;
 }
 
 /// Runner guard defaults. The idle timeout catches silence; the deadline is a
@@ -207,17 +207,18 @@ pub enum TurnRunnerError {
     Cancelled,
 }
 
-struct ActiveTurn {
+struct ActiveTurn<P> {
     request_id: String,
-    request: TurnRequest,
+    request: TurnRequest<P>,
     cancel: crate::CancellationToken,
 }
 
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
+type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Weak<RunQueue<TurnRequest<P>>>>>;
 
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
-pub struct TurnRunner<H, I, R, E, F, S> {
+pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     host: Arc<H>,
     ingress: Arc<I>,
     replies: Arc<R>,
@@ -226,18 +227,20 @@ pub struct TurnRunner<H, I, R, E, F, S> {
     summarizer: Arc<S>,
     config: TurnRunnerConfig,
     locks: ThreadLocks,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn>>,
+    queues: QueueMap<P>,
+    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
 }
 
-impl<H, I, R, E, F, S> TurnRunner<H, I, R, E, F, S>
+impl<H, I, R, E, F, S, P> TurnRunner<H, I, R, E, F, S, P>
 where
-    H: TurnHost + 'static,
-    I: IngressPolicy + 'static,
-    R: ReplyStore + 'static,
-    E: EventSink + 'static,
+    H: TurnHost<P> + 'static,
+    I: IngressPolicy<P> + 'static,
+    R: ReplyStore<P> + 'static,
+    E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
-    S: Summarizer + 'static,
+    S: Summarizer<P> + 'static,
+    P: Clone + Send + Sync + 'static,
 {
     pub fn new(
         host: Arc<H>,
@@ -257,6 +260,7 @@ where
             summarizer,
             config,
             locks: Mutex::new(HashMap::new()),
+            queues: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             parallel_active: Mutex::new(HashMap::new()),
         }
