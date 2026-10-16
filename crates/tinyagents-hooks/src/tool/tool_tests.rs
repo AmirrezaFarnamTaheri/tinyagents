@@ -21,6 +21,12 @@ fn command_decision_vocabulary_keeps_input_rewrite_and_context_together() {
         additional_context: Some("remember this".into()),
         ..Default::default()
     };
-    assert_eq!(decision.updated_input, Some(serde_json::json!({"safe": true})));
-    assert_eq!(decision.additional_context.as_deref(), Some("remember this"));
+    assert_eq!(
+        decision.updated_input,
+        Some(serde_json::json!({"safe": true}))
+    );
+    assert_eq!(
+        decision.additional_context.as_deref(),
+        Some("remember this")
+    );
 }
