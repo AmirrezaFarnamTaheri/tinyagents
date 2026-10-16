@@ -13,3 +13,7 @@ pub use types::{
     ReplyStore, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner,
     TurnRunnerConfig, TurnRunnerError, deterministic_reply_id,
 };
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

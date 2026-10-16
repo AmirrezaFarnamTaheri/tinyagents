@@ -249,6 +249,14 @@ where
         }
     }
 
+    /// Whether the thread owns a primary user-authored turn cancellation slot.
+    pub async fn is_in_flight(&self, scope: &ScopeKey, thread_id: &str) -> bool {
+        self.active
+            .lock()
+            .await
+            .contains_key(&(scope.clone(), thread_id.to_owned()))
+    }
+
     pub async fn run(&self, mut request: TurnRequest) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
@@ -312,7 +320,10 @@ where
         };
         let session = match self.host.checkout(&request).await {
             Ok(session) => session,
-            Err(error) => return self.fail(&request, error).await,
+            Err(error) => {
+                self.clear_active(&request).await;
+                return self.fail(&request, error).await;
+            }
         };
         let origin = self.host.run_origin(&request);
 
@@ -321,13 +332,7 @@ where
             .await;
         self.host.checkin(&request).await;
         if !request.host_authored {
-            let mut active = self.active.lock().await;
-            if active
-                .get(&key)
-                .is_some_and(|turn| turn.request_id == request.request_id)
-            {
-                active.remove(&key);
-            }
+            self.clear_active(&request).await;
         }
 
         match result {
@@ -422,6 +427,17 @@ where
         {
             Ok(Some(result)) => Ok(result),
             _ => Err(format!("turn {reason}")),
+        }
+    }
+
+    async fn clear_active(&self, request: &TurnRequest) {
+        let key = (request.scope.clone(), request.thread_id.clone());
+        let mut active = self.active.lock().await;
+        if active
+            .get(&key)
+            .is_some_and(|turn| turn.request_id == request.request_id)
+        {
+            active.remove(&key);
         }
     }
 
