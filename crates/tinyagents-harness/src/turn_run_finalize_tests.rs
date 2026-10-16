@@ -7,7 +7,6 @@ fn inputs() -> TurnEndInputs<'static> {
         pause_at_cap: true,
         early_exit: false,
         breaker_halt: None,
-        failure_cause: None,
         wrap_up_injected: false,
     }
 }
@@ -119,17 +118,17 @@ fn typed_breaker_cause_prevents_a_cap_classification() {
     let mut inputs = inputs();
     inputs.pause_at_cap = true;
     inputs.max_iterations = 1;
-    inputs.failure_cause = Some(crate::no_progress::ClassifiedStopCause {
+    let failure_cause = crate::no_progress::ClassifiedStopCause {
         class: "permission".into(),
         operation: "write_file".into(),
         summary: "human-readable note may change".into(),
-    });
+    };
     let mut run = AgentRun::default();
     run.model_calls = 1;
-    assert!(!detect_hit_cap(&run, &inputs));
+    assert!(!detect_hit_cap_with_cause(&run, &inputs, Some(&failure_cause)));
     let stop = turn_stop_for_with_cause(
         Some("different prose"),
-        inputs.failure_cause,
+        Some(failure_cause),
         false,
         true,
         |_| "ignored",

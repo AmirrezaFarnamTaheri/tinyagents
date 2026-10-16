@@ -26,8 +26,6 @@ pub struct TurnEndInputs<'a> {
     pub early_exit: bool,
     /// The repeated-failure breaker's root-cause summary, when it tripped.
     pub breaker_halt: Option<&'a str>,
-    /// Typed classified-failure cause from the breaker, when available.
-    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
     /// An in-loop final-call wrap-up concluded the capped turn.
     pub wrap_up_injected: bool,
 }
@@ -53,10 +51,21 @@ pub struct TurnEnd {
 /// tool.
 #[must_use]
 pub fn detect_hit_cap(run: &AgentRun, inputs: &TurnEndInputs<'_>) -> bool {
+    detect_hit_cap_with_cause(run, inputs, None)
+}
+
+/// Typed-cause-aware form of [`detect_hit_cap`]. A classified breaker cause
+/// takes precedence over the model-call cap even if no note was rendered.
+#[must_use]
+pub fn detect_hit_cap_with_cause(
+    run: &AgentRun,
+    inputs: &TurnEndInputs<'_>,
+    failure_cause: Option<&crate::no_progress::ClassifiedStopCause>,
+) -> bool {
     inputs.pause_at_cap
         && !inputs.early_exit
         && inputs.breaker_halt.is_none()
-        && inputs.failure_cause.is_none()
+        && failure_cause.is_none()
         && (inputs.wrap_up_injected
             || (run.model_calls >= inputs.max_iterations && run.final_response.is_none()))
 }
