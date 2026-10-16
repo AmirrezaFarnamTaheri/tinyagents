@@ -379,27 +379,123 @@ fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
 #[test]
 fn retry_scheduling_does_not_split_a_call_and_empty_deltas_do_not_set_ttft() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-retry", None));
-    collector.record_event(&AgentEvent::RunStarted { run_id: RunId::new("run-retry"), thread_id: None }, 0);
-    collector.record_event(&AgentEvent::ModelStarted { call_id: CallId::new("m"), model: "model".into() }, 1_000);
-    collector.record_event(&AgentEvent::ModelDelta { run_id: RunId::new("run-retry"), call_id: CallId::new("m"), delta: MessageDelta::default() }, 1_100);
-    collector.record_event(&AgentEvent::RetryScheduled { call_id: CallId::new("m"), attempt: 2 }, 1_200);
-    collector.record_event(&AgentEvent::ModelDelta { run_id: RunId::new("run-retry"), call_id: CallId::new("m"), delta: MessageDelta::text("answer") }, 1_300);
-    collector.record_event(&AgentEvent::ModelCompleted { call_id: CallId::new("m"), started_at_ms: Some(1_000), usage: None, input: None, output: None }, 1_600);
-    let generations: Vec<_> = collector.spans().iter().filter(|span| span.kind == SpanKind::Generation).collect();
+    collector.record_event(
+        &AgentEvent::RunStarted {
+            run_id: RunId::new("run-retry"),
+            thread_id: None,
+        },
+        0,
+    );
+    collector.record_event(
+        &AgentEvent::ModelStarted {
+            call_id: CallId::new("m"),
+            model: "model".into(),
+        },
+        1_000,
+    );
+    collector.record_event(
+        &AgentEvent::ModelDelta {
+            run_id: RunId::new("run-retry"),
+            call_id: CallId::new("m"),
+            delta: MessageDelta::default(),
+        },
+        1_100,
+    );
+    collector.record_event(
+        &AgentEvent::RetryScheduled {
+            call_id: CallId::new("m"),
+            attempt: 2,
+        },
+        1_200,
+    );
+    collector.record_event(
+        &AgentEvent::ModelDelta {
+            run_id: RunId::new("run-retry"),
+            call_id: CallId::new("m"),
+            delta: MessageDelta::text("answer"),
+        },
+        1_300,
+    );
+    collector.record_event(
+        &AgentEvent::ModelCompleted {
+            call_id: CallId::new("m"),
+            started_at_ms: Some(1_000),
+            usage: None,
+            input: None,
+            output: None,
+        },
+        1_600,
+    );
+    let generations: Vec<_> = collector
+        .spans()
+        .iter()
+        .filter(|span| span.kind == SpanKind::Generation)
+        .collect();
     assert_eq!(generations.len(), 1);
-    assert_eq!(generations[0].attributes["gen_ai.response.time_to_first_token_ms"], 300);
+    assert_eq!(
+        generations[0].attributes["gen_ai.response.time_to_first_token_ms"],
+        300
+    );
 }
 
 #[test]
 fn late_tool_completion_closes_under_its_original_subagent_after_child_end() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-late", None));
-    collector.record_event(&AgentEvent::RunStarted { run_id: RunId::new("run-late"), thread_id: None }, 0);
-    collector.record_event(&AgentEvent::SubAgentStarted { name: "research".into(), depth: 1 }, 10);
-    collector.record_event(&AgentEvent::ToolStarted { call_id: CallId::new("tool"), tool_name: "lookup".into(), input: None, parent_call_id: None }, 20);
-    collector.record_event(&AgentEvent::SubAgentCompleted { name: "research".into(), depth: 1 }, 30);
-    collector.record_event(&AgentEvent::ToolCompleted { call_id: CallId::new("tool"), tool_name: "lookup".into(), started_at_ms: Some(20), input: None, output: None, duration_ms: Some(15), output_bytes: None, error: None, metadata: None, parent_call_id: None }, 40);
-    let child = collector.spans().iter().find(|span| span.kind == SpanKind::Subagent).unwrap();
-    let tool = collector.spans().iter().find(|span| span.kind == SpanKind::Tool).unwrap();
+    collector.record_event(
+        &AgentEvent::RunStarted {
+            run_id: RunId::new("run-late"),
+            thread_id: None,
+        },
+        0,
+    );
+    collector.record_event(
+        &AgentEvent::SubAgentStarted {
+            name: "research".into(),
+            depth: 1,
+        },
+        10,
+    );
+    collector.record_event(
+        &AgentEvent::ToolStarted {
+            call_id: CallId::new("tool"),
+            tool_name: "lookup".into(),
+            input: None,
+            parent_call_id: None,
+        },
+        20,
+    );
+    collector.record_event(
+        &AgentEvent::SubAgentCompleted {
+            name: "research".into(),
+            depth: 1,
+        },
+        30,
+    );
+    collector.record_event(
+        &AgentEvent::ToolCompleted {
+            call_id: CallId::new("tool"),
+            tool_name: "lookup".into(),
+            started_at_ms: Some(20),
+            input: None,
+            output: None,
+            duration_ms: Some(15),
+            output_bytes: None,
+            error: None,
+            metadata: None,
+            parent_call_id: None,
+        },
+        40,
+    );
+    let child = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .unwrap();
+    let tool = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Tool)
+        .unwrap();
     assert_eq!(child.end_unix_ms, Some(35));
     assert_eq!(tool.end_unix_ms, Some(35));
     assert_eq!(tool.parent_span_id.as_deref(), Some(child.span_id.as_str()));
@@ -408,9 +504,44 @@ fn late_tool_completion_closes_under_its_original_subagent_after_child_end() {
 #[test]
 fn terminal_events_without_start_events_still_produce_spans() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-partial", None));
-    collector.record_event(&AgentEvent::RunStarted { run_id: RunId::new("run-partial"), thread_id: None }, 0);
-    collector.record_event(&AgentEvent::ModelCompleted { call_id: CallId::new("missing-start"), started_at_ms: Some(4), usage: None, input: None, output: None }, 9);
-    collector.record_event(&AgentEvent::ToolFailed { call_id: CallId::new("missing-tool"), tool_name: "unsafe".into(), started_at_ms: Some(10), duration_ms: Some(2), error: "failed".into(), parent_call_id: None }, 12);
-    assert!(collector.spans().iter().any(|span| span.name == "llm.unknown" && span.end_unix_ms == Some(9)));
-    assert!(collector.spans().iter().any(|span| span.name == "tool.unsafe" && span.end_unix_ms == Some(12)));
+    collector.record_event(
+        &AgentEvent::RunStarted {
+            run_id: RunId::new("run-partial"),
+            thread_id: None,
+        },
+        0,
+    );
+    collector.record_event(
+        &AgentEvent::ModelCompleted {
+            call_id: CallId::new("missing-start"),
+            started_at_ms: Some(4),
+            usage: None,
+            input: None,
+            output: None,
+        },
+        9,
+    );
+    collector.record_event(
+        &AgentEvent::ToolFailed {
+            call_id: CallId::new("missing-tool"),
+            tool_name: "unsafe".into(),
+            started_at_ms: Some(10),
+            duration_ms: Some(2),
+            error: "failed".into(),
+            parent_call_id: None,
+        },
+        12,
+    );
+    assert!(
+        collector
+            .spans()
+            .iter()
+            .any(|span| span.name == "llm.unknown" && span.end_unix_ms == Some(9))
+    );
+    assert!(
+        collector
+            .spans()
+            .iter()
+            .any(|span| span.name == "tool.unsafe" && span.end_unix_ms == Some(12))
+    );
 }

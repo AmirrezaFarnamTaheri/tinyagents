@@ -128,9 +128,7 @@ impl SpanCollector {
                 let has_content = !delta.text.is_empty()
                     || !delta.reasoning.is_empty()
                     || delta.tool_call.is_some();
-                if has_content
-                    && let Some(call) = self.open_models.get_mut(call_id.as_str())
-                {
+                if has_content && let Some(call) = self.open_models.get_mut(call_id.as_str()) {
                     call.first_delta_ms.get_or_insert(timestamp_ms);
                     if !delta.text.is_empty() {
                         call.first_text_ms.get_or_insert(timestamp_ms);
@@ -838,9 +836,9 @@ impl SpanCollector {
                 self.close_root(at, SpanStatus::Unset, "stopped");
                 if let Some(root) = self.root {
                     let kind = match outcome.reason {
-                        TerminalReason::LimitReached(_) => "iteration_cap",
-                        TerminalReason::Paused => "wind_down",
-                        TerminalReason::Halted => "breaker",
+                        TerminalReason::LimitReached(_) => "limit_reached",
+                        TerminalReason::Paused => "paused",
+                        TerminalReason::Halted => "halted",
                         _ => "deferred",
                     };
                     let status_message = format!("stopped: {kind}");
@@ -850,6 +848,11 @@ impl SpanCollector {
                     self.spans[root]
                         .attributes
                         .insert("turn.stop_kind".into(), json_str(kind));
+                    if let TerminalReason::LimitReached(Some(limit)) = outcome.reason {
+                        self.spans[root]
+                            .attributes
+                            .insert("turn.stop_limit".into(), json_str(limit.as_str()));
+                    }
                     self.spans[root].attributes.insert(
                         "observation.status_message".into(),
                         json_str(&status_message),
