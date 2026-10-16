@@ -73,3 +73,95 @@ fn mark_cancelled_sets_terminal_fields() {
     assert_eq!(status.error.as_deref(), Some("why"));
     assert!(status.ended_at.is_some());
 }
+
+mod sealing {
+    use super::*;
+    use crate::events::AgentEvent;
+    use crate::ids::RunId;
+    use crate::observability::{AgentObservation, HarnessEventJournal, StoreEventJournal};
+    use crate::store::{AppendStore, DriverAppendStore};
+
+    async fn journal_one_event(journal: &dyn HarnessEventJournal, run: &str) {
+        let id = RunId::new(run);
+        journal
+            .append(AgentObservation {
+                event_id: format!("{run}-evt-0").into(),
+                run_id: id.clone(),
+                parent_run_id: None,
+                root_run_id: id,
+                offset: 0,
+                ts_ms: 1,
+                event: AgentEvent::StreamClosed,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reaping_seals_the_journal_of_each_reaped_run_only() {
+        let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+        let status = DriverStatusStore::new(Arc::clone(scoped.documents()));
+        let journal = StoreEventJournal::new(Arc::new(DriverAppendStore::journal(Arc::clone(
+            scoped.streams(),
+        ))) as Arc<dyn AppendStore>);
+
+        let orphan = seed_status(&status, ExecutionStatus::Running).await;
+        let no_journal = seed_status(&status, ExecutionStatus::Pending).await;
+        let finished = mint_run_id();
+        let mut done = HarnessRunStatus::new(finished.clone(), ComponentId::new("m".to_string()));
+        done.mark_running(HarnessPhase::Model);
+        done.mark_completed();
+        status.put_status(done).await.unwrap();
+        journal_one_event(&journal, &orphan).await;
+        journal_one_event(&journal, finished.as_str()).await;
+
+        assert_eq!(reap_orphaned_runs_and_seal(&status, &journal).await, 2);
+
+        let sealed = |name: String| {
+            let streams = Arc::clone(scoped.streams());
+            async move {
+                streams
+                    .info(&format!("harness.journal/{name}"))
+                    .await
+                    .unwrap()
+                    .map(|info| info.sealed_ms.is_some())
+            }
+        };
+        assert_eq!(sealed(orphan.clone()).await, Some(true));
+        assert_eq!(
+            sealed(finished.as_str().to_owned()).await,
+            None.or(Some(false))
+        );
+        assert_eq!(sealed(no_journal).await, None, "no stream was invented");
+        assert_eq!(journal.read_from(&orphan, 0).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_journal_that_fails_to_seal_does_not_stop_the_sweep() {
+        struct Refusing;
+        #[async_trait::async_trait]
+        impl HarnessEventJournal for Refusing {
+            async fn append(&self, _: AgentObservation) -> crate::error::Result<u64> {
+                Ok(0)
+            }
+            async fn read_from(
+                &self,
+                _: &str,
+                _: u64,
+            ) -> crate::error::Result<Vec<AgentObservation>> {
+                Ok(Vec::new())
+            }
+            async fn seal_run(&self, _: &str) -> crate::error::Result<()> {
+                Err(crate::error::TinyAgentsError::Storage("no".into()))
+            }
+        }
+        let status = store();
+        let a = seed_status(&status, ExecutionStatus::Running).await;
+        let b = seed_status(&status, ExecutionStatus::Running).await;
+        assert_eq!(reap_orphaned_runs_and_seal(&status, &Refusing).await, 2);
+        for id in [a, b] {
+            let s = status.get_status(&id).await.unwrap().unwrap();
+            assert_eq!(s.status, ExecutionStatus::Cancelled);
+        }
+    }
+}

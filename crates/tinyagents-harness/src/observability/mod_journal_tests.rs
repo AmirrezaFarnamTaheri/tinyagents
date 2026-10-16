@@ -31,12 +31,7 @@ async fn seed(journal: &dyn HarnessEventJournal, run: &str, count: usize) {
             tool_name: format!("tool-{i}"),
             input: None,
         });
-        let obs = AgentObservation::from_record(
-            &record,
-            RunId::new(run),
-            None,
-            RunId::new(run),
-        );
+        let obs = AgentObservation::from_record(&record, RunId::new(run), None, RunId::new(run));
         journal.append(obs).await.unwrap();
     }
 }
@@ -112,7 +107,11 @@ async fn sealing_a_run_leaves_every_replay_page_unchanged() {
     }
     assert_eq!(after, before);
     assert_eq!(
-        journal.read_filtered("run.sealed", 0, &["tool_started"]).await.unwrap().len(),
+        journal
+            .read_filtered("run.sealed", 0, &["tool_started"])
+            .await
+            .unwrap()
+            .len(),
         7
     );
 }
@@ -146,7 +145,10 @@ async fn sealing_is_a_no_op_for_journals_that_do_not_seal() {
     let in_memory_store = StoreEventJournal::new(crate::store::InMemoryAppendStore::new());
     seed(&in_memory_store, "run.s", 1).await;
     in_memory_store.seal_run("run.s").await.unwrap();
-    assert_eq!(in_memory_store.read_from("run.s", 0).await.unwrap().len(), 1);
+    assert_eq!(
+        in_memory_store.read_from("run.s", 0).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]

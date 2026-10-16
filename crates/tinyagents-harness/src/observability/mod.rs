@@ -24,9 +24,9 @@
 //! bounded queue drops rather than stalls; backend errors are reported, not
 //! propagated), and `flush` blocks until the durable log has caught up.
 
+mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
-mod journal_entry;
 mod profile;
 mod types;
 mod worker;
@@ -51,7 +51,7 @@ pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
 #[cfg(feature = "langfuse")]
 #[doc(hidden)]
 pub use langfuse::{clean_nulls, iso_ms};
-pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs};
+pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs, reap_orphaned_runs_and_seal};
 pub use status::{
     DriverStatusStore, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
 };

@@ -16,7 +16,12 @@ fn observation(run: &str, root: &str, offset: u64, event_id: String) -> AgentObs
 
 #[test]
 fn a_top_level_entry_repeats_neither_run_ids_nor_the_event_id() {
-    let obs = observation("run.a", "run.a", 7, canonical_event_id("run.a", 7).as_str().to_owned());
+    let obs = observation(
+        "run.a",
+        "run.a",
+        7,
+        canonical_event_id("run.a", 7).as_str().to_owned(),
+    );
     let stored = serde_json::to_value(JournalEntry::from_observation(&obs)).unwrap();
     assert_eq!(
         stored,
@@ -26,7 +31,12 @@ fn a_top_level_entry_repeats_neither_run_ids_nor_the_event_id() {
 
 #[test]
 fn an_entry_rebuilds_the_wire_observation_from_the_stream_name() {
-    let obs = observation("run.a", "run.a", 7, canonical_event_id("run.a", 7).as_str().to_owned());
+    let obs = observation(
+        "run.a",
+        "run.a",
+        7,
+        canonical_event_id("run.a", 7).as_str().to_owned(),
+    );
     let stored = serde_json::to_value(JournalEntry::from_observation(&obs)).unwrap();
     let rebuilt = serde_json::from_value::<JournalEntry>(stored)
         .unwrap()

@@ -184,7 +184,10 @@ async fn sealing_closes_a_stream_without_changing_what_a_reader_sees() {
     journal.seal("run.1").await.unwrap();
 
     assert_eq!(journal.read_from("run.1", 0).await.unwrap(), before_all);
-    assert_eq!(journal.read_window("run.1", 5, 7).await.unwrap(), before_window);
+    assert_eq!(
+        journal.read_window("run.1", 5, 7).await.unwrap(),
+        before_window
+    );
     assert_eq!(journal.len("run.1").await.unwrap(), before_len);
     let info = scoped
         .streams()
