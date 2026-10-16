@@ -803,6 +803,48 @@ async fn workload_observers_only_report_successful_fallback_and_carry_one_respon
 }
 
 #[tokio::test]
+async fn workload_observers_preserve_model_control_outcomes_without_fabricating_responses() {
+    for (observe_fallback, carry_usage) in [(true, false), (false, true), (true, true)] {
+        let (mut ctx, recorder) = ctx_with_recorder();
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+        if observe_fallback {
+            stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+        }
+        if carry_usage {
+            let carried_by_middleware = Arc::clone(&carried);
+            stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |_| {
+                carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+            })));
+        }
+        stack.push_model_middleware(Arc::new(CommandModelMiddleware));
+
+        let base = FakeModelBase::new(|_, _| Ok(ok_response()));
+        let outcome = stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+            .await
+            .expect("control outcomes are successful short-circuits");
+        assert!(
+            matches!(
+                outcome,
+                MiddlewareModelOutcome::Command {
+                    control: MiddlewareControl::JumpTo(LoopTarget::End)
+                }
+            ),
+            "observer converted a command into a fabricated model response"
+        );
+        assert_eq!(base.calls(), 0, "short-circuit must not call the model");
+        assert_eq!(carried.load(Ordering::SeqCst), 0);
+        assert!(events(&recorder).iter().all(|event| {
+            !matches!(
+                event,
+                AgentEvent::FallbackSelected { .. } | AgentEvent::UsageRecorded { .. }
+            )
+        }));
+    }
+}
+
+#[tokio::test]
 async fn budget_warns_then_blocks_on_token_exhaustion() {
     let (mut ctx, recorder) = ctx_with_recorder();
     let mw = BudgetMiddleware::new(BudgetLimits {
