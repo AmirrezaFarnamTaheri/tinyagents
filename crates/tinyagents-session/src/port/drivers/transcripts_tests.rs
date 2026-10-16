@@ -370,6 +370,8 @@ fn lookups_find_the_newest_written_root() {
         .unwrap()
         .append(message("user", "old"))
         .unwrap();
+    // Creation time is kept in whole milliseconds.
+    std::thread::sleep(std::time::Duration::from_millis(3));
     locator
         .open_stem("new", meta("t"))
         .unwrap()

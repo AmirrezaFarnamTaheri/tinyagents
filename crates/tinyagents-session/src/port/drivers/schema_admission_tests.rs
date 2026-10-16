@@ -56,6 +56,18 @@ impl DocumentStore for ProbeDocs {
     ) -> Result<tinystoragedrivers_core::Version, StorageError> {
         self.inner.put(collection, id, doc, precondition).await
     }
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        precondition: tinystoragedrivers_core::Precondition,
+        options: tinystoragedrivers_core::WriteOptions,
+    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        self.inner
+            .put_with(collection, id, doc, precondition, options)
+            .await
+    }
     async fn delete(
         &self,
         collection: &str,
@@ -237,7 +249,8 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         storage.prepare_schema().await.unwrap();
         let scoped = storage.for_scope(&Scope::local()).unwrap();
         let mut specs = DriverSessionStores::collection_specs();
-        let required = specs.pop().unwrap();
+        let at = specs.iter().position(|spec| spec.name == "tsd.kv").unwrap();
+        let required = specs.remove(at);
         for spec in specs {
             scoped.documents().ensure_collection(&spec).await.unwrap();
         }

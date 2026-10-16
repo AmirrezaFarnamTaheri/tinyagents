@@ -70,6 +70,17 @@ impl DocumentStore for Refused {
         Err(self.error())
     }
 
+    async fn put_with(
+        &self,
+        _collection: &str,
+        _id: &str,
+        _doc: Value,
+        _precondition: Precondition,
+        _options: tinystoragedrivers_core::WriteOptions,
+    ) -> Result<Version> {
+        Err(self.error())
+    }
+
     async fn delete(&self, _collection: &str, _id: &str, _pre: Precondition) -> Result<bool> {
         Err(self.error())
     }

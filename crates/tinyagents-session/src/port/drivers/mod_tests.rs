@@ -16,8 +16,8 @@ fn memory() -> DriverSessionStores {
 fn bootstrap_manifest_contains_all_session_document_indexes() {
     use tinystoragedrivers_core::IndexSpec;
     let specs = DriverSessionStores::collection_specs();
-    assert_eq!(specs.len(), 4);
-    assert_eq!(specs[0].name, "session_transcript_entries");
+    assert_eq!(specs.len(), 5);
+    assert_eq!(specs[0].name, "session.transcript_entries");
     assert_eq!(
         specs[0].indexes,
         vec![
@@ -25,21 +25,22 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
             IndexSpec::new("by_stem_written", ["stem", "written"]),
         ]
     );
-    assert_eq!(specs[1].name, "session_transcripts");
+    assert_eq!(specs[1].name, "session.transcripts");
     assert_eq!(
         specs[1].indexes,
         vec![
-            IndexSpec::new("by_thread", ["thread_id", "created_at"]),
-            IndexSpec::new("by_agent_name", ["agent_name", "created_at"]),
-            IndexSpec::new("by_agent_id", ["agent_id", "created_at"]),
+            IndexSpec::new("by_thread", ["thread_id", "_created_ms"]),
+            IndexSpec::new("by_agent_name", ["agent_name", "_created_ms"]),
+            IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"]),
         ]
     );
-    assert_eq!(specs[2].name, "session_turn_states");
+    assert_eq!(specs[2].name, "session.turn_states");
     assert_eq!(
         specs[2].indexes,
         vec![IndexSpec::new("by_thread", ["thread_id"])]
     );
     assert_eq!(specs[3], DriverStore::collection_spec());
+    assert_eq!(specs[4].name, "tsd.leases", "generation reservations");
     for spec in specs {
         spec.validate().unwrap();
         assert!(spec.ttl_field.is_none());
@@ -460,6 +461,18 @@ impl tinystoragedrivers_core::DocumentStore for FlakyDocs {
     ) -> Result<tinystoragedrivers_core::Version, StorageError> {
         self.inner.put(collection, id, doc, precondition).await
     }
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        precondition: tinystoragedrivers_core::Precondition,
+        options: tinystoragedrivers_core::WriteOptions,
+    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        self.inner
+            .put_with(collection, id, doc, precondition, options)
+            .await
+    }
     async fn delete(
         &self,
         collection: &str,
@@ -618,8 +631,8 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
         )
         .unwrap(),
     );
-    // Existing unusual keys retain the owner's hashed scope mapping.
-    for key in ["agent", "", "unusual key", "sha256:reserved"] {
+    // Unusual keys get the hashed principal segment, and are refused alike.
+    for key in ["agent", "unusual key", "sha256:reserved"] {
         let error = provider.try_for_agent(key).unwrap_err();
         assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
         let source = error
