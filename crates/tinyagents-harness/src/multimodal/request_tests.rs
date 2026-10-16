@@ -651,7 +651,8 @@ async fn trusted_preparer_normalization_is_counted_before_resolution() {
 
     assert!(error.to_string().contains("max=1, found=2"));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(original, canonical);
+    assert_eq!(original.messages, canonical.messages);
+    assert_eq!(original.metadata, canonical.metadata);
 }
 
 #[tokio::test]
