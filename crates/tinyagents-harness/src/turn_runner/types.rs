@@ -220,6 +220,8 @@ struct ActiveTurn {
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
 type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Arc<RunQueue<TurnRequest<P>>>>>;
+type ParallelQueueKey = (ScopeKey, String, String);
+type ParallelQueueMap<P> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<TurnRequest<P>>>>>;
 
 fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
     match disposition {
@@ -241,6 +243,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     config: TurnRunnerConfig,
     locks: ThreadLocks,
     queues: QueueMap<P>,
+    parallel_queues: ParallelQueueMap<P>,
     active: Mutex<HashMap<(ScopeKey, String), ActiveTurn>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
 }
@@ -274,6 +277,7 @@ where
             config,
             locks: Mutex::new(HashMap::new()),
             queues: Mutex::new(HashMap::new()),
+            parallel_queues: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             parallel_active: Mutex::new(HashMap::new()),
         }
@@ -289,31 +293,34 @@ where
     ) -> bool {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
-        if let Some(turn) = active
+        let cancelled_primary = if let Some(turn) = active
             .get(&key)
             .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
         {
             turn.cancel.cancel();
-            drop(active);
-            self.clear_queue(scope, thread_id).await;
             true
         } else {
-            drop(active);
-            let mut parallel = self.parallel_active.lock().await;
-            let keys: Vec<_> = parallel
-                .keys()
-                .filter(|(owner, thread, req)| {
-                    owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
-                })
-                .cloned()
-                .collect();
-            for key in &keys {
-                if let Some(token) = parallel.remove(key) {
-                    token.cancel();
-                }
-            }
-            !keys.is_empty()
+            false
+        };
+        drop(active);
+        if cancelled_primary {
+            self.clear_queue(scope, thread_id).await;
         }
+        let mut parallel = self.parallel_active.lock().await;
+        let keys: Vec<_> = parallel
+            .keys()
+            .filter(|(owner, thread, req)| {
+                owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
+            })
+            .cloned()
+            .collect();
+        for key in &keys {
+            if let Some(token) = parallel.remove(key) {
+                token.cancel();
+            }
+            self.parallel_queues.lock().await.remove(key);
+        }
+        cancelled_primary || !keys.is_empty()
     }
 
     /// Whether the thread owns a primary user-authored turn cancellation slot.
@@ -335,28 +342,21 @@ where
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         let result = self.run_one(request.clone()).await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
-            let mut pending: std::collections::VecDeque<_> = self
-                .take_queued(
-                    &request.scope,
-                    &request.thread_id,
-                    QueueLane::Followup,
-                    QueueMode::All,
-                )
-                .await
-                .into();
-            while let Some(followup) = pending.pop_front() {
-                if self.run_one(followup.clone()).await.is_ok() {
-                    pending.extend(
-                        self.take_queued(
-                            &followup.scope,
-                            &followup.thread_id,
-                            QueueLane::Followup,
-                            QueueMode::All,
-                        )
-                        .await,
-                    );
+            let mut owner = request.clone();
+            loop {
+                let followup = self
+                    .take_next_followup_or_release(&owner.scope, &owner.thread_id, &owner.request_id)
+                    .await;
+                let Some(followup) = followup else { break };
+                owner = followup.clone();
+                if self.run_one(followup).await.is_err() {
+                    self.clear_queue(&owner.scope, &owner.thread_id).await;
+                    self.clear_tracking(&owner).await;
+                    break;
                 }
             }
+        } else {
+            self.clear_tracking(&request).await;
         }
         result
     }
@@ -381,15 +381,7 @@ where
         let key = (request.scope.clone(), request.thread_id.clone());
         let cancellation = crate::CancellationToken::new();
         if !request.host_authored {
-            if let Some(lane) = queue_lane(request.disposition) {
-                let active = self.active.lock().await;
-                if active.contains_key(&key) {
-                    let queue = self.queue_for(key.clone()).await;
-                    queue.push(lane, request.clone()).await;
-                    return Err(TurnRunnerError::Queued);
-                }
-            }
-            let previous = if request.disposition == QueueDisposition::Parallel {
+            if request.disposition == QueueDisposition::Parallel {
                 self.parallel_active.lock().await.insert(
                     (
                         request.scope.clone(),
@@ -398,22 +390,34 @@ where
                     ),
                     cancellation.clone(),
                 );
-                None
             } else {
-                self.active.lock().await.insert(
+                let mut active = self.active.lock().await;
+                if let Some(lane) = queue_lane(request.disposition)
+                    && active.contains_key(&key)
+                {
+                    let queue = self.queue_for(key.clone()).await;
+                    queue.push(lane, request.clone()).await;
+                    return Err(TurnRunnerError::Queued);
+                }
+                let previous = active.insert(
                     key.clone(),
                     ActiveTurn {
                         request_id: request.request_id.clone(),
                         cancel: cancellation.clone(),
                     },
-                )
-            };
-            if let Some(previous) = previous {
+                );
+                drop(active);
+                if let Some(previous) = previous {
                 previous.cancel.cancel();
                 self.clear_queue(&request.scope, &request.thread_id).await;
+                }
             }
         }
-        let run_queue = self.queue_for(key.clone()).await;
+        let run_queue = if request.disposition == QueueDisposition::Parallel {
+            self.parallel_queue_for((request.scope.clone(), request.thread_id.clone(), request.request_id.clone())).await
+        } else {
+            self.queue_for(key.clone()).await
+        };
         let lock = {
             let mut locks = self.locks.lock().await;
             locks.retain(|_, lock| lock.strong_count() > 0);
@@ -477,9 +481,6 @@ where
             )
             .await;
         self.host.checkin(&request).await;
-        if !request.host_authored {
-            self.clear_tracking(&request).await;
-        }
 
         match result {
             Ok(result) => {
@@ -490,8 +491,10 @@ where
                 }
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
-                let collected = run_queue.take(QueueLane::Collect, QueueMode::All).await;
-                self.events.collected(&request, collected).await;
+                if request.disposition != QueueDisposition::Parallel {
+                    let collected = run_queue.take(QueueLane::Collect, QueueMode::All).await;
+                    self.events.collected(&request, collected).await;
+                }
                 self.events
                     .terminal(
                         &request,
@@ -525,6 +528,33 @@ where
                 .entry(key)
                 .or_insert_with(|| Arc::new(RunQueue::new())),
         )
+    }
+
+    async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<TurnRequest<P>>> {
+        let mut queues = self.parallel_queues.lock().await;
+        Arc::clone(queues.entry(key).or_insert_with(|| Arc::new(RunQueue::new())))
+    }
+
+    async fn take_next_followup_or_release(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        owner_request_id: &str,
+    ) -> Option<TurnRequest<P>> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let mut active = self.active.lock().await;
+        if active.get(&key).is_none_or(|turn| turn.request_id != owner_request_id) {
+            return None;
+        }
+        let queue = self.queues.lock().await.get(&key).cloned();
+        let next = match queue {
+            Some(queue) => queue.take(QueueLane::Followup, QueueMode::OneAtATime).await.into_iter().next(),
+            None => None,
+        };
+        if next.is_none() {
+            active.remove(&key);
+        }
+        next
     }
 
     /// Take queued work from one lane. `OneAtATime` is useful for steering;
