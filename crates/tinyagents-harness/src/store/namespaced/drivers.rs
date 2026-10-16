@@ -41,7 +41,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tinystoragedrivers_core::{
-    DocumentStore, EXPIRES_FIELD, Filter, Precondition, Query, Repo, Versioned, WriteOptions,
+    DocumentStore, DocumentStoreExt, EXPIRES_FIELD, Filter, Precondition, Query, Repo, Versioned,
+    WriteOptions,
 };
 use tokio::sync::OnceCell;
 
