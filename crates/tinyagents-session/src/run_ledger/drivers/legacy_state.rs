@@ -132,3 +132,7 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
     migrations.mark_done(LEDGER_OWNER, STEP).await?;
     Ok(report)
 }
+
+#[cfg(test)]
+#[path = "legacy_state_tests.rs"]
+mod tests;
