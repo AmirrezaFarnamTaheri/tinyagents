@@ -286,6 +286,19 @@ pub trait RunLedgerStore: Send + Sync {
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
 
+    /// Complete a task only while `member_id` still owns `claim_token`.
+    /// The claim check, gate evaluation, and status update share the same
+    /// transaction so an old worker cannot complete a successor's claim.
+    async fn complete_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome>;
+
     /// Stop a team member and release any task it is actively working on.
     ///
     /// In one transaction: unclaim the member's `in_progress` tasks back to `todo`

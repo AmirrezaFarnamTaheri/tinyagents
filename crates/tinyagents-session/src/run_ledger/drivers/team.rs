@@ -144,6 +144,27 @@ impl DriverRunLedger {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome> {
+        self.complete_team_task_if_claimed(
+            team_id,
+            task_id,
+            member_id,
+            None,
+            evidence,
+            require_evidence,
+        )
+        .await
+    }
+
+    /// Complete a task with an optional claim-token fence.
+    pub(super) async fn complete_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: Option<&str>,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
         for _ in 0..CAS_ATTEMPTS {
             let Some(task) = self
                 .read::<AgentTeamTask>(TASKS, task_id)
@@ -153,7 +174,8 @@ impl DriverRunLedger {
                 tracing::debug!("{LOG_PREFIX} complete.unknown team={team_id} task={task_id}");
                 return Ok(CompletionOutcome::UnknownTask);
             };
-            let is_claimant = task.doc.claimed_by_member_id.as_deref() == Some(member_id);
+            let is_claimant = task.doc.claimed_by_member_id.as_deref() == Some(member_id)
+                && claim_token.is_none_or(|token| task.doc.claim_token.as_deref() == Some(token));
             let in_progress = task.doc.status == AgentTeamTaskStatus::InProgress;
             let task_check = ReadCheck {
                 collection: TASKS.into(),

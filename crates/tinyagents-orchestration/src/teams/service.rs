@@ -72,6 +72,16 @@ pub trait TeamLedger: Send + Sync {
         evidence: &[String],
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
+    /// Completes a task only while `member_id` still owns `claim_token`.
+    fn complete_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome>;
     /// Releases a claimed task back to the queue after a worker failure.
     /// Implementations must only release the claim held by `member_id` with
     /// `claim_token`, so cleanup from an old worker cannot release a successor.
@@ -226,6 +236,36 @@ impl TeamLedger for SessionTeamLedger {
         self.run(async move {
             ledger
                 .complete_agent_team_task(&team, &task, &member, &evidence, require_evidence)
+                .await
+        })
+    }
+    fn complete_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        let (ledger, team, task, member, token, evidence) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            task_id.to_owned(),
+            member_id.to_owned(),
+            claim_token.to_owned(),
+            evidence.to_vec(),
+        );
+        self.run(async move {
+            ledger
+                .complete_agent_team_task_if_claimed(
+                    &team,
+                    &task,
+                    &member,
+                    &token,
+                    &evidence,
+                    require_evidence,
+                )
                 .await
         })
     }
@@ -606,7 +646,14 @@ impl<L: TeamLedger> TeamService<L> {
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {
             Ok(evidence) => {
-                self.complete_task(team_id, task_id, member_id, &evidence, require_evidence)
+                self.ledger.complete_task_if_claimed(
+                    team_id,
+                    task_id,
+                    member_id,
+                    &claim_token,
+                    &evidence,
+                    require_evidence,
+                )
             }
             Err(error) => {
                 return match cleanup.cleanup() {

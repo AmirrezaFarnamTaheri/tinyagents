@@ -641,6 +641,26 @@ impl RunLedgerStore for DriverRunLedger {
             .await
     }
 
+    async fn complete_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        self.complete_team_task_if_claimed(
+            team_id,
+            task_id,
+            member_id,
+            Some(claim_token),
+            evidence,
+            require_evidence,
+        )
+        .await
+    }
+
     /// Implement [`RunLedgerStore::shutdown_agent_team_member`] without a weaker fallback.
     async fn shutdown_agent_team_member(
         &self,
