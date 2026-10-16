@@ -25,10 +25,12 @@
 //! deterministically without injecting a clock trait.
 
 mod failover;
+mod circuit_breaker;
 mod jitter;
 mod types;
 
 pub use failover::*;
+pub use circuit_breaker::*;
 pub use types::*;
 
 use std::sync::Mutex;

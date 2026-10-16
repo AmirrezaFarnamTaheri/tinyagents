@@ -125,6 +125,133 @@ pub fn parse_lenient(raw: &str) -> Option<(Value, JsonRepair)> {
     None
 }
 
+/// Parses the last complete JSON object in model text.
+///
+/// A complete fenced block is preferred, matching model output that adds a
+/// later explanation after its answer. Otherwise the last outer balanced
+/// object is selected; braces inside quoted strings and nested objects do not
+/// change which object is returned. Trailing commas are removed before the
+/// regular repair ladder runs. The default [`parse_lenient`] behavior is
+/// unchanged for callers that need the first JSON value instead.
+pub fn parse_lenient_last_object(raw: &str) -> Option<(Value, JsonRepair)> {
+    if let Some(fenced) = last_complete_fenced_block(raw)
+        && let Some(parsed) = parse_object_candidate(fenced)
+    {
+        return Some(parsed);
+    }
+    let object = last_balanced_object(raw)?;
+    parse_object_candidate(object)
+}
+
+fn parse_object_candidate(candidate: &str) -> Option<(Value, JsonRepair)> {
+    let trimmed = candidate.trim();
+    if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
+        return None;
+    }
+    let without_trailing_commas = strip_object_trailing_commas(trimmed);
+    parse_lenient(&without_trailing_commas)
+}
+
+fn last_complete_fenced_block(raw: &str) -> Option<&str> {
+    let mut cursor = 0;
+    let mut last = None;
+    while let Some(relative_open) = raw.get(cursor..)?.find("```") {
+        let content_start = cursor + relative_open + 3;
+        let Some(relative_newline) = raw.get(content_start..)?.find('\n') else {
+            break;
+        };
+        let body_start = content_start + relative_newline + 1;
+        let Some(relative_close) = raw.get(body_start..)?.find("```") else {
+            break;
+        };
+        let body_end = body_start + relative_close;
+        last = raw.get(body_start..body_end);
+        cursor = body_end + 3;
+    }
+    last
+}
+
+fn last_balanced_object(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    let mut depth = 0usize;
+    let mut start = None;
+    let mut best = None;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' => {
+                if depth == 0 {
+                    start = Some(index);
+                }
+                depth = depth.saturating_add(1);
+            }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    best = start.take().map(|begin| (begin, index + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    best.and_then(|(begin, end)| raw.get(begin..end))
+}
+
+fn strip_object_trailing_commas(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            output.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            output.push(byte);
+            index += 1;
+            continue;
+        }
+        if byte == b',' {
+            let mut next = index + 1;
+            while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
+                next += 1;
+            }
+            if matches!(bytes.get(next), Some(b'}' | b']')) {
+                index += 1;
+                continue;
+            }
+        }
+        output.push(byte);
+        index += 1;
+    }
+    // The input was valid UTF-8 and this only removes ASCII commas.
+    String::from_utf8(output).expect("removing ASCII commas preserves UTF-8")
+}
+
 /// Removes a ```` ``` ```` fence, with or without a language tag.
 fn strip_code_fence(raw: &str) -> &str {
     let trimmed = raw.trim();

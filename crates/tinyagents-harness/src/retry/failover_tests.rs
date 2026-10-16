@@ -136,6 +136,30 @@ fn classifies_flattened_model_errors_from_their_text() {
 }
 
 #[test]
+fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client_errors() {
+    for message in [
+        "connection refused",
+        "connect error: no route to host",
+        "broken pipe",
+        "connection reset by peer",
+        "deadline exceeded",
+        "temporarily unavailable",
+        "upstream returned 503",
+    ] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(message.into())),
+            FailoverReason::Transport,
+            "{message}"
+        );
+    }
+
+    let client_error = provider(Some(400), None, "invalid connection option", true);
+    assert_eq!(reason_of(&client_error), FailoverReason::Format);
+    let unrelated = TinyAgentsError::Model("reconnection is disabled".into());
+    assert_eq!(reason_of(&unrelated), FailoverReason::Transport);
+}
+
+#[test]
 fn context_window_text_is_context_overflow_even_under_a_400() {
     let error = provider(
         Some(400),
