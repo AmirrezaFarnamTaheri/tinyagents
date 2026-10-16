@@ -8,6 +8,7 @@
 
 pub mod ingestion_batch;
 pub mod ingestion_otlp;
+pub mod collector;
 #[cfg(feature = "langfuse")]
 pub mod journal_export;
 pub mod otlp;
