@@ -10,7 +10,6 @@ use tinyinference_llm::message::{
     AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, MessageOrigin, SystemMessage,
     ToolMessage, UserMessage,
 };
-use tinyinference_llm::tool::ToolCall as TaToolCall;
 use tinyagents_harness::tinytools_agent::dialect::{
     DialectMessage, DialectRole, ToolResultEntry, TranscriptEntry,
 };
