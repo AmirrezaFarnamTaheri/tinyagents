@@ -1,4 +1,6 @@
 use super::*;
+use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyinference_llm::message::Message;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 
 #[derive(Clone, Default)]
