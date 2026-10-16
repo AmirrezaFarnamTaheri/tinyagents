@@ -608,7 +608,15 @@ async fn aborting_shared_flight_leader_wakes_other_drivers() {
     assert_eq!(entry.waiter_count(), 1, "second driver joined the leader");
 
     leader_task.abort();
-    let _ = leader_task.await;
+    let leader_join = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        leader_task,
+    )
+    .await
+    .expect("aborting the leader must complete its task handle")
+    .expect_err("leader task must report cancellation");
+    assert!(leader_join.is_cancelled());
+    assert!(entry.is_complete(), "leader drop must publish a result");
     let follower_result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         follower_task,

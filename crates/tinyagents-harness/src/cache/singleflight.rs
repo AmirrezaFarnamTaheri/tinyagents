@@ -132,6 +132,15 @@ impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
         self.state.waiters.load(Ordering::Relaxed)
     }
 
+    /// Whether the leader has published a result.
+    pub fn is_complete(&self) -> bool {
+        self.state
+            .result
+            .lock()
+            .expect("shared-flight result poisoned")
+            .is_some()
+    }
+
     /// Waits for the leader to publish its complete result.
     pub async fn wait(&self) -> std::result::Result<V, E> {
         self.state.waiters.fetch_add(1, Ordering::Relaxed);
