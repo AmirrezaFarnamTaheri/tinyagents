@@ -221,7 +221,7 @@ impl DriverNamespacedStore {
         let expires = expiry_at(now, Some(minutes));
         let refreshed = self
             .repo(expires)?
-            .update(&id, Ok)
+            .update(&id, |current| Ok(current))
             .await
             .map_err(map_error)?;
         if refreshed.is_none() {
@@ -332,32 +332,17 @@ impl NamespacedStore for DriverNamespacedStore {
 
     async fn sweep_expired(&self) -> Result<usize> {
         self.declared().await?;
-        let now = now_ms();
-        let rows = self
+        // The driver already hides an expired item from every read; this
+        // reclaims the rows of any it has not yet purged.
+        let filter = self.root_filter(None).and(Filter::lte(
+            EXPIRES_FIELD,
+            i64::try_from(now_ms()).unwrap_or(i64::MAX),
+        ));
+        let reclaimed = self
             .docs
-            .query_all(&self.collection, &Query::default())
+            .delete_where(KV, &filter)
             .await
-            .map_err(map_error)?;
-        let mut reclaimed = 0;
-        for row in rows {
-            if !Self::item(&row.doc)?.is_expired(now) {
-                continue;
-            }
-            match self
-                .docs
-                .delete(
-                    &self.collection,
-                    &row.id,
-                    Precondition::Version(row.version),
-                )
-                .await
-            {
-                Ok(removed) => reclaimed += usize::from(removed),
-                // Refreshed or rewritten since we read it: no longer expired.
-                Err(error) if error.kind() == ErrorKind::Conflict => {}
-                Err(error) => return Err(map_error(error)),
-            }
-        }
+            .map_err(map_error)? as usize;
         if reclaimed > 0 {
             tracing::debug!("[store:namespaced] sweep_expired reclaimed={reclaimed}");
         }
@@ -392,11 +377,7 @@ impl NamespacedStore for DriverNamespacedStore {
                     match value {
                         None => {
                             self.docs
-                                .delete(
-                                    &self.collection,
-                                    &Self::id(namespace, key),
-                                    Precondition::None,
-                                )
+                                .delete(KV, &self.id(namespace, key)?, Precondition::None)
                                 .await
                                 .map_err(map_error)?;
                         }
