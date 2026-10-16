@@ -31,6 +31,17 @@ pub struct CloseOutput {
     pub usage: Vec<Usage>,
 }
 
+/// Result of repairing a required-output contract.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequiredOutputRepair {
+    /// Final response, including a deterministic structured block if needed.
+    pub text: String,
+    /// Whether the model produced a valid replacement block.
+    pub model_repaired: bool,
+    /// Usage reported by the repair request, if it completed.
+    pub usage: Vec<Usage>,
+}
+
 /// Why a close response was rejected and needs its single repair attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseViolation {
@@ -84,6 +95,19 @@ pub fn render_tool_results(results: &[CloseToolResult], total_budget: usize) -> 
     }
     rendered.reverse();
     rendered.join("\n")
+}
+
+/// Build a deterministic checkpoint from captured tool output. The host owns
+/// the prose template; `{steps}` and `{results}` are the only substitutions.
+pub fn deterministic_checkpoint(
+    template: &str,
+    steps: usize,
+    results: &[CloseToolResult],
+    total_budget: usize,
+) -> String {
+    template
+        .replace("{steps}", &steps.to_string())
+        .replace("{results}", &render_tool_results(results, total_budget))
 }
 
 /// Whether a candidate repeats any harness-only phrase supplied by the host.
@@ -158,6 +182,52 @@ where
         }
     }
     CloseOutput { text: deterministic_fallback(), usage }
+}
+
+/// Repair a reply that omits a required structured-output block.
+///
+/// The instruction is caller-provided. If the model fails, returns tool
+/// syntax, or returns an invalid block, the harness appends the contract's
+/// deterministic synthesized block so the required-output invariant holds.
+pub async fn repair_required_output<State, M>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    history: &[Message],
+    reply: &str,
+    contract: &crate::config::RequiredOutput,
+    repair_instruction: &str,
+    reply_already_streamed: bool,
+) -> Option<RequiredOutputRepair>
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+{
+    use crate::config::{find_required_block, output_satisfies_contract, synthesize_block};
+
+    if output_satisfies_contract(reply, contract) {
+        return None;
+    }
+    let attempted = completion(model, state, dialect, history, repair_instruction).await;
+    let (candidate, usage, has_tool_call) = attempted
+        .map(|(text, usage, has_tool_call)| (text, usage, has_tool_call))
+        .unwrap_or_default();
+    let usable = !has_tool_call && output_satisfies_contract(&candidate, contract);
+    let text = if reply_already_streamed {
+        let block = if usable {
+            find_required_block(&candidate, contract)
+                .and_then(|block| serde_json::to_string(&block).ok())
+                .unwrap_or_else(|| synthesize_block(contract))
+        } else {
+            synthesize_block(contract)
+        };
+        format!("{reply}\n\n{block}")
+    } else if usable {
+        candidate
+    } else {
+        format!("{}\n\n{}", reply, synthesize_block(contract))
+    };
+    Some(RequiredOutputRepair { text, model_repaired: usable, usage })
 }
 
 async fn completion<State, M>(
