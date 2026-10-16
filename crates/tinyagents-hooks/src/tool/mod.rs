@@ -259,7 +259,7 @@ where
             agent_id: ctx.data.agent_id(),
             cwd: ctx.data.cwd(),
         };
-        for hook in self.hooks.iter().rev() {
+        for hook in &self.hooks {
             if let Some(additional) = hook.after_tool_context(&ctx.data, &event).await {
                 additional_context.push(additional);
             }
@@ -362,6 +362,7 @@ impl crate::command::HookEngine {
         pre: bool,
     ) -> ToolHookDecision {
         use crate::command::{HookEvent, HookPayload, ToolPayload};
+        let mut context = context.clone();
         let generic = if pre {
             HookEvent::PreToolUse
         } else if context.success == Some(false) {
@@ -375,16 +376,20 @@ impl crate::command::HookEngine {
                 generic,
                 identity.clone(),
                 HookPayload::Tool(ToolPayload {
-                    tool_name: context.tool_name.clone(),
-                    tool_input: context.arguments.clone(),
-                    tool_use_id: context.call_id.clone(),
-                    tool_output: context.output.clone(),
-                    duration_ms: context.duration_ms,
-                    error_message: context.error.clone(),
+                tool_name: context.tool_name.clone(),
+                tool_input: context.arguments.clone(),
+                tool_use_id: context.call_id.clone(),
+                tool_output: context.output.clone(),
+                duration_ms: context.duration_ms,
+                error_message: context.error.clone(),
                     ..Default::default()
                 }),
             );
-            output.merge(self.dispatch(generic, input).await.output);
+            let generic_output = self.dispatch(generic, input).await.output;
+            if let Some(rewritten) = &generic_output.updated_input {
+                context.arguments = rewritten.clone();
+            }
+            output.merge(generic_output);
         }
         if output.is_deny() {
             return output;
