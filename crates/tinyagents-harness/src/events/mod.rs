@@ -172,7 +172,7 @@ impl EventSink {
             let mut inner = lock_recovering(&self.inner);
             let offset = inner.next_offset;
             inner.next_offset += 1;
-            let id = crate::ids::EventId::new(format!("{}-evt-{offset}", inner.stream_id));
+            let id = canonical_event_id(&inner.stream_id, offset);
             let record = EventRecord { id, offset, event };
             // The id/offset must still be minted with no listeners — callers
             // (e.g. `HarnessRunStatus::set_last_event`) rely on the returned
