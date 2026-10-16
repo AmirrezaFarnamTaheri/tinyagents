@@ -95,3 +95,43 @@ impl<C: Clone + Send + Sync + 'static> SessionHooks<C> for NoopSessionHooks {
         Ok(())
     }
 }
+
+/// Boxed future used by [`FnSessionHooks`] callbacks.
+pub type SessionHookFuture<'a, T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, RuntimeError>> + Send + 'a>>;
+
+/// Closure-backed implementation of [`SessionHooks`].
+///
+/// This adapter belongs to the runtime crate because its callbacks use the
+/// runtime's session request and commit types; placing it in `tinyagents-hooks`
+/// would create a dependency cycle (`runtime -> hooks -> runtime`).
+pub struct FnSessionHooks<C: Clone + Send + Sync + 'static = ()> {
+    before_resume: std::sync::Arc<dyn for<'a> Fn(&'a mut SessionTurnRequest, &'a mut TurnOptions<C>, SessionStateView<'a>) -> SessionHookFuture<'a, ResumePreparation> + Send + Sync>,
+    before_turn: std::sync::Arc<dyn for<'a> Fn(&'a mut SessionTurnRequest, &'a mut TurnOptions<C>, SessionStateView<'a>) -> SessionHookFuture<'a, TurnPreparation> + Send + Sync>,
+    before_commit: std::sync::Arc<dyn for<'a> Fn(&'a SessionTurnOutcome, &'a TranscriptTurnOptions<C>) -> SessionHookFuture<'a, ()> + Send + Sync>,
+    after_commit: std::sync::Arc<dyn Fn(CommitReceipt<C>) -> SessionHookFuture<'static, ()> + Send + Sync>,
+    on_terminal: std::sync::Arc<dyn Fn(SessionTerminal) -> SessionHookFuture<'static, ()> + Send + Sync>,
+}
+
+impl<C: Clone + Send + Sync + 'static> FnSessionHooks<C> {
+    /// Create a callback-backed session hook set.
+    #[allow(clippy::type_complexity)]
+    pub fn new(
+        before_resume: impl for<'a> Fn(&'a mut SessionTurnRequest, &'a mut TurnOptions<C>, SessionStateView<'a>) -> SessionHookFuture<'a, ResumePreparation> + Send + Sync + 'static,
+        before_turn: impl for<'a> Fn(&'a mut SessionTurnRequest, &'a mut TurnOptions<C>, SessionStateView<'a>) -> SessionHookFuture<'a, TurnPreparation> + Send + Sync + 'static,
+        before_commit: impl for<'a> Fn(&'a SessionTurnOutcome, &'a TranscriptTurnOptions<C>) -> SessionHookFuture<'a, ()> + Send + Sync + 'static,
+        after_commit: impl Fn(CommitReceipt<C>) -> SessionHookFuture<'static, ()> + Send + Sync + 'static,
+        on_terminal: impl Fn(SessionTerminal) -> SessionHookFuture<'static, ()> + Send + Sync + 'static,
+    ) -> Self {
+        Self { before_resume: std::sync::Arc::new(before_resume), before_turn: std::sync::Arc::new(before_turn), before_commit: std::sync::Arc::new(before_commit), after_commit: std::sync::Arc::new(after_commit), on_terminal: std::sync::Arc::new(on_terminal) }
+    }
+}
+
+#[async_trait]
+impl<C: Clone + Send + Sync + 'static> SessionHooks<C> for FnSessionHooks<C> {
+    async fn before_resume(&self, request: &mut SessionTurnRequest, options: &mut TurnOptions<C>, state: SessionStateView<'_>) -> Result<ResumePreparation, RuntimeError> { (self.before_resume)(request, options, state).await }
+    async fn before_turn(&self, request: &mut SessionTurnRequest, options: &mut TurnOptions<C>, state: SessionStateView<'_>) -> Result<TurnPreparation, RuntimeError> { (self.before_turn)(request, options, state).await }
+    async fn before_commit(&self, outcome: &SessionTurnOutcome, options: &TranscriptTurnOptions<C>) -> Result<(), RuntimeError> { (self.before_commit)(outcome, options).await }
+    async fn after_commit(&self, receipt: CommitReceipt<C>) -> Result<(), RuntimeError> { (self.after_commit)(receipt).await }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> { (self.on_terminal)(terminal).await }
+}
