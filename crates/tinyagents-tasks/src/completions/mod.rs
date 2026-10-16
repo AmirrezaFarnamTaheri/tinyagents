@@ -21,14 +21,18 @@
 //! `mark_delivered`. Nothing here relaunches a child.
 
 mod driver;
+mod delivery;
 mod format;
 mod router;
+mod registry;
 mod store;
 mod types;
 
 pub use driver::DriverCompletionStore;
+pub use delivery::{CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases};
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
+pub use registry::{CompletionRouterPool, CompletionRouterPoolError, open_driver_completion_store_or_memory};
 pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,
@@ -38,3 +42,11 @@ pub use types::{
 #[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
+
+#[cfg(test)]
+#[path = "delivery_tests.rs"]
+mod delivery_tests;
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod registry_tests;

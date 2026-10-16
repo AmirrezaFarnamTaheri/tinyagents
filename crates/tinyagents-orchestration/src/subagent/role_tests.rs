@@ -12,6 +12,16 @@ fn snapshot(names: &[&str]) -> ToolSnapshot {
     ToolSnapshot::new(names.iter().map(|n| spec(n)).collect()).unwrap()
 }
 
+#[test]
+fn tool_snapshot_deduplicates_repeated_identical_specs_before_restriction() {
+    let snapshot = ToolSnapshot::new(vec![spec("read"), spec("read")]).unwrap();
+    assert_eq!(names(&snapshot), ["read"]);
+    assert_eq!(
+        names(&restrict_tools(&snapshot, SubagentRole::Leaf, None, &[])),
+        ["read"]
+    );
+}
+
 fn names(snapshot: &ToolSnapshot) -> Vec<String> {
     snapshot.specs().iter().map(|s| s.name.clone()).collect()
 }

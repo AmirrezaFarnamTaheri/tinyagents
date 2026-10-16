@@ -109,6 +109,44 @@ async fn file_store_reads_legacy_terminal_outcome_records() {
     assert_eq!(store.load_terminal(&key).await.unwrap(), Some(outcome));
 }
 
+#[tokio::test]
+async fn independent_file_store_handles_commit_only_one_pause_for_a_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let first_store = FileSubagentPersistence::new(dir.path());
+    let second_store = FileSubagentPersistence::new(dir.path());
+    let key = key("parent", "concurrent");
+    let (first, second) = tokio::join!(
+        first_store.save_pause(pause(key.clone(), SubagentResume::default())),
+        second_store.save_pause(pause(key.clone(), SubagentResume::default())),
+    );
+    let dispositions = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|value| **value == SubagentPausePersistenceDisposition::Inserted)
+            .count(),
+        1
+    );
+    assert!(dispositions.contains(&SubagentPausePersistenceDisposition::Existing));
+    assert_eq!(first_store.keys_for_task("concurrent").unwrap(), vec![key]);
+}
+
+#[tokio::test]
+async fn invalid_non_pause_record_is_not_returned_as_default_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileSubagentPersistence::new(dir.path());
+    let key = key("parent", "invalid-pause");
+    let path = store.pause_path(&key).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let invalid = PersistedSubagentPause {
+        key: key.clone(),
+        outcome: SubagentOutcome::completed("invalid-pause", "done"),
+        replaces: None,
+    };
+    std::fs::write(path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+    assert_eq!(store.load(&key).await.unwrap(), None);
+}
+
 #[test]
 fn file_store_canonicalizes_checkpoint_roots() {
     let dir = tempfile::tempdir().unwrap();

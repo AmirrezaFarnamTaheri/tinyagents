@@ -25,6 +25,7 @@ mod result_policy;
 mod role;
 mod sessions;
 mod step;
+mod summarization;
 mod types;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
@@ -73,6 +74,7 @@ pub use step::{
     AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,
     StepWorkError, run_agent_step,
 };
+pub use summarization::{CapSummary, CapSummaryModel, summarize_at_cap};
 #[allow(deprecated)]
 pub use types::SubagentStatus;
 pub use types::{

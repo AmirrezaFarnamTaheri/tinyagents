@@ -293,10 +293,7 @@ impl SubagentPersistence for FileSubagentPersistence {
         }
         Ok(self
             .read_pause(key)?
-            .map(|pause| match pause.outcome.status {
-                super::SubagentOutcomeKind::AwaitingInput(pause) => pause.resume,
-                _ => SubagentResume::default(),
-            }))
+            .and_then(|pause| pause_resume(&pause).cloned()))
     }
 
     async fn load_pause(

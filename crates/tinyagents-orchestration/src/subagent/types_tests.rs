@@ -7,11 +7,16 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
     outcome.tier = Some("worker".into());
     outcome.model_override = Some("provider/model".into());
     outcome.cost_usd = Some(0.125);
+    outcome.extensions.insert(
+        "host_checkpoint".into(),
+        serde_json::json!({"skill_filter_override":"docs", "elapsed_ms":17}),
+    );
     let value = serde_json::to_value(&outcome).unwrap();
     assert_eq!(value["worker_thread_id"], "worker-thread");
     assert_eq!(value["tier"], "worker");
     assert_eq!(value["model_override"], "provider/model");
     assert_eq!(value["cost_usd"], 0.125);
+    assert_eq!(value["extensions"]["host_checkpoint"]["elapsed_ms"], 17);
     assert_eq!(
         serde_json::from_value::<SubagentOutcome>(value).unwrap(),
         outcome
