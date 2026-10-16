@@ -72,6 +72,23 @@ impl ToolCallPolicy<Host> for NamePolicy {
     }
 }
 
+struct SessionCeiling;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionCeiling {
+    fn name(&self) -> &str {
+        "session_ceiling"
+    }
+
+    async fn check(&self, ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "web_only" && ctx.data.channel != "web" {
+            PolicyDecision::deny("session ceiling")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
 #[derive(Default)]
 struct Resolver {
     verdict: Mutex<Option<ApprovalResolution>>,
