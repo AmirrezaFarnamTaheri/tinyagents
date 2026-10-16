@@ -120,14 +120,24 @@ async fn separate_run_instances_keep_halts_and_pause_handles_isolated() {
     }
     assert!(first_summary.lock().unwrap().is_some());
     assert!(second_summary.lock().unwrap().is_none());
-    assert!(first_handle.drain().iter().any(|c| matches!(c, SteeringCommand::Pause)));
+    assert!(
+        first_handle
+            .drain()
+            .iter()
+            .any(|c| matches!(c, SteeringCommand::Pause))
+    );
     assert!(second_handle.drain().is_empty());
 
     for n in 0..3 {
         fail_once(&second, 52, &format!("second-{n}")).await;
     }
     assert!(second_summary.lock().unwrap().is_some());
-    assert!(second_handle.drain().iter().any(|c| matches!(c, SteeringCommand::Pause)));
+    assert!(
+        second_handle
+            .drain()
+            .iter()
+            .any(|c| matches!(c, SteeringCommand::Pause))
+    );
 }
 
 #[tokio::test]
@@ -216,7 +226,7 @@ async fn classified_budget_uses_shared_tracker_and_host_halt_copy() {
     let summary = Arc::new(std::sync::Mutex::new(None));
     let middleware =
         FailureScopeMiddleware::new(handle.clone(), summary.clone(), Arc::new(ClassifiedPolicy));
-    fail_once(&middleware, "classified").await;
+    fail_once(&middleware, 41, "classified").await;
 
     let summary = summary.lock().unwrap();
     let summary = summary

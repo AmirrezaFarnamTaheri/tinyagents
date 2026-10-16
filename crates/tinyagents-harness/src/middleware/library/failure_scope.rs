@@ -297,9 +297,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         let repeated_failure = match &assessment {
             FailureAssessment::Failure { error, .. }
             | FailureAssessment::RecoverableFailure { error }
-            | FailureAssessment::ClassifiedFailure { error, .. } => {
-                self.policy.record_failure(ctx, &call, &scope, result, error)
-            }
+            | FailureAssessment::ClassifiedFailure { error, .. } => self
+                .policy
+                .record_failure(ctx, &call, &scope, result, error),
             _ => false,
         };
         let run = self.run_state(ctx.instance_id());
@@ -452,7 +452,10 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         self.calls
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert((ctx.instance_id(), call.id.to_string()), (call.clone(), scope));
+            .insert(
+                (ctx.instance_id(), call.id.to_string()),
+                (call.clone(), scope),
+            );
         Ok(())
     }
 
@@ -470,7 +473,11 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
             .remove(&(ctx.instance_id(), invocation.call_id().to_string()))
             .unwrap_or_else(|| {
                 (
-                    ToolCall::new(invocation.call_id(), invocation.tool_name(), serde_json::Value::Null),
+                    ToolCall::new(
+                        invocation.call_id(),
+                        invocation.tool_name(),
+                        serde_json::Value::Null,
+                    ),
                     FailureScope {
                         argument_fingerprint: String::new(),
                         scope: invocation.tool_name().to_owned(),
