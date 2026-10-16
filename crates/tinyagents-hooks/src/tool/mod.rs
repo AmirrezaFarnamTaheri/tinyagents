@@ -92,3 +92,63 @@ pub trait ToolHook: Send + Sync {
         None
     }
 }
+
+/// Deliver typed callbacks through the harness middleware lifecycle.
+pub struct ToolHooksMiddleware<Ctx> {
+    hooks: Vec<std::sync::Arc<dyn ToolHook>>,
+    arguments: std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+    marker: std::marker::PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx> ToolHooksMiddleware<Ctx> {
+    /// Creates a middleware with callbacks in execution order.
+    pub fn new(hooks: Vec<std::sync::Arc<dyn ToolHook>>) -> Self {
+        Self { hooks, arguments: std::sync::Mutex::new(std::collections::HashMap::new()), marker: std::marker::PhantomData }
+    }
+}
+
+#[async_trait]
+impl<Ctx> tinyagents_harness::middleware::Middleware<(), Ctx> for ToolHooksMiddleware<Ctx>
+where Ctx: HookIdentity + Send + Sync {
+    fn name(&self) -> &str { "tool_hooks" }
+
+    async fn before_tool(&self, ctx: &mut tinyagents_harness::context::RunContext<Ctx>, _state: &(), call: &mut tinyinference_llm::tool::ToolCall) -> tinyagents_harness::error::Result<()> {
+        use tinyagents_harness::error::TinyAgentsError;
+        let mut event = ToolHookContext {
+            event: ToolHookEvent::PreToolUse,
+            call_id: call.id.clone(), tool_name: call.name.clone(), arguments: call.arguments.clone(),
+            success: None, duration_ms: None, output: None, error: None,
+            session_id: ctx.data.session_id(), agent_id: ctx.data.agent_id(), cwd: ctx.data.cwd(),
+        };
+        for hook in &self.hooks {
+            match hook.before_tool_decision(&event).await {
+                ToolHookDecision::Allow | ToolHookDecision::AdditionalContext(_) => {}
+                ToolHookDecision::UpdatedInput(input) => { call.arguments = input.clone(); event.arguments = input; }
+                ToolHookDecision::Deny(reason) => return Err(TinyAgentsError::Tool(format!("tool hook '{}' denied {}: {reason}", hook.name(), event.tool_name))),
+                ToolHookDecision::Ask(reason) => return Err(TinyAgentsError::Tool(format!("tool hook '{}' requires approval for {}: {reason}", hook.name(), event.tool_name))),
+            }
+        }
+        self.arguments.lock().unwrap_or_else(|e| e.into_inner()).insert(call.id.clone(), call.arguments.clone());
+        Ok(())
+    }
+
+    async fn after_tool(&self, ctx: &mut tinyagents_harness::context::RunContext<Ctx>, _state: &(), invocation: &tinyagents_harness::middleware::ToolInvocationIdentity, result: &mut tinytools::ToolResult) -> tinyagents_harness::error::Result<()> {
+        let args = self.arguments.lock().unwrap_or_else(|e| e.into_inner()).remove(invocation.call_id().as_ref()).unwrap_or(serde_json::Value::Null);
+        let text = result.text();
+        let mut event = ToolHookContext {
+            event: ToolHookEvent::PostToolUse, call_id: invocation.call_id().to_string(), tool_name: invocation.tool_name().to_owned(), arguments: args,
+            success: Some(!result.is_error), duration_ms: None,
+            output: (!result.is_error).then(|| text.clone()), error: result.is_error.then_some(text),
+            session_id: ctx.data.session_id(), agent_id: ctx.data.agent_id(), cwd: ctx.data.cwd(),
+        };
+        for hook in self.hooks.iter().rev() {
+            if let Some(additional) = hook.after_tool_context(&event).await {
+                result.content.push(tinytools::ToolContent::Text { text: additional });
+            }
+            // The context is immutable to callbacks; retain this assignment as
+            // a reminder that each observer sees the same normalized arguments.
+            event.arguments = event.arguments.clone();
+        }
+        Ok(())
+    }
+}
