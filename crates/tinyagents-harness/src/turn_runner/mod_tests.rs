@@ -7,6 +7,7 @@ struct Host {
     started: Option<Arc<tokio::sync::Notify>>,
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
+    hold_after_cancel: bool,
     checkins: std::sync::atomic::AtomicUsize,
     runs: std::sync::atomic::AtomicUsize,
 }
@@ -57,7 +58,12 @@ impl TurnHost for Host {
             started.notify_one();
             tokio::select! {
                 _ = release.notified() => {},
-                _ = cancellation.cancelled() => return Err("cancelled".into()),
+                _ = cancellation.cancelled() => {
+                    if self.hold_after_cancel {
+                        release.notified().await;
+                    }
+                    return Err("cancelled".into());
+                },
             }
         }
         Ok(TurnResult {
@@ -171,6 +177,7 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
     let host = Arc::new(Host {
         started: Some(started.clone()),
         release: Some(release.clone()),
+        hold_after_cancel: true,
         ..Host::default()
     });
     let ingress = Arc::new(Ingress::default());
@@ -437,6 +444,7 @@ async fn a_superseded_turn_waiting_for_the_session_lock_never_starts() {
     .await
     .expect("replacement must supersede the waiting request");
 
+    release.notify_one();
     started.notified().await;
     release.notify_one();
     assert!(matches!(
