@@ -413,46 +413,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
         // Evaluate without the resolver first so only a call that actually
         // needs approval waits on the prompt lock; the rest stay concurrent.
         let mut policy_name = self.gate.policy_name().to_owned();
-        let builder_decision = self.gate.check(ctx, &call, false).await;
-        let session_decision = if let Some(session) = &self.session_ceiling {
-            session.check(ctx, &call).await
+        let mut verdict = if let Some(session) = &self.session_ceiling {
+            let decision = session.check(ctx, &call).await;
+            if matches!(decision, PolicyDecision::Allow) {
+                self.gate.evaluate(ctx, &call, false, None).await
+            } else {
+                policy_name = session.name().to_owned();
+                GateVerdict::Blocked(decision)
+            }
         } else {
-            PolicyDecision::Allow
-        };
-        // Neither policy may waive the other: a denial from either side
-        // dominates an approval requirement from the other. Prefer the
-        // builder denial when both deny to preserve its established wording.
-        let mut verdict = match (builder_decision, session_decision) {
-            (decision @ PolicyDecision::Deny { .. }, _) => {
-                GateVerdict::Blocked(decision)
-            }
-            (_, decision @ PolicyDecision::Deny { .. }) => {
-                policy_name = self
-                    .session_ceiling
-                    .as_ref()
-                    .map(|session| session.name().to_owned())
-                    .unwrap_or_else(|| self.gate.policy_name().to_owned());
-                GateVerdict::Blocked(decision)
-            }
-            (PolicyDecision::RequireApproval { reason }, PolicyDecision::Allow) => {
-                GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
-            }
-            (PolicyDecision::Allow, PolicyDecision::RequireApproval { reason }) => {
-                policy_name = self
-                    .session_ceiling
-                    .as_ref()
-                    .map(|session| session.name().to_owned())
-                    .unwrap_or_else(|| self.gate.policy_name().to_owned());
-                GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
-            }
-            (PolicyDecision::RequireApproval { reason: builder }, PolicyDecision::RequireApproval { reason: session }) => {
-                GateVerdict::Blocked(PolicyDecision::RequireApproval {
-                    reason: format!("{builder}; {session}"),
-                })
-            }
-            (PolicyDecision::Allow, PolicyDecision::Allow) => {
-                GateVerdict::Proceed { ticket: None }
-            }
+            self.gate.evaluate(ctx, &call, false, None).await
         };
         if let (GateVerdict::Blocked(PolicyDecision::RequireApproval { .. }), Some(resolver)) =
             (&verdict, self.resolver.as_deref())
