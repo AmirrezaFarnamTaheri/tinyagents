@@ -50,11 +50,6 @@ impl StorageBackend for AdmittedBackend {
     fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
         self.inner.for_scope_fenced(scope, &self.fence)
     }
-    fn database(&self, _name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::invalid_input(
-            "test does not select databases",
-        ))
-    }
 }
 
 fn admitted(inner: &Arc<dyn StorageBackend>, epoch: u64) -> Arc<dyn StorageBackend> {

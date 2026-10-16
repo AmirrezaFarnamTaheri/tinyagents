@@ -293,9 +293,6 @@ impl StorageBackend for Unbindable {
         Err(StorageError::unavailable("database is down"))
     }
 
-    fn database(&self, _name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unavailable("database is down"))
-    }
 }
 
 #[tokio::test]
@@ -473,9 +470,6 @@ impl StorageBackend for Flaky {
             Arc::clone(inner.blobs()),
         ))
     }
-    fn database(&self, name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        self.storage.database(name)
-    }
 }
 
 #[test]
@@ -546,13 +540,6 @@ impl StorageBackend for NativeRefusal {
     /// Refuses admission with the same source Arc supplied by the test.
     fn for_scope(&self, _: &Scope) -> Result<ScopedStorage, StorageError> {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
-    }
-    /// Refuses named database access for this scope-only fixture.
-    fn database(&self, _: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unsupported(
-            tinystoragedrivers_core::Capability::Fencing,
-            "database",
-        ))
     }
 }
 
