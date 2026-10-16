@@ -215,24 +215,6 @@ impl TurnCost {
     }
 }
 
-/// Folds every completed model response into the tally: the provider's
-/// reported charge when the response carries one, else the list-rate estimate
-/// from the installed [`PricingLookup`], else unknown.
-impl crate::middleware::StopHookMetrics for TurnCost {
-    fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {
-        let Some(recovered) = tinyinference_llm::usage::recover_usage(response) else {
-            return;
-        };
-        let usage = CallUsage {
-            usage: recovered.usage,
-            charged_amount_usd: recovered.charged_amount_usd.unwrap_or(0.0),
-            cost_is_estimate: false,
-            charge_reported: recovered.charged_amount_usd.is_some(),
-        };
-        self.add_priced_call(model, &usage);
-    }
-}
-
 #[cfg(test)]
 #[path = "turn_cost_tests.rs"]
 mod tests;
