@@ -38,6 +38,7 @@ pub mod environment;
 pub mod exec;
 pub mod followup;
 pub mod matcher;
+pub mod ops;
 pub mod types;
 
 #[cfg(test)]
