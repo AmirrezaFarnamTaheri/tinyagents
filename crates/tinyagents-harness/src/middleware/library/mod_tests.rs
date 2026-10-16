@@ -724,6 +724,61 @@ fn response_with_usage(model: &str, input: u64, output: u64) -> ModelResponse {
 }
 
 #[tokio::test]
+async fn workload_observers_only_report_successful_fallback_and_carry_one_response() {
+    use tinyinference_llm::model::CapabilitySet;
+
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let carried = Arc::new(AtomicUsize::new(0));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(Arc::new(RequiredCapabilitiesMiddleware::new(
+        CapabilitySet {
+            image_in: true,
+            ..CapabilitySet::default()
+        },
+    )));
+    stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+    let carried_by_middleware = Arc::clone(&carried);
+    stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |response| {
+        if response.usage.is_some() {
+            carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+        }
+    })));
+
+    let failed = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Err(TinyAgentsError::Model("primary failed".into()))
+    });
+    assert!(
+        stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &failed)
+            .await
+            .is_err()
+    );
+    assert!(events(&recorder)
+        .iter()
+        .all(|event| !matches!(event, AgentEvent::FallbackSelected { .. })));
+    assert_eq!(carried.load(Ordering::SeqCst), 0);
+
+    let success = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Ok(response_with_usage("backup", 8, 3))
+    });
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &success)
+        .await
+        .expect("successful resolved fallback");
+    let selections: Vec<_> = events(&recorder)
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::FallbackSelected { from, to } => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selections, vec![("primary".into(), "backup".into())]);
+    assert_eq!(carried.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn budget_warns_then_blocks_on_token_exhaustion() {
     let (mut ctx, recorder) = ctx_with_recorder();
     let mw = BudgetMiddleware::new(BudgetLimits {
