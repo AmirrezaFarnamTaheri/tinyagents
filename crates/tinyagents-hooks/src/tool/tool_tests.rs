@@ -57,6 +57,43 @@ fn call(id: &str) -> tinyinference_llm::tool::ToolCall {
     tinyinference_llm::tool::ToolCall::new(id, "read", serde_json::json!({"path":"secret"}))
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn command_engine_fires_generic_and_derived_shell_events() {
+    use crate::command::{config, environment::HookEnvironment, HookEngine};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[{"command":"./generic.sh"}],"beforeShellExecution":[{"command":"./shell.sh"}]}}"#,
+    ).expect("hooks config");
+    for (name, message) in [("generic.sh", "generic"), ("shell.sh", "shell-specialized")] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\necho '{{\"additional_context\":\"{message}\"}}'\n")).expect("script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let engine = HookEngine::new(HookEnvironment::new("Test", None));
+    engine.install(config::load(engine.environment(), None, Some(dir.path()))).await;
+    let context = ToolHookContext {
+        event: ToolHookEvent::PreToolUse,
+        call_id: "call-1".into(),
+        tool_name: "shell".into(),
+        arguments: serde_json::json!({"command":"pwd"}),
+        success: None,
+        duration_ms: None,
+        output: None,
+        error: None,
+        session_id: Some("session".into()),
+        agent_id: Some("agent".into()),
+        cwd: None,
+    };
+    let output = engine.dispatch_tool_hooks(&context, crate::command::context::TurnIdentity {
+        session_id: Some("session".into()), ..Default::default()
+    }, true).await;
+    assert_eq!(output.additional_context.as_deref(), Some("generic\nshell-specialized"));
+}
+
 #[test]
 fn successful_output_summary_keeps_shape_and_discards_contents() {
     let summary = sanitize_tool_output("secret-token-value", "read_file", true);
