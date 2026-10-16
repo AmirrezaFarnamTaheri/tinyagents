@@ -441,7 +441,7 @@ fn user_blocks_from_parts(parts: &[TranscriptPart]) -> Vec<ContentBlock> {
 }
 
 /// Build content blocks from legacy user text, lifting ready
- `[IMAGE:<reference>]` markers in source order.
+/// `[IMAGE:<reference>]` markers in source order.
 ///
 /// Text around images is trimmed at image boundaries to match the historical
 /// provider bridge. Invalid, empty, and unterminated markers stay in text.
