@@ -46,3 +46,7 @@ impl StopHook<TurnCost> for GoalBudgetStopHook {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "goal_budget_tests.rs"]
+mod tests;
