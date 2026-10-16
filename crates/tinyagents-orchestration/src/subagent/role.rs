@@ -147,8 +147,9 @@ pub fn restrict_tools(
 }
 
 /// Restricts a child's declarations by inherited ceiling, role, authored
-/// [`ToolScope`], and optional `{skill}__` prefix. Every restriction is an
-/// intersection; no policy can widen the supplied snapshot.
+/// [`ToolScope`](tinyagents_definition::ToolScope), and optional `{skill}__`
+/// prefix. Every restriction is an intersection; no policy can widen the
+/// supplied snapshot.
 pub fn restrict_tools_with_scope(
     tools: &ToolSnapshot,
     role: SubagentRole,
