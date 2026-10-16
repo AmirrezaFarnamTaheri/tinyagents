@@ -49,6 +49,7 @@ impl TurnHost for Host {
         _session: &TurnSession,
         _origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -322,17 +323,21 @@ async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
     };
 
     started.notified().await;
-    assert!(!runner.cancel(&scope, &thread, "stale-request").await);
+    assert!(!runner.cancel(&scope, &thread, Some("stale-request")).await);
     let another_agent = ScopeKey {
         agent_id: "agent-b".into(),
         profile_id: None,
     };
     assert!(
         !runner
-            .cancel(&another_agent, &thread, "current-request")
+            .cancel(&another_agent, &thread, Some("current-request"))
             .await
     );
-    assert!(runner.cancel(&scope, &thread, "current-request").await);
+    assert!(
+        runner
+            .cancel(&scope, &thread, Some("current-request"))
+            .await
+    );
     assert!(matches!(
         run.await.unwrap(),
         Err(TurnRunnerError::Cancelled)
@@ -428,6 +433,7 @@ impl TurnHost for ConcurrentHost {
         session: &TurnSession,
         _origin: &serde_json::Value,
         _cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         let expected_session = if request.disposition == QueueDisposition::Parallel {
@@ -485,7 +491,7 @@ async fn parallel_turns_use_independent_fork_sessions_and_run_concurrently() {
     .await
     .expect("parallel branches must not serialize");
     let sessions = host.sessions.lock().unwrap();
-    assert_eq!(sessions.as_slice(), ["parallel-a", "parallel-b"]);
+    assert_eq!(sessions.as_slice(), ["fork:parallel-a", "fork:parallel-b"]);
 }
 
 struct QuietWorkHost {
@@ -513,6 +519,7 @@ impl TurnHost for QuietWorkHost {
         _session: &TurnSession,
         _origin: &serde_json::Value,
         _cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
         progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         progress.send(TurnSignal::WorkStarted).await.unwrap();

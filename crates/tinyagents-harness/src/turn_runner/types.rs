@@ -287,9 +287,10 @@ where
     ) -> bool {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
-        if let Some(turn) = active.get(&key).filter(|turn| {
-            request_id.is_none_or(|id| turn.request_id == id)
-        }) {
+        if let Some(turn) = active
+            .get(&key)
+            .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
+        {
             turn.cancel.cancel();
             drop(active);
             self.clear_queue(scope, thread_id).await;
@@ -300,9 +301,7 @@ where
             let keys: Vec<_> = parallel
                 .keys()
                 .filter(|(owner, thread, req)| {
-                    owner == scope
-                        && thread == thread_id
-                        && request_id.is_none_or(|id| req == id)
+                    owner == scope && thread == thread_id && request_id.is_none_or(|id| req == id)
                 })
                 .cloned()
                 .collect();
@@ -577,16 +576,14 @@ where
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
         let task_cancellation = crate::CancellationToken::new();
-        let run = self
-            .host
-            .run(
-                request,
-                session,
-                origin,
-                task_cancellation.clone(),
-                queue,
-                progress_tx,
-            );
+        let run = self.host.run(
+            request,
+            session,
+            origin,
+            task_cancellation.clone(),
+            queue,
+            progress_tx,
+        );
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
         let deadline = request.deadline.or(self.config.deadline);
         let started = Instant::now();
