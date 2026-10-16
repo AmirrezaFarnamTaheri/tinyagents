@@ -114,6 +114,28 @@ async fn cancelling_one_job_leaves_its_sibling_running() {
 }
 
 #[tokio::test]
+async fn jobs_await_waits_for_the_terminal_snapshot() {
+    let (tool, started, release) = blocked_tool();
+    let jobs = SubAgentJobsTool::new(tool.job_registry().clone());
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let id = spawn(&tool, &parent).await;
+    let _started = started.acquire().await.unwrap();
+    let waiter = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        json!({"action":"await","job_id":id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    release.add_permits(1);
+    let result = waiter.await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["output"], "done");
+}
+
+#[tokio::test]
 async fn cancel_is_owner_checked_and_rejects_terminal_jobs() {
     let (tool, started, release) = blocked_tool();
     let jobs = tool.job_registry().clone();
