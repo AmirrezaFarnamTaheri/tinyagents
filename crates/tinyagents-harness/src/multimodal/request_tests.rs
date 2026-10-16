@@ -608,6 +608,7 @@ async fn nonvision_fallback_reads_images_and_uses_the_pdf_extractor() {
 }
 
 #[tokio::test]
+#[cfg(feature = "multimodal")]
 async fn nonvision_archive_fallback_lists_entries_without_extracting_them() {
     let mut bytes = std::io::Cursor::new(Vec::new());
     {
