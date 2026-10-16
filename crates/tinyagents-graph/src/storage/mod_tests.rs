@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_harness::ids::{GraphId, NodeId, now_ms};
 use tinystoragedrivers_core::{
-    DocumentStoreExt, Leases, MemoryStorage, MigrateOptions, Precondition, Query, Registry, Scope,
-    ScopeClass, ScopedStorage, StorageBackend, WriteOptions,
+    DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Query, Registry, Scope,
+    ScopeClass, ScopedStorage, StorageBackend,
 };
 
 fn scoped() -> ScopedStorage {
@@ -288,5 +288,4 @@ async fn v1_task_cache_rows_move_into_the_graph_kv_namespace() {
         "the deadline is metadata now"
     );
     assert_eq!(import_legacy_task_cache(&storage).await.unwrap(), 0);
-    let _ = (Leases::new(storage.documents()), WriteOptions::new());
 }

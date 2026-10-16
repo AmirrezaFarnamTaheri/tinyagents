@@ -8,9 +8,7 @@ use crate::testkit::conformance::{
 };
 use serde::Serialize;
 use serde_json::json;
-use tinystoragedrivers_core::{
-    DocumentStoreExt, MemoryStorage, Precondition, Scope, StorageBackend,
-};
+use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn docs(storage: &MemoryStorage, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
