@@ -269,12 +269,29 @@ where
         }
         let worker = Arc::clone(&self.worker);
         let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
-            worker(args.clone(), stage, graph)
+            let worker = Arc::clone(&worker);
+            let mut stage_args = args.clone();
+            stage_args["stage_prompt"] = Value::String(stage_prompt(stage).to_owned());
+            async move {
+                let mut output = worker(stage_args, stage, graph).await?;
+                if stage == DelegationStage::Review {
+                    output.approved = parse_approval(&output.text);
+                }
+                Ok(output)
+            }
         })
         .await
         .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
         Ok(ToolResult::json(
             json!({"output":result.final_output,"approved":result.approved,"cancelled":result.cancelled}),
         ))
+    }
+}
+
+fn stage_prompt(stage: DelegationStage) -> &'static str {
+    match stage {
+        DelegationStage::Plan => DELEGATION_PLAN_PROMPT,
+        DelegationStage::Execute => DELEGATION_EXECUTE_PROMPT,
+        DelegationStage::Review => DELEGATION_REVIEW_PROMPT,
     }
 }

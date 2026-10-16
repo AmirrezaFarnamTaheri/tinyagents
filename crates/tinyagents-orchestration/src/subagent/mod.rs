@@ -10,6 +10,7 @@
 //! TinyAgents layers must not depend on this module.
 
 mod admission;
+mod awaiting_user;
 mod completion;
 mod detached;
 mod driver;
@@ -26,6 +27,7 @@ mod step;
 mod types;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
+pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     DETACHED_LEDGER_TIMEOUT_MS, DetachedCompletionTarget, DetachedSubagentStatus, FinishedOutcome,
     SpawnedSubagent, SteerAccess, SteerError, SteerReceipt, SteerRoute, SubagentIdentity,
