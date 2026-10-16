@@ -989,6 +989,23 @@ fn with_policy_replaces_policy() {
 }
 
 #[test]
+fn install_depth_only_narrows_the_existing_limit() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    let mut policy = RunPolicy::default();
+    policy.limits.max_depth = 4;
+    harness.with_policy(policy);
+
+    super::install_depth(&mut harness, 2);
+    assert_eq!(harness.policy().limits.max_depth, 2);
+    super::install_depth(&mut harness, 9);
+    assert_eq!(
+        harness.policy().limits.max_depth,
+        2,
+        "installing a later host limit cannot widen the active policy"
+    );
+}
+
+#[test]
 fn default_matches_new() {
     let harness: AgentHarness<()> = AgentHarness::default();
     assert!(harness.models().default_name().is_none());
