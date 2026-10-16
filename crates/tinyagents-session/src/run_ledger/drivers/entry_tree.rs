@@ -1,6 +1,8 @@
 //! Immutable entry records with per-session allocation and native batch admission.
 
-use super::{DriverRunLedger, storage};
+use super::dto::{Stored, stored_as_is};
+use super::storage::{self, dto_of, key, put_op};
+use super::{DriverRunLedger, now};
 use crate::entry_tree::{
     Branch, Entry, EntryId, EntryKind, Fork, ForkPosition, ForkScope, LabelEntry,
 };
@@ -11,40 +13,132 @@ use tinystoragedrivers_core::{
     WriteOp,
 };
 
-pub(super) const HEADS: &str = "run_ledger_entry_heads";
-pub(super) const ENTRIES: &str = "run_ledger_entries";
-pub(super) const LABELS: &str = "run_ledger_entry_labels";
-pub(super) const INDEXES: &str = "run_ledger_entry_indexes";
+pub(super) const HEADS: &str = "ledger.entry_heads";
+pub(super) const ENTRIES: &str = "ledger.entries";
+pub(super) const LABELS: &str = "ledger.entry_labels";
+pub(super) const INDEXES: &str = "ledger.entry_indexes";
 type Result<T> = std::result::Result<T, StorageError>;
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(super) struct Head {
     session_id: String,
     next_ordinal: Option<u64>,
     next_insertion: Option<u64>,
     pub(super) tip: Option<EntryId>,
 }
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+
+/// An entry with the allocation order it was inserted in.
 struct Node {
     session_id: String,
     insertion: u64,
     entry: Entry,
 }
+
+/// `ledger.entries`: the entry's own fields beside its session and insertion
+/// order. `ts_ms` is the entry's RFC 3339 `ts` as epoch milliseconds; an empty
+/// or unparseable `ts` is stored as absent.
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+struct NodeDto {
+    session_id: String,
+    insertion: u64,
+    id: EntryId,
+    parent_id: Option<EntryId>,
+    ordinal: u64,
+    kind: EntryKind,
+    ts_ms: Option<i64>,
+}
+
+impl Stored for Node {
+    type Dto = NodeDto;
+
+    fn to_dto(&self) -> NodeDto {
+        NodeDto {
+            session_id: self.session_id.clone(),
+            insertion: self.insertion,
+            id: self.entry.id.clone(),
+            parent_id: self.entry.parent_id.clone(),
+            ordinal: self.entry.ordinal,
+            kind: self.entry.kind.clone(),
+            ts_ms: ts_to_ms(&self.entry.ts),
+        }
+    }
+
+    fn from_dto(dto: NodeDto) -> Result<Self> {
+        Ok(Self {
+            session_id: dto.session_id,
+            insertion: dto.insertion,
+            entry: Entry {
+                id: dto.id,
+                parent_id: dto.parent_id,
+                ordinal: dto.ordinal,
+                kind: dto.kind,
+                ts: ts_from_ms(dto.ts_ms)?,
+            },
+        })
+    }
+}
+
+/// The epoch milliseconds of an RFC 3339 entry timestamp.
+pub(super) fn ts_to_ms(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|at| at.timestamp_millis())
+}
+
+/// An entry timestamp from epoch milliseconds, in RFC 3339 with a `Z` offset.
+pub(super) fn ts_from_ms(ms: Option<i64>) -> Result<String> {
+    ms.map(|ms| {
+        super::dto::from_ms(ms).map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+    })
+    .transpose()
+    .map(Option::unwrap_or_default)
+}
+
+/// A named branch.
 struct Named {
     session_id: String,
     branch: Branch,
 }
+
+/// `ledger.entry_labels`: the branch's name and tip beside its session.
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+struct NamedDto {
+    session_id: String,
+    name: String,
+    tip_id: EntryId,
+}
+
+impl Stored for Named {
+    type Dto = NamedDto;
+
+    fn to_dto(&self) -> NamedDto {
+        NamedDto {
+            session_id: self.session_id.clone(),
+            name: self.branch.name.clone(),
+            tip_id: self.branch.tip_id.clone(),
+        }
+    }
+
+    fn from_dto(dto: NamedDto) -> Result<Self> {
+        Ok(Self {
+            session_id: dto.session_id,
+            branch: Branch {
+                name: dto.name,
+                tip_id: dto.tip_id,
+            },
+        })
+    }
+}
+
+/// `ledger.entry_indexes`: the ancestor chain of one tip.
+#[derive(Clone, Serialize, Deserialize)]
 struct Index {
     session_id: String,
     tip: EntryId,
     chain: Vec<EntryId>,
 }
+
+stored_as_is!(Head, Index);
 
 pub(super) struct Tree {
     pub(super) head: Head,
@@ -80,7 +174,7 @@ impl Tree {
             parent_id,
             ordinal,
             kind,
-            ts: chrono::Utc::now().to_rfc3339(),
+            ts: now().to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
         };
         self.head.next_ordinal = (ordinal < i64::MAX as u64).then_some(ordinal + 1);
         self.head.tip = Some(id.clone());
@@ -256,10 +350,10 @@ impl Tree {
             .map(Precondition::Version)
             .unwrap_or(Precondition::Absent)
     }
-    fn check(&self) -> ReadCheck {
-        ReadCheck {
+    fn check(&self) -> Result<ReadCheck> {
+        Ok(ReadCheck {
             collection: HEADS.into(),
-            id: storage::key(&[&self.head.session_id]),
+            id: storage::key(&[&self.head.session_id])?,
             expected: self
                 .version
                 .map(tinystoragedrivers_core::ExpectedDocument::Version)
