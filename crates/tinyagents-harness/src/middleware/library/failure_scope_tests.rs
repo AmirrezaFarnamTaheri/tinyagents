@@ -28,10 +28,12 @@ impl FailureScopePolicy<()> for Policy {
         &self,
         _ctx: &RunContext<()>,
         _invocation: &ToolInvocationIdentity,
-        _call: &ToolCall,
+        call: &ToolCall,
         _scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment {
+        assert_eq!(call.name, "read_file");
+        assert_eq!(call.arguments, json!({"path": "a.txt"}));
         if result.is_error {
             FailureAssessment::Failure {
                 error: result.output(),

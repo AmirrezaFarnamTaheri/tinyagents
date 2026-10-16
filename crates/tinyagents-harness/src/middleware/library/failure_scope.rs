@@ -111,6 +111,58 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
     fn halt_copy(&self, _kind: FailureStopKind, summary: String, _error: &str) -> String {
         summary
     }
+
+    /// Called at the start of a model response's tool batch.
+    fn start_batch(&self, _ctx: &RunContext<Ctx>) {}
+
+    /// Whether this result is a host repeat-guard refusal rather than a tool
+    /// failure. The driver records it through `record_guard_refusal` and skips
+    /// failure accounting.
+    fn is_repeat_guard_refusal(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+        _result: &ToolResult,
+    ) -> bool {
+        false
+    }
+
+    /// Host adapter for shared repeat-stop state, called when a guard refusal
+    /// is observed.
+    fn record_guard_refusal(&self, _ctx: &RunContext<Ctx>) {}
+
+    /// Host adapter for shared repeat-stop state, called after useful progress.
+    fn record_progress(&self, _ctx: &RunContext<Ctx>, _call: &ToolCall, _scope: &FailureScope) {}
+
+    /// Host adapter for shared repeat-stop state. Returns whether this is a
+    /// repeated tool failure, for classified-stop relabeling.
+    fn record_failure(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+        _error: &str,
+    ) -> bool {
+        false
+    }
+
+    /// Host adapter for classified stops that need to interact with repeat
+    /// guard evidence in the same batch.
+    fn classified_halt(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _summary: &str,
+        _class: &str,
+        _call: &ToolCall,
+        _repeated: bool,
+        _error: &str,
+    ) {
+    }
+
+    /// Called when the run ends or errors so a host stop-latch adapter can
+    /// discard its run-specific evidence.
+    fn finish_run(&self, _ctx: &RunContext<Ctx>) {}
 }
 
 /// Which generic stop mechanism produced a halt for host-authored copy.
@@ -146,7 +198,7 @@ impl RunFailureState {
 
 /// Shared driver for no-progress and classified/recoverable tool failures.
 ///
-/// Construct one instance for each active run because the steering handle and
+/// Construct a new instance per run because the steering handle and
 /// halt-summary slot belong to that run. Run counters and call correlation are
 /// keyed by `RunContext::instance_id`; lifecycle hooks discard them at the end
 /// of each run.
@@ -237,7 +289,19 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         result: &ToolResult,
     ) {
         let tool = invocation.tool_name();
+        if self.policy.is_repeat_guard_refusal(ctx, &call, result) {
+            self.policy.record_guard_refusal(ctx);
+            return;
+        }
         let assessment = self.policy.assess(ctx, invocation, &call, &scope, result);
+        let repeated_failure = match &assessment {
+            FailureAssessment::Failure { error, .. }
+            | FailureAssessment::RecoverableFailure { error }
+            | FailureAssessment::ClassifiedFailure { error, .. } => {
+                self.policy.record_failure(ctx, &call, &scope, result, error)
+            }
+            _ => false,
+        };
         let run = self.run_state(ctx.instance_id());
         let step = run.step.fetch_add(1, Ordering::SeqCst) + 1;
         let argument_key = format!("{}\u{1f}{}", scope.argument_fingerprint, scope.scope);
@@ -248,6 +312,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 let _ = run.tracker.record(step, &attempt);
                 run.recoverable.reset_streak();
                 clear_recovered(&run.classified, tool, &scope.scope);
+                self.policy.record_progress(ctx, &call, &scope);
             }
             FailureAssessment::Halt { summary, cause } => {
                 run.tracker.reset();
@@ -293,6 +358,14 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                         let summary = self.policy.halt_copy(
                             FailureStopKind::Classified,
                             cause.summary.clone(),
+                            &error,
+                        );
+                        self.policy.classified_halt(
+                            ctx,
+                            &summary,
+                            &class,
+                            &call,
+                            repeated_failure,
                             &error,
                         );
                         self.halt(
@@ -359,6 +432,7 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         _state: &(),
         response: &mut ModelResponse,
     ) -> Result<()> {
+        self.policy.start_batch(ctx);
         if let Some((summary, cause)) = self.policy.terminal_model_halt(ctx, response) {
             let summary = self
                 .policy
@@ -413,6 +487,7 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         _state: &(),
         _run: &mut crate::middleware::AgentRun,
     ) -> Result<()> {
+        self.policy.finish_run(ctx);
         self.clear_run(ctx.instance_id());
         Ok(())
     }
@@ -422,6 +497,7 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         ctx: &mut RunContext<Ctx>,
         _error: &crate::error::TinyAgentsError,
     ) -> Result<()> {
+        self.policy.finish_run(ctx);
         self.clear_run(ctx.instance_id());
         Ok(())
     }
