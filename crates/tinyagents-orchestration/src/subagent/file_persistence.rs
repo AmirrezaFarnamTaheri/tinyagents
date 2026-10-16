@@ -13,7 +13,7 @@ use super::{
     SubagentTerminalPersistenceDisposition,
 };
 
-type Result<T> = std::result::Result<T, SubagentError>;
+type Result<T, E = SubagentError> = std::result::Result<T, E>;
 
 /// File-backed subagent persistence with per-key process locks and atomic
 /// record replacement.
@@ -69,7 +69,7 @@ impl FileSubagentPersistence {
     /// Returns live keys indexed under a task id. A task id may have multiple
     /// scoped lifecycles; callers must resolve ambiguity rather than guessing.
     pub fn keys_for_task(&self, task_id: &str) -> Result<Vec<SubagentTaskKey>, SubagentError> {
-        let _lock = self.lock_path(&self.index_lock_path(task_id))?;
+        let _lock = self.lock_path(&self.index_lock_path(task_id)?)?;
         self.read_index(task_id)
     }
 
@@ -80,7 +80,11 @@ impl FileSubagentPersistence {
     fn digest<T: Serialize>(value: &T) -> Result<String, SubagentError> {
         let bytes = serde_json::to_vec(value)
             .map_err(|error| SubagentError::Persistence(error.to_string()))?;
-        Ok(format!("sha256-{:x}", Sha256::digest(bytes)))
+        let digest = Sha256::digest(bytes);
+        Ok(format!(
+            "sha256-{}",
+            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+        ))
     }
 
     fn key_id(key: &SubagentTaskKey) -> Result<String, SubagentError> {

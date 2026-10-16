@@ -666,7 +666,7 @@ impl SubagentOutcome {
 mod tests;
 
 /// The durable input to [`crate::subagent::SubagentPersistence::save_pause`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedSubagentPause {
     /// Durable scoped lifecycle identity.
     pub key: SubagentTaskKey,
