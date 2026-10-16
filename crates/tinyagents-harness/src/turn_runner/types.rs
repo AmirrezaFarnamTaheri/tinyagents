@@ -212,14 +212,16 @@ pub enum TurnRunnerError {
     Cancelled,
 }
 
-struct ActiveTurn {
+#[derive(Clone)]
+struct ActiveTurn<P> {
     request_id: String,
     cancel: crate::CancellationToken,
+    generation: u64,
+    queue: Arc<RunQueue<TurnRequest<P>>>,
 }
 
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
-type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Arc<RunQueue<TurnRequest<P>>>>>;
 type ParallelQueueKey = (ScopeKey, String, String);
 type ParallelQueueMap<P> = Mutex<HashMap<ParallelQueueKey, Arc<RunQueue<TurnRequest<P>>>>>;
 
@@ -242,10 +244,10 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     summarizer: Arc<S>,
     config: TurnRunnerConfig,
     locks: ThreadLocks,
-    queues: QueueMap<P>,
     parallel_queues: ParallelQueueMap<P>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn>>,
+    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
+    next_generation: std::sync::atomic::AtomicU64,
 }
 
 impl<H, I, R, E, F, S, P> TurnRunner<H, I, R, E, F, S, P>
@@ -276,10 +278,10 @@ where
             summarizer,
             config,
             locks: Mutex::new(HashMap::new()),
-            queues: Mutex::new(HashMap::new()),
             parallel_queues: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             parallel_active: Mutex::new(HashMap::new()),
+            next_generation: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
