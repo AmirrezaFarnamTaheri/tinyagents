@@ -304,6 +304,57 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
 /// the blocking decision.
 pub type DenialRenderer = Arc<dyn Fn(&ToolCall, &str, &PolicyDecision) -> String + Send + Sync>;
 
+/// Host wording for each part of a structured policy denial.
+///
+/// The harness supplies stable section labels; hosts supply the actual
+/// product-specific copy, including any typed marker they need to preserve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredDenialParts {
+    /// What was blocked, including a marker when downstream policy needs it.
+    pub blocked: String,
+    /// Why the action was blocked.
+    pub why: String,
+    /// A permitted next step.
+    pub workaround: String,
+    /// Instruction to relay the result instead of silently stopping.
+    pub relay: String,
+}
+
+impl StructuredDenialParts {
+    /// Creates the four host-authored sections of a denial.
+    pub fn new(
+        blocked: impl Into<String>,
+        why: impl Into<String>,
+        workaround: impl Into<String>,
+        relay: impl Into<String>,
+    ) -> Self {
+        Self {
+            blocked: blocked.into(),
+            why: why.into(),
+            workaround: workaround.into(),
+            relay: relay.into(),
+        }
+    }
+
+    /// Renders the shared blocked/why/workaround/relay structure.
+    pub fn render(&self) -> String {
+        format!(
+            "Blocked: {}. Why: {}. Workaround: {}. {}",
+            self.blocked, self.why, self.workaround, self.relay
+        )
+    }
+}
+
+/// Creates a [`DenialRenderer`] with shared structure and host-owned wording.
+pub fn structured_denial_renderer(
+    wording: impl Fn(&ToolCall, &str, &PolicyDecision) -> StructuredDenialParts
+    + Send
+    + Sync
+    + 'static,
+) -> DenialRenderer {
+    Arc::new(move |call, policy, decision| wording(call, policy, decision).render())
+}
+
 /// Optional per-session ceiling consulted before the builder-level tool policy.
 /// The host supplies it from its own session snapshot; an `Allow` only means
 /// this ceiling permits the call, after which the primary policy still runs.
