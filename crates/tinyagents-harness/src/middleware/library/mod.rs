@@ -68,6 +68,7 @@ mod context;
 mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
+mod failure_scope;
 mod image_trim;
 mod loop_guards;
 mod memory_protocol;
@@ -84,7 +85,9 @@ mod resilience;
 mod response_shape;
 mod shell_turn_budget;
 mod tool_exposure_shadow;
+mod tool_outcome_capture;
 mod tool_policy;
+mod transcript_snapshot;
 mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
@@ -111,6 +114,9 @@ pub use credential_scrub::{
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
+pub use failure_scope::{
+    FailureAssessment, FailureScope, FailureScopeMiddleware, FailureScopePolicy, FailureStopKind,
+};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
@@ -131,7 +137,8 @@ pub use output_cap::{
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
-    PolicyDecision, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware, record_approved,
+    PolicyDecision, SessionToolCeiling, SessionToolListing, ToolCallPolicy, ToolPolicyGate,
+    ToolPolicyGateMiddleware, record_approved,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use repeat_progress::{
@@ -155,6 +162,11 @@ pub use shell_turn_budget::{
     install_time_notes,
 };
 pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
+pub use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
+pub use transcript_snapshot::{
+    TranscriptSnapshot, TranscriptSnapshotMiddleware, TranscriptSnapshotSink,
+    new_transcript_snapshot_sink, render_unanswered_steps,
+};
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use unmet_deliverable::{

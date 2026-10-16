@@ -304,6 +304,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
 /// the blocking decision.
 pub type DenialRenderer = Arc<dyn Fn(&ToolCall, &str, &PolicyDecision) -> String + Send + Sync>;
 
+/// Optional per-session ceiling consulted before the builder-level tool policy.
+/// The host supplies it from its own session snapshot; an `Allow` only means
+/// this ceiling permits the call, after which the primary policy still runs.
+pub type SessionToolCeiling<Ctx> = Arc<dyn ToolCallPolicy<Ctx>>;
+
+/// Host callback that filters candidate tool names for a session-scoped
+/// listing such as `use_skill`. It receives only names already available to the
+/// current run and must return a subset of those names.
+pub type SessionToolListing<Ctx> =
+    Arc<dyn Fn(&RunContext<Ctx>, &[String]) -> Vec<String> + Send + Sync>;
+
 fn default_denial(call: &ToolCall, policy: &str, decision: &PolicyDecision) -> String {
     let (action, reason) = match decision {
         PolicyDecision::RequireApproval { reason } => ("requires approval", reason.as_str()),
@@ -319,6 +330,8 @@ fn default_denial(call: &ToolCall, policy: &str, decision: &PolicyDecision) -> S
 /// Tool-wrap middleware that enforces a [`ToolCallPolicy`].
 pub struct ToolPolicyGateMiddleware<Ctx: Send + Sync = ()> {
     gate: ToolPolicyGate<Ctx>,
+    session_ceiling: Option<SessionToolCeiling<Ctx>>,
+    session_listing: Option<SessionToolListing<Ctx>>,
     resolver: Option<Arc<dyn ApprovalResolver<Ctx>>>,
     render: DenialRenderer,
     /// Serialises approval prompts across the overlapping calls of a
@@ -331,6 +344,8 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
     pub fn new(policy: Arc<dyn ToolCallPolicy<Ctx>>) -> Self {
         Self {
             gate: ToolPolicyGate::new(policy),
+            session_ceiling: None,
+            session_listing: None,
             resolver: None,
             render: Arc::new(default_denial),
             prompt_lock: tokio::sync::Mutex::new(()),
@@ -348,6 +363,35 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
     pub fn with_denial_renderer(mut self, render: DenialRenderer) -> Self {
         self.render = render;
         self
+    }
+
+    /// Adds a session permission ceiling that runs before the builder policy.
+    /// `Allow` delegates to the builder policy; a block or approval requirement
+    /// is handled by this middleware's normal denial/resolver path.
+    pub fn with_session_ceiling(mut self, policy: SessionToolCeiling<Ctx>) -> Self {
+        self.session_ceiling = Some(policy);
+        self
+    }
+
+    /// Adds the session-scoped name filter used by host-owned skill/listing
+    /// adapters. Names not present in `candidates` are discarded even if the
+    /// callback returns them.
+    pub fn with_session_listing(mut self, listing: SessionToolListing<Ctx>) -> Self {
+        self.session_listing = Some(listing);
+        self
+    }
+
+    /// Filters candidate names through the configured session listing policy.
+    /// Without a listing callback, all candidates are returned unchanged.
+    pub fn visible_tool_names(&self, ctx: &RunContext<Ctx>, candidates: &[String]) -> Vec<String> {
+        let Some(listing) = &self.session_listing else {
+            return candidates.to_vec();
+        };
+        let selected = listing(ctx, candidates);
+        selected
+            .into_iter()
+            .filter(|name| candidates.contains(name))
+            .collect()
     }
 }
 
@@ -368,7 +412,55 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
     ) -> Result<MiddlewareToolOutcome> {
         // Evaluate without the resolver first so only a call that actually
         // needs approval waits on the prompt lock; the rest stay concurrent.
-        let mut verdict = self.gate.evaluate(ctx, &call, false, None).await;
+        let mut policy_name = self.gate.policy_name().to_owned();
+        let session_decision = if let Some(session) = &self.session_ceiling {
+            session.check(ctx, &call).await
+        } else {
+            PolicyDecision::Allow
+        };
+        // A session denial is decisive and avoids consulting a wider builder
+        // policy. Otherwise both decisions are required before resolving any
+        // approval: neither policy may waive the other's denial.
+        let mut verdict = match session_decision {
+            decision @ PolicyDecision::Deny { .. } => {
+                policy_name = self
+                    .session_ceiling
+                    .as_ref()
+                    .map(|session| session.name().to_owned())
+                    .unwrap_or_else(|| self.gate.policy_name().to_owned());
+                GateVerdict::Blocked(decision)
+            }
+            session_decision => {
+                let builder_decision = self.gate.check(ctx, &call, false).await;
+                match (builder_decision, session_decision) {
+                    (decision @ PolicyDecision::Deny { .. }, _) => GateVerdict::Blocked(decision),
+                    (PolicyDecision::RequireApproval { reason }, PolicyDecision::Allow) => {
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (PolicyDecision::Allow, PolicyDecision::RequireApproval { reason }) => {
+                        policy_name = self
+                            .session_ceiling
+                            .as_ref()
+                            .map(|session| session.name().to_owned())
+                            .unwrap_or_else(|| self.gate.policy_name().to_owned());
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (
+                        PolicyDecision::RequireApproval { reason: builder },
+                        PolicyDecision::RequireApproval { reason: session },
+                    ) => GateVerdict::Blocked(PolicyDecision::RequireApproval {
+                        reason: format!("{builder}; {session}"),
+                    }),
+                    (PolicyDecision::Allow, PolicyDecision::Allow) => {
+                        GateVerdict::Proceed { ticket: None }
+                    }
+                    // A session denial was returned above.
+                    (_, PolicyDecision::Deny { .. }) => {
+                        unreachable!("session denial handled first")
+                    }
+                }
+            }
+        };
         if let (GateVerdict::Blocked(PolicyDecision::RequireApproval { .. }), Some(resolver)) =
             (&verdict, self.resolver.as_deref())
         {
@@ -390,7 +482,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
             }
             GateVerdict::Blocked(decision) => {
-                let text = (self.render)(&call, self.gate.policy_name(), &decision);
+                let text = (self.render)(&call, &policy_name, &decision);
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(text)))
             }
         }

@@ -72,6 +72,40 @@ impl ToolCallPolicy<Host> for NamePolicy {
     }
 }
 
+struct SessionCeiling;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionCeiling {
+    fn name(&self) -> &str {
+        "session_ceiling"
+    }
+
+    async fn check(&self, ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "ceiling_only" && ctx.data.channel != "web" {
+            PolicyDecision::deny("session ceiling")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
+struct SessionApproval;
+
+#[async_trait]
+impl ToolCallPolicy<Host> for SessionApproval {
+    fn name(&self) -> &str {
+        "session_approval"
+    }
+
+    async fn check(&self, _ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
+        if call.name == "rm" || call.name == "send" {
+            PolicyDecision::require_approval("session requires approval")
+        } else {
+            PolicyDecision::Allow
+        }
+    }
+}
+
 #[derive(Default)]
 struct Resolver {
     verdict: Mutex<Option<ApprovalResolution>>,
@@ -481,4 +515,106 @@ async fn policy_gate_serialises_concurrent_prompts_only() {
             .with_approval_resolver(resolver.clone()),
     );
     assert_approvals_serialise(middleware, resolver).await;
+}
+
+#[tokio::test]
+async fn session_ceiling_runs_before_builder_policy() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling)),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = RunContext::new(RunConfig::new("cli-session"), Host { channel: "cli" });
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("ceiling_only"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("session ceiling"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn session_approval_cannot_bypass_builder_denial() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("rm"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn both_policies_requiring_approval_prompt_once_then_run() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let resolver = Arc::new(Resolver {
+        verdict: Mutex::new(Some(ApprovalResolution::Allow {
+            ticket: Some("approved".into()),
+        })),
+        ..Resolver::default()
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionApproval))
+            .with_approval_resolver(resolver.clone()),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = ctx();
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("send"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(!result.is_error);
+    assert_eq!(*resolver.resolved.lock().unwrap(), 1);
+    assert_eq!(*runs.lock().unwrap(), 1);
+    assert_eq!(
+        resolver.recorded.lock().unwrap().as_slice(),
+        &[("approved".into(), false)]
+    );
+}
+
+#[test]
+fn session_skill_listing_cannot_introduce_unavailable_tools() {
+    let gate = ToolPolicyGateMiddleware::new(Arc::new(NamePolicy)).with_session_listing(Arc::new(
+        |_ctx: &RunContext<Host>, _candidates: &[String]| {
+            vec!["visible".to_owned(), "not-in-this-run".to_owned()]
+        },
+    ));
+    let names = vec!["visible".to_owned(), "hidden".to_owned()];
+    assert_eq!(gate.visible_tool_names(&ctx(), &names), vec!["visible"]);
 }

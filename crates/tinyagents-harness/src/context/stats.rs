@@ -10,6 +10,38 @@
 
 use tinyinference_llm::message::{ContentBlock, Message};
 
+/// A transcript's measured or estimated token use alongside an optional model
+/// context window. `Some(0)` is retained as reported data; callers can decide
+/// that a zero-sized window is unusable without collapsing it into unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContextWindowStatistics {
+    /// Tokens used by the transcript or provider-reported request.
+    pub used_tokens: u64,
+    /// Model context window, when known from provider usage or host catalog.
+    pub context_window_tokens: Option<u64>,
+}
+
+impl ContextWindowStatistics {
+    /// Fraction of the context window consumed, unavailable for an unknown or
+    /// zero-sized window.
+    pub fn utilization(&self) -> Option<f64> {
+        let window = self.context_window_tokens.filter(|window| *window > 0)?;
+        Some(self.used_tokens as f64 / window as f64)
+    }
+}
+
+/// Builds a host-neutral window projection while retaining unknown versus
+/// explicitly reported zero.
+pub fn context_window_statistics(
+    used_tokens: u64,
+    context_window_tokens: Option<u64>,
+) -> ContextWindowStatistics {
+    ContextWindowStatistics {
+        used_tokens,
+        context_window_tokens,
+    }
+}
+
 /// Counts useful for prompt budgeting and diagnostics without naming a host
 /// tokenizer, memory system, or product message type.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,3 +149,7 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
         })
         .sum()
 }
+
+#[cfg(test)]
+#[path = "stats_tests.rs"]
+mod tests;
