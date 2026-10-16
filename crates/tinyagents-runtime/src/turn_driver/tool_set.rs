@@ -47,6 +47,7 @@ pub struct ToolSetReport {
 /// Registers an admitted subset of shared tool sets onto a harness.
 pub struct ToolSetBuilder<State, C> {
     sets: Vec<SharedToolSet>,
+    synthesized_sets: Vec<SharedToolSet>,
     admission: ToolAdmission,
     deferred: HashSet<String>,
     dispatch: Option<DispatchSelector<State, C>>,
@@ -57,6 +58,7 @@ impl<State, C> Default for ToolSetBuilder<State, C> {
     fn default() -> Self {
         Self {
             sets: Vec::new(),
+            synthesized_sets: Vec::new(),
             admission: ToolAdmission::default(),
             deferred: HashSet::new(),
             dispatch: None,
@@ -86,6 +88,13 @@ where
     #[must_use]
     pub fn sets(mut self, sets: impl IntoIterator<Item = SharedToolSet>) -> Self {
         self.sets.extend(sets);
+        self
+    }
+
+    /// Adds a synthesized set that can be replaced at a later turn boundary.
+    #[must_use]
+    pub fn synthesized_set(mut self, set: SharedToolSet) -> Self {
+        self.synthesized_sets.push(set);
         self
     }
 
@@ -124,19 +133,34 @@ where
         let mut seen = HashSet::new();
         self.sets
             .iter()
+            .chain(self.synthesized_sets.iter())
             .flat_map(|set| set.iter())
             .map(|tool| tool.name().to_string())
             .filter(|name| seen.insert(name.clone()))
             .collect()
     }
 
-    /// Diffs this builder's de-duplicated tool names against a freshly
-    /// synthesized name set. Hosts can use this at each turn boundary to
-    /// withdraw revoked tools and decide whether wildcard policy admits new
-    /// names, while rebuilding the builder from the current executable sets.
-    pub fn surface_diff(&self, next: &HashSet<String>) -> ToolSurfaceDiff {
-        let previous = self.candidate_names().into_iter().collect();
-        tool_surface_diff(&previous, next)
+    /// Replaces the synthesized sets and returns their name diff. Static sets
+    /// remain untouched. Hosts call this at a turn boundary after collecting
+    /// the current live executor surface, then apply the diff to visibility
+    /// policy before registering the next turn.
+    pub fn refresh_synthesized_sets(
+        &mut self,
+        sets: impl IntoIterator<Item = SharedToolSet>,
+    ) -> ToolSurfaceDiff {
+        let previous = self.synthesized_names();
+        self.synthesized_sets = sets.into_iter().collect();
+        let next = self.synthesized_names();
+        tool_surface_diff(&previous, &next)
+    }
+
+    /// De-duplicated synthesized names.
+    pub fn synthesized_names(&self) -> HashSet<String> {
+        self.synthesized_sets
+            .iter()
+            .flat_map(|set| set.iter())
+            .map(|tool| tool.name().to_string())
+            .collect()
     }
 
     /// Forces the sub-agent admission rule on.
@@ -175,6 +199,7 @@ where
                 let hidden = self
                     .sets
                     .iter()
+                    .chain(self.synthesized_sets.iter())
                     .flat_map(|set| set.iter())
                     .find(|tool| tool.name() == name)
                     .is_some_and(|tool| tool.exposure() == ToolExposure::Hidden);
@@ -186,7 +211,13 @@ where
             .collect();
         let mut registered = Vec::new();
         let (_, plan) = register_admitted(harness, names, &self.admission, |name| {
-            let mut adapter = CanonicalSharedToolAdapter::for_name(self.sets.clone(), name)?
+            let sets = self
+                .sets
+                .iter()
+                .chain(self.synthesized_sets.iter())
+                .cloned()
+                .collect();
+            let mut adapter = CanonicalSharedToolAdapter::for_name(sets, name)?
                 .deferred(self.deferred.contains(name));
             if let Some(scope) = &self.scope {
                 adapter = adapter.with_exec_scope(scope.clone());
