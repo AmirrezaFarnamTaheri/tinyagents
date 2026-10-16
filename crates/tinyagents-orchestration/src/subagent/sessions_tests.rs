@@ -289,9 +289,7 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
 
 #[tokio::test]
 async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
-    use tinyagents_tasks::{
-        InMemoryTaskStore, OrchestrationTaskKind, OrchestrationTaskResult,
-    };
+    use tinyagents_tasks::{InMemoryTaskStore, OrchestrationTaskKind, OrchestrationTaskResult};
 
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let owner = tinyagents_harness::ids::RunId::new("owner");
@@ -416,10 +414,9 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
     let foreign_jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
         .with_fixed_action(crate::subagent::SubAgentJobAction::Await)
         .with_identifier_field("task_id")
-        .with_task_store(
-            task_store.clone(),
-            |_| tinyagents_harness::ids::RunId::new("foreign-owner"),
-        )
+        .with_task_store(task_store.clone(), |_| {
+            tinyagents_harness::ids::RunId::new("foreign-owner")
+        })
         .with_task_thread_scope(|_| Some("thread-a".into()));
     assert!(
         ToolDispatch::<(), ()>::execute(

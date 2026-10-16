@@ -17,8 +17,8 @@ use tinyinference_llm::message::Message;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
 use crate::subagent::{
-    AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
-    DetachedSubagentStatus, WaitError, WaitOutcome, list_subagent_records, record_agent_id,
+    AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, IncompleteKind,
+    SubagentSessionStore, WaitError, WaitOutcome, list_subagent_records, record_agent_id,
     record_subagent_session_id, record_to_wait_outcome, subagent_record_for_task,
     task_id_for_session_in_records,
 };
@@ -1309,8 +1309,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .filter(|record| {
                             record.spec.parent_run_id.as_ref() == Some(&parent_run_id)
                                 && thread_id.as_ref().is_none_or(|thread| {
-                                    record.spec.thread_id.as_ref().map(ToString::to_string)
-                                        == *thread
+                                    record
+                                        .spec
+                                        .thread_id
+                                        .as_ref()
+                                        .map(ToString::to_string)
+                                        .as_ref()
+                                        == thread.as_ref()
                                 })
                         })
                         .collect::<Vec<_>>();
@@ -1322,20 +1327,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         Ok(record)
                             if record.spec.parent_run_id.as_ref() == Some(&parent_run_id)
                                 && thread_id.as_ref().is_none_or(|thread| {
-                                    record.spec.thread_id.as_ref().map(ToString::to_string)
-                                        == *thread
+                                    record
+                                        .spec
+                                        .thread_id
+                                        .as_ref()
+                                        .map(ToString::to_string)
+                                        .as_ref()
+                                        == thread.as_ref()
                                 }) =>
                         {
                             Some(record.spec.task_id.as_str().to_owned())
                         }
-                        Err(WaitError::Unknown) => {
-                            task_id_for_session_in_records(
-                                records.clone(),
-                                id,
-                                parent_run_id.as_str(),
-                            )
-                            .ok()
-                        }
+                        Err(WaitError::Unknown) => task_id_for_session_in_records(
+                            records.clone(),
+                            id,
+                            parent_run_id.as_str(),
+                        )
+                        .ok(),
                         Err(_) => None,
                         Ok(_) => None,
                     };
@@ -1434,15 +1442,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     parent_run_id: Some(parent_run_id(parent.instance_id())),
                     ..OrchestrationTaskFilter::default()
                 };
-                rows.extend(tasks.list(filter).into_iter().filter(|task| {
-                    thread_id.as_ref().is_none_or(|thread| {
-                        task.spec.thread_id.as_ref().map(ToString::to_string) == *thread
-                    })
-                }).map(|task| {
-                    let mut value = serde_json::to_value(task).unwrap_or(Value::Null);
-                    value["kind"] = Value::String("task".into());
-                    value
-                }));
+                rows.extend(
+                    tasks
+                        .list(filter)
+                        .into_iter()
+                        .filter(|task| {
+                            thread_id.as_ref().is_none_or(|thread| {
+                                task.spec
+                                    .thread_id
+                                    .as_ref()
+                                    .map(ToString::to_string)
+                                    .as_ref()
+                                    == thread.as_ref()
+                            })
+                        })
+                        .map(|task| {
+                            let mut value = serde_json::to_value(task).unwrap_or(Value::Null);
+                            value["kind"] = Value::String("task".into());
+                            value
+                        }),
+                );
             }
             Ok(ToolResult::json(Value::Array(rows)))
         }
