@@ -680,14 +680,15 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     let terminal_wait = SubAgentJobsTool::new(jobs.clone())
         .with_fixed_action(SubAgentJobAction::Await)
         .with_identifier_field("task_id")
-        .with_required_identifier();
+        .with_required_identifier()
+        .with_owner_scope(owner_scope.clone());
     let terminal = ToolDispatch::<(), ()>::execute(
         &terminal_wait,
         &(),
         CallId::new("collect-result"),
         json!({"task_id":task_id}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();
