@@ -73,7 +73,7 @@ and wraps it:
 ```rust,ignore
 let scoped = backend.for_scope(&Scope::new(agent_id)?)?;
 let kv = DriverStore::new(scoped.documents().clone());
-let journal = DriverAppendStore::with_prefix(scoped.streams().clone(), "journal/");
+let journal = DriverAppendStore::journal(scoped.streams().clone()); // harness.journal/<run id>
 ```
 
 - `DriverStore` is a view of the shared `tsd.kv` primitive: each namespace is a
@@ -84,9 +84,13 @@ let journal = DriverAppendStore::with_prefix(scoped.streams().clone(), "journal/
   the `harness` owner are reserved for `DriverNamespacedStore` and
   `DriverResponseCache`. A v1 `harness_store` moves over with
   `storage::import_legacy_kv`.
-- `DriverAppendStore` maps each stream to a driver stream (optionally
-  prefixed). Driver offsets are already dense and zero-based, matching the
-  `AppendStore` contract.
+- `DriverAppendStore` maps each stream to the driver stream `<prefix><stream>`
+  (no prefix by default; `journal` uses `harness.journal/`, the run journal's
+  stream family). Pick prefixes that end in a separator so two stores never
+  address one stream. Driver offsets are already dense and zero-based, matching
+  the `AppendStore` contract. `AppendStore::seal` closes a finished stream;
+  reads, offsets and `len` are unchanged, later appends are refused, and the
+  driver stores the entries compactly.
 - Driver `InvalidInput` errors surface as `TinyAgentsError::Validation`. Every
   other driver error surfaces as `TinyAgentsError::Storage`.
 
