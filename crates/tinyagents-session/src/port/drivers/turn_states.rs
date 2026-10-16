@@ -242,7 +242,7 @@ impl Inner {
         &self,
         thread_id: &str,
         request_id: &str,
-        change: impl Fn(&TurnState) -> Option<TurnState> + Send,
+        change: impl Fn(&TurnState) -> Option<TurnState> + Send + Sync,
     ) -> Result<Option<TurnState>, StorageError> {
         self.declared().await?;
         let mut applied = None;

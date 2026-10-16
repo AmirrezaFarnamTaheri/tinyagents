@@ -211,7 +211,7 @@ impl DriverTranscriptLocator {
                 return Ok(None);
             }
         };
-        let handle = self.reserved_handle(&stem, meta.clone(), Some(reservation));
+        let handle = self.reserved_handle(&stem, meta.clone(), Some(reservation.clone()));
         let written = handle.append_turn(TranscriptTurn {
             prev: &[],
             next: &messages,
