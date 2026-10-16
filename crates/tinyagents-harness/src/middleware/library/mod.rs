@@ -160,7 +160,7 @@ pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware}
 pub use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
 pub use transcript_snapshot::{
     TranscriptSnapshot, TranscriptSnapshotMiddleware, TranscriptSnapshotSink,
-    render_unanswered_steps,
+    new_transcript_snapshot_sink, render_unanswered_steps,
 };
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};

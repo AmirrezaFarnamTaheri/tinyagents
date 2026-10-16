@@ -121,10 +121,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Transcript
                 .push(Message::tool(outcome.call_id.clone(), content));
             snapshot.tool_outcomes.push(outcome.clone());
         }
-        if let Some(sink) = &self.outcome_sink {
-            if let Ok(mut sink) = sink.lock() {
-                sink.push(outcome);
-            }
+        if let Some(sink) = &self.outcome_sink
+            && let Ok(mut sink) = sink.lock()
+        {
+            sink.push(outcome);
         }
         Ok(())
     }
