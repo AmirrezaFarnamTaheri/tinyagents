@@ -1,18 +1,20 @@
 //! A [`SessionStoreProvider`] over `tinystoragedrivers` ports.
 //!
 //! A host opens one storage backend (SQLite on a desktop, MongoDB in the
-//! cloud, memory in tests) and hands it to [`DriverSessionStores`]. Each
-//! agent's stores then live in that backend under the agent's own
-//! [`Scope`], so one shared database serves every agent and the driver, not
-//! this crate, keeps them apart: a handle bound to one scope cannot name
-//! another scope's records.
+//! cloud, memory in tests) and hands it, with the tenant [`Scope`] it serves,
+//! to [`DriverSessionStores`]. Each agent's stores then live in that backend
+//! under the agent's own principal scope (`tenant.agent(id)`), so one shared
+//! database serves every tenant and agent and the driver, not this crate,
+//! keeps them apart: a handle bound to one scope cannot name another scope's
+//! records.
 //!
 //! # What goes where
 //!
 //! | Store | Backend shape |
 //! | --- | --- |
-//! | transcripts | `session_transcripts` (one index document per stem) and `session_transcript_entries` (an append-only log per stem) |
-//! | turn states | `session_turn_states`, one document per turn |
+//! | transcripts | `session.transcripts` (one index document per stem) and `session.transcript_entries` (an append-only log per stem) |
+//! | generation reservations | `tsd.leases`, owner `session` |
+//! | turn states | `session.turn_states`, one document per turn |
 //! | key-value | `tsd.kv` owner `session`, through the harness [`DriverStore`] |
 //! | journal | streams `16:session_journal/<name>`, through the harness [`DriverAppendStore`] |
 //!
@@ -25,10 +27,12 @@
 //!
 //! # Scopes
 //!
-//! An agent id that is a valid [`Scope`] is used as is. Any other id (empty,
-//! over-long, holding whitespace) and any id that itself starts with
-//! `sha256:` maps to `sha256:<hex>` of the id, so every agent gets a scope of
-//! its own, no raw id can name a hashed scope, and the mapping never changes.
+//! The provider is constructed with a **tenant** [`Scope`] (`local`, or
+//! `u:<id>`; see [`Scope::tenant`]) and derives each agent's scope itself with
+//! [`Scope::agent`]: `local/agent:<id>`. It never uses a raw agent id as a
+//! scope. An id that is too long or holds characters outside the scope
+//! grammar is hashed by [`Scope::agent`] (the segment only, so the agent
+//! stays under its tenant and its fence); an empty id has no scope.
 
 mod refused;
 mod transcripts;
@@ -37,7 +41,6 @@ mod turn_states;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use sha2::{Digest, Sha256};
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, Scope, ScopedStorage, StorageBackend, StorageError,
@@ -48,20 +51,18 @@ use super::{AgentStores, SessionStoreProvider};
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
 
-/// Prefix of the scopes agent ids are hashed into. Reserved: an agent id
-/// starting with it is hashed too, so it cannot name another agent's scope.
-const HASHED_SCOPE: &str = "sha256:";
-
-/// Collection holding each agent's key-value records.
-/// The `tsd.kv` owner of the session key-value store.
+/// The `tsd.kv` owner of the session key-value store, and the `tsd.leases`
+/// owner of its generation reservations.
 const KV_OWNER: &str = "session";
 /// Prefix of each agent's journal streams.
 const JOURNAL_PREFIX: &str = "session_journal/";
 
 /// A [`SessionStoreProvider`] keeping every agent's stores in one
-/// `tinystoragedrivers` backend, each agent in its own [`Scope`].
+/// `tinystoragedrivers` backend, each agent in its own principal [`Scope`] of
+/// one tenant.
 pub struct DriverSessionStores {
     backend: Arc<dyn StorageBackend>,
+    tenant: Scope,
     bridge: Blocking,
     agents: Mutex<HashMap<String, AgentStores>>,
     recover_on_open: bool,
@@ -77,6 +78,7 @@ impl std::fmt::Debug for DriverSessionStores {
         let agents = self.agents.lock().unwrap_or_else(PoisonError::into_inner);
         f.debug_struct("DriverSessionStores")
             .field("driver", &self.backend.driver())
+            .field("tenant", &self.tenant.as_str())
             .field("agents", &agents.len())
             .field("recover_on_open", &self.recover_on_open)
             .finish_non_exhaustive()
@@ -84,19 +86,31 @@ impl std::fmt::Debug for DriverSessionStores {
 }
 
 impl DriverSessionStores {
-    /// A provider over `backend`, with its own [`Blocking`] bridge.
+    /// A provider over `backend` for `tenant`, with its own [`Blocking`] bridge.
+    ///
+    /// `tenant` is the tenant scope every agent of this provider lives under
+    /// ([`Scope::local`] for the desktop operator, [`Scope::tenant`] for a
+    /// user); an agent's stores are bound to `tenant.agent(id)`. The v1
+    /// constructor took no tenant and used the raw agent id as the scope.
     ///
     /// # Errors
     ///
-    /// When the bridge's runtime thread cannot start.
-    pub fn new(backend: Arc<dyn StorageBackend>) -> Result<Self, StorageError> {
-        Ok(Self::with_bridge(backend, Blocking::new()?))
+    /// `InvalidInput` when `tenant` is not a tenant scope without a principal
+    /// (`cluster`, or one that already names an agent or module), or when the
+    /// bridge's runtime thread cannot start.
+    pub fn new(backend: Arc<dyn StorageBackend>, tenant: Scope) -> Result<Self, StorageError> {
+        check_tenant(&tenant)?;
+        Ok(Self::with_bridge(backend, tenant, Blocking::new()?))
     }
 
-    /// A provider over `backend` that runs its synchronous seams on `bridge`,
-    /// so several providers (or other sync adapters) can share one thread.
-    pub fn with_bridge(backend: Arc<dyn StorageBackend>, bridge: Blocking) -> Self {
-        Self::with_bridge_and_schema_admission(backend, bridge, SchemaAdmission::Declare)
+    /// A provider over `backend` for `tenant` that runs its synchronous seams
+    /// on `bridge`, so several providers (or other sync adapters) can share
+    /// one thread.
+    ///
+    /// Unlike [`Self::new`] this does not check `tenant`: an unusable one makes
+    /// every [`SessionStoreProvider::for_agent`] answer with refusing stores.
+    pub fn with_bridge(backend: Arc<dyn StorageBackend>, tenant: Scope, bridge: Blocking) -> Self {
+        Self::with_bridge_and_schema_admission(backend, tenant, bridge, SchemaAdmission::Declare)
     }
 
     /// Create a provider with an immutable document schema policy.
@@ -105,13 +119,17 @@ impl DriverSessionStores {
     /// policy does not grant a lease or prevent native internal lazy initialization.
     ///
     /// # Errors
-    /// Failure to start the blocking bridge.
+    /// `InvalidInput` for an unusable `tenant` (see [`Self::new`]), or failure
+    /// to start the blocking bridge.
     pub fn new_with_schema_admission(
         backend: Arc<dyn StorageBackend>,
+        tenant: Scope,
         schema_admission: SchemaAdmission,
     ) -> Result<Self, StorageError> {
+        check_tenant(&tenant)?;
         Ok(Self::with_bridge_and_schema_admission(
             backend,
+            tenant,
             Blocking::new()?,
             schema_admission,
         ))
@@ -120,11 +138,13 @@ impl DriverSessionStores {
     /// Share a bridge while keeping schema policy, caches and recovery independent.
     pub fn with_bridge_and_schema_admission(
         backend: Arc<dyn StorageBackend>,
+        tenant: Scope,
         bridge: Blocking,
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
             backend,
+            tenant,
             bridge,
             agents: Mutex::new(HashMap::new()),
             recover_on_open: false,
@@ -133,6 +153,11 @@ impl DriverSessionStores {
             recovered: Mutex::new(HashSet::new()),
             id: uuid::Uuid::new_v4(),
         }
+    }
+
+    /// The tenant scope every agent of this provider lives under.
+    pub fn tenant(&self) -> &Scope {
+        &self.tenant
     }
 
     /// Marks an agent's in-flight turns interrupted the first time this
@@ -152,14 +177,15 @@ impl DriverSessionStores {
     ///
     /// Prepare optional ledger declarations separately with
     /// [`crate::run_ledger::DriverRunLedger::prepare_schema`].
-    /// Includes transcript entries and index, turn states, and key-value
-    /// records. The journal uses streams and has no document declaration.
+    /// Includes transcript entries and index, turn states, key-value
+    /// records and the lease collection generation reservations use. The journal uses streams and has no document declaration.
     /// These are also used by each store's lazy initialization. Returning
     /// declarations does not initialize or authorize an actor.
     pub fn collection_specs() -> Vec<CollectionSpec> {
         let mut specs = transcripts::collection_specs().to_vec();
         specs.push(turn_states::collection_spec());
         specs.push(DriverStore::collection_spec());
+        specs.push(transcripts::leases_spec());
         specs
     }
 
@@ -194,7 +220,7 @@ impl DriverSessionStores {
         &self,
         agent_id: &str,
     ) -> Result<crate::run_ledger::DriverRunLedger, StorageError> {
-        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
         Ok(match self.schema_admission {
             SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
             SchemaAdmission::ValidateOnly => {
@@ -211,7 +237,7 @@ impl DriverSessionStores {
         &self,
         agent_id: &str,
     ) -> Result<(Arc<dyn DocumentStore>, bool), StorageError> {
-        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
         Ok((
             Arc::clone(scoped.documents()),
             self.schema_admission == SchemaAdmission::Declare,
@@ -224,16 +250,13 @@ impl DriverSessionStores {
         &self.bridge
     }
 
-    /// The scope agent `agent_id` is stored under.
-    pub fn scope_for(agent_id: &str) -> Scope {
-        if !agent_id.starts_with(HASHED_SCOPE)
-            && let Ok(scope) = Scope::new(agent_id)
-        {
-            return scope;
-        }
-        let digest = Sha256::digest(agent_id.as_bytes());
-        Scope::new(format!("{HASHED_SCOPE}{}", hex::encode(digest)))
-            .expect("a sha256 hex scope is always valid")
+    /// The scope agent `agent_id` is stored under: `tenant.agent(agent_id)`.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidInput` for an empty id, or an unusable tenant.
+    pub fn scope_for(&self, agent_id: &str) -> Result<Scope, StorageError> {
+        self.tenant.agent(agent_id)
     }
 
     /// The stores of `agent_id`, or the error that kept the backend from
@@ -251,7 +274,7 @@ impl DriverSessionStores {
         {
             return Ok(stores.clone());
         }
-        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
         if self.schema_admission == SchemaAdmission::ValidateOnly {
             let documents = Arc::clone(scoped.documents());
             self.bridge.run(async move {
@@ -358,6 +381,11 @@ impl DriverSessionStores {
     }
 }
 
+/// A provider's tenant must be a tenant scope without a principal.
+fn check_tenant(tenant: &Scope) -> Result<(), StorageError> {
+    tenant.agent("probe").map(drop)
+}
+
 impl SessionStoreProvider for DriverSessionStores {
     fn run_ledger_for_agent(
         &self,
@@ -367,7 +395,7 @@ impl SessionStoreProvider for DriverSessionStores {
         if let Some(ledger) = ledgers.get(agent_id) {
             return Ok(Some(ledger.clone()));
         }
-        let scoped = self.backend.for_scope(&Self::scope_for(agent_id))?;
+        let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
         let ledger: Arc<dyn crate::run_ledger::RunLedgerStore> =
             Arc::new(match self.schema_admission {
                 SchemaAdmission::Declare => crate::run_ledger::DriverRunLedger::new(scoped),
@@ -396,8 +424,13 @@ impl SessionStoreProvider for DriverSessionStores {
         backend: Arc<dyn StorageBackend>,
         admission: SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        let actor = Self::with_bridge_and_schema_admission(backend, self.bridge.clone(), admission)
-            .recover_on_open(self.recover_on_open);
+        let actor = Self::with_bridge_and_schema_admission(
+            backend,
+            self.tenant.clone(),
+            self.bridge.clone(),
+            admission,
+        )
+        .recover_on_open(self.recover_on_open);
         Ok(Some(Arc::new(actor)))
     }
 
