@@ -1540,7 +1540,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     ));
 
     let missing = driver
-        .run(sibling_request("no-target"), CancellationToken::new())
+        .run(sibling_request("no-target").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1549,7 +1549,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     ));
     let wrong = driver
         .run(
-            sibling_request("wrong").with_target("coder"),
+            sibling_request("wrong").await.with_target("coder"),
             CancellationToken::new(),
         )
         .await
@@ -1562,7 +1562,7 @@ async fn driver_enforces_the_target_allowlist_and_fails_closed_without_a_target(
     );
     driver
         .run(
-            sibling_request("right").with_target("researcher"),
+            sibling_request("right").await.with_target("researcher"),
             CancellationToken::new(),
         )
         .await
@@ -1586,7 +1586,7 @@ async fn driver_refunds_the_reservation_when_planning_fails_before_launch() {
     // the next attempt is admitted (and fails the same way), not rejected.
     for task in ["a", "b"] {
         let error = driver
-            .run(sibling_request(task), CancellationToken::new())
+            .run(sibling_request(task).await, CancellationToken::new())
             .await
             .unwrap_err();
         assert!(matches!(error, SubagentError::Planning(_)), "{error}");
@@ -1612,7 +1612,7 @@ async fn driver_releases_the_live_slot_when_execution_fails() {
     ));
     for task in ["a", "b"] {
         let error = driver
-            .run(sibling_request(task), CancellationToken::new())
+            .run(sibling_request(task).await, CancellationToken::new())
             .await
             .unwrap_err();
         assert_eq!(error, SubagentError::Execution("executor failed".into()));
@@ -1633,11 +1633,11 @@ async fn driver_total_budget_is_spent_by_completed_children() {
     ));
 
     driver
-        .run(sibling_request("one"), CancellationToken::new())
+        .run(sibling_request("one").await, CancellationToken::new())
         .await
         .unwrap();
     let over = driver
-        .run(sibling_request("two"), CancellationToken::new())
+        .run(sibling_request("two").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(
@@ -1656,7 +1656,7 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
     ));
 
     driver
-        .run(sibling_request("original"), CancellationToken::new())
+        .run(sibling_request("original").await, CancellationToken::new())
         .await
         .unwrap();
     assert_eq!(
@@ -1666,7 +1666,7 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
 
     // The budget is spent, so a fresh spawn is refused...
     let fresh = driver
-        .run(sibling_request("fresh"), CancellationToken::new())
+        .run(sibling_request("fresh").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert!(matches!(
