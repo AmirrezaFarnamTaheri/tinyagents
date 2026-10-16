@@ -47,10 +47,11 @@ format contributes a header naming it plus a content hash.
   `escape_attr`).
 - [`request`] — [`MediaRequestModel`], a `ChatModel` decorator that prepares a
   disposable request, checks counts before reads, preserves per-call scope,
-  dispatches native media only when both model and transport support it, and
-  renders text/archive/image fallbacks. The host supplies
-  [`MediaSourceResolver`] for authorized source access and may supply
-  [`MediaImageReadout`] for its chosen non-vision image description path.
+  applies a bounded historical-media budget, dispatches native media only when
+  both model and transport support it, and renders text/archive/image
+  fallbacks. The host supplies [`MediaSourceResolver`] for authorized source
+  access, [`MediaHistoryFallback`] for its safe history behavior, and may
+  supply [`MediaImageReadout`] plus selected-model [`ModelProfile`] facts.
 - [`error`] — [`MultimodalError`] and its [`Result`] alias; every variant
   carries the offending `input` verbatim so a multi-attachment turn's failure
   is attributable.
@@ -72,7 +73,7 @@ format contributes a header naming it plus a content hash.
 | `archive/zip_admission.rs` | Allocation-free ZIP preflight and admitted reader. |
 | `png.rs` | Optional lossless PNG optimization. |
 | `payload.rs`  | `FilePayload`, message composition, truncation, hashing.           |
-| `request.rs` | `MediaRequestModel` and host resolver/readout seams.                |
+| `request.rs` | `MediaRequestModel` and host scope/resolver/fallback seams.         |
 | `error.rs`    | `MultimodalError`, `Result`.                                       |
 | `mod_tests.rs`, `resolve_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, archive, PNG and stash behavior. |
 
@@ -87,8 +88,8 @@ format contributes a header naming it plus a content hash.
 - What stays with the host, deliberately: the `TextExtractor` implementation
   (which parser, if any, and its timeout), the attachment stash (where bytes
   live between ingress and dispatch), image-readout model choice, source
-  authorization, and access scope. `MediaRequestModel` counts typed message
-  markers but never decides which local paths may be read.
+  authorization, access scope, selected-model profile, and safe historical
+  placeholders. `MediaRequestModel` never decides which local paths may be read.
 - Opt-in remote image and file URLs pass TinyTools' URL and DNS guard. The
   resolver pins the vetted addresses in its own direct HTTP client and refuses
   redirects. It uses 30-second request and 10-second connection timeouts.

@@ -1,3 +1,4 @@
+use super::super::NoTextExtractor;
 use super::*;
 use std::{
     collections::HashMap,
@@ -354,13 +355,16 @@ async fn resolution_error_and_cancellation_leave_the_canonical_request_unchanged
         MediaRequestConfig::default(),
         |state: &String, _request| Ok(state.clone()),
         pending.clone(),
-        Arc::default(),
+        Arc::new(NoTextExtractor),
     );
     let canonical_after_cancel = serde_json::to_value(&original).unwrap();
     let call = {
         let wrapped = canceled_wrapper;
         let request = original.clone();
-        tokio::spawn(async move { wrapped.invoke(&"tenant-a".into(), request).await })
+        tokio::spawn(async move {
+            let tenant = "tenant-a".to_string();
+            wrapped.invoke(&tenant, request).await
+        })
     };
     pending.entered.notified().await;
     call.abort();
@@ -428,7 +432,7 @@ async fn request_metadata_scope_is_consumed_per_concurrent_call() {
                 .ok_or_else(|| "missing trusted test scope".to_string())
         },
         resolver.clone(),
-        Arc::default(),
+        Arc::new(NoTextExtractor),
     );
     let operator = "same-operator".to_string();
     let mut first = request("[IMAGE:image]");
