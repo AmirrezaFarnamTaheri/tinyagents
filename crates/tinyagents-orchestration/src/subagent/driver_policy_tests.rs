@@ -491,3 +491,50 @@ async fn an_over_budget_run_still_gets_the_result_policy() {
     ));
     assert!(result.outcome.output.chars().count() <= 80);
 }
+
+#[tokio::test]
+async fn cloned_in_flight_registry_coalesces_runs_across_driver_instances() {
+    let in_flight = SubagentInFlight::new();
+    let leader_executor = Executor::hanging();
+    let follower_executor = Executor::new(ok_with("follower must not execute"));
+    let leader = driver(plain(), leader_executor.clone())
+        .with_shared_in_flight(in_flight.clone());
+    let follower = driver(plain(), follower_executor.clone())
+        .with_shared_in_flight(in_flight.clone());
+    let leader_request = request("shared-task");
+    let key = leader_request.task_key().clone();
+    let leader_token = CancellationToken::new();
+    let leader_token_for_task = leader_token.clone();
+    let leader_task = tokio::spawn(async move {
+        leader
+            .run(leader_request, leader_token_for_task)
+            .await
+    });
+
+    for _ in 0..10_000 {
+        if leader_executor.attempts.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(leader_executor.attempts.load(Ordering::SeqCst), 1);
+    let entry = in_flight.get(&key).expect("leader reserved the task key");
+    let follower_task = tokio::spawn(async move {
+        follower
+            .run(request("shared-task"), CancellationToken::new())
+            .await
+    });
+    for _ in 0..10_000 {
+        if entry.waiter_count() == 1 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(entry.waiter_count(), 1, "second driver joined the leader");
+
+    leader_task.abort();
+    let _ = leader_task.await;
+    let follower_error = follower_task.await.unwrap().unwrap_err();
+    assert_eq!(follower_executor.attempts.load(Ordering::SeqCst), 0);
+    assert_eq!(follower_error, SubagentError::Cancelled);
+}

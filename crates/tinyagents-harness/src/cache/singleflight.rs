@@ -26,6 +26,7 @@
 //! its own retry budget — and an error is not a value worth caching.
 
 use std::{collections::HashMap, future::Future};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::Result;
@@ -65,6 +66,15 @@ impl<V, E> Clone for SharedFlightEntry<V, E> {
 struct SharedFlightState<V, E> {
     result: Mutex<Option<std::result::Result<V, E>>>,
     notify: tokio::sync::Notify,
+    waiters: AtomicUsize,
+}
+
+struct Waiter<'a>(&'a AtomicUsize);
+
+impl Drop for Waiter<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl<K, V, E> SharedFlightMap<K, V, E>
@@ -86,12 +96,22 @@ where
                     state: Arc::new(SharedFlightState {
                         result: Mutex::new(None),
                         notify: tokio::sync::Notify::new(),
+                        waiters: AtomicUsize::new(0),
                     }),
                 };
                 entries.insert(key, entry.clone());
                 (entry, true)
             }
         }
+    }
+
+    /// Looks up a current entry for coordination and diagnostics.
+    pub fn get(&self, key: &K) -> Option<SharedFlightEntry<V, E>> {
+        self.entries
+            .lock()
+            .expect("shared-flight map poisoned")
+            .get(key)
+            .cloned()
     }
 
     /// Removes `key` only if it still points at `entry`.
@@ -107,8 +127,15 @@ where
 }
 
 impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
+    /// Number of callers currently waiting for this leader's result.
+    pub fn waiter_count(&self) -> usize {
+        self.state.waiters.load(Ordering::Relaxed)
+    }
+
     /// Waits for the leader to publish its complete result.
     pub async fn wait(&self) -> std::result::Result<V, E> {
+        self.state.waiters.fetch_add(1, Ordering::Relaxed);
+        let _waiter = Waiter(&self.state.waiters);
         loop {
             let notified = self.state.notify.notified();
             tokio::pin!(notified);
@@ -131,6 +158,8 @@ impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
         &self,
         cancellation: &crate::CancellationToken,
     ) -> Option<std::result::Result<V, E>> {
+        self.state.waiters.fetch_add(1, Ordering::Relaxed);
+        let _waiter = Waiter(&self.state.waiters);
         loop {
             let notified = self.state.notify.notified();
             tokio::pin!(notified);
