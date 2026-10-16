@@ -23,7 +23,7 @@ use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, Sort, StorageErro
 
 use super::{
     DriverTranscriptHistory, DriverTranscriptLocator, ENTRIES, Entry, HistoryInner, INDEX,
-    discovered_seed, normalized, run_on,
+    discovered_seed, normalized, oldest_first, run_on,
 };
 use crate::transcript::{
     CompactionMarker, DisplayRecord, DisplaySessionTranscript, SessionRef, ThreadTranscript,
