@@ -24,12 +24,12 @@ pub type PackDispatchSelector<State, Ctx> =
 
 /// A `use_skill` registration that can route packed calls through the live
 /// typed parent while retaining the call-scoped target used for admission.
-pub struct UseSkillDispatch<State: Send + Sync, Ctx: Send + Sync> {
+pub struct UseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> {
     tool: Arc<dyn Tool>,
     selector: Arc<PackDispatchSelector<State, Ctx>>,
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> UseSkillDispatch<State, Ctx> {
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> UseSkillDispatch<State, Ctx> {
     /// Creates a dispatch around the registered `use_skill` declaration.
     pub fn new(
         tool: Arc<dyn Tool>,
@@ -40,7 +40,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> UseSkillDispatch<State, Ctx> {
 }
 
 #[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx>
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<State, Ctx>
     for UseSkillDispatch<State, Ctx>
 {
     fn tool(&self) -> Arc<dyn Tool> {
@@ -82,13 +82,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx>
     }
 }
 
-struct BoundUseSkillDispatch<State: Send + Sync, Ctx: Send + Sync> {
+struct BoundUseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> {
     pinned: Arc<super::PinnedPackCall>,
     selected: Option<Arc<dyn ToolDispatch<State, Ctx>>>,
 }
 
 #[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx>
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<State, Ctx>
     for BoundUseSkillDispatch<State, Ctx>
 {
     fn tool(&self) -> Arc<dyn Tool> {
