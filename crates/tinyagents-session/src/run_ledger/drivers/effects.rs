@@ -1,14 +1,19 @@
 //! Mechanical document encoding for the classic per-call tool-effect ledger.
 use super::super::tool_effects::ToolEffectStatus;
 use super::*;
-use storage::EFFECTS;
+use storage::{EFFECTS, key};
+
+/// The document id of a call's effect row.
+fn effect_id(run_id: &str, call_id: &str) -> std::result::Result<String, StorageError> {
+    key(&[run_id, call_id])
+}
 
 impl DriverRunLedger {
     pub(super) async fn effect_start(&self, start: ToolEffectStart) -> Result<ToolEffectRow> {
         let now = now();
         let id = effect_id(&start.run_id, &start.call_id)?;
         Ok(self
-            .merge(EFFECTS, &id, |_: Option<ToolEffectRow>| ToolEffectRow {
+            .merge_at(EFFECTS, &id, |_: Option<ToolEffectRow>| ToolEffectRow {
                 run_id: start.run_id.clone(),
                 call_id: start.call_id.clone(),
                 tool: start.tool.clone(),
@@ -28,7 +33,7 @@ impl DriverRunLedger {
         let now = now();
         let id = effect_id(&settle.run_id, &settle.call_id)?;
         Ok(Some(
-            self.merge(EFFECTS, &id, |previous: Option<ToolEffectRow>| {
+            self.merge_at(EFFECTS, &id, |previous: Option<ToolEffectRow>| {
                 let mut record = previous.unwrap_or(ToolEffectRow {
                     run_id: settle.run_id.clone(),
                     call_id: settle.call_id.clone(),

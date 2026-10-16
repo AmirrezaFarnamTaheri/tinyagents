@@ -255,7 +255,21 @@ impl DriverRunLedger {
         T: Stored + Clone + Send + Sync,
         F: Fn(Option<T>) -> T + Send + Sync,
     {
-        self.change(collection, id, |previous| {
+        self.merge_at(collection, &key(&[id])?, merge).await
+    }
+
+    /// [`Self::merge`] for a record whose document id is already built (a composite key).
+    pub(super) async fn merge_at<T, F>(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        merge: F,
+    ) -> Result<T, StorageError>
+    where
+        T: Stored + Clone + Send + Sync,
+        F: Fn(Option<T>) -> T + Send + Sync,
+    {
+        self.change_at(collection, doc_id, |previous| {
             let record = merge(previous);
             Ok((Some(record.clone()), record))
         })
@@ -278,10 +292,25 @@ impl DriverRunLedger {
         R: Send,
         F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
     {
+        self.change_at(collection, &key(&[id])?, change).await
+    }
+
+    /// [`Self::change`] for a record whose document id is already built.
+    pub(super) async fn change_at<T, R, F>(
+        &self,
+        collection: &str,
+        doc_id: &str,
+        change: F,
+    ) -> Result<R, StorageError>
+    where
+        T: Stored + Send + Sync,
+        R: Send,
+        F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
+    {
         self.declare().await?;
         let repo = self.repo::<T>(collection)?;
         let mut outcome = None;
-        repo.update(&key(&[id])?, |previous| {
+        repo.update(doc_id, |previous| {
             let previous = previous.map(T::from_dto).transpose()?;
             let (record, result) = change(previous)?;
             outcome = Some(result);
