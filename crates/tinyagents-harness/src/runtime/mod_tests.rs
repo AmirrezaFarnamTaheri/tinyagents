@@ -2811,7 +2811,7 @@ async fn learning_summary_contains_digested_success_and_classified_failure_outco
     assert_eq!(outcomes.len(), 2);
     assert!(outcomes[0].success);
     assert!(outcomes[0].duration_ms < 10_000);
-    assert_eq!(outcomes[0].args_digest, format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"safe"})).unwrap())));
+    assert_eq!(outcomes[0].args_digest, sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"safe"})).unwrap()).iter().map(|byte| format!("{byte:02x}")).collect::<String>());
     assert!(!outcomes[1].success);
     assert_eq!(outcomes[1].failure_class.as_deref(), Some("permission_denied"));
     assert!(outcomes[1].duration_ms < 10_000);
