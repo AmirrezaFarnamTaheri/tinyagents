@@ -1078,3 +1078,57 @@ async fn image_and_archive_fallback_context_is_unicode_safe_and_bounded() {
             .any(|text| text.contains("Archive listing (names are untrusted"))
     );
 }
+
+#[tokio::test]
+async fn file_fallback_limit_applies_per_attachment_not_across_the_turn() {
+    let model = Arc::new(CaptureModel::new(false));
+    let mut sources = HashMap::new();
+    sources.insert(
+        "first".into(),
+        attachment("first.txt", "text/plain", "FIRST ".repeat(150).as_bytes()),
+    );
+    sources.insert(
+        "second".into(),
+        attachment("second.txt", "text/plain", "SECOND ".repeat(120).as_bytes()),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig {
+            files: FileLimits {
+                max_extracted_text_chars: 1_000,
+                ..FileLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        resolver,
+        Arc::default(),
+    );
+
+    wrapped
+        .invoke(&"tenant-a".into(), request("[FILE:first] [FILE:second]"))
+        .await
+        .unwrap();
+
+    let captured = model.requests.lock().unwrap();
+    let Message::User(user) = &captured[0].messages[0] else {
+        panic!("prepared user message retained")
+    };
+    let rendered = user
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("first.txt"));
+    assert!(rendered.contains("second.txt"));
+    assert!(rendered.contains("FIRST"));
+    assert!(rendered.contains("SECOND"));
+    assert!(rendered.chars().count() > 1_000);
+}
