@@ -5,7 +5,10 @@ use crate::testkit::conformance::{
     checkpointer_concurrent_contract, checkpointer_contract, checkpointer_lineage_contract,
     checkpointer_writes_contract,
 };
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use crate::storage::subgraph_key;
+use serde::Serialize;
+use serde_json::json;
+use tinystoragedrivers_core::{DocumentStoreExt, MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn docs(storage: &MemoryStorage, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -47,18 +50,18 @@ async fn passes_the_concurrent_contract() {
 }
 
 #[tokio::test]
-async fn scopes_and_prefixes_keep_threads_apart() {
+async fn scopes_and_namespaces_keep_threads_apart() {
     let storage = MemoryStorage::new();
     let alice = DriverCheckpointer::<i32>::new(docs(&storage, "alice"));
     let bob = DriverCheckpointer::<i32>::new(docs(&storage, "bob"));
-    let other = DriverCheckpointer::<i32>::with_prefix(docs(&storage, "alice"), "other");
+    let other = DriverCheckpointer::<i32>::with_namespace(docs(&storage, "alice"), "other");
     let checkpoint = sample("t", "c1", None, 1);
     alice.put(checkpoint).await.unwrap();
     assert!(bob.get("t", None).await.unwrap().is_none());
     assert!(other.get("t", None).await.unwrap().is_none());
     assert_eq!(alice.list_threads().await.unwrap(), vec!["t".to_owned()]);
     assert!(bob.list_threads().await.unwrap().is_empty());
-    assert!(format!("{alice:?}").contains("graph_checkpoints"));
+    assert!(format!("{alice:?}").contains("graph"));
     let _ = alice.clone();
 }
 
@@ -107,32 +110,19 @@ async fn leases_follow_the_claim_protocol() {
 }
 
 #[test]
-fn long_keys_are_hashed_and_tuples_never_collide() {
-    assert_ne!(key(&["a/b", "c"]), key(&["a", "b/c"]));
-    let long = "t".repeat(500);
-    let hashed = key(&[&long]);
-    assert!(hashed.starts_with("h:") && hashed.len() == 66, "{hashed}");
-    assert_ne!(hashed, key(&[&"u".repeat(500)]));
-    assert_ne!(
-        key(&[&"t".repeat(500)]),
-        key(&[&"t".repeat(499), "t"]),
-        "the hash covers the length-prefixed tuple"
-    );
-}
-
-#[test]
 fn namespaces_encode_injectively() {
     let ns = |parts: &[&str]| parts.iter().map(|p| (*p).to_string()).collect::<Vec<_>>();
     assert_ne!(
-        namespace_key(&ns(&["a", "b"])),
-        namespace_key(&ns(&["a\u{1f}b"]))
+        subgraph_key(&ns(&["a", "b"])),
+        subgraph_key(&ns(&["a\u{1f}b"]))
     );
     assert_ne!(
-        namespace_key(&ns(&["a", "b"])),
-        namespace_key(&ns(&["a/b"]))
+        subgraph_key(&ns(&["a", "b"])),
+        subgraph_key(&ns(&["a/b"]))
     );
-    assert_ne!(namespace_key(&ns(&["ab"])), namespace_key(&ns(&["a", "b"])));
-    assert_eq!(namespace_key(&[]), "");
+    assert_ne!(subgraph_key(&ns(&["ab"])), subgraph_key(&ns(&["a", "b"])));
+    assert_eq!(subgraph_key(&[]), "");
+    assert_ne!(subgraph_key(&ns(&[""])), subgraph_key(&[]), "the empty segment is not the root");
 }
 
 #[tokio::test]
@@ -212,9 +202,9 @@ async fn a_corrupt_record_is_a_checkpoint_error() {
     cp.put(sample("t", "c1", None, 1)).await.unwrap();
     let stored = cp.thread_docs("t").await.unwrap().remove(0);
     docs.put(
-        "graph_checkpoints",
+        "graph.checkpoints",
         &stored.id,
-        json!({"thread": "t", "seq": 0, "checkpoint_id": "c1", "record": "nope"}),
+        json!({"ns": "graph", "thread": "t", "subgraph": "", "seq": 0, "checkpoint_id": "c1", "checkpoint": "nope"}),
         Precondition::None,
     )
     .await

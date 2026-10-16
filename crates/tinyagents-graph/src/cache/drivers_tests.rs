@@ -52,11 +52,11 @@ async fn entries_persist_across_handles_and_reopened_files() {
 }
 
 #[tokio::test]
-async fn scopes_and_collections_keep_entries_apart() {
+async fn scopes_and_namespaces_keep_entries_apart() {
     let storage = MemoryStorage::new();
     let alice = DriverTaskCache::new(docs(&storage, "alice"));
     let bob = DriverTaskCache::new(docs(&storage, "bob"));
-    let other = DriverTaskCache::with_collection(docs(&storage, "alice"), "other_cache");
+    let other = DriverTaskCache::with_namespace(docs(&storage, "alice"), "other_cache");
     alice
         .put(&key("g", "n", "h"), json!(1), None)
         .await
