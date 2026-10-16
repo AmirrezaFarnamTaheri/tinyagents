@@ -680,7 +680,7 @@ async fn persist_refuses_to_replace_an_existing_artifact() {
         .await
         .unwrap_err();
     assert!(error.contains("already exists"), "{error}");
-    let kept = output.blobs.get("generated-media/clip.png").await.unwrap();
+    let kept = output.blobs.get("harness/generated_media/clip.png").await.unwrap();
     assert_eq!(kept.unwrap().bytes, b"one");
 }
 
