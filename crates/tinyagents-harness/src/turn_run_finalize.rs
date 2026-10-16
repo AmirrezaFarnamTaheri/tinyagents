@@ -92,7 +92,13 @@ pub fn turn_stop_for_with_cause(
     hit_cap: bool,
     fallback_class: impl FnOnce(&str) -> &'static str,
 ) -> Option<TurnStop> {
-    TurnStop::classify_with_cause(breaker_halt, failure_cause, wind_down, hit_cap, fallback_class)
+    TurnStop::classify_with_cause(
+        breaker_halt,
+        failure_cause,
+        wind_down,
+        hit_cap,
+        fallback_class,
+    )
 }
 
 /// The turn's final text. An early-exit tool's captured question stands in for

@@ -15,9 +15,18 @@ struct ScriptedModel {
 
 #[async_trait]
 impl ChatModel<()> for ScriptedModel {
-    async fn invoke(&self, _: &(), request: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(
+        &self,
+        _: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
         self.requests.lock().unwrap().push(request);
-        let answer = self.answers.lock().unwrap().pop_front().expect("scripted answer");
+        let answer = self
+            .answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted answer");
         let mut response = ModelResponse::assistant(answer);
         response.usage = Some(Usage::new(11, 3));
         Ok(response)
@@ -34,8 +43,16 @@ fn scripted_model(answers: &[&str]) -> ScriptedModel {
 #[test]
 fn render_tool_results_spends_the_budget_on_newest_results() {
     let results = vec![
-        CloseToolResult { name: "old".into(), success: true, content: "old output".into() },
-        CloseToolResult { name: "new".into(), success: false, content: "new output".into() },
+        CloseToolResult {
+            name: "old".into(),
+            success: true,
+            content: "old output".into(),
+        },
+        CloseToolResult {
+            name: "new".into(),
+            success: false,
+            content: "new output".into(),
+        },
     ];
     let rendered = render_tool_results(&results, 30);
     assert!(rendered.contains("new"));
@@ -44,15 +61,24 @@ fn render_tool_results_spends_the_budget_on_newest_results() {
 
 #[test]
 fn verdict_parser_accepts_only_an_exact_verdict_line() {
-    assert_eq!(parse_close_verdict("ACCEPT\nLooks good"), CloseVerdict::Accept);
+    assert_eq!(
+        parse_close_verdict("ACCEPT\nLooks good"),
+        CloseVerdict::Accept
+    );
     assert_eq!(parse_close_verdict("REJECT"), CloseVerdict::Reject);
-    assert_eq!(parse_close_verdict("probably ACCEPT"), CloseVerdict::Unclear);
+    assert_eq!(
+        parse_close_verdict("probably ACCEPT"),
+        CloseVerdict::Unclear
+    );
     assert_eq!(parse_close_verdict(""), CloseVerdict::Unclear);
 }
 
 #[test]
 fn harness_quote_matching_normalizes_whitespace_but_ignores_short_phrases() {
-    assert!(quotes_harness_instruction("Do not call another tool right now", &["Do not call another tool right now"]));
+    assert!(quotes_harness_instruction(
+        "Do not call another tool right now",
+        &["Do not call another tool right now"]
+    ));
     assert!(!quotes_harness_instruction("The answer is yes", &["yes"]));
 }
 
@@ -82,7 +108,11 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| request.tools.is_empty()));
-    assert!(requests.iter().all(|request| request.tool_choice == ToolChoice::None));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.tool_choice == ToolChoice::None)
+    );
 }
 
 #[tokio::test]
@@ -109,7 +139,14 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
     let contract = crate::config::RequiredOutput::new("summary");
     let model = scripted_model(&["{\"summary\":\"repaired\"}"]);
     let repaired = repair_required_output(
-        &model, &(), &NativeDialect, &[], "old reply", &contract, "repair", false,
+        &model,
+        &(),
+        &NativeDialect,
+        &[],
+        "old reply",
+        &contract,
+        "repair",
+        false,
     )
     .await
     .expect("missing output triggers repair");
@@ -118,11 +155,21 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
 
     let invalid = scripted_model(&["still no JSON"]);
     let appended = repair_required_output(
-        &invalid, &(), &NativeDialect, &[], "already streamed", &contract, "repair", true,
+        &invalid,
+        &(),
+        &NativeDialect,
+        &[],
+        "already streamed",
+        &contract,
+        "repair",
+        true,
     )
     .await
     .expect("missing output triggers repair");
     assert_eq!(appended.text, "already streamed\n\n{\"summary\":\"\"}");
     assert!(!appended.model_repaired);
-    assert_eq!(invalid.requests.lock().unwrap()[0].tool_choice, ToolChoice::None);
+    assert_eq!(
+        invalid.requests.lock().unwrap()[0].tool_choice,
+        ToolChoice::None
+    );
 }

@@ -20,7 +20,10 @@ fn a_typed_breaker_cause_is_independent_of_note_wording() {
         Some("web_answer_tool".into()),
     );
     assert_eq!(stop.kind, TurnStopKind::Breaker);
-    assert_eq!(stop.failure_class.as_ref().map(TurnFailureClass::as_str), Some("uncertain_side_effect"));
+    assert_eq!(
+        stop.failure_class.as_ref().map(TurnFailureClass::as_str),
+        Some("uncertain_side_effect")
+    );
     assert_eq!(stop.operation.as_deref(), Some("web_answer_tool"));
     let message = stop.status_message();
     assert_eq!(
@@ -37,7 +40,10 @@ fn legacy_breaker_uses_the_supplied_fallback_without_parsing_the_note() {
         fallback,
     );
     assert_eq!(stop.kind, TurnStopKind::Breaker);
-    assert_eq!(stop.failure_class.as_ref().map(TurnFailureClass::as_str), Some("varied_failures"));
+    assert_eq!(
+        stop.failure_class.as_ref().map(TurnFailureClass::as_str),
+        Some("varied_failures")
+    );
     assert_eq!(stop.operation, None);
     assert_eq!(stop.status_message(), "stopped: breaker varied_failures");
 }
@@ -49,7 +55,10 @@ fn typed_failure_classes_do_not_include_note_content() {
          `rm -rf /home/alice` on `x`.",
         fallback,
     );
-    assert_eq!(stop.failure_class.as_ref().map(TurnFailureClass::as_str), Some("repeated_failure"));
+    assert_eq!(
+        stop.failure_class.as_ref().map(TurnFailureClass::as_str),
+        Some("repeated_failure")
+    );
     assert_eq!(stop.operation, None, "free text must not reach a trace");
 }
 

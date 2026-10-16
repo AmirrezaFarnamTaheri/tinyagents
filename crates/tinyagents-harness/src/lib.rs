@@ -63,10 +63,10 @@ pub mod agent_loop;
 pub mod artifacts;
 pub mod cache;
 pub mod cancel;
-pub mod close;
 mod canonical_json;
 pub mod capability;
 pub mod catalog;
+pub mod close;
 pub mod config;
 pub mod context;
 pub mod cost;
@@ -167,5 +167,5 @@ pub use steering::{
     SteeringOutcome, SteeringPolicy,
 };
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
-pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};
 pub use tool::ToolRegistry;
+pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};
