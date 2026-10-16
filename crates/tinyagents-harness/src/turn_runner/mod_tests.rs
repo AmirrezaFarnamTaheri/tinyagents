@@ -63,15 +63,15 @@ impl TurnHost for Host {
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if self.fail_run {
-            return Err("host run failed".into());
-        }
         if let (Some(started), Some(release)) = (&self.started, &self.release) {
             started.notify_one();
             tokio::select! {
                 _ = release.notified() => {},
                 _ = cancellation.cancelled() => return Err("cancelled".into()),
             }
+        }
+        if self.fail_run {
+            return Err("host run failed".into());
         }
         Ok(TurnResult {
             reply: "done".into(),
@@ -409,7 +409,11 @@ impl TurnHost for OrderedHost {
 
 #[tokio::test]
 async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
     let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
         fail_run: true,
         ..Host::default()
     });
@@ -431,6 +435,14 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
             runner.run(first).await
         })
     };
+    started.notified().await;
+    let mut queued = request(QueueDisposition::Followup, false);
+    queued.request_id = "accepted-before-failure".into();
+    assert!(matches!(
+        runner.run(queued).await,
+        Err(TurnRunnerError::Queued)
+    ));
+    release.notify_one();
     events.terminal_started.notified().await;
 
     let mut late = request(QueueDisposition::Steer, false);
@@ -444,18 +456,132 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
     ));
     assert!(matches!(late_result, Err(TurnRunnerError::Failed(_))));
     assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert!(
+        events
+            .terminal
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(id, event)| id == "accepted-before-failure"
+                && matches!(event, TerminalEvent::Failed { .. }))
+    );
+}
+
+#[tokio::test]
+async fn cancelled_generation_is_retired_before_a_slow_terminal_callback() {
+    let host = Arc::new(CancelOwnerHost::default());
+    let events = Arc::new(BlockingCancelEvents::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            let mut owner = request(QueueDisposition::Interrupt, false);
+            owner.request_id = "cancel-owner".into();
+            runner.run(owner).await
+        })
+    };
+    host.owner_started.notified().await;
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+    assert!(
+        runner
+            .cancel(&scope, "thread-a", Some("cancel-owner"))
+            .await
+    );
+    events.terminal_started.notified().await;
+
+    let mut late = request(QueueDisposition::Steer, false);
+    late.request_id = "after-cancel".into();
+    assert!(runner.run(late).await.is_ok());
+    events.release_terminal.notify_one();
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+}
+
+#[derive(Default)]
+struct CancelOwnerHost {
+    owner_started: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for CancelOwnerHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        if request.request_id == "cancel-owner" {
+            self.owner_started.notify_one();
+            cancellation.cancelled().await;
+            return Err("cancelled".into());
+        }
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[derive(Default)]
+struct BlockingCancelEvents {
+    terminal_started: tokio::sync::Notify,
+    release_terminal: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl EventSink for BlockingCancelEvents {
+    async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
+    async fn terminal(&self, request: &TurnRequest, event: TerminalEvent) {
+        if request.request_id == "cancel-owner" && matches!(event, TerminalEvent::Cancelled { .. })
+        {
+            self.terminal_started.notify_one();
+            self.release_terminal.notified().await;
+        }
+    }
 }
 
 #[derive(Default)]
 struct BlockingFailureEvents {
     terminal_started: tokio::sync::Notify,
     release_terminal: tokio::sync::Notify,
+    terminal: Mutex<Vec<(String, TerminalEvent)>>,
 }
 
 #[async_trait::async_trait]
 impl EventSink for BlockingFailureEvents {
     async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
-    async fn terminal(&self, request: &TurnRequest, _event: TerminalEvent) {
+    async fn terminal(&self, request: &TurnRequest, event: TerminalEvent) {
+        self.terminal
+            .lock()
+            .unwrap()
+            .push((request.request_id.clone(), event));
         if request.request_id == "failing-owner" {
             self.terminal_started.notify_one();
             self.release_terminal.notified().await;
