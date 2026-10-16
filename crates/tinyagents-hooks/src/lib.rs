@@ -5,3 +5,5 @@
 
 pub mod command;
 pub mod tool;
+pub mod lifecycle;
+pub mod stop;
