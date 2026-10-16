@@ -333,6 +333,7 @@ fn observation_replay_ignores_duplicate_offsets_and_other_run_streams() {
         },
     );
     other_run.run_id = RunId::new("run-2");
+    other_run.root_run_id = RunId::new("run-2");
     collector.record(&other_run);
     assert_eq!(collector.spans().len(), 1);
     assert_eq!(collector.spans()[0].end_unix_ms, None);
@@ -467,24 +468,19 @@ fn late_tool_completion_closes_under_its_original_subagent_after_child_end() {
         },
         10,
     );
-    collector.record_event(
-        &AgentEvent::ToolStarted {
+    collector.record_event(&AgentEvent::SubAgentRunStarted {
+        name: "research".into(), depth: 1, run_id: RunId::new("research-run"),
+    }, 10);
+    collector.record(&observation_in_run("research-run", Some("run-late"), "run-late", 0, 20, AgentEvent::ToolStarted {
             call_id: CallId::new("tool"),
             tool_name: "lookup".into(),
             input: None,
             parent_call_id: None,
-        },
-        20,
-    );
-    collector.record_event(
-        &AgentEvent::SubAgentCompleted {
-            name: "research".into(),
-            depth: 1,
-        },
-        30,
-    );
-    collector.record_event(
-        &AgentEvent::ToolCompleted {
+        }));
+    collector.record(&observation_in_run("research-run", Some("run-late"), "run-late", 1, 30, AgentEvent::RunCompleted {
+        run_id: RunId::new("research-run"), outcome: None,
+    }));
+    collector.record(&observation_in_run("research-run", Some("run-late"), "run-late", 2, 40, AgentEvent::ToolCompleted {
             call_id: CallId::new("tool"),
             tool_name: "lookup".into(),
             started_at_ms: Some(20),
@@ -495,9 +491,7 @@ fn late_tool_completion_closes_under_its_original_subagent_after_child_end() {
             error: None,
             metadata: None,
             parent_call_id: None,
-        },
-        40,
-    );
+        }));
     let child = collector
         .spans()
         .iter()
@@ -599,36 +593,19 @@ fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_spa
         },
         4,
     );
-    collector.record_event(
-        &AgentEvent::ModelStarted {
-            call_id: CallId::new("child-call"),
-            model: "child-model".into(),
-        },
-        5,
-    );
-    collector.record_event(
-        &AgentEvent::ModelCompleted {
-            call_id: CallId::new("child-call"),
-            started_at_ms: Some(5),
-            usage: Some(Usage {
-                input_tokens: 10,
-                output_tokens: 2,
-                ..Default::default()
-            }),
-            input: None,
-            output: None,
-        },
-        6,
-    );
-    collector.record_event(
-        &AgentEvent::CostRecorded {
-            cost: crate::cost::CostTotals {
-                total_cost: 0.25,
-                ..Default::default()
-            },
-        },
-        7,
-    );
+    collector.record_event(&AgentEvent::SubAgentRunStarted {
+        name: "child".into(), depth: 1, run_id: RunId::new("child-run"),
+    }, 4);
+    collector.record(&observation_in_run("child-run", Some("run-rollup"), "run-rollup", 0, 5,
+        AgentEvent::ModelStarted { call_id: CallId::new("child-call"), model: "child-model".into() }));
+    collector.record(&observation_in_run("child-run", Some("run-rollup"), "run-rollup", 1, 6,
+        AgentEvent::ModelCompleted {
+            call_id: CallId::new("child-call"), started_at_ms: Some(5),
+            usage: Some(Usage { input_tokens: 10, output_tokens: 2, ..Default::default() }),
+            input: None, output: None,
+        }));
+    collector.record(&observation_in_run("child-run", Some("run-rollup"), "run-rollup", 2, 7,
+        AgentEvent::CostRecorded { cost: crate::cost::CostTotals { total_cost: 0.25, ..Default::default() } }));
 
     let root = &collector.spans()[0];
     let child = collector
@@ -664,9 +641,6 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
         }));
         collector.record(&observation_in_run(run, Some("parent"), "parent", 2, at + 1, AgentEvent::CostRecorded {
             cost: crate::cost::CostTotals { total_cost: cost, ..Default::default() },
-        }));
-        collector.record(&observation_in_run(run, Some("parent"), "parent", 3, at + 2, AgentEvent::UsageRecorded {
-            usage: Usage { input_tokens: 10, ..Default::default() },
         }));
         assert!(collector.spans().iter().any(|span| span.name == format!("llm.{model}")));
     }

@@ -353,7 +353,12 @@ impl SpanCollector {
                 self.open_subagents.insert(name.clone(), index);
             }
             AgentEvent::SubAgentRunStarted { name, depth, run_id } => {
-                let index = self.open_subagents.get(name).copied().unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
+                let index = self.run_roots.get(run_id.as_str()).copied().unwrap_or_else(|| {
+                    self.open_subagents.get(name).copied().unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms))
+                });
+                self.spans[index].name = format!("subagent.{name}");
+                self.spans[index].attributes.insert("subagent.name".into(), json_str(name));
+                self.spans[index].attributes.insert("subagent.depth".into(), json!(*depth));
                 self.run_roots.insert(run_id.as_str().to_owned(), index);
             }
             AgentEvent::SubAgentRunCompleted { run_id } => {
