@@ -14,7 +14,7 @@ use crate::turn_outcome::ended_out_of_output_budget;
 use crate::turn_stop::TurnStop;
 
 /// What the host knows about the run beyond the [`AgentRun`] itself.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct TurnEndInputs<'a> {
     /// The model-call cap the run was configured with.
     pub max_iterations: usize,

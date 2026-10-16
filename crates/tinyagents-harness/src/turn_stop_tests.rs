@@ -63,6 +63,24 @@ fn typed_failure_classes_do_not_include_note_content() {
 }
 
 #[test]
+fn a_classified_stop_preserves_its_cause_without_reading_its_summary() {
+    let stop = TurnStop::from_classified_cause(crate::no_progress::ClassifiedStopCause {
+        class: "permission".into(),
+        operation: "file_write".into(),
+        summary: "changed prose without a template".into(),
+    });
+    assert_eq!(
+        stop.failure_class.as_ref().map(TurnFailureClass::as_str),
+        Some("permission")
+    );
+    assert_eq!(stop.operation.as_deref(), Some("file_write"));
+    assert_eq!(
+        stop.status_message(),
+        "stopped: breaker permission on file_write"
+    );
+}
+
+#[test]
 fn classify_prefers_breaker_then_wind_down_then_cap() {
     assert_eq!(TurnStop::classify(None, false, false, fallback), None);
     assert_eq!(
