@@ -22,6 +22,9 @@ aggregation logic at every recursion boundary.
   independently.
 - [`estimate_cost`] (`mod.rs`) — prices a `tinyinference_llm::usage::Usage`
   record against a `ModelPricing` entry, returning a `CostTotals`.
+- [`roll_up_subagent_usage`] (`types.rs`) — folds parent and nested child usage
+  once by run identity, preserving token counts, cached-token subset semantics,
+  child details and cost certainty across replayed completion rows.
 
 ## Files
 
