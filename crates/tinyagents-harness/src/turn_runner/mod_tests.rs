@@ -516,7 +516,16 @@ async fn parallel_turn_gets_a_private_queue_and_cannot_steal_primary_work() {
         runner.run(collect).await,
         Err(TurnRunnerError::Queued)
     ));
-    assert_eq!(runner.queue_status(&request(QueueDisposition::Interrupt, false).scope, "thread-a").await.collects, 1);
+    assert_eq!(
+        runner
+            .queue_status(
+                &request(QueueDisposition::Interrupt, false).scope,
+                "thread-a"
+            )
+            .await
+            .collects,
+        1
+    );
 
     let mut parallel_request = request(QueueDisposition::Parallel, false);
     parallel_request.request_id = "parallel-private".into();
@@ -562,6 +571,16 @@ async fn host_authored_turn_gets_private_queue_and_preserves_primary_collects() 
         runner.run(collect).await,
         Err(TurnRunnerError::Queued)
     ));
+    assert_eq!(
+        runner
+            .queue_status(
+                &request(QueueDisposition::Interrupt, false).scope,
+                "thread-a"
+            )
+            .await
+            .collects,
+        1
+    );
     let mut background = request(QueueDisposition::Interrupt, true);
     background.request_id = "host-background".into();
     runner.run(background).await.unwrap();
