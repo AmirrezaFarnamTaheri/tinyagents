@@ -477,7 +477,10 @@ fn the_index_keeps_its_creation_time() {
     let read = Arc::clone(&docs);
     let second = on_bridge(async move { read.get(INDEX, &index_id("s").unwrap()).await });
     let (first, second) = (first.unwrap(), second.unwrap());
-    assert!(first.doc.get("created_at").is_none(), "the time is metadata");
+    assert!(
+        first.doc.get("created_at").is_none(),
+        "the time is metadata"
+    );
     assert!(first.meta.created_ms > 0);
     assert_eq!(first.meta.created_ms, second.meta.created_ms);
     assert!(second.meta.updated_ms >= first.meta.updated_ms);

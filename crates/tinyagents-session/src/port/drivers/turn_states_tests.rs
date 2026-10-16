@@ -177,7 +177,7 @@ fn an_unreadable_snapshot_is_an_error() {
         .run(async move {
             raw.put(
                 COLLECTION,
-                &id("t", "bodiless"),
+                &id("t", "bodiless").unwrap(),
                 json!({"thread_id": "t", "request_id": "bodiless"}),
                 Precondition::None,
             )
@@ -192,7 +192,7 @@ fn an_unreadable_snapshot_is_an_error() {
         .run(async move {
             raw.put(
                 COLLECTION,
-                &id("t", "bodiless"),
+                &id("t", "bodiless").unwrap(),
                 json!({"thread_id": "t", "request_id": "bodiless", "started_ms": "nope", "updated_ms": 0}),
                 Precondition::None,
             )
