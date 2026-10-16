@@ -113,7 +113,43 @@ impl DriverRunLedger {
 }
 
 impl DriverRunLedger {
+    /// Driver leases (`tsd.leases`) timed at `now`, so expiry is tested without sleeps.
+    fn leases_at(&self, now: DateTime<Utc>) -> Leases {
+        let ms = u64::try_from(now.timestamp_millis()).unwrap_or(0);
+        Leases::new(self.scoped.documents()).with_clock(Arc::new(move || ms))
+    }
+
+    /// `row` with the live driver lease of its run, if one is held.
+    async fn with_lease(&self, mut row: WorkflowRun, now: DateTime<Utc>) -> Result<WorkflowRun> {
+        let lease = self
+            .leases_at(now)
+            .current(LEDGER_OWNER, &workflow_lease_key(&row.id)?)
+            .await?;
+        if let Some(lease) = lease {
+            row.lease_owner = Some(lease.holder);
+            row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
+        }
+        Ok(row)
+    }
+
+    /// End the live lease of `run_id`, whoever holds it. Nothing happens when none is held.
+    async fn release_workflow_lease(&self, run_id: &str, now: DateTime<Utc>) -> Result<()> {
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(run_id)?;
+        if let Some(lease) = leases.current(LEDGER_OWNER, &lease_key).await? {
+            leases
+                .release(LEDGER_OWNER, &lease_key, &lease.holder, lease.epoch)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// The timestamp is explicit internally so the expiry boundary is tested without sleeps.
+    ///
+    /// The lease is a `tsd.leases` record; the run record only gets its revision
+    /// bumped, in a second write, so a claim is no longer one atomic document
+    /// change. A crash between the two leaves the lease held and the revision
+    /// unchanged, which the next claim after expiry resolves.
     async fn claim_workflow_at(
         &self,
         id: &str,
@@ -121,24 +157,36 @@ impl DriverRunLedger {
         lease_for: chrono::Duration,
         now: DateTime<Utc>,
     ) -> Result<WorkflowLeaseClaim> {
-        self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, WorkflowLeaseClaim::Missing));
-            };
-            if row.lease_owner.is_some()
-                && row.lease_owner.as_deref() != Some(owner)
-                && row.lease_expires_at.is_some_and(|expires| expires > now)
-            {
-                return Ok((None, WorkflowLeaseClaim::Busy(row)));
-            }
-            row.lease_owner = Some(owner.into());
-            row.lease_expires_at = Some(now + lease_for);
-            row.updated_at = now;
-            row.revision = next_revision(row.revision)?;
-            Ok((Some(row.clone()), WorkflowLeaseClaim::Acquired(row)))
-        })
-        .await
-        .map_err(Into::into)
+        let Some(found) = self.read::<WorkflowRun>(WORKFLOWS, id).await? else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        let lease_key = workflow_lease_key(id)?;
+        let ttl_ms = lease_for.num_milliseconds().max(1);
+        let Some(lease) = self
+            .leases_at(now)
+            .acquire(LEDGER_OWNER, &lease_key, owner, ttl_ms)
+            .await?
+        else {
+            return Ok(WorkflowLeaseClaim::Busy(
+                self.with_lease(found.doc, now).await?,
+            ));
+        };
+        let bumped = self
+            .change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                row.updated_at = now;
+                row.revision = next_revision(row.revision)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        let Some(mut row) = bumped else {
+            return Ok(WorkflowLeaseClaim::Missing);
+        };
+        row.lease_owner = Some(lease.holder);
+        row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
+        Ok(WorkflowLeaseClaim::Acquired(row))
     }
 
     /// Renewal changes the native version, but preserves the workflow lifecycle revision.
@@ -149,18 +197,29 @@ impl DriverRunLedger {
         lease_for: chrono::Duration,
         now: DateTime<Utc>,
     ) -> Result<bool> {
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(id)?;
+        let Some(current) = leases.current(LEDGER_OWNER, &lease_key).await? else {
+            return Ok(false);
+        };
+        if current.holder != owner {
+            return Ok(false);
+        }
+        let ttl_ms = lease_for.num_milliseconds().max(1);
+        let renewed = leases
+            .renew(LEDGER_OWNER, &lease_key, owner, current.epoch, ttl_ms)
+            .await?;
+        if renewed.is_none() {
+            return Ok(false);
+        }
         self.change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, false));
-            };
-            if row.lease_owner.as_deref() != Some(owner)
-                || row.lease_expires_at.is_none_or(|expires| expires <= now)
-            {
-                return Ok((None, false));
-            }
-            row.lease_expires_at = Some(now + lease_for);
-            row.updated_at = now;
-            Ok((Some(row), true))
+            Ok(match previous {
+                Some(mut row) => {
+                    row.updated_at = now;
+                    (Some(row), true)
+                }
+                None => (None, false),
+            })
         })
         .await
         .map_err(Into::into)
@@ -208,8 +267,8 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+        let now = now();
+        let row = self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
             let first = previous.is_none();
             let mut row = previous.unwrap_or(WorkflowRun {
                 id: upsert.id.clone(),
@@ -239,14 +298,14 @@ impl RunLedgerStore for DriverRunLedger {
             if !first {
                 row.revision = next_revision(row.revision)?;
             }
-            if row.status.is_terminal() {
-                row.lease_owner = None;
-                row.lease_expires_at = None;
-            }
             Ok((Some(row.clone()), row))
         })
-        .await
-        .map_err(Into::into)
+        .await?;
+        if row.status.is_terminal() {
+            self.release_workflow_lease(&row.id, now).await?;
+            return Ok(row);
+        }
+        self.with_lease(row, now).await
     }
 
     async fn try_claim_workflow_run(
