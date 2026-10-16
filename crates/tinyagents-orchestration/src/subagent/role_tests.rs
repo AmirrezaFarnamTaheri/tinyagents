@@ -107,7 +107,7 @@ fn fleet_tools_follow_named_scope_and_deny_patterns() {
 
 #[test]
 fn wildcard_fleet_visibility_can_use_effective_visible_names() {
-    let names = ["wait_subagent".to_owned(), "close_subagent".to_owned()]
+    let names = ["wait_subagent".to_owned()]
         .into_iter()
         .collect();
     let fleet = FleetToolSet::from_visible_tool_names(&names);
