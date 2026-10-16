@@ -70,7 +70,7 @@
 //! use tinyagents_session::SessionStatus;
 //! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+//! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
 //! let ledger = DriverRunLedger::new(storage);
 //!
