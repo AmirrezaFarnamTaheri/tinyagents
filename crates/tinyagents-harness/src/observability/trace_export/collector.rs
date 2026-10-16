@@ -173,18 +173,22 @@ impl SpanCollector {
             }
             AgentEvent::ModelFailed {
                 call_id,
+                model,
                 started_at_ms,
                 error,
                 ..
             } => {
-                if let Some(call) = self.open_models.remove(call_id.as_str()) {
-                    let start = started_at_ms
-                        .unwrap_or(call.started_at_ms)
-                        .min(timestamp_ms);
-                    self.close_span(call.index, timestamp_ms, SpanStatus::Error);
-                    self.put_error(call.index, error);
-                    self.spans[call.index].start_unix_ms = start;
-                }
+                let call = self.open_models.remove(call_id.as_str()).unwrap_or_else(|| {
+                    let parent = self.active_parent(timestamp_ms);
+                    let mut attrs = BTreeMap::new();
+                    attrs.insert("gen_ai.request.model".into(), json_str(model));
+                    let (index, _) = self.open_span(SpanKind::Generation, format!("llm.{}", nonempty(model, "unknown")), Some(parent), started_at_ms.unwrap_or(timestamp_ms), attrs);
+                    CallStart { index, parent_index: parent, started_at_ms: started_at_ms.unwrap_or(timestamp_ms), first_delta_ms: None, first_text_ms: None }
+                });
+                let start = started_at_ms.unwrap_or(call.started_at_ms).min(timestamp_ms);
+                self.close_span(call.index, timestamp_ms, SpanStatus::Error);
+                self.put_error(call.index, error);
+                self.spans[call.index].start_unix_ms = start;
             }
             AgentEvent::ToolStarted {
                 call_id,
@@ -298,29 +302,17 @@ impl SpanCollector {
                 }
             }
             AgentEvent::SubAgentStarted { name, depth } => {
-                let parent = self.active_parent(timestamp_ms);
-                let mut attrs = BTreeMap::new();
-                attrs.insert("subagent.name".into(), json_str(name));
-                attrs.insert("subagent.depth".into(), json!(*depth));
-                let (index, _) = self.open_span(
-                    SpanKind::Subagent,
-                    format!("subagent.{name}"),
-                    Some(parent),
-                    timestamp_ms,
-                    attrs,
-                );
+                let index = self.open_subagent(name, *depth, timestamp_ms);
                 self.open_subagents.insert(name.clone(), index);
             }
             AgentEvent::SubAgentCompleted { name, .. } => {
-                if let Some(index) = self.open_subagents.remove(name) {
-                    self.close_span(index, timestamp_ms, SpanStatus::Ok);
-                }
+                let index = self.open_subagents.remove(name).unwrap_or_else(|| self.open_subagent(name, 0, timestamp_ms));
+                self.close_span(index, timestamp_ms, SpanStatus::Ok);
             }
-            AgentEvent::SubAgentFailed { name, error, .. } => {
-                if let Some(index) = self.open_subagents.remove(name) {
-                    self.close_span(index, timestamp_ms, SpanStatus::Error);
-                    self.put_error(index, error);
-                }
+            AgentEvent::SubAgentFailed { name, depth, error } => {
+                let index = self.open_subagents.remove(name).unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
+                self.close_span(index, timestamp_ms, SpanStatus::Error);
+                self.put_error(index, error);
             }
             AgentEvent::MessageAppended { role, message, .. } if self.context.capture_content => {
                 if role == "user" && !self.first_input_recorded {
@@ -677,6 +669,21 @@ impl SpanCollector {
         let (index, _) = self.open_span(SpanKind::Turn, name, None, at, attrs);
         self.root = Some(index);
         index
+    }
+
+    fn open_subagent(&mut self, name: &str, depth: usize, at: u64) -> usize {
+        let parent = self.active_parent(at);
+        let mut attrs = BTreeMap::new();
+        attrs.insert("subagent.name".into(), json_str(name));
+        attrs.insert("subagent.depth".into(), json!(depth));
+        self.open_span(
+            SpanKind::Subagent,
+            format!("subagent.{name}"),
+            Some(parent),
+            at,
+            attrs,
+        )
+        .0
     }
 
     fn active_parent(&mut self, at: u64) -> usize {
