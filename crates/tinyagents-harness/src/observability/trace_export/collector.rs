@@ -72,7 +72,11 @@ impl SpanCollector {
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
         let run_id = observation.run_id.as_str();
-        if self.stream_run_id.as_deref().is_some_and(|current| current != run_id) {
+        if self
+            .stream_run_id
+            .as_deref()
+            .is_some_and(|current| current != run_id)
+        {
             return;
         }
         self.stream_run_id.get_or_insert_with(|| run_id.to_owned());
@@ -310,42 +314,104 @@ impl SpanCollector {
             }
             AgentEvent::UsageRecorded { usage } => {
                 let root = self.ensure_root(timestamp_ms);
-                let cached = usage.cache_read_tokens.saturating_add(usage.cache_creation_tokens);
-                let input = usage.input_tokens.max(cached).max(usage.input_tokens.saturating_add(if usage.input_tokens < cached { cached } else { 0 }));
+                let cached = usage
+                    .cache_read_tokens
+                    .saturating_add(usage.cache_creation_tokens);
+                let input = usage
+                    .input_tokens
+                    .max(cached)
+                    .max(
+                        usage
+                            .input_tokens
+                            .saturating_add(if usage.input_tokens < cached {
+                                cached
+                            } else {
+                                0
+                            }),
+                    );
                 for (key, add) in [
                     ("gen_ai.usage.input_tokens", input),
                     ("gen_ai.usage.output_tokens", usage.output_tokens),
                     ("gen_ai.usage.cached_input_tokens", usage.cache_read_tokens),
-                    ("gen_ai.usage.cache_creation_tokens", usage.cache_creation_tokens),
+                    (
+                        "gen_ai.usage.cache_creation_tokens",
+                        usage.cache_creation_tokens,
+                    ),
                     ("gen_ai.usage.reasoning_tokens", usage.reasoning_tokens),
                 ] {
-                    let prior = self.spans[root].attributes.get(key).and_then(Value::as_u64).unwrap_or(0);
-                    self.spans[root].attributes.insert(key.into(), json_u64(prior.saturating_add(add)));
+                    let prior = self.spans[root]
+                        .attributes
+                        .get(key)
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    self.spans[root]
+                        .attributes
+                        .insert(key.into(), json_u64(prior.saturating_add(add)));
                 }
                 if let Some(charge) = usage.charged_amount {
-                    let prior = self.spans[root].attributes.get("gen_ai.usage.cost").and_then(Value::as_f64).unwrap_or(0.0);
-                    self.spans[root].attributes.insert("gen_ai.usage.cost".into(), json_f64(prior + charge.micros as f64 / 1_000_000.0));
-                    self.spans[root].attributes.insert("gen_ai.cost.source".into(), json_str("provider_reported"));
+                    let prior = self.spans[root]
+                        .attributes
+                        .get("gen_ai.usage.cost")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0);
+                    self.spans[root].attributes.insert(
+                        "gen_ai.usage.cost".into(),
+                        json_f64(prior + charge.micros as f64 / 1_000_000.0),
+                    );
+                    self.spans[root]
+                        .attributes
+                        .insert("gen_ai.cost.source".into(), json_str("provider_reported"));
                 }
             }
             AgentEvent::CostRecorded { cost } => {
                 let amount = cost.total_cost;
                 if let Some(generation) = self.last_generation {
-                    let provider_reported = self.spans[generation].attributes.get("gen_ai.cost.source").and_then(Value::as_str) == Some("provider_reported");
+                    let provider_reported = self.spans[generation]
+                        .attributes
+                        .get("gen_ai.cost.source")
+                        .and_then(Value::as_str)
+                        == Some("provider_reported");
                     if !provider_reported {
-                        self.spans[generation].attributes.insert("gen_ai.usage.cost".into(), json_f64(amount));
-                        self.spans[generation].attributes.insert("gen_ai.cost.source".into(), json_str("estimated"));
+                        self.spans[generation]
+                            .attributes
+                            .insert("gen_ai.usage.cost".into(), json_f64(amount));
+                        self.spans[generation]
+                            .attributes
+                            .insert("gen_ai.cost.source".into(), json_str("estimated"));
                     }
-                    if let Some(parent) = self.spans[generation].parent_span_id.as_deref().and_then(|id| self.spans.iter().position(|span| span.span_id == id)) {
-                        let source = self.spans[generation].attributes.get("gen_ai.cost.source").and_then(Value::as_str).unwrap_or("estimated");
-                        let prior = self.spans[parent].attributes.get("gen_ai.usage.cost").and_then(Value::as_f64).unwrap_or(0.0);
-                        let addition = if source == "provider_reported" { 0.0 } else { amount };
-                        self.spans[parent].attributes.insert("gen_ai.usage.cost".into(), json_f64(prior + addition));
-                        self.spans[parent].attributes.insert("gen_ai.cost.source".into(), json_str(source));
+                    if let Some(parent) = self.spans[generation]
+                        .parent_span_id
+                        .as_deref()
+                        .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
+                    {
+                        let source = self.spans[generation]
+                            .attributes
+                            .get("gen_ai.cost.source")
+                            .and_then(Value::as_str)
+                            .unwrap_or("estimated")
+                            .to_owned();
+                        let prior = self.spans[parent]
+                            .attributes
+                            .get("gen_ai.usage.cost")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0);
+                        let addition = if source == "provider_reported" {
+                            0.0
+                        } else {
+                            amount
+                        };
+                        self.spans[parent]
+                            .attributes
+                            .insert("gen_ai.usage.cost".into(), json_f64(prior + addition));
+                        self.spans[parent]
+                            .attributes
+                            .insert("gen_ai.cost.source".into(), json_str(&source));
                     }
                 }
             }
-            AgentEvent::RunCompleted { outcome, .. } => self.close_completed_run(outcome.as_ref(), timestamp_ms),
+            AgentEvent::RunCompleted { outcome, .. } => {
+                self.close_completed_run(outcome.as_ref(), timestamp_ms)
+            }
             AgentEvent::RunFailed { error, .. } => {
                 self.close_root(timestamp_ms, SpanStatus::Error, "failed");
                 if let Some(root) = self.root {
@@ -662,11 +728,23 @@ impl SpanCollector {
             TerminalReason::Cancelled => {
                 self.close_root(at, SpanStatus::Unset, "cancelled");
                 if let Some(root) = self.root {
-                    self.spans[root].attributes.insert("observation.level".into(), json_str("WARNING"));
-                    self.put_error(root, if outcome.message.is_empty() { "Run cancelled" } else { &outcome.message });
+                    self.spans[root]
+                        .attributes
+                        .insert("observation.level".into(), json_str("WARNING"));
+                    self.put_error(
+                        root,
+                        if outcome.message.is_empty() {
+                            "Run cancelled"
+                        } else {
+                            &outcome.message
+                        },
+                    );
                 }
             }
-            TerminalReason::LimitReached(_) | TerminalReason::Halted | TerminalReason::Paused | TerminalReason::Deferred => {
+            TerminalReason::LimitReached(_)
+            | TerminalReason::Halted
+            | TerminalReason::Paused
+            | TerminalReason::Deferred => {
                 self.close_root(at, SpanStatus::Unset, "stopped");
                 if let Some(root) = self.root {
                     let kind = match outcome.reason {
@@ -676,10 +754,19 @@ impl SpanCollector {
                         _ => "deferred",
                     };
                     let status_message = format!("stopped: {kind}");
-                    self.spans[root].attributes.insert("observation.level".into(), json_str("WARNING"));
-                    self.spans[root].attributes.insert("turn.stop_kind".into(), json_str(kind));
-                    self.spans[root].attributes.insert("observation.status_message".into(), json_str(&status_message));
-                    self.spans[root].attributes.insert("error.message".into(), json_str(&status_message));
+                    self.spans[root]
+                        .attributes
+                        .insert("observation.level".into(), json_str("WARNING"));
+                    self.spans[root]
+                        .attributes
+                        .insert("turn.stop_kind".into(), json_str(kind));
+                    self.spans[root].attributes.insert(
+                        "observation.status_message".into(),
+                        json_str(&status_message),
+                    );
+                    self.spans[root]
+                        .attributes
+                        .insert("error.message".into(), json_str(&status_message));
                 }
             }
             _ => {
