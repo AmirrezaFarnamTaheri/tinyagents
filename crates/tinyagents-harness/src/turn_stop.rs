@@ -117,6 +117,19 @@ impl TurnStop {
         }
     }
 
+    /// Build a stop directly from the typed classified-failure result.
+    pub fn from_classified_cause(cause: crate::no_progress::ClassifiedStopCause) -> Self {
+        Self::breaker_with_cause(
+            &cause.summary,
+            Self::failure_class(cause.class),
+            Some(cause.operation),
+        )
+    }
+
+    fn failure_class(class: String) -> TurnFailureClass {
+        TurnFailureClass::new(class)
+    }
+
     /// How a top-level run ended, from the outcome's flags. The breaker is the
     /// explicit cause and wins; a wind-down pause can also leave the run
     /// without a final response (which reads as a cap), so it beats the cap.

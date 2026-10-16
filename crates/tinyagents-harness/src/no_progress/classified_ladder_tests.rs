@@ -72,7 +72,7 @@ fn uncertain_side_effect_halt_carries_the_reconcile_suffix() {
         0,
         "timeout",
     ) {
-        ClassifiedStep::Halt(s) => assert!(s.ends_with(UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX)),
+        ClassifiedStep::Halt(s) => assert!(s.summary.ends_with(UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX)),
         other => panic!("expected halt, got {other:?}"),
     }
 }

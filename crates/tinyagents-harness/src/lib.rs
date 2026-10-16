@@ -63,6 +63,7 @@ pub mod agent_loop;
 pub mod artifacts;
 pub mod cache;
 pub mod cancel;
+pub mod close;
 mod canonical_json;
 pub mod capability;
 pub mod catalog;
