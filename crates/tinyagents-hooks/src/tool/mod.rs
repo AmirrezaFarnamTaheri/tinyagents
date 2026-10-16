@@ -216,14 +216,14 @@ where
         // every live parallel run's pending calls.
         pending.retain(|_, (_, _, _, run)| run.strong_count() > 0);
         pending.insert(
-                (ctx.instance_id(), call.id.clone()),
-                (
-                    call.arguments.clone(),
-                    std::time::Instant::now(),
-                    additional_context,
-                    ctx.lifecycle_token(),
-                ),
-            );
+            (ctx.instance_id(), call.id.clone()),
+            (
+                call.arguments.clone(),
+                std::time::Instant::now(),
+                additional_context,
+                ctx.lifecycle_token(),
+            ),
+        );
         Ok(())
     }
 
@@ -295,9 +295,17 @@ where
         for hook in &self.hooks {
             let decision = hook.before_tool_decision(&ctx.data, &event).await;
             let refusal = if decision.is_deny() {
-                decision.agent_message.or(decision.user_message).map(|reason| format!("denied: {reason}"))
+                decision
+                    .agent_message
+                    .or(decision.user_message)
+                    .map(|reason| format!("denied: {reason}"))
             } else if decision.is_ask() {
-                decision.agent_message.or(decision.user_message).map(|reason| format!("requires approval, unavailable for a nested call: {reason}"))
+                decision
+                    .agent_message
+                    .or(decision.user_message)
+                    .map(|reason| {
+                        format!("requires approval, unavailable for a nested call: {reason}")
+                    })
             } else if decision.updated_input.is_some() {
                 Some("rewrites the call, which a nested call cannot apply".to_owned())
             } else {
@@ -306,7 +314,8 @@ where
             if let Some(refusal) = refusal {
                 return Err(TinyAgentsError::Tool(format!(
                     "tool hook '{}' refused nested call to {}: {refusal}",
-                    hook.name(), event.tool_name
+                    hook.name(),
+                    event.tool_name
                 )));
             }
         }
@@ -376,12 +385,12 @@ impl crate::command::HookEngine {
                 generic,
                 identity.clone(),
                 HookPayload::Tool(ToolPayload {
-                tool_name: context.tool_name.clone(),
-                tool_input: context.arguments.clone(),
-                tool_use_id: context.call_id.clone(),
-                tool_output: context.output.clone(),
-                duration_ms: context.duration_ms,
-                error_message: context.error.clone(),
+                    tool_name: context.tool_name.clone(),
+                    tool_input: context.arguments.clone(),
+                    tool_use_id: context.call_id.clone(),
+                    tool_output: context.output.clone(),
+                    duration_ms: context.duration_ms,
+                    error_message: context.error.clone(),
                     ..Default::default()
                 }),
             );
