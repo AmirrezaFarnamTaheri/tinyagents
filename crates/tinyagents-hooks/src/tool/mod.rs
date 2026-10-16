@@ -52,54 +52,28 @@ pub struct ToolHookContext {
     pub cwd: Option<PathBuf>,
 }
 
-/// Unified tool decision vocabulary, also used by command hooks.
-#[derive(Debug, Clone, Default)]
-pub enum ToolHookDecision {
-    /// Allow the original input.
-    #[default]
-    Allow,
-    /// Allow after replacing the input.
-    UpdatedInput(serde_json::Value),
-    /// Refuse the operation.
-    Deny(String),
-    /// Require an external approval decision.
-    Ask(String),
-    /// Allow and append context for the next model call.
-    AdditionalContext(String),
-}
-
-impl From<super::command::HookOutput> for ToolHookDecision {
-    fn from(output: super::command::HookOutput) -> Self {
-        use super::command::HookPermission;
-        match output.permission {
-            Some(HookPermission::Deny) => Self::Deny(output.agent_message.or(output.user_message).unwrap_or_else(|| "denied by hook".into())),
-            Some(HookPermission::Ask) => Self::Ask(output.agent_message.or(output.user_message).unwrap_or_else(|| "approval requested by hook".into())),
-            _ if output.updated_input.is_some() => Self::UpdatedInput(output.updated_input.expect("checked")),
-            _ if output.additional_context.is_some() => Self::AdditionalContext(output.additional_context.expect("checked")),
-            _ => Self::Allow,
-        }
-    }
-}
+/// Unified decision type for typed and command hooks.
+pub type ToolHookDecision = super::command::HookOutput;
 
 /// Typed callback around tool execution.
 #[async_trait]
-pub trait ToolHook: Send + Sync {
+pub trait ToolHook<Ctx: Send + Sync = ()>: Send + Sync {
     /// Stable diagnostic name.
     fn name(&self) -> &str;
     /// Observe before execution. Errors are treated as a denial.
-    async fn before_tool(&self, _context: &ToolHookContext) -> anyhow::Result<()> { Ok(()) }
+    async fn before_tool(&self, _host_context: &Ctx, _context: &ToolHookContext) -> anyhow::Result<()> { Ok(()) }
     /// Decide before execution. Override to rewrite or deny the call.
-    async fn before_tool_decision(&self, context: &ToolHookContext) -> ToolHookDecision {
-        match self.before_tool(context).await {
-            Ok(()) => ToolHookDecision::Allow,
-            Err(error) => ToolHookDecision::Deny(format!("{error:#}")),
+    async fn before_tool_decision(&self, host_context: &Ctx, context: &ToolHookContext) -> ToolHookDecision {
+        match self.before_tool(host_context, context).await {
+            Ok(()) => ToolHookDecision::default(),
+            Err(error) => ToolHookDecision::deny(format!("{error:#}")),
         }
     }
     /// Observe a completed invocation. Errors are advisory.
-    async fn after_tool(&self, _context: &ToolHookContext) -> anyhow::Result<()> { Ok(()) }
+    async fn after_tool(&self, _host_context: &Ctx, _context: &ToolHookContext) -> anyhow::Result<()> { Ok(()) }
     /// Observe a completed invocation and optionally return model context.
-    async fn after_tool_context(&self, context: &ToolHookContext) -> Option<String> {
-        if let Err(error) = self.after_tool(context).await {
+    async fn after_tool_context(&self, host_context: &Ctx, context: &ToolHookContext) -> Option<String> {
+        if let Err(error) = self.after_tool(host_context, context).await {
             tracing::warn!(hook = self.name(), %error, "tool hook failed after execution");
         }
         None
@@ -108,14 +82,14 @@ pub trait ToolHook: Send + Sync {
 
 /// Deliver typed callbacks through the harness middleware lifecycle.
 pub struct ToolHooksMiddleware<Ctx> {
-    hooks: Vec<std::sync::Arc<dyn ToolHook>>,
-    arguments: std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+    hooks: Vec<std::sync::Arc<dyn ToolHook<Ctx>>>,
+    arguments: std::sync::Mutex<std::collections::HashMap<(u64, String), (serde_json::Value, std::time::Instant)>>,
     marker: std::marker::PhantomData<fn() -> Ctx>,
 }
 
 impl<Ctx> ToolHooksMiddleware<Ctx> {
     /// Creates a middleware with callbacks in execution order.
-    pub fn new(hooks: Vec<std::sync::Arc<dyn ToolHook>>) -> Self {
+    pub fn new(hooks: Vec<std::sync::Arc<dyn ToolHook<Ctx>>>) -> Self {
         Self { hooks, arguments: std::sync::Mutex::new(std::collections::HashMap::new()), marker: std::marker::PhantomData }
     }
 }
@@ -134,28 +108,32 @@ where Ctx: HookIdentity + Send + Sync {
             session_id: ctx.data.session_id(), agent_id: ctx.data.agent_id(), cwd: ctx.data.cwd(),
         };
         for hook in &self.hooks {
-            match hook.before_tool_decision(&event).await {
-                ToolHookDecision::Allow | ToolHookDecision::AdditionalContext(_) => {}
-                ToolHookDecision::UpdatedInput(input) => { call.arguments = input.clone(); event.arguments = input; }
-                ToolHookDecision::Deny(reason) => return Err(TinyAgentsError::Tool(format!("tool hook '{}' denied {}: {reason}", hook.name(), event.tool_name))),
-                ToolHookDecision::Ask(reason) => return Err(TinyAgentsError::Tool(format!("tool hook '{}' requires approval for {}: {reason}", hook.name(), event.tool_name))),
+            let decision = hook.before_tool_decision(&ctx.data, &event).await;
+            if decision.is_deny() || decision.is_ask() {
+                let reason = decision.agent_message.or(decision.user_message).unwrap_or_else(|| "hook refused the tool call".into());
+                let kind = if decision.is_ask() { "requires approval for" } else { "denied" };
+                return Err(TinyAgentsError::Tool(format!("tool hook '{}' {kind} {}: {reason}", hook.name(), event.tool_name)));
+            }
+            if let Some(input) = decision.updated_input {
+                call.arguments = input.clone();
+                event.arguments = input;
             }
         }
-        self.arguments.lock().unwrap_or_else(|e| e.into_inner()).insert(call.id.clone(), call.arguments.clone());
+        self.arguments.lock().unwrap_or_else(|e| e.into_inner()).insert((ctx.instance_id(), call.id.clone()), (call.arguments.clone(), std::time::Instant::now()));
         Ok(())
     }
 
     async fn after_tool(&self, ctx: &mut tinyagents_harness::context::RunContext<Ctx>, _state: &(), invocation: &tinyagents_harness::middleware::ToolInvocationIdentity, result: &mut tinytools::ToolResult) -> tinyagents_harness::error::Result<()> {
-        let args = self.arguments.lock().unwrap_or_else(|e| e.into_inner()).remove(&invocation.call_id().to_string()).unwrap_or(serde_json::Value::Null);
+        let (args, started) = self.arguments.lock().unwrap_or_else(|e| e.into_inner()).remove(&(ctx.instance_id(), invocation.call_id().to_string())).unwrap_or((serde_json::Value::Null, std::time::Instant::now()));
         let text = result.text();
         let mut event = ToolHookContext {
             event: ToolHookEvent::PostToolUse, call_id: invocation.call_id().to_string(), tool_name: invocation.tool_name().to_owned(), arguments: args,
-            success: Some(!result.is_error), duration_ms: None,
+            success: Some(!result.is_error), duration_ms: Some(started.elapsed().as_millis().min(u64::MAX as u128) as u64),
             output: (!result.is_error).then(|| text.clone()), error: result.is_error.then_some(text),
             session_id: ctx.data.session_id(), agent_id: ctx.data.agent_id(), cwd: ctx.data.cwd(),
         };
         for hook in self.hooks.iter().rev() {
-            if let Some(additional) = hook.after_tool_context(&event).await {
+            if let Some(additional) = hook.after_tool_context(&ctx.data, &event).await {
                 result.content.push(tinytools::ToolContent::Text { text: additional });
             }
             event.arguments = event.arguments.clone();
@@ -165,17 +143,17 @@ where Ctx: HookIdentity + Send + Sync {
 }
 
 #[async_trait]
-impl ToolHook for crate::command::HookEngine {
+impl<Ctx: HookIdentity + Send + Sync> ToolHook<Ctx> for crate::command::HookEngine {
     fn name(&self) -> &str { "command_hooks" }
 
-    async fn before_tool_decision(&self, context: &ToolHookContext) -> ToolHookDecision {
+    async fn before_tool_decision(&self, host: &Ctx, context: &ToolHookContext) -> ToolHookDecision {
         let input = crate::command::context::build_input(
             crate::command::HookEvent::PreToolUse,
             crate::command::context::TurnIdentity {
-                conversation_id: context.session_id.clone(),
-                session_id: context.session_id.clone(),
-                agent_id: context.agent_id.clone(),
-                cwd: context.cwd.as_ref().map(|path| path.display().to_string()),
+                conversation_id: host.session_id(),
+                session_id: host.session_id(),
+                agent_id: host.agent_id(),
+                cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
                 ..Default::default()
             },
             crate::command::HookPayload::Tool(crate::command::ToolPayload {
@@ -185,18 +163,18 @@ impl ToolHook for crate::command::HookEngine {
                 ..Default::default()
             }),
         );
-        self.dispatch(crate::command::HookEvent::PreToolUse, input).await.output.into()
+        self.dispatch(crate::command::HookEvent::PreToolUse, input).await.output
     }
 
-    async fn after_tool_context(&self, context: &ToolHookContext) -> Option<String> {
+    async fn after_tool_context(&self, host: &Ctx, context: &ToolHookContext) -> Option<String> {
         let event = if context.success == Some(false) { crate::command::HookEvent::PostToolUseFailure } else { crate::command::HookEvent::PostToolUse };
         let input = crate::command::context::build_input(
             event,
             crate::command::context::TurnIdentity {
-                conversation_id: context.session_id.clone(),
-                session_id: context.session_id.clone(),
-                agent_id: context.agent_id.clone(),
-                cwd: context.cwd.as_ref().map(|path| path.display().to_string()),
+                conversation_id: host.session_id(),
+                session_id: host.session_id(),
+                agent_id: host.agent_id(),
+                cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
                 ..Default::default()
             },
             crate::command::HookPayload::Tool(crate::command::ToolPayload {
