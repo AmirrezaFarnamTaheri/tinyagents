@@ -532,7 +532,7 @@ fn atomic_write_under_dir(
             &directory,
             name.as_str(),
             OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
-            Mode::RWUSR,
+            Mode::RUSR | Mode::WUSR,
         ) {
             Ok(fd) => {
                 temp_name = Some(name);
