@@ -62,7 +62,7 @@ pub use key::{
     model_cache_identity, prompt_cache_key, scoped_cache_key,
 };
 pub use miss::{DEFAULT_CACHE_MISS_NOISE_FLOOR_TOKENS, PromptCacheMiss, PromptCacheTracker};
-pub use singleflight::SingleFlight;
+pub use singleflight::{SharedFlightEntry, SharedFlightMap, SingleFlight};
 pub use types::*;
 
 #[cfg(test)]
