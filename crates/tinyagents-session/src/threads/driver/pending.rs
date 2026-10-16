@@ -102,6 +102,7 @@ impl AppendIntent {
             id: row.id,
             version: row.version,
             doc: intent,
+            meta: row.meta,
         })
     }
 }
