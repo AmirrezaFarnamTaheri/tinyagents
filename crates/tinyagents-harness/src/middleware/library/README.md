@@ -102,12 +102,12 @@ Grouped by extension shape:
   before result-transforming middleware so its reverse-order result hook sees
   the transformed output.
 - `FailureScopeMiddleware` — correlates tool calls with their final results
-  and owns per-run generic no-progress, classified-recovery, and recoverable
-  failure trackers, typed halts, and one-shot request nudges. The host supplies
-  resource scoping, failure classifications/exemptions, terminal model-failure
-  detection, and halt copy through `FailureScopePolicy`. Construct one driver
-  per active run because its steering handle and halt-summary slot are run
-  specific.
+  and passes the original `ToolCall` to host classification without a second
+  call-id map. It owns per-run no-progress, classified-recovery, and recoverable
+  failure trackers, typed halts, and one-shot request nudges. Host policy also
+  supplies lifecycle callbacks for stop-latch batch/refusal/progress evidence.
+  Construct a **new driver per run** because its steering handle and
+  halt-summary slot are run specific.
 - `run_output_ladder` — the shared compact, persist-or-cap, disclose sequence
   for tool results. The host supplies `OutputProcessor` and `OutputCapPolicy`.
 
