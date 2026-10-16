@@ -149,3 +149,7 @@ pub fn estimate_context_tokens(messages: &[Message], tokenize: impl Fn(&str) -> 
         })
         .sum()
 }
+
+#[cfg(test)]
+#[path = "stats_tests.rs"]
+mod tests;
