@@ -163,6 +163,21 @@ fn stale_success_cannot_reset_or_release_a_new_attempt() {
 }
 
 #[test]
+fn stale_failure_cannot_record_against_a_new_attempt() {
+    let breaker = PersistentFailoverBreaker::<String>::default();
+    let mut old = breaker.try_acquire("key".into(), 0).unwrap();
+    breaker.reset(&"key".to_owned());
+    let mut current = breaker.try_acquire("key".into(), 0).unwrap();
+    assert!(old.record_failure(0).is_none());
+    assert!(matches!(
+        breaker.try_acquire("key".into(), 0),
+        Err(BreakerRejection::InFlight)
+    ));
+    let failure = current.record_failure(0).unwrap();
+    assert_eq!(failure.failure_count, 1);
+}
+
+#[test]
 fn success_resets_a_nonzero_failure_streak() {
     let breaker = PersistentFailoverBreaker::<String>::new(PersistentFailoverBreakerConfig {
         base_backoff_ms: 5,
