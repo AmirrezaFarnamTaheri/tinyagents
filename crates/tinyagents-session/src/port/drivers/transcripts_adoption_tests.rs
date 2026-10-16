@@ -214,10 +214,11 @@ fn a_reserved_stem_reports_nothing_adopted() {
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
     let docs = Arc::clone(&locator.docs);
+    let tables = Arc::clone(&locator.tables);
     let declared = Arc::clone(&locator.declared);
     run_on(&locator.bridge, async move {
         declared.ensure(&docs).await?;
-        Ok(DriverTranscriptLocator::reserve(&docs, &stem).await)
+        Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
     })
     .unwrap()
     .unwrap();
