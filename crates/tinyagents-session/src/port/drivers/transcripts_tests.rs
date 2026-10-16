@@ -1,6 +1,6 @@
 use super::*;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend, Version};
+use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");
@@ -23,6 +23,29 @@ fn docs() -> Arc<dyn DocumentStore> {
 
 fn locator(docs: &Arc<dyn DocumentStore>) -> DriverTranscriptLocator {
     DriverTranscriptLocator::new(Arc::clone(docs), Blocking::new().unwrap(), "memory://test")
+}
+
+/// Lets the reservation of `stem` lapse, as if its owner stopped long ago.
+fn lapse_reservation(docs: &Arc<dyn DocumentStore>, stem: &str) {
+    let docs = Arc::clone(docs);
+    let id = Key::of(["session", stem]).unwrap().as_str().to_owned();
+    on_bridge(async move {
+        let found = docs.get("tsd.leases", &id).await?.expect("a reservation");
+        let mut body = found.doc;
+        body["expires_ms"] = json!(0);
+        docs.put("tsd.leases", &id, body, Precondition::None).await
+    });
+}
+
+/// The epoch of the live or lapsed reservation of `stem`.
+fn reservation_epoch(docs: &Arc<dyn DocumentStore>, stem: &str) -> u64 {
+    let docs = Arc::clone(docs);
+    let id = Key::of(["session", stem]).unwrap().as_str().to_owned();
+    on_bridge(async move { docs.get("tsd.leases", &id).await })
+        .expect("a reservation")
+        .doc["epoch"]
+        .as_u64()
+        .unwrap()
 }
 
 fn turn<'a>(
@@ -297,15 +320,15 @@ fn a_stale_reservation_is_taken_over() {
         .unwrap();
     locator.begin_generation(&session, meta("t")).unwrap();
     // The process that reserved generation 1 stopped before writing it.
-    let id = doc_key(&[&session_stem(&session.next_generation())]);
-    let aged = Arc::clone(&docs);
-    on_bridge(async move {
-        let found = aged.get(INDEX, &id).await?.unwrap();
-        let mut doc = found.doc;
-        doc["reserved_at"] = json!(0);
-        aged.put(INDEX, &id, doc, Precondition::None).await
-    });
+    let stem = session_stem(&session.next_generation());
+    assert_eq!(reservation_epoch(&docs, &stem), 1);
+    lapse_reservation(&docs, &stem);
     let (successor, next) = locator.begin_generation(&session, meta("t")).unwrap();
+    assert_eq!(
+        reservation_epoch(&docs, &stem),
+        2,
+        "a takeover advances the lease epoch, which fences the stalled owner"
+    );
     next.append(message("user", "summary")).unwrap();
     assert_eq!(locator.head_generation(&session), successor);
 }
@@ -347,6 +370,8 @@ fn lookups_find_the_newest_written_root() {
         .unwrap()
         .append(message("user", "old"))
         .unwrap();
+    // Creation time is kept in whole milliseconds.
+    std::thread::sleep(std::time::Duration::from_millis(3));
     locator
         .open_stem("new", meta("t"))
         .unwrap()
@@ -396,12 +421,17 @@ fn a_thread_change_moves_the_transcript_in_the_index() {
 
 #[test]
 fn ids_are_unambiguous_and_bounded() {
-    assert_ne!(doc_key(&["a/b", "c"]), doc_key(&["a", "b/c"]));
+    assert_ne!(entry_id("a/b", 1).unwrap(), entry_id("a", 1).unwrap());
+    assert_eq!(entry_id("a/b", 7).unwrap(), "a%2Fb/0000000007");
+    assert_eq!(entry_id("s", 7).unwrap(), "s/0000000007");
+    assert_eq!(index_id("s").unwrap(), "s");
+    assert!(index_id("").is_err(), "an empty stem has no id");
+    // Zero padding keeps ids in log order.
+    assert!(entry_id("s", 9).unwrap() < entry_id("s", 10).unwrap());
     let long = "x".repeat(1_000);
-    let hashed = doc_key(&[&long]);
-    assert!(hashed.starts_with("h:") && hashed.len() == 66, "{hashed}");
-    assert!(entry_id(&long, 9).len() < tinystoragedrivers_core::MAX_ID_LEN);
-    assert_eq!(entry_id("s", 7), "1:s#0000000007");
+    let hashed = index_id(&long).unwrap();
+    assert!(hashed.starts_with('~') && hashed.len() == 53, "{hashed}");
+    assert!(entry_id(&long, 9).unwrap().len() < tinystoragedrivers_core::MAX_ID_LEN);
     assert!(is_subagent("parent__child"));
     assert!(!is_subagent("__child"));
     assert!(!is_subagent("plain"));
@@ -426,7 +456,7 @@ fn an_unreadable_entry_is_an_error() {
     on_bridge(async move {
         raw.put(
             ENTRIES,
-            &entry_id("s", 1),
+            &entry_id("s", 1).unwrap(),
             json!({ "stem": "s", "seq": 1, "set": "not rows" }),
             Precondition::None,
         )
@@ -442,16 +472,23 @@ fn the_index_keeps_its_creation_time() {
     let rows = vec![message("user", "a")];
     history.append_turn(turn(&[], &rows, &meta("t"))).unwrap();
     let read = Arc::clone(&docs);
-    let first = on_bridge(async move { read.get(INDEX, &doc_key(&["s"])).await });
+    let first = on_bridge(async move { read.get(INDEX, &index_id("s").unwrap()).await });
     history
         .append_turn(turn(&rows, &rows, &meta("t2")))
         .unwrap();
     let read = Arc::clone(&docs);
-    let second = on_bridge(async move { read.get(INDEX, &doc_key(&["s"])).await });
+    let second = on_bridge(async move { read.get(INDEX, &index_id("s").unwrap()).await });
     let (first, second) = (first.unwrap(), second.unwrap());
-    assert_eq!(first.doc["created_at"], second.doc["created_at"]);
+    assert!(
+        first.doc.get("created_at").is_none(),
+        "the time is metadata"
+    );
+    assert!(first.meta.created_ms > 0);
+    assert_eq!(first.meta.created_ms, second.meta.created_ms);
+    assert!(second.meta.updated_ms >= first.meta.updated_ms);
+    assert_eq!(second.meta.schema, 2);
     assert_eq!(second.doc["thread_id"], json!("t2"));
-    assert!(second.version > first.version || first.version == Version(1));
+    assert!(second.version > first.version);
 }
 
 #[test]
@@ -600,7 +637,7 @@ fn a_read_repairs_an_index_a_write_could_not_refresh() {
     // The index refresh after that write was lost.
     let raw = Arc::clone(&docs);
     on_bridge(async move {
-        raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
+        raw.delete(INDEX, &index_id("s").unwrap(), Precondition::None)
             .await
     });
     assert!(locator.root_for_thread("t").is_none());
@@ -624,7 +661,7 @@ fn a_display_read_repairs_an_index_a_write_could_not_refresh() {
     // The index refresh after that write was lost.
     let raw = Arc::clone(&docs);
     on_bridge(async move {
-        raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
+        raw.delete(INDEX, &index_id("s").unwrap(), Precondition::None)
             .await
     });
     assert!(locator.root_for_thread("t").is_none());
@@ -654,7 +691,7 @@ fn a_listing_sees_and_repairs_a_root_whose_index_refresh_failed() {
         .unwrap();
     let raw = Arc::clone(&docs);
     on_bridge(async move {
-        raw.delete(INDEX, &doc_key(&["s"]), Precondition::None)
+        raw.delete(INDEX, &index_id("s").unwrap(), Precondition::None)
             .await
     });
     assert!(
@@ -690,7 +727,7 @@ fn a_listing_repairs_an_unindexed_subagent_of_an_indexed_root() {
     on_bridge(async move {
         raw.delete(
             INDEX,
-            &doc_key(&["100_root__200_child"]),
+            &index_id("100_root__200_child").unwrap(),
             Precondition::None,
         )
         .await
@@ -739,14 +776,9 @@ fn a_taken_over_generation_refuses_its_stalled_owner() {
         .unwrap();
     let (_, stalled) = locator.begin_generation(&session, meta("t")).unwrap();
     // The owner stalls past the stale timeout and another process takes over.
-    let id = doc_key(&[&session_stem(&session.next_generation())]);
-    let aged = Arc::clone(&docs);
-    on_bridge(async move {
-        let found = aged.get(INDEX, &id).await?.unwrap();
-        let mut doc = found.doc;
-        doc["reserved_at"] = json!(0);
-        aged.put(INDEX, &id, doc, Precondition::None).await
-    });
+    let stem = session_stem(&session.next_generation());
+    assert_eq!(reservation_epoch(&docs, &stem), 1);
+    lapse_reservation(&docs, &stem);
     let (_, winner) = locator.begin_generation(&session, meta("t")).unwrap();
     winner.append(message("user", "winner")).unwrap();
 

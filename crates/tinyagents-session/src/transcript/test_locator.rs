@@ -16,8 +16,11 @@ use crate::port::{DriverSessionStores, SessionStoreProvider};
 
 /// An empty driver-backed locator (the production store, over memory).
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
-    let provider = DriverSessionStores::new(Arc::new(MemoryStorage::new()))
-        .expect("driver session stores over memory");
+    let provider = DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .expect("driver session stores over memory");
     provider.for_agent("test").transcripts
 }
 

@@ -72,20 +72,26 @@ memory in tests) gets a complete provider from it:
 
 ```rust
 let backend: Arc<dyn StorageBackend> = Arc::new(SqliteStorage::open(path)?);
-let provider = DriverSessionStores::new(backend)?.recover_on_open(true);
+let provider = DriverSessionStores::new(backend, Scope::local())?.recover_on_open(true);
 ```
 
-Each agent id becomes a storage `Scope`. An id that is not a valid scope,
-or that starts with the reserved `sha256:` prefix, maps to `sha256:<hex>` of
-itself, so no raw id can name a hashed scope, and the driver enforces scopes, so the
-provider claims isolation and passes `session_store_isolation_conformance`.
+The provider is constructed with the **tenant** `Scope` it serves
+(`Scope::local()` for the desktop operator, `Scope::tenant(id)` for a user) and
+derives each agent's scope itself, `tenant.agent(id)` (`local/agent:<id>`); it
+never uses a raw agent id as a scope. `Scope::agent` hashes an id that is too
+long or outside the segment grammar (the segment only, so the agent stays under
+its tenant), and an empty id has no scope. `new` refuses a scope that is not a
+tenant. The v1 constructor took no tenant (`new(backend)`) and stored agents under
+the raw id or `sha256:<hex>`; the driver enforces scopes, so the provider claims
+isolation and passes `session_store_isolation_conformance`. The v2 names and
+migration steps are in [storage-schema.md](storage-schema.md).
 
 ### Prepared actor schemas
 
 Existing constructors keep declaring schema lazily. A trusted host can instead
 prepare `DriverSessionStores::collection_specs()` through `prepare_schema`,
 then create an actor provider with
-`new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)`.
+`new_with_schema_admission(backend, tenant, SchemaAdmission::ValidateOnly)`.
 Import the original admission policy from
 `tinyagents_harness::store::SchemaAdmission`; the session driver constructors
 consume that type directly.
@@ -162,8 +168,9 @@ literals and providers are unchanged.
 
 | Store | Backend shape |
 | --- | --- |
-| transcripts | `session_transcripts`: one index document per stem (thread, agent, sub-agent flag, creation time); `session_transcript_entries`: an append-only log per stem |
-| turn states | `session_turn_states`: one document per `(thread, request)` |
+| transcripts | `session.transcripts`: one index document per stem (thread, agent, sub-agent flag; its creation time is the `_created_ms` metadata); `session.transcript_entries`: an append-only log per stem |
+| generation reservations | `tsd.leases` (owner `session`, key = the successor stem) |
+| turn states | `session.turn_states`: one document per `(thread, request)` |
 | key-value | `tsd.kv` (owner `session`) through the harness `DriverStore` |
 | journal | streams `16:session_journal/<name>` (the harness `DriverAppendStore` always writes `<prefix len>:` first) |
 
