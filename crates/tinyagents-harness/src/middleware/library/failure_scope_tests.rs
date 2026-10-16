@@ -43,14 +43,14 @@ impl FailureScopePolicy<()> for Policy {
     }
 }
 
-fn context() -> RunContext<()> {
+fn context(instance_id: u64) -> RunContext<()> {
     let mut ctx = RunContext::new(RunConfig::new("failure-scope"), ());
-    ctx.instance_id = 41;
+    ctx.instance_id = instance_id;
     ctx
 }
 
-async fn fail_once(middleware: &FailureScopeMiddleware<()>, id: &str) {
-    let mut ctx = context();
+async fn fail_once(middleware: &FailureScopeMiddleware<()>, run_id: u64, id: &str) {
+    let mut ctx = context(run_id);
     let mut call = ToolCall::new(id, "read_file", json!({"path": "a.txt"}));
     middleware
         .before_tool(&mut ctx, &(), &mut call)
@@ -71,19 +71,21 @@ async fn repeated_failures_nudge_before_halt() {
     let middleware =
         FailureScopeMiddleware::new(handle.clone(), halt_summary.clone(), Arc::new(Policy));
 
-    fail_once(&middleware, "one").await;
+    fail_once(&middleware, 41, "one").await;
     assert!(halt_summary.lock().unwrap().is_none());
-    fail_once(&middleware, "two").await;
-    assert!(middleware.nudges.drain_for(&context()).len() > 0);
+    fail_once(&middleware, 41, "two").await;
+    assert!(!middleware.nudges.drain_for(&context(41)).is_empty());
     assert!(halt_summary.lock().unwrap().is_none());
-    fail_once(&middleware, "three").await;
+    fail_once(&middleware, 41, "three").await;
 
     assert!(
         halt_summary
             .lock()
             .unwrap()
             .as_deref()
-            .is_some_and(|summary| summary.starts_with("Stopping:"))
+            .is_some_and(|summary| {
+                summary.starts_with("Stopping: the `read_file` call was retried 3 times")
+            })
     );
     assert!(
         handle
@@ -91,6 +93,38 @@ async fn repeated_failures_nudge_before_halt() {
             .iter()
             .any(|command| matches!(command, SteeringCommand::Pause))
     );
+}
+
+#[tokio::test]
+async fn separate_run_instances_keep_halts_and_pause_handles_isolated() {
+    let first_handle = SteeringHandle::allow_all();
+    let first_summary = Arc::new(std::sync::Mutex::new(None));
+    let first = FailureScopeMiddleware::new(
+        first_handle.clone(),
+        first_summary.clone(),
+        Arc::new(Policy),
+    );
+    let second_handle = SteeringHandle::allow_all();
+    let second_summary = Arc::new(std::sync::Mutex::new(None));
+    let second = FailureScopeMiddleware::new(
+        second_handle.clone(),
+        second_summary.clone(),
+        Arc::new(Policy),
+    );
+
+    for n in 0..3 {
+        fail_once(&first, 51, &format!("first-{n}")).await;
+    }
+    assert!(first_summary.lock().unwrap().is_some());
+    assert!(second_summary.lock().unwrap().is_none());
+    assert!(first_handle.drain().iter().any(|c| matches!(c, SteeringCommand::Pause)));
+    assert!(second_handle.drain().is_empty());
+
+    for n in 0..3 {
+        fail_once(&second, 52, &format!("second-{n}")).await;
+    }
+    assert!(second_summary.lock().unwrap().is_some());
+    assert!(second_handle.drain().iter().any(|c| matches!(c, SteeringCommand::Pause)));
 }
 
 #[tokio::test]
@@ -127,7 +161,7 @@ async fn host_can_classify_terminal_failures_with_a_typed_cause() {
     let summary = Arc::new(std::sync::Mutex::new(None));
     let middleware =
         FailureScopeMiddleware::new(handle.clone(), summary.clone(), Arc::new(TerminalPolicy));
-    fail_once(&middleware, "terminal").await;
+    fail_once(&middleware, 41, "terminal").await;
     assert_eq!(
         summary.lock().unwrap().as_deref(),
         Some("terminal inference failure")
