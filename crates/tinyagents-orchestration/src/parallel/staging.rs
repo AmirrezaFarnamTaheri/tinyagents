@@ -198,12 +198,12 @@ impl<P> Plan<P> {
     }
 }
 
-struct PreflightAdmission<'a, P, Policy> {
+struct PreflightAdmission<'a, Policy> {
     policy: &'a Policy,
     failures: HashMap<usize, String>,
 }
 
-impl<P, Policy: AdmissionPolicy<P>> AdmissionPolicy<P> for PreflightAdmission<'_, P, Policy> {
+impl<P, Policy: AdmissionPolicy<P>> AdmissionPolicy<P> for PreflightAdmission<'_, Policy> {
     fn admit(&self, index: usize, task: &Task<P>) -> AdmissionVerdict {
         match self.failures.get(&index) {
             Some(reason) => AdmissionVerdict::Reject(reason.clone()),
