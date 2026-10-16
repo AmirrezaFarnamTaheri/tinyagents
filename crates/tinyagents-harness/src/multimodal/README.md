@@ -7,8 +7,9 @@ message text.
 
 A user attaches a picture or a document; somewhere between the text box and
 the provider that attachment has to become bytes the model can read —
-validated, size-capped, MIME-checked, and rendered into the message. This
-module is that pipeline, minus every decision that belongs to a host.
+validated, size-capped, MIME-checked, and rendered into the message. The
+multimodal module provides that generic pipeline while leaving source access,
+scope, selected-model facts, and other host policy behind explicit seams.
 Attachments travel as markers inside message text rather than a parallel
 structured field, so they survive every hop a host already has (persistence,
 summarisation, delegation) without each of those learning about attachments.
