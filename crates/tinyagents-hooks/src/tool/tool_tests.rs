@@ -249,6 +249,129 @@ async fn command_engine_fires_generic_and_derived_shell_events() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn derived_shell_hook_receives_generic_argument_rewrite() {
+    use crate::command::{HookEngine, config, environment::HookEnvironment};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("hooks.json"),
+        r#"{"version":1,"hooks":{"preToolUse":[{"command":"./rewrite.sh"}],"beforeShellExecution":[{"command":"./observe.sh"}]}}"#,
+    ).expect("hooks config");
+    for (name, body) in [
+        (
+            "rewrite.sh",
+            "#!/bin/sh\necho '{\"updatedInput\":{\"command\":\"rewritten command\"}}'\n",
+        ),
+        (
+            "observe.sh",
+            "#!/bin/sh\ninput=$(cat)\ncase \"$input\" in *\"rewritten command\"*) echo '{\"additional_context\":\"derived saw rewrite\"}' ;; *) echo '{\"permission\":\"deny\",\"agent_message\":\"derived saw stale arguments\"}' ;; esac\n",
+        ),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).expect("script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    let engine = HookEngine::new(HookEnvironment::new("Test", None));
+    engine
+        .install(config::load(engine.environment(), None, Some(dir.path())))
+        .await;
+    let context = ToolHookContext {
+        event: ToolHookEvent::PreToolUse,
+        call_id: "call-1".into(),
+        tool_name: "shell".into(),
+        arguments: serde_json::json!({"command":"original command"}),
+        success: None,
+        duration_ms: None,
+        output: None,
+        error: None,
+        session_id: Some("session".into()),
+        agent_id: Some("agent".into()),
+        cwd: None,
+    };
+    let output = engine
+        .dispatch_tool_hooks(
+            &context,
+            crate::command::context::TurnIdentity::default(),
+            true,
+        )
+        .await;
+    assert!(
+        !output.is_deny(),
+        "derived hook must see the rewritten command"
+    );
+    assert_eq!(
+        output.updated_input,
+        Some(serde_json::json!({"command":"rewritten command"}))
+    );
+    assert_eq!(
+        output.additional_context.as_deref(),
+        Some("derived saw rewrite")
+    );
+}
+
+struct OrderedAfterHook(&'static str);
+
+#[async_trait]
+impl ToolHook<Host> for OrderedAfterHook {
+    fn name(&self) -> &str {
+        self.0
+    }
+    async fn after_tool_context(&self, _: &Host, _: &ToolHookContext) -> Option<String> {
+        Some(self.0.into())
+    }
+}
+
+#[tokio::test]
+async fn after_tool_callbacks_follow_registration_order() {
+    let middleware = ToolHooksMiddleware::new(vec![
+        Arc::new(OrderedAfterHook("first")),
+        Arc::new(OrderedAfterHook("second")),
+    ]);
+    let mut context = run("ordered");
+    let mut tool_call = call("call");
+    Middleware::before_tool(&middleware, &mut context, &(), &mut tool_call)
+        .await
+        .unwrap();
+    let identity = ToolInvocationIdentity::new("call", "read");
+    let mut result = ToolResult::success("result");
+    Middleware::after_tool(&middleware, &mut context, &(), &identity, &mut result)
+        .await
+        .unwrap();
+    let additional: Vec<_> = result
+        .content
+        .into_iter()
+        .filter_map(|item| match item {
+            ToolContent::Text { text } if text != "result" => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(additional, ["first", "second"]);
+}
+
+#[tokio::test]
+async fn abandoned_call_state_is_pruned_after_its_run_ends() {
+    let middleware = ToolHooksMiddleware::<Host>::new(Vec::new());
+    let mut first = run("first");
+    let first_instance = first.instance_id();
+    Middleware::before_tool(&middleware, &mut first, &(), &mut call("same"))
+        .await
+        .unwrap();
+    drop(first);
+
+    let mut second = run("second");
+    let second_instance = second.instance_id();
+    Middleware::before_tool(&middleware, &mut second, &(), &mut call("same"))
+        .await
+        .unwrap();
+    let pending = middleware.arguments.lock().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert!(pending.contains_key(&(second_instance, "same".into())));
+    assert!(!pending.contains_key(&(first_instance, "same".into())));
+}
+
 #[test]
 fn successful_output_summary_keeps_shape_and_discards_contents() {
     let summary = sanitize_tool_output("secret-token-value", "read_file", true);

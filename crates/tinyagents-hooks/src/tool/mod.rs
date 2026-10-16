@@ -278,7 +278,6 @@ where
         _state: &(),
         call: &tinyinference_llm::tool::ToolCall,
     ) -> tinyagents_harness::error::Result<()> {
-        return Ok(()); // temporary red verification of the nested-call regression
         use tinyagents_harness::error::TinyAgentsError;
         let event = ToolHookContext {
             event: ToolHookEvent::PreToolUse,
