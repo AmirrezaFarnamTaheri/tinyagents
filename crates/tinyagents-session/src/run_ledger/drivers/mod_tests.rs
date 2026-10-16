@@ -32,7 +32,7 @@ fn workflow(id: &str) -> WorkflowRunUpsert {
         child_run_ids: vec![],
         status: WorkflowRunStatus::Running,
         summary: Some("original".into()),
-        started_at: Some(Utc::now() - Duration::days(1)),
+        started_at: Some(now() - Duration::days(1)),
         completed_at: None,
     }
 }
@@ -137,7 +137,7 @@ async fn scoped_telemetry_upserts_merge_and_isolate_records() {
 #[tokio::test]
 async fn scoped_team_records_preserve_merge_identity_order_and_unique_names() {
     let (a, b) = ledgers();
-    let old = Utc::now() - Duration::days(1);
+    let old = now() - Duration::days(1);
     let input = AgentTeamUpsert {
         id: "team".into(),
         parent_thread_id: Some("thread".into()),
@@ -152,7 +152,7 @@ async fn scoped_team_records_preserve_merge_identity_order_and_unique_names() {
         .upsert_agent_team(AgentTeamUpsert {
             parent_thread_id: None,
             summary: None,
-            created_at: Some(Utc::now()),
+            created_at: Some(now()),
             ..input
         })
         .await
@@ -498,7 +498,7 @@ async fn scoped_workflow_terminal_cas_preserves_started_at_and_clears_lease() {
 #[tokio::test]
 async fn scoped_workflow_expiry_boundary_uses_exact_supplied_timestamp() {
     let (ledger, _) = ledgers();
-    let now = Utc::now();
+    let now = now();
     ledger
         .upsert_workflow_run(workflow("workflow"))
         .await
@@ -679,7 +679,7 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
     );
     ledger.entry_import_legacy("session", &[]).await.unwrap();
     ledger.entry_rebuild_index("session").await.unwrap();
-    assert_eq!(ledger.apply_retention(Utc::now()).await.unwrap().total(), 0);
+    assert_eq!(ledger.apply_retention(now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
         Some(before)

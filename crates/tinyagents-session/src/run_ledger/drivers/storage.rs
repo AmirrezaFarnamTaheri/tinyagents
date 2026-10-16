@@ -64,6 +64,11 @@ pub(super) fn now() -> DateTime<Utc> {
     DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap_or_else(Utc::now)
 }
 
+/// A caller-supplied time at the precision the ledger stores.
+pub(super) fn trunc(time: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(time.timestamp_millis()).unwrap_or(time)
+}
+
 /// Ignore trim-empty filter inputs, retaining nonblank values verbatim as SQL does.
 pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> Filter {
     match value.filter(|value| !value.trim().is_empty()) {
@@ -157,7 +162,7 @@ pub(super) fn specs() -> Vec<CollectionSpec> {
 
 /// The shared `tsd.*` collections this ledger reads: leases, counters and the
 /// migration receipts.
-fn primitive_specs() -> Vec<CollectionSpec> {
+pub(super) fn primitive_specs() -> Vec<CollectionSpec> {
     let mut all = primitives::collection_specs();
     all.push(CollectionSpec::new(MIGRATIONS_COLLECTION));
     all

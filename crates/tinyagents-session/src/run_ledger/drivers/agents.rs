@@ -193,7 +193,7 @@ fn merge_agent(
         error: None,
         metadata: upsert.metadata.clone(),
         telemetry: None,
-        started_at: upsert.started_at.unwrap_or(now),
+        started_at: upsert.started_at.map(trunc).unwrap_or(now),
         updated_at: now,
         completed_at: None,
     });
@@ -213,7 +213,7 @@ fn merge_agent(
     if first || upsert.metadata != serde_json::json!({}) {
         row.metadata = upsert.metadata.clone();
     }
-    row.completed_at = upsert.completed_at.or(row.completed_at);
+    row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
     row.updated_at = now;
     row
 }

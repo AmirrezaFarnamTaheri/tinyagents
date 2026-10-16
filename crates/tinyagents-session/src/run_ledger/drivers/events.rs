@@ -159,7 +159,7 @@ impl DriverRunLedger {
             let mut row = previous.doc;
             row.status = status;
             row.error = error.map(str::to_owned);
-            row.completed_at = completed_at;
+            row.completed_at = completed_at.map(trunc);
             row.updated_at = now();
             row.telemetry = None;
             let mut writes = vec![put_op(AGENTS, key(&[id])?, &row, condition)?];

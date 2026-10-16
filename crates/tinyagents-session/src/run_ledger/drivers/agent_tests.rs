@@ -17,7 +17,7 @@ pub(super) fn run(id: &str) -> AgentRunUpsert {
         summary: Some("original".into()),
         error: None,
         metadata: json!({"keep":true}),
-        started_at: Some(Utc::now()),
+        started_at: Some(now()),
         completed_at: None,
     }
 }
@@ -63,7 +63,7 @@ async fn native_status_compare_and_swap_records_only_the_winning_event() {
             AgentRunStatus::Running,
             AgentRunStatus::Completed,
             None,
-            Some(Utc::now()),
+            Some(now()),
             event(),
         )
         .await
@@ -261,7 +261,7 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
         AgentRunStatus::Running,
         AgentRunStatus::Completed,
         None,
-        Some(Utc::now()),
+        Some(now()),
         Some(RunEventAppend {
             run_id: "run".into(),
             event_type: "done".into(),

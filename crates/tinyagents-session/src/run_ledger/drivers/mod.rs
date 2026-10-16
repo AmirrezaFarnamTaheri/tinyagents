@@ -34,7 +34,7 @@ use std::sync::Arc;
 pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
 pub use schema::{history_storage_schema, ledger_storage_schema};
 use storage::{
-    LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now,
+    LEDGER_OWNER, trunc, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now,
     workflow_lease_key,
 };
 use tinystoragedrivers_core::{
@@ -100,7 +100,12 @@ impl DriverRunLedger {
     pub async fn prepare_schema(
         documents: &dyn tinystoragedrivers_core::DocumentStore,
     ) -> std::result::Result<(), StorageError> {
-        for spec in Self::collection_specs() {
+        // The shared `tsd.*` collections (leases, counters, migrations) are
+        // declared with them: the ledger reads and writes those too.
+        for spec in Self::collection_specs()
+            .into_iter()
+            .chain(storage::primitive_specs())
+        {
             documents.ensure_collection(&spec).await?;
         }
         Ok(())
@@ -161,16 +166,24 @@ impl DriverRunLedger {
             return Ok(WorkflowLeaseClaim::Missing);
         };
         let lease_key = workflow_lease_key(id)?;
-        let ttl_ms = lease_for.num_milliseconds().max(1);
-        let Some(lease) = self
-            .leases_at(now)
-            .acquire(LEDGER_OWNER, &lease_key, owner, ttl_ms)
+        let ttl_ms = lease_for.num_milliseconds();
+        let leases = self.leases_at(now);
+        let Some(mut lease) = leases
+            .acquire(LEDGER_OWNER, &lease_key, owner, ttl_ms.max(1))
             .await?
         else {
             return Ok(WorkflowLeaseClaim::Busy(
                 self.with_lease(found.doc, now).await?,
             ));
         };
+        if ttl_ms <= 0 {
+            // A lease that is already over (the classic claim accepted any
+            // duration): take the holder's tenure, then end it at once.
+            leases
+                .release(LEDGER_OWNER, &lease_key, owner, lease.epoch)
+                .await?;
+            lease.expires_ms = now.timestamp_millis() + ttl_ms;
+        }
         let bumped = self
             .change(WORKFLOWS, id, |previous: Option<WorkflowRun>| {
                 let Some(mut row) = previous else {
@@ -253,7 +266,7 @@ fn apply_workflow(
     row.status = upsert.status;
     row.summary = upsert.summary.clone().or(row.summary.take());
     row.updated_at = now;
-    row.completed_at = upsert.completed_at.or(row.completed_at);
+    row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
     row.revision = next_revision(row.revision)?;
     Ok(())
 }
@@ -279,7 +292,7 @@ impl RunLedgerStore for DriverRunLedger {
                 child_run_ids: upsert.child_run_ids.clone(),
                 status: upsert.status,
                 summary: None,
-                started_at: upsert.started_at.unwrap_or(now),
+                started_at: upsert.started_at.map(trunc).unwrap_or(now),
                 updated_at: now,
                 completed_at: None,
                 revision: 0,
@@ -294,7 +307,7 @@ impl RunLedgerStore for DriverRunLedger {
             row.status = upsert.status;
             row.summary = upsert.summary.clone().or(row.summary);
             row.updated_at = now;
-            row.completed_at = upsert.completed_at.or(row.completed_at);
+            row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
             if !first {
                 row.revision = next_revision(row.revision)?;
             }
@@ -559,7 +572,7 @@ impl RunLedgerStore for DriverRunLedger {
                 created_at: previous
                     .as_ref()
                     .map(|row| row.created_at)
-                    .unwrap_or(upsert.created_at.unwrap_or(now)),
+                    .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                 updated_at: now,
                 closed_at: upsert
                     .closed_at
@@ -629,7 +642,7 @@ impl RunLedgerStore for DriverRunLedger {
                     created_at: previous
                         .as_ref()
                         .map(|row| row.created_at)
-                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                        .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                     updated_at: now,
                 }
             })
@@ -693,7 +706,7 @@ impl RunLedgerStore for DriverRunLedger {
                     created_at: previous
                         .as_ref()
                         .map(|row| row.created_at)
-                        .unwrap_or(upsert.created_at.unwrap_or(now)),
+                        .unwrap_or(upsert.created_at.map(trunc).unwrap_or(now)),
                     updated_at: now,
                 }
             })

@@ -427,7 +427,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 filter,
-                Sort::desc("started_ms"),
+                Sort::desc("started_ms"), Sort::desc(ID_FIELD),
                 u64::from(limit.unwrap_or(50).min(500)),
                 u64::from(offset.unwrap_or(0)),
             )
@@ -472,7 +472,7 @@ impl SessionHistoryStore for DriverRunLedger {
                 .page_sorted(
                     HIST_SESSIONS,
                     filter,
-                    Sort::desc("started_ms"),
+                    Sort::desc("started_ms"), Sort::desc(ID_FIELD),
                     limit,
                     offset,
                 )
@@ -482,7 +482,7 @@ impl SessionHistoryStore for DriverRunLedger {
         self.declare().await?;
         let mut matched: Vec<SessionRecord> = Vec::new();
         let mut query = Query::filter(filter)
-            .sort(Sort::desc("started_ms"))
+            .sort(Sort::desc("started_ms"), Sort::desc(ID_FIELD))
             .limit(256);
         loop {
             let page = self.scoped.documents().query(HIST_SESSIONS, &query).await?;
@@ -545,7 +545,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 Filter::eq("parent_session_id", session_id),
-                Sort::asc("started_ms"),
+                Sort::asc("started_ms"), Sort::asc(ID_FIELD),
                 u64::MAX,
                 0,
             )
