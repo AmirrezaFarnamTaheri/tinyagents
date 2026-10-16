@@ -289,7 +289,9 @@ async fn records_and_history_are_v2_documents_with_key_ids_and_ms_times() {
     let docs = docs_of(&storage, "local");
     let store = DriverTaskStore::new(docs.clone()).unwrap();
     let id = TaskId::new("a/b");
-    store.insert(spec("a/b").with_lineage("run-1", "root-1")).unwrap();
+    store
+        .insert(spec("a/b").with_lineage("run-1", "root-1"))
+        .unwrap();
     store.mark_running(&id).unwrap();
 
     let row = docs.get("tasks.records", "a%2Fb").await.unwrap().unwrap();
@@ -306,7 +308,12 @@ async fn records_and_history_are_v2_documents_with_key_ids_and_ms_times() {
     let first = docs.get("tasks.history", "a%2Fb/1").await.unwrap().unwrap();
     assert_eq!(first.doc["status"], "pending");
     assert_eq!(first.meta.schema, 2);
-    assert!(docs.get("tasks.history", "a%2Fb/2").await.unwrap().is_some());
+    assert!(
+        docs.get("tasks.history", "a%2Fb/2")
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         store.get(&id).unwrap().updated_at,
         std::time::UNIX_EPOCH + std::time::Duration::from_millis(row.meta.updated_ms as u64),

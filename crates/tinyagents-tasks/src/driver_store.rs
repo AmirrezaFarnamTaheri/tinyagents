@@ -154,7 +154,9 @@ impl DriverTaskStore {
             .await
         {
             Ok(_) => Ok(()),
-            Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+            {
                 Ok(())
             }
             Err(error) => Err(map_error(error)),
@@ -192,12 +194,16 @@ impl DriverTaskStore {
                     match outcome {
                         Ok((outcome, record, rev)) => {
                             let doc = TaskDoc::from_record(&record, rev + 1);
-                            *decided.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            *decided
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(Ok((outcome, record)));
                             Ok(Some(doc))
                         }
                         Err(error) => {
-                            *decided.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            *decided
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                                 Some(Err(error));
                             Ok(None)
                         }
@@ -225,40 +231,36 @@ impl crate::store::TaskStore for DriverTaskStore {
         self.run(async move {
             this.declare().await?;
             let record = OrchestrationTaskRecord::pending(spec);
-            let id = hashed_id(&[record.spec.task_id.as_str()]);
-            let writes = vec![
-                WriteOp::Put {
-                    collection: this.tasks.clone(),
-                    id,
-                    doc: Self::task_doc(&record, 1)?,
-                    precondition: Precondition::Absent,
-                },
-                Self::history_write(&record, 1, &this.history)?,
-            ];
-            match this.docs.atomic_batch(writes).await {
-                Ok(_) => Ok(record),
+            let id = task_id_key(record.spec.task_id.as_str()).map_err(map_error)?;
+            match this
+                .records
+                .insert(&id, &TaskDoc::from_record(&record, 1))
+                .await
+            {
+                Ok(_) => {}
                 Err(error)
                     if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
                 {
-                    Err(TinyAgentsError::DuplicateComponent(format!(
+                    return Err(TinyAgentsError::DuplicateComponent(format!(
                         "orchestration task `{}`",
                         record.spec.task_id
-                    )))
+                    )));
                 }
-                Err(error) => Err(map_error(error)),
+                Err(error) => return Err(map_error(error)),
             }
+            this.snapshot(&record, 1).await?;
+            Ok(record)
         })
     }
 
     fn get(&self, task_id: &TaskId) -> Option<OrchestrationTaskRecord> {
         let this = self.clone();
-        let id = hashed_id(&[task_id.as_str()]);
+        let task_id = task_id.clone();
         self.run(async move {
             this.declare().await?;
-            let found = this.docs.get(&this.tasks, &id).await.map_err(map_error)?;
-            found
-                .map(|row| decode(row.doc.get("record").cloned().unwrap_or(Value::Null)))
-                .transpose()
+            let id = task_id_key(task_id.as_str()).map_err(map_error)?;
+            let found = this.docs.get(RECORDS, &id).await.map_err(map_error)?;
+            found.map(decode).transpose()
         })
         .inspect_err(|error| tracing::warn!("[orchestration] task store read failed: {error}"))
         .ok()
@@ -272,16 +274,16 @@ impl crate::store::TaskStore for DriverTaskStore {
             let mut query_filter = Filter::default();
             for (field, value) in [
                 (
-                    "rootRunId",
+                    "root_run_id",
                     filter.root_run_id.as_ref().map(|id| id.as_str()),
                 ),
                 (
-                    "parentRunId",
+                    "parent_run_id",
                     filter.parent_run_id.as_ref().map(|id| id.as_str()),
                 ),
-                ("threadId", filter.thread_id.as_ref().map(|id| id.as_str())),
-                ("nodeId", filter.node_id.as_ref().map(|id| id.as_str())),
-                ("kind", filter.kind.as_deref()),
+                ("thread_id", filter.thread_id.as_ref().map(|id| id.as_str())),
+                ("node_id", filter.node_id.as_ref().map(|id| id.as_str())),
+                ("kind_label", filter.kind.as_deref()),
             ] {
                 if let Some(value) = value {
                     query_filter = query_filter.and(Filter::eq(field, value));
@@ -293,12 +295,12 @@ impl crate::store::TaskStore for DriverTaskStore {
             }
             let rows = this
                 .docs
-                .query_all(&this.tasks, &Query::filter(query_filter))
+                .query_all(RECORDS, &Query::filter(query_filter))
                 .await
                 .map_err(map_error)?;
             let mut records = Vec::with_capacity(rows.len());
             for row in rows {
-                let record = decode(row.doc.get("record").cloned().unwrap_or(Value::Null))?;
+                let record = decode(row)?;
                 // The time window is the part the projections cannot answer.
                 if filter.matches(&record) {
                     records.push(record);
@@ -319,14 +321,12 @@ impl crate::store::TaskStore for DriverTaskStore {
             let rows = this
                 .docs
                 .query_all(
-                    &this.history,
-                    &Query::filter(Filter::eq("taskId", task_id)).sort(Sort::asc("rev")),
+                    HISTORY,
+                    &Query::filter(Filter::eq("task_id", task_id)).sort(Sort::asc("rev")),
                 )
                 .await
                 .map_err(map_error)?;
-            rows.into_iter()
-                .map(|row| decode(row.doc.get("record").cloned().unwrap_or(Value::Null)))
-                .collect()
+            rows.into_iter().map(decode).collect()
         })
         .inspect_err(|error| tracing::warn!("[orchestration] task history read failed: {error}"))
         .unwrap_or_default()

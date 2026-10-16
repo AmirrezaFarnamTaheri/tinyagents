@@ -2,8 +2,7 @@ use super::*;
 use serde_json::{Value, json};
 use tinystoragedrivers_core::{
     DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage,
-    StorageBackend,
+    ScopedStorage, StorageBackend,
 };
 
 fn scoped() -> ScopedStorage {
@@ -54,7 +53,10 @@ fn the_schema_composes_and_names_everything_the_tasks_crate_owns() {
     let schema = storage_schema();
     assert_eq!(schema.owner.as_str(), "tasks");
     let names: Vec<&str> = schema.items.iter().map(|item| item.name()).collect();
-    assert_eq!(names, ["tasks.records", "tasks.history", "tasks.completions"]);
+    assert_eq!(
+        names,
+        ["tasks.records", "tasks.history", "tasks.completions"]
+    );
     assert!(
         schema
             .items
