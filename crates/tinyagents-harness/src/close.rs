@@ -188,49 +188,83 @@ pub fn close_repair_instruction(template: &str, reason: &str) -> String {
     template.replace("{repair_reason}", reason)
 }
 
+/// Host-provided prompts and policies for one grounded close sequence.
+pub struct GroundedCloseConfig<'a, V, R, F> {
+    /// Conversation history to close.
+    pub history: &'a [Message],
+    /// Initial caller-configured close prompt.
+    pub initial_prompt: &'a str,
+    /// Build a separate verifier prompt for a candidate reply.
+    pub verification_prompt: V,
+    /// Build a repair prompt for the detected violation.
+    pub repair_instruction: R,
+    /// Caller-provided harness phrases the candidate must not quote.
+    pub harness_phrases: &'a [&'a str],
+    /// Total time budget shared by generation, verification and repair.
+    pub budget: Option<std::time::Duration>,
+    /// Deterministic fallback when the model cannot produce an accepted close.
+    pub deterministic_fallback: F,
+}
+
+/// Inputs for repairing a reply that omitted required structured output.
+pub struct RequiredOutputRepairConfig<'a> {
+    /// Conversation history used for the repair request.
+    pub history: &'a [Message],
+    /// Reply that needs repair.
+    pub reply: &'a str,
+    /// Required output contract to validate.
+    pub contract: &'a crate::config::RequiredOutput,
+    /// Caller-configured repair prompt.
+    pub repair_instruction: &'a str,
+    /// Whether the original reply was already streamed to the caller.
+    pub reply_already_streamed: bool,
+}
+
 /// Ask, screen, separately verify, and repair at most once. Every call uses a
 /// request with no tool schemas and `ToolChoice::None`; `ToolDialect` rejects
 /// textual tool syntax even if a provider ignores that constraint.
-#[allow(clippy::too_many_arguments)] // Each argument is an explicit host policy seam.
 pub async fn grounded_close<State, M>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
-    history: &[Message],
-    initial_prompt: &str,
-    verification_prompt: impl Fn(&str) -> String,
-    repair_instruction: impl Fn(CloseViolation) -> String,
-    harness_phrases: &[&str],
-    budget: Option<std::time::Duration>,
-    deterministic_fallback: impl FnOnce() -> String,
+    config: GroundedCloseConfig<
+        '_,
+        impl Fn(&str) -> String,
+        impl Fn(CloseViolation) -> String,
+        impl FnOnce() -> String,
+    >,
 ) -> CloseOutput
 where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
     let mut usage = Vec::new();
-    let mut prompt = initial_prompt.to_owned();
+    let mut prompt = config.initial_prompt.to_owned();
     let started = tokio::time::Instant::now();
     for attempt in 0..2 {
-        let remaining = budget.map(|limit| limit.saturating_sub(started.elapsed()));
+        let remaining = config
+            .budget
+            .map(|limit| limit.saturating_sub(started.elapsed()));
         let Some((candidate, call_usage, has_tool_call)) =
-            completion(model, state, dialect, history, &prompt, remaining).await
+            completion(model, state, dialect, config.history, &prompt, remaining).await
         else {
             if attempt == 1 {
                 break;
             }
-            prompt = repair_instruction(CloseViolation::NoReply);
+            prompt = (config.repair_instruction)(CloseViolation::NoReply);
             continue;
         };
         usage.extend(call_usage);
         let candidate = candidate.trim().to_owned();
         let violation = if candidate.is_empty() || has_tool_call {
             Some(CloseViolation::NoReply)
-        } else if quotes_harness_instruction(&candidate, harness_phrases) {
+        } else if quotes_harness_instruction(&candidate, config.harness_phrases) {
             Some(CloseViolation::QuotedInstruction)
         } else {
-            let verify_prompt = verification_prompt(&candidate);
-            let remaining = budget.map(|limit| limit.saturating_sub(started.elapsed()));
+            let verify_prompt = (config.verification_prompt)(&candidate);
+            let remaining = config
+                .budget
+                .map(|limit| limit.saturating_sub(started.elapsed()));
             match completion(model, state, dialect, &[], &verify_prompt, remaining).await {
                 Some((verdict, call_usage, has_tool_call)) => {
                     usage.extend(call_usage);
@@ -249,11 +283,11 @@ where
             if attempt == 1 {
                 break;
             }
-            prompt = repair_instruction(violation);
+            prompt = (config.repair_instruction)(violation);
         }
     }
     CloseOutput {
-        text: deterministic_fallback(),
+        text: (config.deterministic_fallback)(),
         usage,
     }
 }
@@ -263,16 +297,11 @@ where
 /// The instruction is caller-provided. If the model fails, returns tool
 /// syntax, or returns an invalid block, the harness appends the contract's
 /// deterministic synthesized block so the required-output invariant holds.
-#[allow(clippy::too_many_arguments)] // Keep the model, contract, and streaming state explicit.
 pub async fn repair_required_output<State, M>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
-    history: &[Message],
-    reply: &str,
-    contract: &crate::config::RequiredOutput,
-    repair_instruction: &str,
-    reply_already_streamed: bool,
+    config: RequiredOutputRepairConfig<'_>,
 ) -> Option<RequiredOutputRepair>
 where
     M: ChatModel<State> + ?Sized,
@@ -280,25 +309,33 @@ where
 {
     use crate::config::{find_required_block, output_satisfies_contract, synthesize_block};
 
-    if output_satisfies_contract(reply, contract) {
+    if output_satisfies_contract(config.reply, config.contract) {
         return None;
     }
-    let attempted = completion(model, state, dialect, history, repair_instruction, None).await;
+    let attempted = completion(
+        model,
+        state,
+        dialect,
+        config.history,
+        config.repair_instruction,
+        None,
+    )
+    .await;
     let (candidate, usage, has_tool_call) = attempted.unwrap_or_default();
-    let usable = !has_tool_call && output_satisfies_contract(&candidate, contract);
-    let text = if reply_already_streamed {
+    let usable = !has_tool_call && output_satisfies_contract(&candidate, config.contract);
+    let text = if config.reply_already_streamed {
         let block = if usable {
-            find_required_block(&candidate, contract)
+            find_required_block(&candidate, config.contract)
                 .and_then(|block| serde_json::to_string(&block).ok())
-                .unwrap_or_else(|| synthesize_block(contract))
+                .unwrap_or_else(|| synthesize_block(config.contract))
         } else {
-            synthesize_block(contract)
+            synthesize_block(config.contract)
         };
-        format!("{reply}\n\n{block}")
+        format!("{}\n\n{block}", config.reply)
     } else if usable {
         candidate
     } else {
-        format!("{}\n\n{}", reply, synthesize_block(contract))
+        format!("{}\n\n{}", config.reply, synthesize_block(config.contract))
     };
     Some(RequiredOutputRepair {
         text,

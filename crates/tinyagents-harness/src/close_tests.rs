@@ -98,13 +98,17 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
         &model,
         &(),
         &NativeDialect,
-        &[Message::user("original request")],
-        "close prompt",
-        |reply| format!("verify {reply}"),
-        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
-        &[],
-        None,
-        || "fallback".to_owned(),
+        GroundedCloseConfig {
+            history: &[Message::user("original request")],
+            initial_prompt: "close prompt",
+            verification_prompt: |reply| format!("verify {reply}"),
+            repair_instruction: |violation| {
+                close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
+            },
+            harness_phrases: &[],
+            budget: None,
+            deterministic_fallback: || "fallback".to_owned(),
+        },
     )
     .await;
     assert_eq!(output.text, "Found two records.");
@@ -126,13 +130,17 @@ async fn unclear_verification_and_failed_repair_use_the_deterministic_fallback()
         &model,
         &(),
         &NativeDialect,
-        &[],
-        "close prompt",
-        |reply| format!("verify {reply}"),
-        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
-        &[],
-        None,
-        || "deterministic fallback".to_owned(),
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close prompt",
+            verification_prompt: |reply| format!("verify {reply}"),
+            repair_instruction: |violation| {
+                close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
+            },
+            harness_phrases: &[],
+            budget: None,
+            deterministic_fallback: || "deterministic fallback".to_owned(),
+        },
     )
     .await;
     assert_eq!(output.text, "deterministic fallback");
@@ -146,13 +154,17 @@ async fn an_expired_close_budget_uses_fallback_without_starting_model_calls() {
         &model,
         &(),
         &NativeDialect,
-        &[],
-        "close prompt",
-        |reply| format!("verify {reply}"),
-        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
-        &[],
-        Some(std::time::Duration::ZERO),
-        || "budget fallback".to_owned(),
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close prompt",
+            verification_prompt: |reply| format!("verify {reply}"),
+            repair_instruction: |violation| {
+                close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
+            },
+            harness_phrases: &[],
+            budget: Some(std::time::Duration::ZERO),
+            deterministic_fallback: || "budget fallback".to_owned(),
+        },
     )
     .await;
     assert_eq!(output.text, "budget fallback");
@@ -167,11 +179,13 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
         &model,
         &(),
         &NativeDialect,
-        &[],
-        "old reply",
-        &contract,
-        "repair",
-        false,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "old reply",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: false,
+        },
     )
     .await
     .expect("missing output triggers repair");
@@ -183,11 +197,13 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
         &invalid,
         &(),
         &NativeDialect,
-        &[],
-        "already streamed",
-        &contract,
-        "repair",
-        true,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "already streamed",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: true,
+        },
     )
     .await
     .expect("missing output triggers repair");
