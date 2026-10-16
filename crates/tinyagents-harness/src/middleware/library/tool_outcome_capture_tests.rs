@@ -2,6 +2,7 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::middleware::Middleware;
 use crate::turn_outcome::new_tool_outcome_sink;
+use std::sync::Arc;
 use tinyinference_llm::tool::ToolCall;
 
 #[tokio::test]

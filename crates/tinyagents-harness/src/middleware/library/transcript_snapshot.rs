@@ -98,7 +98,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Transcript
 
     async fn before_tool(
         &self,
-        _ctx: &mut RunContext<Ctx>,
+        ctx: &mut RunContext<Ctx>,
         _state: &State,
         call: &mut tinyinference_llm::tool::ToolCall,
     ) -> Result<()> {
