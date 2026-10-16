@@ -154,7 +154,7 @@ async fn image_tool_stores_blobs_and_reports_their_keys() {
     let saved = stored(&output).await;
     assert_eq!(saved.len(), 2);
     assert!(
-        !dir.path().join("generated-media").exists(),
+        !dir.path().join("harness/generated_media").exists(),
         "nothing is written to the workspace"
     );
     for key in &saved {
