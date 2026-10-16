@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
+use crate::tool::ToolDispatch;
 
 const MARKER: &str = "[not_found]";
 
@@ -271,6 +272,66 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     let result = bound.tool().execute(arguments).await.unwrap();
     assert!(result.is_error);
     assert!(result.text().contains("catalog is unavailable"));
+}
+
+struct LiveParentDispatch(Arc<dyn Tool>);
+
+#[async_trait]
+impl crate::tool::ToolDispatch<(), String> for LiveParentDispatch {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.0.clone()
+    }
+
+    async fn execute(
+        &self,
+        _state: &(),
+        call_id: crate::CallId,
+        arguments: Value,
+        _options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<String>,
+    ) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(format!(
+            "run={};call={call_id};args={arguments}",
+            parent.data
+        )))
+    }
+}
+
+#[tokio::test]
+async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
+    let tools = bound(vec![FakeTool::plain("a_one")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(|selection| {
+        assert_eq!(selection.tool_name(), "a_one");
+        assert_eq!(selection.arguments(), &json!({"marker": "inside"}));
+        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain("a_one")))))
+    });
+    let dispatch = UseSkillDispatch::new(outer, selector);
+    let outer_args = json!({
+        "skill": "alpha",
+        "tool": "a_one",
+        "args": {"marker": "inside"}
+    });
+    let bound = dispatch.bind_call(&outer_args).unwrap().unwrap();
+
+    // Rebinding the live registry after admission must not change this call's
+    // already authorized target or args.
+    let replacement = Arc::new(vec![Box::new(FakeTool::plain("a_two")) as Box<dyn Tool>]);
+    handle.bind(Arc::downgrade(&replacement));
+
+    let parent = crate::context::RunContext::new(
+        crate::context::RunConfig::new("parent-run"),
+        "live-parent".to_string(),
+    );
+    let call_id = crate::CallId::new("admitted-call");
+    let result = bound
+        .execute(&(), call_id, outer_args, tinytools::ToolCallOptions::default(), &parent)
+        .await
+        .unwrap();
+
+    assert_eq!(result.text(), "run=live-parent;call=admitted-call;args={\"marker\":\"inside\"}");
+    assert_eq!(bound.admission_target().unwrap().0.name(), "a_one");
 }
 
 #[test]
