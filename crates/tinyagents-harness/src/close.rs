@@ -21,6 +21,32 @@ pub struct CloseToolResult {
     pub content: String,
 }
 
+/// Copy the captured outcome boundary into the data shape used by checkpoint
+/// and grounded-close rendering, truncating each result by Unicode characters.
+pub fn results_from_tool_outcomes(
+    outcomes: &[crate::turn_outcome::ToolCallOutcome],
+    per_result_budget: usize,
+) -> Vec<CloseToolResult> {
+    outcomes
+        .iter()
+        .map(|outcome| CloseToolResult {
+            name: outcome.name.clone(),
+            success: outcome.success,
+            content: truncate_chars(&outcome.content, per_result_budget),
+        })
+        .collect()
+}
+
+/// Trim surrounding whitespace and truncate on a Unicode character boundary.
+pub fn truncate_chars(text: &str, max: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_owned();
+    }
+    let prefix = trimmed.chars().take(max).collect::<String>();
+    format!("{prefix}… [truncated]")
+}
+
 /// Close result and the provider usage for its completion and verification
 /// calls. Usage is returned even when a later repair fails.
 #[derive(Debug, Clone, PartialEq)]

@@ -144,7 +144,7 @@ async fn an_expired_close_budget_uses_fallback_without_starting_model_calls() {
         &[],
         "close prompt",
         |reply| format!("verify {reply}"),
-        "Repair: {repair_reason}",
+        |violation| close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}")),
         &[],
         Some(std::time::Duration::ZERO),
         || "budget fallback".to_owned(),
