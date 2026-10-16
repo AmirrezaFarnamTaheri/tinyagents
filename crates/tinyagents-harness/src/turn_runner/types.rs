@@ -11,6 +11,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 
 use crate::progress::AgentProgress;
+use crate::run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue};
 
 /// Identity that isolates session locks and active turns between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -21,11 +22,14 @@ pub struct ScopeKey {
 
 /// A request after the host has supplied its channel-independent metadata.
 #[derive(Debug, Clone)]
-pub struct TurnRequest {
+pub struct TurnRequest<P = serde_json::Value> {
     pub scope: ScopeKey,
     pub thread_id: String,
     pub request_id: String,
     pub text: String,
+    /// Lossless host-defined input metadata such as attachments, access flags,
+    /// locale, or channel attribution.
+    pub payload: P,
     pub host_authored: bool,
     pub disposition: QueueDisposition,
     pub deadline: Option<Duration>,
@@ -57,11 +61,11 @@ pub enum IngressDecision {
 }
 
 #[async_trait]
-pub trait IngressPolicy: Send + Sync {
+pub trait IngressPolicy<P = serde_json::Value>: Send + Sync {
     async fn apply(
         &self,
         stage: IngressStage,
-        request: &mut TurnRequest,
+        request: &mut TurnRequest<P>,
     ) -> Result<IngressDecision, String>;
 }
 
@@ -101,38 +105,35 @@ pub enum TurnSignal {
 }
 
 #[async_trait]
-pub trait TurnHost: Send + Sync {
+pub trait TurnHost<P = serde_json::Value>: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
-    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String>;
+    async fn checkout(&self, request: &TurnRequest<P>) -> Result<TurnSession, String>;
+    /// Check out an independent transcript/session snapshot for Parallel mode.
+    async fn checkout_fork(&self, request: &TurnRequest<P>) -> Result<TurnSession, String>;
     /// Confirm the checked-out session still matches the request's expected
     /// transcript/session identity before any model work begins.
     async fn validate_fingerprint(
         &self,
-        _request: &TurnRequest,
+        _request: &TurnRequest<P>,
         _session: &TurnSession,
     ) -> Result<(), String> {
         Ok(())
     }
     /// Build the host's origin value (channel, actor and request attribution).
-    fn run_origin(&self, request: &TurnRequest) -> serde_json::Value;
+    fn run_origin(&self, request: &TurnRequest<P>) -> serde_json::Value;
     /// Run the actual harness/session turn. Progress is forwarded to the sink.
     async fn run(
         &self,
-        request: &TurnRequest,
+        request: &TurnRequest<P>,
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
         progress: mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String>;
     /// Release the session after the run, including on cancellation or failure.
-    async fn checkin(&self, request: &TurnRequest);
+    async fn checkin(&self, request: &TurnRequest<P>);
     /// Cancel child runs belonging to this parent request.
-    async fn cancel_children(&self, request: &TurnRequest);
-    /// Accept an incoming request into the host's turn queue. Return `true`
-    /// when it was queued instead of run immediately.
-    async fn queue(&self, _request: &TurnRequest, _mode: QueueDisposition) -> Result<bool, String> {
-        Ok(false)
-    }
+    async fn cancel_children(&self, request: &TurnRequest<P>);
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
