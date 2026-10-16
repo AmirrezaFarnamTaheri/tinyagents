@@ -101,7 +101,7 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
         GroundedCloseConfig {
             history: &[Message::user("original request")],
             initial_prompt: "close prompt",
-            verification_prompt: |reply| format!("verify {reply}"),
+            verification_prompt: |reply: &str| format!("verify {reply}"),
             repair_instruction: |violation| {
                 close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
             },
@@ -133,7 +133,7 @@ async fn unclear_verification_and_failed_repair_use_the_deterministic_fallback()
         GroundedCloseConfig {
             history: &[],
             initial_prompt: "close prompt",
-            verification_prompt: |reply| format!("verify {reply}"),
+            verification_prompt: |reply: &str| format!("verify {reply}"),
             repair_instruction: |violation| {
                 close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
             },
@@ -157,7 +157,7 @@ async fn an_expired_close_budget_uses_fallback_without_starting_model_calls() {
         GroundedCloseConfig {
             history: &[],
             initial_prompt: "close prompt",
-            verification_prompt: |reply| format!("verify {reply}"),
+            verification_prompt: |reply: &str| format!("verify {reply}"),
             repair_instruction: |violation| {
                 close_repair_instruction("Repair: {repair_reason}", &format!("{violation:?}"))
             },
