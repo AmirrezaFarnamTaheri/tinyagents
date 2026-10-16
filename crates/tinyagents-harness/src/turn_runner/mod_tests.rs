@@ -67,7 +67,6 @@ impl TurnHost for Host {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
     async fn cancel_children(&self, _request: &TurnRequest) {}
-
 }
 
 #[derive(Default)]
@@ -171,27 +170,68 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
         ..Host::default()
     });
     let ingress = Arc::new(Ingress::default());
-    let runner = runner(
+    let runner = Arc::new(runner(
         host.clone(),
         ingress.clone(),
         Arc::new(Replies::default()),
         Arc::new(Events::default()),
-    );
+    ));
 
     let primary = {
-        let runner = &runner;
-        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
     };
     started.notified().await;
-    let mut steered = request(QueueDisposition::Steer, false);
-    steered.request_id = "steered".into();
-    assert!(matches!(runner.run(steered).await, Err(TurnRunnerError::Queued)));
+    for (mode, id) in [
+        (QueueDisposition::Steer, "steered"),
+        (QueueDisposition::Followup, "followup"),
+        (QueueDisposition::Collect, "collect"),
+    ] {
+        let mut incoming = request(mode, false);
+        incoming.request_id = id.into();
+        assert!(matches!(
+            runner.run(incoming).await,
+            Err(TurnRunnerError::Queued)
+        ));
+    }
     let scope = request(QueueDisposition::Interrupt, false).scope;
-    assert_eq!(runner.queue_status(&scope, "thread-a").await.steers, 1);
+    let status = runner.queue_status(&scope, "thread-a").await;
+    assert_eq!(
+        (status.steers, status.followups, status.collects),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        runner
+            .take_queued(&scope, "thread-a", QueueLane::Steer, QueueMode::OneAtATime)
+            .await[0]
+            .request_id,
+        "steered"
+    );
+    assert_eq!(
+        runner
+            .take_queued(&scope, "thread-a", QueueLane::Followup, QueueMode::All)
+            .await[0]
+            .request_id,
+        "followup"
+    );
+    assert_eq!(
+        runner
+            .take_queued(&scope, "thread-a", QueueLane::Collect, QueueMode::All)
+            .await[0]
+            .request_id,
+        "collect"
+    );
+    assert_eq!(runner.clear_queue(&scope, "thread-a").await, 0);
     release.notify_one();
     primary.await.unwrap().unwrap();
+    let ingress = ingress.0.lock().unwrap();
+    assert_eq!(ingress.len(), 4 * 4);
     assert_eq!(
-        *ingress.0.lock().unwrap(),
+        ingress[12..],
         [
             IngressStage::StageAttachments,
             IngressStage::Guardrail,
