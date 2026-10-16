@@ -480,7 +480,7 @@ async fn reindex_restores_missing_rows_and_drops_stale_ones() {
     ledger
         .scoped
         .documents()
-        .delete(HIST_FTS, &message_fts_id(id), Precondition::None)
+        .delete(HIST_FTS, &message_fts_id(id).unwrap(), Precondition::None)
         .await
         .unwrap();
     ledger
