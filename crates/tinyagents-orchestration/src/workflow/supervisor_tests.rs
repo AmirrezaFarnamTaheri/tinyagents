@@ -26,7 +26,7 @@ fn stale_generation_cannot_cancel_its_resumed_successor() {
     assert!(first.cancellation_token().is_cancelled());
     assert!(!supervisor.stop_generation(&first));
     assert!(!second.cancellation_token().is_cancelled());
-    pending.lock().unwrap().remove(0);
+    drop(pending.lock().unwrap().remove(0));
     assert!(supervisor.stop("run"));
     assert!(second.cancellation_token().is_cancelled());
 }
@@ -84,7 +84,13 @@ fn completed_drive_clears_its_generation_and_stale_drop_preserves_successor() {
             *slot.lock().unwrap() = Some(Box::pin(future));
         },
     );
-    let successor = supervisor.resume("run", |_| async {}, futures::executor::block_on);
+    let successor_pending = Arc::new(std::sync::Mutex::new(None::<
+        Pin<Box<dyn Future<Output = ()> + Send>>,
+    >));
+    let successor_slot = successor_pending.clone();
+    let successor = supervisor.resume("run", |_| futures::future::pending(), move |future| {
+        *successor_slot.lock().unwrap() = Some(Box::pin(future));
+    });
     assert!(old.cancellation_token().is_cancelled());
     futures::executor::block_on(old_pending.lock().unwrap().take().unwrap());
     assert!(supervisor.stop_generation(&successor));
