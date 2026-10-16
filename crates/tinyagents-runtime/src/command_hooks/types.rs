@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::time::Duration;
 
 /// A lifecycle moment a configured hook can observe or gate.
 ///
@@ -588,4 +590,32 @@ fn append_message(slot: &mut Option<String>, addition: Option<String>) {
         }
         None => *slot = Some(addition),
     }
+}
+
+/// One `command` hook run, handed to a [`CommandSpawner`](super::environment::CommandSpawner).
+#[derive(Debug, Clone)]
+pub struct CommandRequest {
+    /// The hook's command line, exactly as written in `hooks.json`.
+    pub command: String,
+    /// Working directory, when the hook names an existing one.
+    pub cwd: Option<PathBuf>,
+    /// Environment variables to add to the process.
+    pub env: BTreeMap<String, String>,
+    /// Bytes to write to the process's stdin (the event JSON).
+    pub stdin: Vec<u8>,
+    /// The deadline for the run. The spawner owns enforcing it and tearing
+    /// down whatever it started; the engine only waits `SPAWNER_GRACE` past
+    /// it as a backstop, so the spawner's own cleanup is not cut short.
+    pub timeout: Duration,
+}
+
+/// What a [`CommandSpawner`](super::environment::CommandSpawner) observed when the process finished.
+#[derive(Debug, Clone, Default)]
+pub struct CommandOutput {
+    /// Exit code, or `None` when the process was terminated by a signal.
+    pub exit_code: Option<i32>,
+    /// Captured stdout.
+    pub stdout: Vec<u8>,
+    /// Captured stderr.
+    pub stderr: Vec<u8>,
 }

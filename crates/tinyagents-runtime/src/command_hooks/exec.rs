@@ -32,6 +32,7 @@ use tokio::io::AsyncWriteExt;
 
 use super::config::{HookDefinition, HookKind};
 use super::environment::HookEnvironment;
+use super::types::{CommandOutput, CommandRequest};
 use super::types::{HookInput, HookOutput, HookPermission};
 
 /// Exit code a hook uses to refuse an action.
@@ -39,6 +40,10 @@ pub const EXIT_DENY: i32 = 2;
 
 /// Timeout applied when neither the definition nor the engine names one.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long past a hook's deadline the engine waits for a [`CommandSpawner`](super::environment::CommandSpawner) to
+/// finish its own timeout teardown before dropping it.
+pub const SPAWNER_GRACE: Duration = Duration::from_secs(5);
 
 /// What running one hook produced, with enough detail for diagnostics.
 #[derive(Debug, Clone)]
@@ -147,6 +152,45 @@ async fn run_command(
     let payload =
         serde_json::to_vec(input).map_err(|error| format!("serializing input: {error}"))?;
 
+    let output = match &environment.command_spawner {
+        Some(spawner) => {
+            tracing::debug!(
+                "[hooks] {} running through the host spawner",
+                definition.label()
+            );
+            let request = CommandRequest {
+                command: definition.command.clone(),
+                cwd: definition
+                    .source_dir
+                    .as_deref()
+                    .filter(|dir| dir.is_dir())
+                    .map(Path::to_path_buf),
+                env: env.clone(),
+                stdin: payload,
+                timeout,
+            };
+            let deadline = timeout
+                .checked_add(SPAWNER_GRACE)
+                .ok_or_else(|| "hook timeout exceeds the supported range".to_string())?;
+            match tokio::time::timeout(deadline, spawner.run(request)).await {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => return Err(format!("host spawner: {error}")),
+                Err(_) => return Err(format!("timed out after {}s", timeout.as_secs())),
+            }
+        }
+        None => spawn_local(definition, &payload, env, timeout, environment).await?,
+    };
+    interpret(definition, output)
+}
+
+/// Spawn the hook through the synchronous shell factory.
+async fn spawn_local(
+    definition: &HookDefinition,
+    payload: &[u8],
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+    environment: &HookEnvironment,
+) -> Result<CommandOutput, String> {
     let mut command = (environment.shell)(&definition.command);
     if let Some(dir) = definition.source_dir.as_deref().filter(|dir| dir.is_dir()) {
         command.current_dir(dir);
@@ -166,7 +210,7 @@ async fn run_command(
 
     let write_and_wait = async {
         if let Some(mut stdin) = child.stdin.take()
-            && let Err(error) = stdin.write_all(&payload).await
+            && let Err(error) = stdin.write_all(payload).await
         {
             tracing::debug!("[hooks] {} closed stdin early: {error}", definition.label());
         }
@@ -177,17 +221,25 @@ async fn run_command(
         Ok(Err(error)) => return Err(format!("waiting on hook: {error}")),
         Err(_) => return Err(format!("timed out after {}s", timeout.as_secs())),
     };
+    Ok(CommandOutput {
+        exit_code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
 
+/// Read a finished command hook's exit code and streams as a decision.
+fn interpret(definition: &HookDefinition, output: CommandOutput) -> Result<HookOutput, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let code = output.status.code();
+    let code = output.exit_code;
 
     if code == Some(EXIT_DENY) {
         let reason = first_non_empty(&[&stderr, &stdout])
             .unwrap_or_else(|| format!("hook {} denied the action", definition.label()));
         return Ok(HookOutput::deny(reason));
     }
-    if !output.status.success() {
+    if code != Some(0) {
         let detail = first_non_empty(&[&stderr, &stdout]).unwrap_or_default();
         return Err(match code {
             Some(code) => format!("exited with status {code}: {detail}"),

@@ -45,5 +45,7 @@ mod tests;
 
 pub use config::{HookConfig, HookDefinition, HookKind, HookLayer, HooksFile};
 pub use engine::{HookEngine, HookOutcome};
-pub use environment::{HookEnvironment, PromptEvaluator, ShellFactory};
+pub use environment::{
+    CommandOutput, CommandRequest, CommandSpawner, HookEnvironment, PromptEvaluator, ShellFactory,
+};
 pub use types::{HookEvent, HookInput, HookOutput, HookPayload, HookPermission};

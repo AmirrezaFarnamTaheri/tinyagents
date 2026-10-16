@@ -12,11 +12,27 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+pub use super::types::{CommandOutput, CommandRequest};
+
 /// Builds the process a `command` hook runs in, from the hook's command line.
 ///
 /// The engine sets the working directory, environment and stdio itself; the
 /// factory only chooses the shell (`bash -lc`, `cmd /C`, ...).
 pub type ShellFactory = fn(&str) -> tokio::process::Command;
+
+/// Runs a `command` hook asynchronously on the host's terms.
+///
+/// This is the seam for hosts that must place hook processes behind an async
+/// gate (a sandbox, an approval, a remote box). It replaces the synchronous
+/// [`ShellFactory`] and the engine's own spawn for command hooks. An `Err` is
+/// treated like any other hook that could not run: fail-open unless the
+/// definition sets `fail_closed`, so a spawner that refuses (for example for
+/// lack of isolation) returns `Err` and a fail-closed hook denies.
+#[async_trait]
+pub trait CommandSpawner: Send + Sync {
+    /// Run `request` to completion and return what the process produced.
+    async fn run(&self, request: CommandRequest) -> Result<CommandOutput, String>;
+}
 
 /// Evaluates a `prompt` hook: sends an instruction to a model and returns its
 /// raw answer. Errors are plain strings because the only consumer folds them
@@ -42,6 +58,9 @@ pub struct HookEnvironment {
     pub home_dir: Option<PathBuf>,
     /// Shell used to run `command` hooks.
     pub shell: ShellFactory,
+    /// Async spawner for `command` hooks. When set it runs every command hook
+    /// and [`HookEnvironment::shell`] is not used.
+    pub command_spawner: Option<Arc<dyn CommandSpawner>>,
     /// Evaluator for `prompt` hooks; without one they fail like any other
     /// hook that could not run.
     pub prompt_evaluator: Option<Arc<dyn PromptEvaluator>>,
@@ -55,6 +74,7 @@ impl HookEnvironment {
             product: product.into(),
             home_dir,
             shell: default_shell,
+            command_spawner: None,
             prompt_evaluator: None,
         }
     }
@@ -62,6 +82,13 @@ impl HookEnvironment {
     /// Replace the shell factory.
     pub fn with_shell(mut self, shell: ShellFactory) -> Self {
         self.shell = shell;
+        self
+    }
+
+    /// Route `command` hooks through an async [`CommandSpawner`] instead of
+    /// the synchronous shell factory.
+    pub fn with_command_spawner(mut self, spawner: Arc<dyn CommandSpawner>) -> Self {
+        self.command_spawner = Some(spawner);
         self
     }
 
@@ -93,6 +120,7 @@ impl std::fmt::Debug for HookEnvironment {
         f.debug_struct("HookEnvironment")
             .field("product", &self.product)
             .field("home_dir", &self.home_dir)
+            .field("command_spawner", &self.command_spawner.is_some())
             .field("prompt_evaluator", &self.prompt_evaluator.is_some())
             .finish()
     }
