@@ -9,6 +9,7 @@ rust-version.workspace = true
 description = "Provider-neutral model, tool, middleware, and agent-loop runtime."
 
 [dependencies]
+cap-std.workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 # Keep this aligned with reqwest's transitive version. Claude Code request
