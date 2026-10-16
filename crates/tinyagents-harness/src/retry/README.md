@@ -49,7 +49,10 @@ taxonomy and `Retry-After` parsing are consumed directly from
   choose retry-same / fallback / surface. See the table below.
 - [`PersistentFailoverBreaker`] — shared per-key outage state across run
   contexts, with explicit-clock admission, an RAII attempt guard, exponential
-  backoff, a configurable failure limit, and success/reset support.
+  backoff, a configurable failure threshold, and success/reset support. The
+  threshold is reported to the caller; eligibility resumes after the capped
+  cooldown, matching hosts that surface a terminal result and schedule future
+  work separately.
 - [`RateLimiter`] — `new(capacity, refill_per_sec)`, `try_acquire(tokens,
   now)`, `available(now)`, `capacity`, `refill_per_sec`, `can_ever_acquire`.
 - [`JITTER_FRACTION`] — the ± band jitter spreads backoff over.

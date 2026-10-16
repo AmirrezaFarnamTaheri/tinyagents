@@ -151,6 +151,22 @@ fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client
             "{message}"
         );
     }
+    for message in ["timed out", "timeout"] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(message.into())),
+            FailoverReason::Timeout,
+            "{message}"
+        );
+    }
+    for code in [500, 501, 550, 599] {
+        assert_eq!(
+            reason_of(&TinyAgentsError::Model(format!("upstream returned {code}"))),
+            FailoverReason::Transport,
+            "{code}"
+        );
+    }
+    assert!(has_transient_transport_phrase("connection reset by peer"));
+    assert!(!has_transient_transport_phrase("reconnection is disabled"));
 
     let client_error = provider(Some(400), None, "invalid connection option", true);
     assert_eq!(reason_of(&client_error), FailoverReason::Format);
