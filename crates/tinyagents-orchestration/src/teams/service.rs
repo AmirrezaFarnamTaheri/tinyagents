@@ -73,7 +73,15 @@ pub trait TeamLedger: Send + Sync {
         require_evidence: bool,
     ) -> Result<CompletionOutcome>;
     /// Releases a claimed task back to the queue after a worker failure.
-    fn release_task(&self, team_id: &str, task_id: &str) -> Result<bool>;
+    /// Implementations must only release the claim held by `member_id` with
+    /// `claim_token`, so cleanup from an old worker cannot release a successor.
+    fn release_task(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool>;
     /// Marks a member as running a task and records its execution identifiers.
     fn mark_member_running(
         &self,
@@ -214,7 +222,25 @@ impl TeamLedger for SessionTeamLedger {
                 .await
         })
     }
-    fn release_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
+    fn release_task(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool> {
+        let Some(task) = self
+            .list_tasks(team_id)?
+            .into_iter()
+            .find(|task| task.id == task_id)
+        else {
+            return Ok(false);
+        };
+        if task.claimed_by_member_id.as_deref() != Some(member_id)
+            || task.claim_token.as_deref() != Some(claim_token)
+        {
+            return Ok(false);
+        }
         let (ledger, team, task) = (
             Arc::clone(&self.ledger),
             team_id.to_owned(),
@@ -296,13 +322,18 @@ struct MemberExecutionCleanup<'a, L: TeamLedger> {
     team_id: &'a str,
     task_id: &'a str,
     member_id: &'a str,
+    claim_token: &'a str,
     armed: bool,
 }
 
 impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
     fn cleanup(&mut self) -> Result<()> {
-        self.service
-            .release_and_idle(self.team_id, self.task_id, self.member_id)?;
+        self.service.release_and_idle(
+            self.team_id,
+            self.task_id,
+            self.member_id,
+            self.claim_token,
+        )?;
         self.armed = false;
         Ok(())
     }
@@ -317,7 +348,12 @@ impl<L: TeamLedger> Drop for MemberExecutionCleanup<'_, L> {
         if self.armed {
             let _ = self
                 .service
-                .release_and_idle(self.team_id, self.task_id, self.member_id);
+                .release_and_idle(
+                    self.team_id,
+                    self.task_id,
+                    self.member_id,
+                    self.claim_token,
+                );
         }
     }
 }
@@ -523,6 +559,7 @@ impl<L: TeamLedger> TeamService<L> {
             team_id,
             task_id,
             member_id,
+            claim_token: &claim_token,
             armed: true,
         };
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
@@ -574,8 +611,16 @@ impl<L: TeamLedger> TeamService<L> {
         }
     }
 
-    fn release_and_idle(&self, team_id: &str, task_id: &str, member_id: &str) -> Result<()> {
-        let release = self.ledger.release_task(team_id, task_id);
+    fn release_and_idle(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<()> {
+        let release = self
+            .ledger
+            .release_task(team_id, task_id, member_id, claim_token);
         let idle = self.ledger.mark_member_idle(team_id, member_id);
         match (release, idle) {
             (Ok(_), Ok(_)) => Ok(()),
