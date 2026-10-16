@@ -302,6 +302,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 .record_failure(ctx, &call, &scope, result, error),
             _ => false,
         };
+        if matches!(&assessment, FailureAssessment::Ignore) {
+            return;
+        }
         let run = self.run_state(ctx.instance_id());
         let step = run.step.fetch_add(1, Ordering::SeqCst) + 1;
         let argument_key = format!("{}\u{1f}{}", scope.argument_fingerprint, scope.scope);
