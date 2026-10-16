@@ -33,11 +33,16 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod agents_md;
 mod depth;
 mod host_ext;
 mod stats;
 mod types;
 
+pub use agents_md::{
+    AGENTS_MD_FILENAME, AgentsMdContent, MAX_AGENTS_MD_READ_BYTES, load_agents_md,
+    load_agents_md_layers,
+};
 pub use depth::{current_run_depth, with_run_depth};
 pub use host_ext::HostExtensions;
 pub use stats::*;
