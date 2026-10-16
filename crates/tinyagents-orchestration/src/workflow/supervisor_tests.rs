@@ -38,11 +38,11 @@ fn scoped_start_wraps_drive_with_root_parent_then_origin_before_spawning() {
         |_| async {},
         move |future| {
             root_scopes.lock().unwrap().push("root-parent");
-            async move { future.await }
+            future
         },
         move |future| {
             origin_scopes.lock().unwrap().push("origin");
-            async move { future.await }
+            future
         },
         |future| futures::executor::block_on(future),
     );
