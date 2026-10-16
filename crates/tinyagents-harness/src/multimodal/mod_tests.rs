@@ -353,8 +353,8 @@ fn the_disable_sentinel_survives_the_clamp() {
     assert!(disabled.files_disabled());
     assert_eq!(
         disabled.effective().0,
-        1,
-        "the clamp lifts 0 to 1 — which is exactly why files_disabled exists"
+        0,
+        "zero files must remain disabled after applying runtime limits"
     );
     assert!(!FileLimits::default().files_disabled());
 }
