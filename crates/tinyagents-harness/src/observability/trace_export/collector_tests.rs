@@ -545,3 +545,90 @@ fn terminal_events_without_start_events_still_produce_spans() {
             .any(|span| span.name == "tool.unsafe" && span.end_unix_ms == Some(12))
     );
 }
+
+#[test]
+fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_span() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-rollup", None));
+    collector.record_event(
+        &AgentEvent::RunStarted {
+            run_id: RunId::new("run-rollup"),
+            thread_id: None,
+        },
+        0,
+    );
+    collector.record_event(
+        &AgentEvent::ModelStarted {
+            call_id: CallId::new("parent-call"),
+            model: "parent-model".into(),
+        },
+        1,
+    );
+    let own = Usage {
+        input_tokens: 3,
+        output_tokens: 4,
+        charged_amount: Some(ChargedAmount::usd_micros(100)),
+        ..Default::default()
+    };
+    collector.record_event(
+        &AgentEvent::ModelCompleted {
+            call_id: CallId::new("parent-call"),
+            started_at_ms: Some(1),
+            usage: Some(own),
+            input: None,
+            output: None,
+        },
+        2,
+    );
+    collector.record_event(&AgentEvent::UsageRecorded { usage: own }, 3);
+    collector.record_event(
+        &AgentEvent::SubAgentStarted {
+            name: "child".into(),
+            depth: 1,
+        },
+        4,
+    );
+    collector.record_event(
+        &AgentEvent::ModelStarted {
+            call_id: CallId::new("child-call"),
+            model: "child-model".into(),
+        },
+        5,
+    );
+    collector.record_event(
+        &AgentEvent::ModelCompleted {
+            call_id: CallId::new("child-call"),
+            started_at_ms: Some(5),
+            usage: Some(Usage {
+                input_tokens: 10,
+                output_tokens: 2,
+                ..Default::default()
+            }),
+            input: None,
+            output: None,
+        },
+        6,
+    );
+    collector.record_event(
+        &AgentEvent::CostRecorded {
+            cost: crate::cost::CostTotals {
+                total_cost: 0.25,
+                ..Default::default()
+            },
+        },
+        7,
+    );
+
+    let root = &collector.spans()[0];
+    let child = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .unwrap();
+    assert_eq!(root.attributes["gen_ai.usage.input_tokens"], 3);
+    assert_eq!(root.attributes["gen_ai.usage.output_tokens"], 4);
+    assert_eq!(root.attributes["gen_ai.usage.cost"], 0.0001);
+    assert_eq!(child.attributes["gen_ai.usage.input_tokens"], 10);
+    assert_eq!(child.attributes["gen_ai.usage.output_tokens"], 2);
+    assert_eq!(child.attributes["gen_ai.usage.cost"], 0.25);
+    assert_eq!(child.attributes["gen_ai.cost.source"], "estimated");
+}
