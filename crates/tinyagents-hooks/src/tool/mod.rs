@@ -259,7 +259,7 @@ where
             agent_id: ctx.data.agent_id(),
             cwd: ctx.data.cwd(),
         };
-        for hook in &self.hooks {
+        for hook in self.hooks.iter().rev() {
             if let Some(additional) = hook.after_tool_context(&ctx.data, &event).await {
                 additional_context.push(additional);
             }
