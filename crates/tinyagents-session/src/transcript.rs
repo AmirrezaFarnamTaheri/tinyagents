@@ -75,9 +75,9 @@ mod adoption;
 mod background;
 mod display;
 mod history;
-pub mod legacy;
 #[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod jsonl;
+pub mod legacy;
 #[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod legacy_md;
 #[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]

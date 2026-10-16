@@ -46,8 +46,7 @@ fn reads_known_legacy_rows_and_serializes_them_back_with_the_same_shape() {
 
 #[test]
 fn writes_only_legacy_role_and_content_fields() {
-    let row = TranscriptMessage::tool_result("call-7", "finished")
-        .with_id("call-7");
+    let row = TranscriptMessage::tool_result("call-7", "finished").with_id("call-7");
     let holder = Holder {
         rows: vec![row],
         optional_rows: None,
