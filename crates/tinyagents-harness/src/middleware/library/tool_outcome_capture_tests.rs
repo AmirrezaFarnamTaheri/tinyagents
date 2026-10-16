@@ -1,9 +1,31 @@
 use super::*;
 use crate::context::{RunConfig, RunContext};
-use crate::middleware::Middleware;
+use crate::middleware::{Middleware, MiddlewareStack};
 use crate::turn_outcome::new_tool_outcome_sink;
 use std::sync::Arc;
 use tinyinference_llm::tool::ToolCall;
+
+struct RewriteResult;
+
+#[async_trait::async_trait]
+impl Middleware<(), ()> for RewriteResult {
+    fn name(&self) -> &str {
+        "rewrite_result"
+    }
+
+    async fn after_tool(
+        &self,
+        _ctx: &mut RunContext<()>,
+        _state: &(),
+        _invocation: &ToolInvocationIdentity,
+        result: &mut ToolResult,
+    ) -> crate::error::Result<()> {
+        result.content = vec![tinytools::ToolContent::Text {
+            text: "host-enriched final text".into(),
+        }];
+        Ok(())
+    }
+}
 
 #[tokio::test]
 async fn outcome_capture_records_arguments_and_final_result_in_shared_sink() {
@@ -49,4 +71,28 @@ async fn reused_call_ids_are_isolated_between_run_contexts() {
         capture.finish(&second, &invocation, &result).arguments,
         serde_json::json!({"run": 2})
     );
+}
+
+#[tokio::test]
+async fn middleware_pipeline_captures_after_inner_result_transformers() {
+    let sink = new_tool_outcome_sink();
+    let capture = Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&sink)));
+    let mut stack = MiddlewareStack::<(), ()>::new();
+    // First registered is outermost: after_tool runs last and observes the
+    // transformed text the transcript/model will receive.
+    stack.push(capture);
+    stack.push(Arc::new(RewriteResult));
+
+    let mut ctx = RunContext::new(RunConfig::new("pipeline-capture"), ());
+    let mut call = ToolCall::new("call-1", "search", serde_json::json!({"q": "raw"}));
+    stack.run_before_tool(&mut ctx, &(), &mut call).await.unwrap();
+    let invocation = ToolInvocationIdentity::new("call-1", "search");
+    let mut result = ToolResult::success("raw result");
+    stack
+        .run_after_tool(&mut ctx, &(), &invocation, &mut result)
+        .await
+        .unwrap();
+
+    assert_eq!(result.output(), "host-enriched final text");
+    assert_eq!(sink.lock().unwrap()[0].content, "host-enriched final text");
 }
