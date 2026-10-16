@@ -6,7 +6,7 @@ mod kv;
 mod kv_import;
 mod steps;
 
-use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
+use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_body, kv_id};
 pub use kv_import::{LegacyKv, import_legacy_kv};
@@ -22,6 +22,12 @@ pub(crate) const EMBEDDING_CACHE: &str = "harness.embedding_cache";
 
 /// The attachment stash's index: one row per stashed attachment.
 pub(crate) const ATTACHMENT_STASH: &str = "harness.attachment_stash";
+
+/// The attachment stash's index declaration; the stash itself is behind the
+/// `multimodal` feature, the schema is not.
+pub(crate) fn attachment_stash_spec() -> CollectionSpec {
+    CollectionSpec::new(ATTACHMENT_STASH).index(IndexSpec::new("touched", ["touched_ms"]))
+}
 
 /// The harness's storage declarations: what it stores and the steps that bring
 /// the v1 names and shapes forward. The host composes it with
@@ -57,7 +63,7 @@ pub fn storage_schema() -> Schema {
         )
         .collection_with(
             SCHEMA_VERSION,
-            crate::multimodal::BlobAttachmentStash::collection_spec(),
+            attachment_stash_spec(),
             ScopeClass::Agent,
         );
     for (_, to) in steps::BLOB_PREFIXES {

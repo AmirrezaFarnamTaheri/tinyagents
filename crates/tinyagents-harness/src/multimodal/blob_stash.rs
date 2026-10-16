@@ -84,8 +84,7 @@ impl BlobAttachmentStash {
 
     /// The declaration the index needs.
     pub fn collection_spec() -> CollectionSpec {
-        CollectionSpec::new(Self::INDEX_COLLECTION)
-            .index(IndexSpec::new("touched", ["touched_ms"]))
+        crate::storage::attachment_stash_spec()
     }
 
     fn key(id: &str) -> String {
