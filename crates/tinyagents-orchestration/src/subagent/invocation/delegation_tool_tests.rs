@@ -122,7 +122,10 @@ async fn graph_delegation_runs_stage_worker_with_original_task_and_approval_pars
     assert!(!result.is_error);
     let seen = seen.lock().unwrap();
     assert!(seen.len() >= 3);
-    assert!(seen.len() > 3, "non-standalone APPROVE must trigger another review cycle");
+    assert!(
+        seen.len() > 3,
+        "non-standalone APPROVE must trigger another review cycle"
+    );
     assert!(seen.iter().all(|(task, _, _)| task == "ship a safe fix"));
     assert_eq!(seen[0].1, DelegationStage::Plan);
     assert_eq!(seen[0].2, DELEGATION_PLAN_PROMPT);
