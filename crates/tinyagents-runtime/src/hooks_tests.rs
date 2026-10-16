@@ -1,4 +1,5 @@
 use super::*;
+use crate::ResumeMode;
 use std::sync::{Arc, Mutex};
 use tinyinference_llm::message::Message;
 
@@ -140,10 +141,10 @@ async fn callback_adapter_propagates_hook_errors_through_runtime_trait() {
     };
     let mut request = SessionTurnRequest::new(Message::user("x"));
     let mut options = TurnOptions::default();
-    assert_eq!(
+    assert!(matches!(
         SessionHooks::before_turn(&hooks, &mut request, &mut options, state).await,
-        Err(RuntimeError::Hook("before-turn".into()))
-    );
+        Err(RuntimeError::Hook(message)) if message == "before-turn"
+    ));
     assert_eq!(
         SessionHooks::before_commit(
             &hooks,
