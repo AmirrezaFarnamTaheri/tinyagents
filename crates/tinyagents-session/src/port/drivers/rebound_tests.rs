@@ -130,6 +130,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
     let retained = provider.for_agent("agent");
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let backends = [Arc::new(MemoryStorage::new()), Arc::new(MemoryStorage::new())];
+    let candidate_backends = backends.clone();
     let mut workers = Vec::new();
     for backend in backends {
         let provider = Arc::clone(&provider);
@@ -151,9 +152,44 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .put("n", "k", serde_json::json!("same-backend"))
             .await
             .unwrap();
+        let mut winner = None;
+        for (index, backend) in candidate_backends.into_iter().enumerate() {
+            let direct = DriverSessionStores::new(backend).unwrap();
+            if direct
+                .for_agent("agent")
+                .kv
+                .get("n", "k")
+                .await
+                .unwrap()
+                .is_some()
+            {
+                winner = Some(index);
+            }
+        }
+        let winner = winner.expect("one concurrent rebind backend has the retained write");
+        fresh
+            .kv
+            .put("n", "fresh", serde_json::json!("current"))
+            .await
+            .unwrap();
+        let direct = DriverSessionStores::new(backends[winner].clone()).unwrap();
         assert_eq!(
-            fresh.kv.get("n", "k").await.unwrap(),
+            direct
+                .for_agent("agent")
+                .kv
+                .get("n", "k")
+                .await
+                .unwrap(),
             Some(serde_json::json!("same-backend"))
+        );
+        assert_eq!(
+            direct
+                .for_agent("agent")
+                .kv
+                .get("n", "fresh")
+                .await
+                .unwrap(),
+            Some(serde_json::json!("current"))
         );
     });
 }
