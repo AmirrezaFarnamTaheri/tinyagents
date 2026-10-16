@@ -212,9 +212,8 @@ pub enum TurnRunnerError {
     Cancelled,
 }
 
-struct ActiveTurn<P> {
+struct ActiveTurn {
     request_id: String,
-    request: TurnRequest<P>,
     cancel: crate::CancellationToken,
 }
 
@@ -242,7 +241,7 @@ pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     config: TurnRunnerConfig,
     locks: ThreadLocks,
     queues: QueueMap<P>,
-    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn<P>>>,
+    active: Mutex<HashMap<(ScopeKey, String), ActiveTurn>>,
     parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
 }
 
@@ -405,7 +404,6 @@ where
                     key.clone(),
                     ActiveTurn {
                         request_id: request.request_id.clone(),
-                        request: request.clone(),
                         cancel: cancellation.clone(),
                     },
                 )

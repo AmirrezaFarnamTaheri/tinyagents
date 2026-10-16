@@ -177,7 +177,6 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
     let host = Arc::new(Host {
         started: Some(started.clone()),
         release: Some(release.clone()),
-        hold_after_cancel: true,
         ..Host::default()
     });
     let ingress = Arc::new(Ingress::default());
@@ -389,6 +388,7 @@ async fn a_superseded_turn_waiting_for_the_session_lock_never_starts() {
     let host = Arc::new(Host {
         started: Some(started.clone()),
         release: Some(release.clone()),
+        hold_after_cancel: true,
         ..Host::default()
     });
     let runner = Arc::new(runner(
