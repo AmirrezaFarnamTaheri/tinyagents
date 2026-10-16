@@ -315,6 +315,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         streaming: bool,
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
@@ -324,6 +325,11 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
 
         let run = if streaming {
@@ -337,6 +343,9 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         Ok(run)
@@ -387,11 +396,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             return self.run_child(state, ctx, input, streaming).await;
         }
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         let events = ctx.events.clone();
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         let run = match self
             .harness
@@ -408,6 +423,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
         Ok(run)
     }
@@ -557,6 +575,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         let config = self.child_config()?;
         let depth = config.depth();
         let ctx = RunContext::new(config, ctx_data).with_events(self.events.clone());
+        let child_run_id = ctx.run_id().clone();
 
         // Clone the sink so we can emit the completion event after `ctx` is
         // moved into the child agent loop.
@@ -564,6 +583,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.subagent.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         if self.turn > 0 {
             events.emit(AgentEvent::SubAgentReused {
@@ -583,6 +607,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         // Carry the produced assistant/tool messages forward. `run.messages` is

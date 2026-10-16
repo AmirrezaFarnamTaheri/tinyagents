@@ -181,4 +181,5 @@ pub struct LangfuseClient {
     pub(super) endpoint: String,
     pub(super) auth: LangfuseAuth,
     pub(super) client: reqwest::Client,
+    pub(super) headers: reqwest::header::HeaderMap,
 }

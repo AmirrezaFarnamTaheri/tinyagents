@@ -613,6 +613,24 @@ pub enum AgentEvent {
         depth: usize,
     },
 
+    /// Links a sub-agent lifecycle span to the child's exact run identity.
+    /// Kept additive so existing consumers can continue matching the legacy
+    /// name/depth lifecycle events without source changes.
+    SubAgentRunStarted {
+        /// Name of the sub-agent being invoked.
+        name: String,
+        /// Depth of the child run in the recursion tree.
+        depth: usize,
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
+    },
+
+    /// Marks the successful completion of the linked child run.
+    SubAgentRunCompleted {
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
+    },
+
     /// An existing sub-agent was *reused* for a follow-up turn rather than
     /// reconstructed, carrying the prior conversation context forward.
     ///
@@ -1085,6 +1103,8 @@ impl AgentEvent {
             AgentEvent::FallbackSkipped { .. } => "model.fallback_skipped",
             AgentEvent::SubAgentStarted { .. } => "subagent.started",
             AgentEvent::SubAgentCompleted { .. } => "subagent.completed",
+            AgentEvent::SubAgentRunStarted { .. } => "subagent.run.started",
+            AgentEvent::SubAgentRunCompleted { .. } => "subagent.run.completed",
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
