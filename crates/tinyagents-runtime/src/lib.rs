@@ -25,7 +25,7 @@ pub use builder::SessionBuilder;
 pub use capability_projection::{project_descriptors, register_admitted_projected};
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
-pub use hooks::{NoopSessionHooks, SessionHooks};
+pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
 pub use managed_tools::{refresh_prefix, reject_synthesized_collisions};
 pub use permanent_tool::PermanentTool;
 pub use prefix::PrefixSnapshot;
