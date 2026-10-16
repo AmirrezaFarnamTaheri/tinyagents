@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::Value;
 use tinystoragedrivers_core::MemoryStorage;
 
 #[tokio::test]
@@ -74,6 +75,54 @@ async fn retained_journal_handle_routes_later_appends_to_new_backend() {
         .await
         .unwrap();
     assert_eq!(stores.journal.len("turns").await.unwrap(), 1);
+}
+
+struct BlockingStore {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+#[async_trait::async_trait]
+impl Store for BlockingStore {
+    async fn get(&self, _: &str, _: &str) -> HarnessResult<Option<Value>> {
+        if let Some(entered) = self.entered.lock().unwrap().take() {
+            let _ = entered.send(());
+        }
+        if let Some(release) = self.release.lock().unwrap().take() {
+            let _ = release.await;
+        }
+        Ok(Some(serde_json::json!("old-operation")))
+    }
+    async fn put(&self, _: &str, _: &str, _: Value) -> HarnessResult<()> { Ok(()) }
+    async fn delete(&self, _: &str, _: &str) -> HarnessResult<()> { Ok(()) }
+    async fn list(&self, _: &str) -> HarnessResult<Vec<String>> { Ok(Vec::new()) }
+}
+
+#[tokio::test]
+async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new() {
+    let base_provider = DriverSessionStores::new(Arc::new(MemoryStorage::new())).unwrap();
+    let mut old = base_provider.for_agent("agent");
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    old.kv = Arc::new(BlockingStore {
+        entered: Mutex::new(Some(entered_tx)),
+        release: Mutex::new(Some(release_rx)),
+    });
+    let binding = Arc::new(LiveAgentStores { current: RwLock::new(old) });
+    let operation = {
+        let store = LiveStore(Arc::clone(&binding));
+        tokio::spawn(async move { store.get("n", "k").await.unwrap() })
+    };
+    entered_rx.await.unwrap();
+
+    let mut next = base_provider.for_agent("agent");
+    next.kv = Arc::new(tinyagents_harness::store::InMemoryStore::new());
+    next.kv.put("n", "k", serde_json::json!("new-operation")).await.unwrap();
+    *binding.current.write().unwrap() = next;
+    release_tx.send(()).unwrap();
+
+    assert_eq!(operation.await.unwrap(), Some(serde_json::json!("old-operation")));
+    assert_eq!(LiveStore(binding).get("n", "k").await.unwrap(), Some(serde_json::json!("new-operation")));
 }
 
 #[test]
