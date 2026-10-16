@@ -140,14 +140,14 @@ fn map_keys(value: Value, rename: fn(&str) -> String) -> Value {
 /// `started_at` / `ended_at` of a `thinking` item are epoch ms: store them as
 /// `started_ms` / `ended_ms`.
 fn thinking_times_to_ms(transcript: Value) -> Value {
-    rename_thinking_times(transcript, &THINKING_TIMES.map(|(from, to)| (from, to)))
+    rename_thinking_times(transcript, THINKING_TIMES)
 }
 
 fn thinking_times_from_ms(transcript: Value) -> Value {
-    rename_thinking_times(transcript, &THINKING_TIMES.map(|(from, to)| (to, from)))
+    rename_thinking_times(transcript, THINKING_TIMES.map(|(from, to)| (to, from)))
 }
 
-fn rename_thinking_times(transcript: Value, renames: &[(&str, &str); 2]) -> Value {
+fn rename_thinking_times(transcript: Value, renames: [(&str, &str); 2]) -> Value {
     let Value::Array(items) = transcript else {
         return transcript;
     };
@@ -159,8 +159,8 @@ fn rename_thinking_times(transcript: Value, renames: &[(&str, &str); 2]) -> Valu
                     if fields.get("kind").and_then(Value::as_str) == Some("thinking") =>
                 {
                     for (from, to) in renames {
-                        if let Some(value) = fields.remove(*from) {
-                            fields.insert((*to).to_owned(), value);
+                        if let Some(value) = fields.remove(from) {
+                            fields.insert(to.to_owned(), value);
                         }
                     }
                     Value::Object(fields)
