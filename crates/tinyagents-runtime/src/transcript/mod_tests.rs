@@ -468,7 +468,11 @@ fn conversation_projection_groups_tool_results_and_keeps_typed_calls() {
         Message::Assistant(assistant),
         Message::tool("call-1", "first"),
         Message::tool("call-2", "second"),
-        Message::Custom(tinyinference_llm::message::CustomMessage::new("note", "hidden")),
+        Message::Custom(tinyinference_llm::message::CustomMessage {
+            kind: "note".into(),
+            payload: serde_json::json!({"text": "hidden"}),
+            display: None,
+        }),
         Message::assistant("done"),
     ];
 
@@ -479,7 +483,9 @@ fn conversation_projection_groups_tool_results_and_keeps_typed_calls() {
         TranscriptEntry::Chat(chat) if chat.role == DialectRole::User && chat.content == "go"
     ));
     match &entries[1] {
-        TranscriptEntry::AssistantToolCalls { text, tool_calls, .. } => {
+        TranscriptEntry::AssistantToolCalls {
+            text, tool_calls, ..
+        } => {
             assert_eq!(text.as_deref(), Some("calling"));
             assert_eq!(tool_calls.len(), 1);
             assert_eq!(tool_calls[0].name, "lookup");

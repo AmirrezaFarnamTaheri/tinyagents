@@ -3,15 +3,15 @@
 //! These helpers do not replace a lossless host [`crate::TranscriptCodec`].
 //! They intentionally project provider-neutral execution fields; hosts retain
 //! durable dialects, raw argument strings, metadata, and legacy marker policy.
+use tinyagents_harness::tinytools_agent::dialect::{
+    DialectMessage, DialectRole, ToolResultEntry, TranscriptEntry,
+};
 use tinyagents_session::transcript::{
     TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall,
 };
 use tinyinference_llm::message::{
     AssistantMessage, ContentBlock, ImageRef, MediaRef, Message, MessageOrigin, SystemMessage,
     ToolMessage, UserMessage,
-};
-use tinyagents_harness::tinytools_agent::dialect::{
-    DialectMessage, DialectRole, ToolResultEntry, TranscriptEntry,
 };
 use tinyinference_llm::tool::ToolCall as TaToolCall;
 
@@ -471,7 +471,11 @@ fn lift_image_markers(text: &str, trim_text: bool) -> Option<Vec<ContentBlock>> 
     }
 
     fn flush_text(pending: &mut String, blocks: &mut Vec<ContentBlock>, trim: bool) {
-        let text = if trim { pending.trim() } else { pending.as_str() };
+        let text = if trim {
+            pending.trim()
+        } else {
+            pending.as_str()
+        };
         if !text.is_empty() {
             blocks.push(ContentBlock::Text(text.to_string()));
         }
