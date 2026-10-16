@@ -36,11 +36,22 @@ pub const RECOVERY_CLASSES: &[&str] = &[
 pub const UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX: &str =
     " The action may already have happened; reconcile its external state before any retry.";
 
+/// Typed root cause accompanying a classified-failure halt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassifiedStopCause {
+    /// Stable classifier-owned failure class.
+    pub class: String,
+    /// Stable operation identifier.
+    pub operation: String,
+    /// Human-readable summary retained for compatibility.
+    pub summary: String,
+}
+
 /// What one classified failure asks of the driver.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClassifiedStep {
     /// The budget is spent: halt the run with this root-cause summary.
-    Halt(String),
+    Halt(ClassifiedStopCause),
     /// Within budget; steer the next model request with this instruction.
     Nudge(String),
     /// Within budget and the class has no instruction of its own.
@@ -110,7 +121,11 @@ pub fn classified_step(
         if class == "uncertain_side_effect" {
             summary.push_str(UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX);
         }
-        return ClassifiedStep::Halt(summary);
+        return ClassifiedStep::Halt(ClassifiedStopCause {
+            class: key.class,
+            operation: key.operation,
+            summary,
+        });
     }
     if class_has_nudge(class) {
         let line = first_error_line(failure_text);
