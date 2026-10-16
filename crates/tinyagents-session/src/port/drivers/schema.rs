@@ -1,0 +1,58 @@
+//! The session crate's v2 storage declarations: [`storage_schema`].
+
+use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
+
+use super::transcripts::{
+    self, ENTRIES as ENTRIES_NAME, INDEX as INDEX_NAME, SCHEMA_VERSION as TRANSCRIPT_VERSION,
+};
+use super::turn_states::{self, COLLECTION as TURN_NAME, SCHEMA_VERSION as TURN_VERSION};
+
+#[path = "schema_steps.rs"]
+mod steps;
+
+/// What the session crate stores, for the host's `Registry::compose` (owner
+/// `session`, scope class Agent), and the steps that bring the v1 names and
+/// shapes forward with `Registry::migrate`.
+///
+/// | v1 | v2 |
+/// |---|---|
+/// | `session_transcripts` (id `<len>:<stem>` or `h:<sha>`) | `session.transcripts`, id `Key::of([stem])`; `created_at` (RFC 3339, indexed) becomes the record's `_created_ms`; unwritten reservation rows (`reserved_at`) are dropped |
+/// | `session_transcript_entries` (id `<len>:<stem>#<seq>`) | `session.transcript_entries`, id `Key::of([stem, "<seq>"])` with `seq` zero-padded |
+/// | `session_turn_states` (`{thread_id, request_id, lifecycle, turn: {camelCase}}`) | `session.turn_states`, id `Key::of([thread_id, request_id])`, bare snake_case body with `started_ms` / `updated_ms` (RFC 3339 to epoch ms) |
+///
+/// Things that move outside a document step:
+///
+/// - `session_kv` lives in `tsd.kv` (owner `session`); the host calls
+///   `tinyagents_harness::storage::import_legacy_kv(storage, "session",
+///   "session_kv", LegacyKv::Flat)` once per scope.
+/// - The generation reservations that were `reserved_at` rows are `tsd.leases`
+///   records (owner `session`, key = the successor stem); nothing is migrated,
+///   an in-flight reservation simply lapses.
+/// - The transcript-import marker (`session_import_markers`) is a
+///   `tsd.migrations` record (`session` / `session_raw_jsonl_v1`); the host
+///   calls `legacy::import_legacy_marker` (which `import_transcripts_once` also
+///   does itself) after `Registry::prepare`.
+/// - The journal stream belongs to a later change.
+///
+/// A provider is constructed with the tenant scope (see
+/// `DriverSessionStores::new`) and binds each agent to `tenant.agent(id)`;
+/// the scope class is `Agent` for that reason. Data stored by v1 under a raw
+/// agent-id scope is not moved by these steps: a step runs inside one scope,
+/// and the host that re-homes a profile's database copies each v1 agent scope
+/// into its `tenant.agent(id)` scope.
+#[must_use]
+pub fn storage_schema() -> Schema {
+    let owner = Owner::new("session").expect("`session` is a valid owner");
+    let [entries, index] = transcripts::collection_specs();
+    Schema::new(owner)
+        .collection_with(TRANSCRIPT_VERSION, entries, ScopeClass::Agent)
+        .collection_with(TRANSCRIPT_VERSION, index, ScopeClass::Agent)
+        .collection_with(
+            TURN_VERSION,
+            turn_states::collection_spec(),
+            ScopeClass::Agent,
+        )
+        .step(steps::transcript_entries())
+        .step(steps::transcripts())
+        .step(steps::turn_states())
+}

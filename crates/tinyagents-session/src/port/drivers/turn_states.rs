@@ -429,7 +429,7 @@ impl TurnStates for DriverTurnStates {
 }
 
 #[path = "turn_states_storage.rs"]
-mod storage;
+pub(super) mod storage;
 
 #[cfg(test)]
 #[path = "turn_states_tests.rs"]

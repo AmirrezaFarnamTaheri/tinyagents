@@ -35,6 +35,7 @@
 //! stays under its tenant and its fence); an empty id has no scope.
 
 mod refused;
+mod schema;
 mod transcripts;
 mod turn_states;
 
@@ -48,6 +49,7 @@ use tinystoragedrivers_core::{
 
 use super::{AgentStores, SessionStoreProvider};
 
+pub use schema::storage_schema;
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
 
@@ -473,6 +475,10 @@ impl SessionStoreProvider for DriverSessionStores {
         Some(format!("{}://{}", self.backend.driver(), self.id))
     }
 }
+
+#[cfg(test)]
+#[path = "schema_tests.rs"]
+mod schema_tests;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

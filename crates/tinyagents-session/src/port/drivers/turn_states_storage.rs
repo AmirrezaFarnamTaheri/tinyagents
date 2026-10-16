@@ -39,7 +39,7 @@ fn invalid(message: impl Into<String>) -> StorageError {
 /// # Errors
 ///
 /// When `state` does not serialize, or a time is not RFC 3339.
-pub(super) fn encode(state: &TurnState) -> Result<Value, StorageError> {
+pub(in crate::port::drivers) fn encode(state: &TurnState) -> Result<Value, StorageError> {
     let Value::Object(mut wire) =
         serde_json::to_value(state).map_err(|error| invalid(error.to_string()))?
     else {
@@ -75,7 +75,7 @@ pub(super) fn encode(state: &TurnState) -> Result<Value, StorageError> {
 /// # Errors
 ///
 /// When `body` is missing a time or is not a turn state.
-pub(super) fn decode(body: &Value) -> Result<TurnState, StorageError> {
+pub(in crate::port::drivers) fn decode(body: &Value) -> Result<TurnState, StorageError> {
     let Value::Object(stored) = body else {
         return Err(invalid("a stored turn state is an object"));
     };
