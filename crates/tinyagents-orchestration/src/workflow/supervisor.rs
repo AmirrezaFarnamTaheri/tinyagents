@@ -60,7 +60,12 @@ impl WorkflowRunSupervisor {
     /// caller can pass it directly to `WorkflowEngine::drive` or
     /// `drive_async`. Callers may wrap the future with their root-parent and
     /// origin scopes before handing it to the spawner.
-    pub fn start<F, MakeFuture, Spawn>(&self, run_id: impl Into<String>, make_future: MakeFuture, spawn: Spawn) -> WorkflowRunHandle
+    pub fn start<F, MakeFuture, Spawn>(
+        &self,
+        run_id: impl Into<String>,
+        make_future: MakeFuture,
+        spawn: Spawn,
+    ) -> WorkflowRunHandle
     where
         F: Future<Output = ()> + Send + 'static,
         MakeFuture: FnOnce(CancellationToken) -> F,

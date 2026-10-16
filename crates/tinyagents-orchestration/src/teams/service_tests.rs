@@ -23,50 +23,82 @@ impl TeamMemberExecutor for FixedExecutor {
 async fn start_member_runs_and_completes_claimed_task() {
     let dir = TempDir::new().unwrap();
     let service = service(&dir);
-    let team = service.create_team(
-        "lead",
-        None,
-        None,
-        &[NewMember { name: "alice".into(), agent_id: None }],
-    ).unwrap();
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
     let member = &team.members[0];
-    let task = service.assign_task(&team.team.id, "write", None, Some(&member.id), &[]).unwrap();
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
 
-    let outcome = service.start_member(
-        &team.team.id,
-        &task.id,
-        &member.id,
-        &FixedExecutor(Ok(vec!["done".into()])),
-        true,
-    ).await.unwrap();
+    let outcome = service
+        .start_member(
+            &team.team.id,
+            &task.id,
+            &member.id,
+            &FixedExecutor(Ok(vec!["done".into()])),
+            true,
+        )
+        .await
+        .unwrap();
 
     assert!(matches!(outcome, CompletionOutcome::Completed(_)));
-    assert_eq!(service.ledger().list_tasks(&team.team.id).unwrap()[0].status, AgentTeamTaskStatus::Done);
-    assert_eq!(service.ledger().list_members(&team.team.id).unwrap()[0].member_status, AgentTeamMemberStatus::Idle);
+    assert_eq!(
+        service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
+        AgentTeamTaskStatus::Done
+    );
+    assert_eq!(
+        service.ledger().list_members(&team.team.id).unwrap()[0].member_status,
+        AgentTeamMemberStatus::Idle
+    );
 }
 
 #[tokio::test]
 async fn start_member_releases_task_and_idles_member_on_executor_failure() {
     let dir = TempDir::new().unwrap();
     let service = service(&dir);
-    let team = service.create_team(
-        "lead",
-        None,
-        None,
-        &[NewMember { name: "alice".into(), agent_id: None }],
-    ).unwrap();
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
     let member = &team.members[0];
-    let task = service.assign_task(&team.team.id, "write", None, Some(&member.id), &[]).unwrap();
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
 
-    let error = service.start_member(
-        &team.team.id,
-        &task.id,
-        &member.id,
-        &FixedExecutor(Err("worker stopped")),
-        true,
-    ).await.unwrap_err();
+    let error = service
+        .start_member(
+            &team.team.id,
+            &task.id,
+            &member.id,
+            &FixedExecutor(Err("worker stopped")),
+            true,
+        )
+        .await
+        .unwrap_err();
 
     assert!(error.to_string().contains("worker stopped"));
-    assert_eq!(service.ledger().list_tasks(&team.team.id).unwrap()[0].status, AgentTeamTaskStatus::Todo);
-    assert_eq!(service.ledger().list_members(&team.team.id).unwrap()[0].member_status, AgentTeamMemberStatus::Idle);
+    assert_eq!(
+        service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
+        AgentTeamTaskStatus::Todo
+    );
+    assert_eq!(
+        service.ledger().list_members(&team.team.id).unwrap()[0].member_status,
+        AgentTeamMemberStatus::Idle
+    );
 }

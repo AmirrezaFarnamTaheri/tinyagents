@@ -137,7 +137,9 @@ impl WorkspaceIsolation for GitWorktreeIsolation {
         let status = create_git_worktree(&self.repo_root, run_id, self.base_ref)
             .map_err(|err| TinyAgentsError::Tool(err.to_string()))?;
         let policy_id = match agent {
-            Some(agent) if !agent.is_empty() => format!("{}:{agent}:{run_id}", self.policy_id_prefix),
+            Some(agent) if !agent.is_empty() => {
+                format!("{}:{agent}:{run_id}", self.policy_id_prefix)
+            }
             _ => format!("{}:{run_id}", self.policy_id_prefix),
         };
         let mut descriptor = WorkspaceDescriptor::new(status.path)
@@ -159,7 +161,11 @@ impl WorkspaceIsolation for GitWorktreeIsolation {
         let result = remove_git_worktree(&self.repo_root, &descriptor.root, false)
             .map_err(|err| TinyAgentsError::Tool(err.to_string()));
         if let Some(hook) = &self.lifecycle_hook {
-            hook.cleaned(descriptor, result.as_ref().err().map(ToString::to_string).as_deref()).await?;
+            hook.cleaned(
+                descriptor,
+                result.as_ref().err().map(ToString::to_string).as_deref(),
+            )
+            .await?;
         }
         result
     }

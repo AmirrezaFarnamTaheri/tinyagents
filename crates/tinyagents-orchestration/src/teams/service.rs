@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
@@ -21,7 +22,6 @@ use tinyagents_session::run_ledger::{
 };
 use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
-use async_trait::async_trait;
 
 use super::runtime::drain_run_events;
 use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamError, TeamView};
@@ -30,11 +30,7 @@ use super::{LEAD_SENDER, MemberShutdown, NewMember, TEAM_MESSAGE_EVENT, TeamErro
 #[async_trait]
 pub trait TeamMemberExecutor: Send + Sync {
     /// Run `task` as `member` and return the evidence to submit at completion.
-    async fn execute(
-        &self,
-        member: &AgentTeamMember,
-        task: &AgentTeamTask,
-    ) -> Result<Vec<String>>;
+    async fn execute(&self, member: &AgentTeamMember, task: &AgentTeamTask) -> Result<Vec<String>>;
 }
 
 /// Durable team state required by [`TeamService`].
@@ -219,7 +215,11 @@ impl TeamLedger for SessionTeamLedger {
         })
     }
     fn release_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
-        let (ledger, team, task) = (Arc::clone(&self.ledger), team_id.to_owned(), task_id.to_owned());
+        let (ledger, team, task) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            task_id.to_owned(),
+        );
         self.run(async move { ledger.release_agent_team_task(&team, &task).await })
     }
     fn mark_member_running(
@@ -231,17 +231,31 @@ impl TeamLedger for SessionTeamLedger {
         run_id: &str,
     ) -> Result<bool> {
         let (ledger, team, member, task, thread, run) = (
-            Arc::clone(&self.ledger), team_id.to_owned(), member_id.to_owned(),
-            task_id.to_owned(), worker_thread_id.to_owned(), run_id.to_owned(),
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
         );
         self.run(async move {
-            Ok(ledger.mark_agent_team_member_running(&team, &member, &task, &thread, &run).await?.is_some())
+            Ok(ledger
+                .mark_agent_team_member_running(&team, &member, &task, &thread, &run)
+                .await?
+                .is_some())
         })
     }
     fn mark_member_idle(&self, team_id: &str, member_id: &str) -> Result<bool> {
-        let (ledger, team, member) = (Arc::clone(&self.ledger), team_id.to_owned(), member_id.to_owned());
+        let (ledger, team, member) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+        );
         self.run(async move {
-            Ok(ledger.mark_agent_team_member_idle(&team, &member).await?.is_some())
+            Ok(ledger
+                .mark_agent_team_member_idle(&team, &member)
+                .await?
+                .is_some())
         })
     }
     fn shutdown_member(
@@ -463,35 +477,55 @@ impl<L: TeamLedger> TeamService<L> {
         let claim_token = Uuid::new_v4().to_string();
         let claimed = match self.claim_task(team_id, task_id, member_id, &claim_token)? {
             ClaimOutcome::Claimed(task) => *task,
-            ClaimOutcome::AlreadyClaimed => return Err(anyhow!("task is already claimed: {task_id}")),
-            ClaimOutcome::Blocked { unmet } => return Err(anyhow!("task dependencies are incomplete: {}", unmet.join(", "))),
+            ClaimOutcome::AlreadyClaimed => {
+                return Err(anyhow!("task is already claimed: {task_id}"));
+            }
+            ClaimOutcome::Blocked { unmet } => {
+                return Err(anyhow!(
+                    "task dependencies are incomplete: {}",
+                    unmet.join(", ")
+                ));
+            }
             ClaimOutcome::UnknownTask => return Err(anyhow!("unknown task: {task_id}")),
         };
-        let member = self.ledger.list_members(team_id)?.into_iter()
+        let member = self
+            .ledger
+            .list_members(team_id)?
+            .into_iter()
             .find(|member| member.id == member_id)
             .ok_or_else(|| anyhow!("unknown team member: {member_id}"))?;
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
         let run_id = format!("team-run-{}", Uuid::new_v4().simple());
-        match self.ledger.mark_member_running(team_id, member_id, task_id, &worker_thread_id, &run_id) {
+        match self.ledger.mark_member_running(
+            team_id,
+            member_id,
+            task_id,
+            &worker_thread_id,
+            &run_id,
+        ) {
             Ok(true) => {}
             Ok(false) => {
                 let _ = self.ledger.release_task(team_id, task_id);
                 return Err(anyhow!("unknown team member: {member_id}"));
             }
             Err(error) => {
-            let _ = self.ledger.release_task(team_id, task_id);
-            return Err(error.context("mark team member running"));
+                let _ = self.ledger.release_task(team_id, task_id);
+                return Err(error.context("mark team member running"));
             }
         }
 
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {
-            Ok(evidence) => self.complete_task(team_id, task_id, member_id, &evidence, require_evidence),
+            Ok(evidence) => {
+                self.complete_task(team_id, task_id, member_id, &evidence, require_evidence)
+            }
             Err(error) => {
                 let cleanup = self.release_and_idle(team_id, task_id, member_id);
                 return match cleanup {
                     Ok(()) => Err(error.context("team member execution failed")),
-                    Err(cleanup_error) => Err(anyhow!("team member execution failed: {error}; cleanup failed: {cleanup_error}")),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "team member execution failed: {error}; cleanup failed: {cleanup_error}"
+                    )),
                 };
             }
         };
@@ -508,7 +542,9 @@ impl<L: TeamLedger> TeamService<L> {
                 let cleanup = self.release_and_idle(team_id, task_id, member_id);
                 match cleanup {
                     Ok(()) => Err(error.context("complete team task")),
-                    Err(cleanup_error) => Err(anyhow!("complete team task failed: {error}; cleanup failed: {cleanup_error}")),
+                    Err(cleanup_error) => Err(anyhow!(
+                        "complete team task failed: {error}; cleanup failed: {cleanup_error}"
+                    )),
                 }
             }
         }
