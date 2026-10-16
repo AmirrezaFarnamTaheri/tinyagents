@@ -60,6 +60,33 @@ pub struct SubagentTaskKey {
     pub task_id: String,
 }
 
+/// Target used to continue a durable subagent lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubagentContinuationTarget {
+    /// The original lifecycle key.
+    TaskKey(SubagentTaskKey),
+    /// Public reusable-session id resolved through the durable session store.
+    SessionId(String),
+}
+
+impl From<SubagentTaskKey> for SubagentContinuationTarget {
+    fn from(value: SubagentTaskKey) -> Self {
+        Self::TaskKey(value)
+    }
+}
+
+impl From<String> for SubagentContinuationTarget {
+    fn from(value: String) -> Self {
+        Self::SessionId(value)
+    }
+}
+
+impl From<&str> for SubagentContinuationTarget {
+    fn from(value: &str) -> Self {
+        Self::SessionId(value.to_owned())
+    }
+}
+
 impl SubagentTaskKey {
     /// Creates an initial durable identity from a context at task creation.
     /// Continuations must retain this returned key rather than derive another
@@ -119,13 +146,33 @@ impl<C, H> SubagentRequest<C, H> {
     ///
     /// Hosts must authorize and recover `original_key` from their own durable
     /// record; do not derive a replacement key from the fresh context.
-    pub fn continue_with_key(
-        original_key: SubagentTaskKey,
+    pub async fn continue_with_key(
+        target: impl Into<SubagentContinuationTarget>,
         fresh_owned_context: RunContext<C>,
         host_request: H,
         input: impl Into<String>,
         resume: Option<SubagentResume>,
+        sessions: Option<&dyn super::SubagentSessionStore>,
     ) -> Result<Self, SubagentError> {
+        let original_key = match target.into() {
+            SubagentContinuationTarget::TaskKey(key) => key,
+            SubagentContinuationTarget::SessionId(session_id) => {
+                let sessions = sessions.ok_or_else(|| {
+                    SubagentError::InvalidRequest(
+                        "continuing by session id requires a durable session store".into(),
+                    )
+                })?;
+                sessions
+                    .get(&session_id)
+                    .await?
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "unknown subagent session `{session_id}`"
+                        ))
+                    })?
+                    .lifecycle_key
+            }
+        };
         Self::validate_key(&original_key)?;
         Self::validate_thread(&original_key, &fresh_owned_context)?;
         Ok(Self {
@@ -159,7 +206,9 @@ impl<C, H> SubagentRequest<C, H> {
             host_request,
             input,
             resume,
+            Some(sessions),
         )
+        .await
     }
 
     /// Names the sub-agent this lifecycle runs, for spawn-policy

@@ -16,7 +16,7 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
         "task_id": "legacy",
         "output": "done",
         "history": [],
-        "status": "completed",
+        "status": "Completed",
         "usage": { "calls": 0, "usage": {
             "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
             "cache_write_tokens": 0, "charged_amount": null

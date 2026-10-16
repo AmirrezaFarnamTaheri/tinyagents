@@ -77,7 +77,7 @@ pub use types::{
     PreparedSubagent, SubagentError, SubagentExecution, SubagentIncomplete, SubagentOutcome,
     SubagentOutcomeKind, SubagentPause, SubagentPausePersistenceDisposition,
     SubagentPersistenceDisposition, SubagentRequest, SubagentRequestParts, SubagentResume,
-    SubagentRunResult, SubagentTaskKey, SubagentTerminalPersistenceDisposition,
+    SubagentContinuationTarget, SubagentRunResult, SubagentTaskKey, SubagentTerminalPersistenceDisposition,
 };
 
 #[cfg(test)]
