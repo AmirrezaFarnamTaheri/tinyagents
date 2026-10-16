@@ -341,35 +341,31 @@ where
 
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         let mut state = None;
-        let result = self.run_one(request.clone(), None, &mut state).await;
+        let mut next = None;
+        let result = self
+            .run_one(request.clone(), None, &mut state, &mut next)
+            .await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
-            let mut owner = request.clone();
-            let mut current = state.clone();
-            while let Some(owner_generation) = current.as_ref().map(|state| state.generation) {
-                let followup = self
-                    .take_next_followup_or_release(&owner.scope, &owner.thread_id, owner_generation)
-                    .await;
-                let Some((followup, reserved)) = followup else {
-                    break;
-                };
-                owner = followup.clone();
-                current = Some(reserved.clone());
+            while let Some((followup, reserved)) = next.take() {
+                let mut current = Some(reserved.clone());
+                let mut following = None;
                 if self
-                    .run_one(followup, Some(reserved), &mut current)
+                    .run_one(followup.clone(), Some(reserved), &mut current, &mut following)
                     .await
                     .is_err()
                 {
                     if let Some(state) = current.as_ref() {
                         self.clear_generation_queue(
-                            &owner.scope,
-                            &owner.thread_id,
+                            &followup.scope,
+                            &followup.thread_id,
                             state.generation,
                         )
                         .await;
-                        self.clear_tracking(&owner, state.generation).await;
+                        self.clear_tracking(&followup, state.generation).await;
                     }
                     break;
                 }
+                next = following;
             }
         } else {
             if let Some(state) = state.as_ref() {
@@ -394,6 +390,7 @@ where
         mut request: TurnRequest<P>,
         reservation: Option<ActiveTurn<P>>,
         state_out: &mut Option<ActiveTurn<P>>,
+        next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
@@ -417,6 +414,7 @@ where
             .map(|state| state.cancel.clone())
             .unwrap_or_default();
         let mut primary_queue = reservation.as_ref().map(|state| state.queue.clone());
+        let mut active_generation = reservation.as_ref().map(|state| state.generation);
         if !request.host_authored {
             if request.disposition == QueueDisposition::Parallel {
                 self.parallel_active.lock().await.insert(
@@ -447,6 +445,7 @@ where
                 state.request_id = request.request_id.clone();
                 state.cancel = cancellation.clone();
                 active.insert(key.clone(), state.clone());
+                active_generation = Some(state.generation);
                 *state_out = Some(state);
             } else {
                 let mut active = self.active.lock().await;
@@ -466,6 +465,7 @@ where
                     queue: queue.clone(),
                 };
                 let previous = active.insert(key.clone(), state.clone());
+                active_generation = Some(state.generation);
                 *state_out = Some(state);
                 primary_queue = Some(queue);
                 if let Some(previous) = previous {
@@ -560,7 +560,15 @@ where
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
                 if !request.host_authored && request.disposition != QueueDisposition::Parallel {
-                    let collected = run_queue.take(QueueLane::Collect, QueueMode::All).await;
+                    let (collected, next) = match active_generation {
+                        Some(generation) => {
+                            self.finalize_generation(&request.scope, &request.thread_id, generation)
+                                .await
+                        }
+                        None => (Vec::new(), None),
+                    };
+                    *next_out = next.clone();
+                    *state_out = next.map(|(_, state)| state);
                     self.events.collected(&request, collected).await;
                 }
                 self.events
