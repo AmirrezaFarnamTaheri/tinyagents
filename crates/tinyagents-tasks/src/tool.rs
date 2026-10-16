@@ -128,12 +128,40 @@ pub fn orchestration_tools(store: Arc<dyn TaskStore>) -> Vec<Arc<OrchestrationTo
         .collect()
 }
 
+/// Builds every orchestration control with host-provided durable status overlays.
+pub fn orchestration_tools_with_status_overlay(
+    store: Arc<dyn TaskStore>,
+    overlay: Arc<dyn OrchestrationStatusOverlay>,
+) -> Vec<Arc<OrchestrationTool>> {
+    OrchestrationToolKind::ALL
+        .into_iter()
+        .map(|kind| {
+            Arc::new(
+                OrchestrationTool::new(kind, store.clone())
+                    .with_status_overlay(overlay.clone()),
+            )
+        })
+        .collect()
+}
+
 /// Registers every built-in orchestration control in a normal tool registry.
 pub fn register_orchestration_tools<State: Send + Sync, Ctx: Send + Sync>(
     registry: &mut ToolRegistry<State, Ctx>,
     store: Arc<dyn TaskStore>,
 ) -> &mut ToolRegistry<State, Ctx> {
     for tool in orchestration_tools(store) {
+        registry.register(tool);
+    }
+    registry
+}
+
+/// Registers every orchestration control with host-provided durable overlays.
+pub fn register_orchestration_tools_with_status_overlay<State: Send + Sync, Ctx: Send + Sync>(
+    registry: &mut ToolRegistry<State, Ctx>,
+    store: Arc<dyn TaskStore>,
+    overlay: Arc<dyn OrchestrationStatusOverlay>,
+) -> &mut ToolRegistry<State, Ctx> {
+    for tool in orchestration_tools_with_status_overlay(store, overlay) {
         registry.register(tool);
     }
     registry
