@@ -26,6 +26,7 @@
 
 #[cfg(feature = "langfuse")]
 mod langfuse;
+mod journal_entry;
 mod profile;
 mod types;
 mod worker;

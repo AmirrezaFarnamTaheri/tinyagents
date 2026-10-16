@@ -94,6 +94,13 @@ impl Drop for DispatchGuard<'_> {
 // EventSink impls
 // ---------------------------------------------------------------------------
 
+/// The id a sink whose stream id is `stream_id` mints for the event at
+/// `offset`: `{stream_id}-evt-{offset}`. Persisted ids are reproducible from
+/// the pair, which the durable journal relies on to avoid storing them.
+pub(crate) fn canonical_event_id(stream_id: &str, offset: u64) -> crate::ids::EventId {
+    crate::ids::EventId::new(format!("{stream_id}-evt-{offset}"))
+}
+
 impl EventSink {
     /// Creates a new, empty event sink with no registered listeners.
     ///
