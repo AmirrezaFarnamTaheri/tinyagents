@@ -54,8 +54,9 @@ it, each owned by its own submodule:
   should carry for a given strategy (`JsonSchema` for `ProviderSchema`,
   `Text` for `ToolCall`, since the structure arrives via tool arguments there).
 - `JsonRepair` (`repair.rs`) — which rung of the repair ladder produced a
-  value (`Strict`/`CodeFence`/`Slice`/`Relaxed`/`Closed`); `as_str()` for
-  logging, `is_repaired()` to tell a clean parse from a recovered one.
+  value (`Strict`/`CodeFence`/`Slice`/`Relaxed`/`TrailingComma`/`Closed`);
+  `as_str()` for logging, `is_repaired()` to tell a clean parse from a
+  recovered one.
 - `parse_lenient` and `parse_lenient_last_object` (`repair.rs`) — parse the
   first recoverable value or explicitly select the last complete object,
   preferring a fenced block and repairing trailing commas.

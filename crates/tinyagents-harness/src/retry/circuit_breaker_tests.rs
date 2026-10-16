@@ -11,9 +11,11 @@ fn a_shared_breaker_blocks_same_key_and_keeps_keys_independent() {
         second_context.try_acquire("tenant-a/provider:model".into(), 0),
         Err(BreakerRejection::InFlight)
     ));
-    assert!(second_context
-        .try_acquire("tenant-b/provider:model".into(), 0)
-        .is_ok());
+    assert!(
+        second_context
+            .try_acquire("tenant-b/provider:model".into(), 0)
+            .is_ok()
+    );
 
     let failure = first.record_failure(0).expect("failure is recorded");
     assert_eq!(failure.failure_count, 1);
@@ -22,9 +24,11 @@ fn a_shared_breaker_blocks_same_key_and_keeps_keys_independent() {
         second_context.try_acquire("tenant-a/provider:model".into(), 29_999),
         Err(BreakerRejection::Backoff { .. })
     ));
-    assert!(second_context
-        .try_acquire("tenant-a/provider:model".into(), 30_000)
-        .is_ok());
+    assert!(
+        second_context
+            .try_acquire("tenant-a/provider:model".into(), 30_000)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -43,7 +47,11 @@ fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
         failure_limit: 3,
     });
     let key = "provider/model";
-    let first = breaker.try_acquire(key, 0).unwrap().record_failure(0).unwrap();
+    let first = breaker
+        .try_acquire(key, 0)
+        .unwrap()
+        .record_failure(0)
+        .unwrap();
     assert_eq!(first.next_attempt_ms, 10);
     assert!(!first.failure_limit_reached);
     let second = breaker
@@ -61,19 +69,20 @@ fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
     assert!(third.failure_limit_reached);
     assert!(matches!(
         breaker.try_acquire(key, third.next_attempt_ms - 1),
-        Err(BreakerRejection::Backoff { failure_limit_reached: true, .. })
+        Err(BreakerRejection::Backoff {
+            failure_limit_reached: true,
+            ..
+        })
     ));
 }
 
 #[test]
 fn success_resets_the_streak_and_stale_drop_cannot_release_a_new_attempt() {
-    let breaker = PersistentFailoverBreaker::<String>::new(
-        PersistentFailoverBreakerConfig {
-            base_backoff_ms: 1,
-            max_backoff_ms: 10,
-            failure_limit: 2,
-        },
-    );
+    let breaker = PersistentFailoverBreaker::<String>::new(PersistentFailoverBreakerConfig {
+        base_backoff_ms: 1,
+        max_backoff_ms: 10,
+        failure_limit: 2,
+    });
     let mut old = breaker.try_acquire("key".into(), 0).unwrap();
     old.record_failure(0).unwrap();
     let mut current = breaker.try_acquire("key".into(), 1).unwrap();

@@ -113,7 +113,9 @@ where
     }
 
     fn lock_entries(&self) -> MutexGuard<'_, HashMap<K, Entry>> {
-        self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -175,7 +177,10 @@ where
 {
     /// Records success and resets the consecutive failure count.
     pub fn record_success(&mut self) {
-        let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = entries.get_mut(&self.key)
             && Arc::ptr_eq(&entry.generation, &self.generation)
             && entry.in_flight
@@ -195,7 +200,10 @@ where
         if self.finished {
             return None;
         }
-        let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let entry = entries.get_mut(&self.key)?;
         if !Arc::ptr_eq(&entry.generation, &self.generation) || !entry.in_flight {
             self.finished = true;
@@ -228,7 +236,10 @@ where
         if self.finished {
             return;
         }
-        let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = entries.get_mut(&self.key)
             && Arc::ptr_eq(&entry.generation, &self.generation)
             && entry.in_flight

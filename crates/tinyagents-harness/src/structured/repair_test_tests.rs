@@ -85,10 +85,9 @@ fn last_object_parser_prefers_the_last_fenced_object_and_repairs_commas() {
 
 #[test]
 fn last_object_parser_uses_the_last_outer_balanced_object() {
-    let (value, _) = parse_lenient_last_object(
-        "{\"id\": 1} then {\"nested\": {\"id\": 2}, \"text\": \"} {\"}",
-    )
-    .expect("the last complete outer object parses");
+    let (value, _) =
+        parse_lenient_last_object("{\"id\": 1} then {\"nested\": {\"id\": 2}, \"text\": \"} {\"}")
+            .expect("the last complete outer object parses");
     assert_eq!(value["nested"]["id"], 2);
     assert_eq!(value["text"], "} {");
 }

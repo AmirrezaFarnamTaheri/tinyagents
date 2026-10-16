@@ -53,6 +53,9 @@ pub enum JsonRepair {
     /// Relaxed-JSON repairs were applied (unquoted keys, doubled braces, leaked
     /// chat-template quote tokens).
     Relaxed,
+    /// A trailing comma was removed while parsing the explicit last-object
+    /// option.
+    TrailingComma,
     /// Truncated output was closed (unterminated string and/or open brackets).
     Closed,
 }
@@ -65,6 +68,7 @@ impl JsonRepair {
             JsonRepair::CodeFence => "code_fence",
             JsonRepair::Slice => "slice",
             JsonRepair::Relaxed => "relaxed",
+            JsonRepair::TrailingComma => "trailing_comma",
             JsonRepair::Closed => "closed",
         }
     }
@@ -149,7 +153,13 @@ fn parse_object_candidate(candidate: &str) -> Option<(Value, JsonRepair)> {
         return None;
     }
     let without_trailing_commas = strip_object_trailing_commas(trimmed);
-    parse_lenient(&without_trailing_commas)
+    let (value, repair) = parse_lenient(&without_trailing_commas)?;
+    let repair = if repair == JsonRepair::Strict && without_trailing_commas != trimmed {
+        JsonRepair::TrailingComma
+    } else {
+        repair
+    };
+    Some((value, repair))
 }
 
 fn last_complete_fenced_block(raw: &str) -> Option<&str> {

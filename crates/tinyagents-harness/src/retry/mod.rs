@@ -24,13 +24,13 @@
 //! `now: Instant` / `rand01: f64` so tests can drive time and randomness
 //! deterministically without injecting a clock trait.
 
-mod failover;
 mod circuit_breaker;
+mod failover;
 mod jitter;
 mod types;
 
-pub use failover::*;
 pub use circuit_breaker::*;
+pub use failover::*;
 pub use types::*;
 
 use std::sync::Mutex;
