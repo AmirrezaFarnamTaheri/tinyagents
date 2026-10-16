@@ -264,7 +264,7 @@ impl SpanCollector {
                     .or_insert(call.index);
                 let completed_index = call.index;
                 let cached_usage = usage.as_ref().filter(|_| cache_hit).map(|usage| {
-                    let mut usage = usage.clone();
+                    let mut usage = *usage;
                     usage.charged_amount = None;
                     usage
                 });
