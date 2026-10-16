@@ -36,20 +36,19 @@ pub fn reconcile_native_transcript(
 ) -> ReconciledTranscript {
     let mut rows = next
         .iter()
-        .filter_map(|message| {
-            message_to_native_transcript(message).map(|row| (row, message))
-        })
+        .filter_map(|message| message_to_native_transcript(message).map(|row| (row, message)))
         .collect::<Vec<_>>();
     let mut consumed = vec![false; previous.len().min(prior.len())];
     let mut fresh = Vec::with_capacity(rows.len());
     for (row, message) in &mut rows {
-        let matched = previous
-            .iter()
-            .enumerate()
-            .take(consumed.len())
-            .find_map(|(index, candidate)| {
-                (!consumed[index] && candidate == *message).then_some(index)
-            });
+        let matched =
+            previous
+                .iter()
+                .enumerate()
+                .take(consumed.len())
+                .find_map(|(index, candidate)| {
+                    (!consumed[index] && candidate == *message).then_some(index)
+                });
         if let Some(index) = matched {
             *row = prior[index].clone();
             consumed[index] = true;
