@@ -194,6 +194,26 @@ async fn serial_path_runs_one_at_a_time_and_honours_cancel() {
     assert_eq!(ran.load(Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn async_preflight_prepares_each_task_before_admission_staging() {
+    let out = Plan::new(vec![
+        task("a", "read", vec![]),
+        task("b", "read", vec![]),
+    ])
+    .stage_with_preflight(&Policy, |index, mut task| async move {
+        tokio::task::yield_now().await;
+        if index == 1 {
+            return Err("workspace isolation failed".to_owned());
+        }
+        task.payload.kind = "iso";
+        Ok(task)
+    })
+    .await;
+
+    assert!(matches!(out[0], Preflight::Prepared(ref w) if w.dispatch_mode == WorkerDispatchMode::Parallel));
+    assert!(matches!(&out[1], Preflight::Rejected(r) if r.kind == RejectionKind::Policy("workspace isolation failed".into())));
+}
+
 struct R {
     id: &'static str,
     ok: bool,
