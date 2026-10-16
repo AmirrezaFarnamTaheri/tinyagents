@@ -97,6 +97,7 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
         |reply| format!("verify {reply}"),
         "Repair: {repair_reason}",
         &[],
+        None,
         || "fallback".to_owned(),
     )
     .await;
@@ -124,11 +125,32 @@ async fn unclear_verification_and_failed_repair_use_the_deterministic_fallback()
         |reply| format!("verify {reply}"),
         "Repair: {repair_reason}",
         &[],
+        None,
         || "deterministic fallback".to_owned(),
     )
     .await;
     assert_eq!(output.text, "deterministic fallback");
     assert_eq!(model.requests.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn an_expired_close_budget_uses_fallback_without_starting_model_calls() {
+    let model = scripted_model(&["unconsumed answer"]);
+    let output = grounded_close(
+        &model,
+        &(),
+        &NativeDialect,
+        &[],
+        "close prompt",
+        |reply| format!("verify {reply}"),
+        "Repair: {repair_reason}",
+        &[],
+        Some(std::time::Duration::ZERO),
+        || "budget fallback".to_owned(),
+    )
+    .await;
+    assert_eq!(output.text, "budget fallback");
+    assert!(model.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

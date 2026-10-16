@@ -157,6 +157,7 @@ pub async fn grounded_close<State, M>(
     verification_prompt: impl Fn(&str) -> String,
     repair_template: &str,
     harness_phrases: &[&str],
+    budget: Option<std::time::Duration>,
     deterministic_fallback: impl FnOnce() -> String,
 ) -> CloseOutput
 where
@@ -165,9 +166,18 @@ where
 {
     let mut usage = Vec::new();
     let mut prompt = initial_prompt.to_owned();
+    let started = tokio::time::Instant::now();
     for attempt in 0..2 {
-        let Some((candidate, call_usage, has_tool_call)) =
-            completion(model, state, dialect, history, &prompt).await
+        let remaining = budget.map(|limit| limit.saturating_sub(started.elapsed()));
+        let Some((candidate, call_usage, has_tool_call)) = completion(
+            model,
+            state,
+            dialect,
+            history,
+            &prompt,
+            remaining,
+        )
+        .await
         else {
             if attempt == 1 {
                 break;
@@ -183,7 +193,8 @@ where
             Some(CloseViolation::QuotedInstruction)
         } else {
             let verify_prompt = verification_prompt(&candidate);
-            match completion(model, state, dialect, &[], &verify_prompt).await {
+            let remaining = budget.map(|limit| limit.saturating_sub(started.elapsed()));
+            match completion(model, state, dialect, &[], &verify_prompt, remaining).await {
                 Some((verdict, call_usage, has_tool_call)) => {
                     usage.extend(call_usage);
                     if !has_tool_call && parse_close_verdict(&verdict) == CloseVerdict::Accept {
@@ -234,7 +245,7 @@ where
     if output_satisfies_contract(reply, contract) {
         return None;
     }
-    let attempted = completion(model, state, dialect, history, repair_instruction).await;
+    let attempted = completion(model, state, dialect, history, repair_instruction, None).await;
     let (candidate, usage, has_tool_call) = attempted
         .map(|(text, usage, has_tool_call)| (text, usage, has_tool_call))
         .unwrap_or_default();
@@ -266,6 +277,7 @@ async fn completion<State, M>(
     dialect: &dyn ToolDialect,
     history: &[Message],
     prompt: &str,
+    timeout: Option<std::time::Duration>,
 ) -> Option<(String, Vec<Usage>, bool)>
 where
     M: ChatModel<State> + ?Sized,
@@ -276,7 +288,13 @@ where
     let request = ModelRequest::new(messages)
         .with_tools(Vec::new())
         .with_tool_choice(ToolChoice::None);
-    let response = model.invoke(state, request).await.ok()?;
+    let response = match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, model.invoke(state, request))
+            .await
+            .ok()?
+            .ok()?,
+        None => model.invoke(state, request).await.ok()?,
+    };
     let text = response.text().to_owned();
     let has_tool_call = !response.message.tool_calls.is_empty()
         || !dialect
