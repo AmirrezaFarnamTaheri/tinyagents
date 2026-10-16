@@ -50,6 +50,37 @@ fn upsert(force_fresh: bool, task_id: &str) -> SubagentSessionUpsert {
     }
 }
 
+#[test]
+fn legacy_session_rows_decode_without_a_lifecycle_key() {
+    let mut value = serde_json::to_value(DurableSubagentSession {
+        subagent_session_id: "legacy".into(),
+        parent_session: "parent".into(),
+        parent_thread_id: Some("thread".into()),
+        worker_thread_id: None,
+        agent_id: "researcher".into(),
+        display_name: None,
+        model: None,
+        sandbox_mode: "read_only".into(),
+        action_root: None,
+        task_key: "analysis".into(),
+        lifecycle_key: Some(lifecycle_key()),
+        task_title: "Analyze".into(),
+        current_task_id: Some("legacy-task".into()),
+        status: DurableSubagentStatus::Idle,
+        reusable: true,
+        latest_history: None,
+        latest_error: None,
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        last_used_at: "2026-01-01T00:00:00Z".into(),
+    })
+    .unwrap();
+    value.as_object_mut().unwrap().remove("lifecycleKey");
+    let decoded: DurableSubagentSession = serde_json::from_value(value).unwrap();
+    assert!(decoded.lifecycle_key.is_none());
+    assert_eq!(decoded.current_task_id.as_deref(), Some("legacy-task"));
+}
+
 #[tokio::test]
 async fn session_selector_requires_matching_scope_and_reusable_status() {
     let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
@@ -254,6 +285,151 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
     .await
     .unwrap();
     assert!(closed.output().contains("true"));
+}
+
+#[tokio::test]
+async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
+    use tinyagents_tasks::{InMemoryTaskStore, OrchestrationTaskKind, OrchestrationTaskResult};
+
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let owner = tinyagents_harness::ids::RunId::new("owner");
+    let task_store = Arc::new(InMemoryTaskStore::new());
+    let mut completed = tinyagents_tasks::OrchestrationTaskSpec::new(
+        "task-completed",
+        OrchestrationTaskKind::SubAgent {
+            agent: "researcher".into(),
+        },
+    )
+    .with_lineage(owner.clone(), owner.clone())
+    .with_metadata("parentSession", owner.to_string())
+    .with_metadata("subagentSessionId", "session-completed");
+    completed.thread_id = Some(tinyagents_harness::ids::ThreadId::new("thread-a"));
+    task_store.insert(completed).unwrap();
+    task_store
+        .mark_running(&tinyagents_harness::ids::TaskId::new("task-completed"))
+        .unwrap();
+    task_store
+        .complete(
+            &tinyagents_harness::ids::TaskId::new("task-completed"),
+            OrchestrationTaskResult::text("durable answer"),
+        )
+        .unwrap();
+
+    let mut awaiting = tinyagents_tasks::OrchestrationTaskSpec::new(
+        "task-awaiting",
+        OrchestrationTaskKind::SubAgent {
+            agent: "planner".into(),
+        },
+    )
+    .with_lineage(owner.clone(), owner.clone())
+    .with_metadata("parentSession", owner.to_string())
+    .with_metadata("subagentSessionId", "session-awaiting");
+    awaiting.thread_id = Some(tinyagents_harness::ids::ThreadId::new("thread-a"));
+    task_store.insert(awaiting).unwrap();
+    task_store
+        .mark_running(&tinyagents_harness::ids::TaskId::new("task-awaiting"))
+        .unwrap();
+    task_store
+        .mark_awaiting_with_question(
+            &tinyagents_harness::ids::TaskId::new("task-awaiting"),
+            "Which environment?".into(),
+        )
+        .unwrap();
+
+    let mut failed = tinyagents_tasks::OrchestrationTaskSpec::new(
+        "task-failed",
+        OrchestrationTaskKind::SubAgent {
+            agent: "reviewer".into(),
+        },
+    )
+    .with_lineage(owner.clone(), owner.clone())
+    .with_metadata("parentSession", owner.to_string())
+    .with_metadata("subagentSessionId", "session-failed");
+    failed.thread_id = Some(tinyagents_harness::ids::ThreadId::new("thread-a"));
+    task_store.insert(failed).unwrap();
+    task_store
+        .mark_running(&tinyagents_harness::ids::TaskId::new("task-failed"))
+        .unwrap();
+    task_store
+        .fail(
+            &tinyagents_harness::ids::TaskId::new("task-failed"),
+            "durable failure".into(),
+        )
+        .unwrap();
+
+    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
+        .with_fixed_action(crate::subagent::SubAgentJobAction::Await)
+        .with_identifier_fields("task_id", "subagent_session_id")
+        .with_task_store(task_store.clone(), move |_| owner.clone())
+        .with_task_thread_scope(|_| Some("thread-a".into()));
+
+    let completed_by_task = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"task_id":"task-completed"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let completed_by_session: serde_json::Value =
+        serde_json::from_str(&completed_by_task.output()).unwrap();
+    assert_eq!(completed_by_session["status"], "completed");
+    assert_eq!(completed_by_session["output"], "durable answer");
+    assert_eq!(completed_by_session["agent"], "researcher");
+    assert_eq!(completed_by_session["session_id"], "session-completed");
+    assert_eq!(completed_by_session["extensions"]["iterations"], 0);
+
+    let awaiting = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"subagent_session_id":"session-awaiting"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let awaiting: serde_json::Value = serde_json::from_str(&awaiting.output()).unwrap();
+    assert_eq!(awaiting["status"], "awaiting_user");
+    assert_eq!(awaiting["output"], "Which environment?");
+    assert_eq!(awaiting["agent"], "planner");
+
+    let failed = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"task_id":"task-failed"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let failed: serde_json::Value = serde_json::from_str(&failed.output()).unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["error"], "durable failure");
+    assert_eq!(failed["agent"], "reviewer");
+
+    let foreign_jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
+        .with_fixed_action(crate::subagent::SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_task_store(task_store.clone(), |_| {
+            tinyagents_harness::ids::RunId::new("foreign-owner")
+        })
+        .with_task_thread_scope(|_| Some("thread-a".into()));
+    assert!(
+        ToolDispatch::<(), ()>::execute(
+            &foreign_jobs,
+            &(),
+            new_call_id(),
+            serde_json::json!({"task_id":"task-completed"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .is_err()
+    );
 }
 
 #[tokio::test]

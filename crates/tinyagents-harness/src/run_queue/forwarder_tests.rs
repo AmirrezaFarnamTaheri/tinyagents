@@ -4,6 +4,7 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::runtime::AgentHarness;
 use crate::testkit::ScriptedModel;
+use tinyinference_llm::message::{ContentBlock, ImageRef};
 
 #[derive(Debug, Clone, PartialEq)]
 struct Item {
@@ -307,4 +308,164 @@ async fn a_steer_queued_while_the_guard_closes_stays_in_the_queue() {
         .map(|i| i.id)
         .collect();
     assert_eq!(ids, ["q"]);
+}
+
+#[tokio::test]
+async fn native_message_queue_forwarding_preserves_full_payload_and_lanes() {
+    let queue = RunQueue::<TaMessage>::new();
+    let image = ContentBlock::Image(ImageRef {
+        url: "data:image/png;base64,abc".into(),
+        mime_type: Some("image/png".into()),
+    });
+    let user = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![ContentBlock::Text("inspect this".into()), image.clone()],
+    });
+    queue.push_now(QueueLane::Steer, user.clone());
+    queue.push_now(
+        QueueLane::Steer,
+        TaMessage::system("retain this unsupported role"),
+    );
+    queue.push_now(QueueLane::Collect, user.clone());
+    let handle = SteeringHandle::allow_all();
+    let (sink, events) = recorder();
+
+    forward_message_steers(&queue, &handle, "native", &sink).await;
+    let steers = handle.drain();
+    assert!(matches!(
+        steers.as_slice(),
+        [SteeringCommand::InjectMessage(TaMessage::User(message))]
+            if message.content == vec![
+                ContentBlock::Text(format!("{STEER_PREFIX}inspect this")),
+                image.clone(),
+            ]
+    ));
+    assert!(matches!(
+        queue.drain_now(QueueLane::Steer).as_slice(),
+        [TaMessage::System(_)]
+    ));
+
+    forward_message_collects(&queue, &handle, "native", &sink).await;
+    assert!(matches!(
+        handle.drain().as_slice(),
+        [SteeringCommand::InjectMessage(TaMessage::User(message))]
+            if message.content == vec![
+                ContentBlock::Text(format!("{COLLECT_PREFIX}inspect this")),
+                image,
+            ]
+    ));
+    assert_eq!(queue.status().await.collects, 0);
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [
+            ForwardEvent::Delivered {
+                mode: "steer",
+                item_id: None,
+                ..
+            },
+            ForwardEvent::Delivered {
+                mode: "collect",
+                item_id: None,
+                ..
+            }
+        ]
+    ));
+}
+
+#[tokio::test]
+async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items() {
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let media = ContentBlock::Image(ImageRef {
+        url: "data:image/png;base64,def".into(),
+        mime_type: Some("image/png".into()),
+    });
+    queue.push_now(QueueLane::Steer, TaMessage::system("keep system"));
+    let handle = SteeringHandle::allow_all();
+    let (sink, events) = recorder();
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "native".into(),
+        sink,
+    );
+    handle.send(SteeringCommand::InjectMessage(TaMessage::User(
+        tinyinference_llm::message::UserMessage {
+            content: vec![
+                ContentBlock::Text(format!("{COLLECT_PREFIX}deferred")),
+                media.clone(),
+            ],
+        },
+    )));
+    drop(guard);
+
+    let recovered = queue.drain_now(QueueLane::Collect);
+    assert!(matches!(
+        recovered.as_slice(),
+        [TaMessage::User(message)]
+            if message.content == vec![ContentBlock::Text("deferred".into()), media]
+    ));
+    assert!(matches!(
+        queue.drain_now(QueueLane::Steer).as_slice(),
+        [TaMessage::System(_)]
+    ));
+    assert!(matches!(
+        events.lock().unwrap().as_slice(),
+        [ForwardEvent::Requeued { requeued: 1, item_id: None, text: Some(text), .. }]
+            if text == "deferred"
+    ));
+}
+
+#[tokio::test]
+async fn native_message_residual_round_trips_without_empty_prefix_blocks() {
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let original = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text("first block".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,roundtrip".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Json(serde_json::json!({"caption": "complete payload"})),
+        ],
+    });
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+
+    for _ in 0..2 {
+        let guard = MessageSteeringForwarderGuard::new(
+            handle.clone(),
+            Some(queue.clone()),
+            None,
+            "thread".into(),
+            sink.clone(),
+        );
+        queue.push_now(QueueLane::Steer, original.clone());
+        forward_message_steers(&queue, &handle, "thread", &sink).await;
+        drop(guard);
+        assert_eq!(queue.drain_now(QueueLane::Steer), vec![original.clone()]);
+    }
+
+    let original_empty_first = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text(String::new()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,empty".into(),
+                mime_type: Some("image/png".into()),
+            }),
+        ],
+    });
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "thread".into(),
+        sink.clone(),
+    );
+    queue.push_now(QueueLane::Steer, original_empty_first.clone());
+    forward_message_steers(&queue, &handle, "thread", &sink).await;
+    drop(guard);
+    assert_eq!(
+        queue.drain_now(QueueLane::Steer),
+        vec![original_empty_first]
+    );
 }
