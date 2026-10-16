@@ -251,8 +251,9 @@ impl DriverRunLedger {
                         StorageError::serialization("event projection offset has a gap").into(),
                     );
                 }
-                let event: RunEvent =
-                    serde_json::from_value(entry.value).map_err(StorageError::from)?;
+                let event = serde_json::from_value::<StreamEvent>(entry.value)
+                    .map_err(StorageError::from)?
+                    .into_event(run_id)?;
                 if event != expected {
                     return Err(StorageError::serialization(
                         "event projection differs from ordered committed receipt",
@@ -277,7 +278,7 @@ impl DriverRunLedger {
     /// a conflicting or truncated projection is refused rather than overwritten.
     pub async fn reconcile_run_events(&self, run_id: &str) -> Result<u64> {
         self.declare().await?;
-        let stream = format!("run_events:{}", key(&[run_id]));
+        let stream = event_stream(run_id)?;
         let mut next = self.scoped.streams().len(&stream).await?;
         let mut after = self.validate_projection(run_id, &stream, next).await?;
         let mut conflicts = 0;
@@ -297,7 +298,7 @@ impl DriverRunLedger {
             let count = records.len() as u64;
             let values = records
                 .into_iter()
-                .map(serde_json::to_value)
+                .map(|event| serde_json::to_value(StreamEvent::of(&event)))
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(StorageError::from)?;
             match self
