@@ -84,6 +84,7 @@ mod resilience;
 mod response_shape;
 mod shell_turn_budget;
 mod tool_exposure_shadow;
+mod tool_outcome_capture;
 mod tool_policy;
 mod transcript_snapshot;
 mod turn_clock;
@@ -156,6 +157,7 @@ pub use shell_turn_budget::{
     install_time_notes,
 };
 pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
+pub use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
 pub use transcript_snapshot::{
     TranscriptSnapshot, TranscriptSnapshotMiddleware, TranscriptSnapshotSink,
     render_unanswered_steps,

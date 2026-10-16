@@ -2,9 +2,7 @@
 //! run fails. The snapshot mirrors only provider requests the harness actually
 //! dispatches and marks the prefix a provider answered.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use async_trait::async_trait;
 use tinyinference_llm::message::Message;
@@ -13,8 +11,10 @@ use tinyinference_llm::model::{ModelRequest, ModelResponse, ResolvedModelRoute};
 use crate::context::RunContext;
 use crate::error::Result;
 use crate::middleware::{Middleware, ToolInvocationIdentity};
-use crate::turn_outcome::ToolCallOutcome;
+use crate::turn_outcome::{ToolCallOutcome, ToolOutcomeSink};
 use tinytools::ToolResult;
+
+use super::tool_outcome_capture::ToolCallCapture;
 
 /// Snapshot of transcript state observed while a run is in progress.
 #[derive(Clone, Debug, Default)]
@@ -68,7 +68,8 @@ pub fn new_transcript_snapshot_sink() -> TranscriptSnapshotSink {
 /// `after_tool` transformations have run.
 pub struct TranscriptSnapshotMiddleware {
     sink: TranscriptSnapshotSink,
-    started: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
+    outcome_sink: Option<ToolOutcomeSink>,
+    capture: ToolCallCapture,
 }
 
 impl TranscriptSnapshotMiddleware {
@@ -76,8 +77,16 @@ impl TranscriptSnapshotMiddleware {
     pub fn new(sink: TranscriptSnapshotSink) -> Self {
         Self {
             sink,
-            started: Mutex::default(),
+            outcome_sink: None,
+            capture: ToolCallCapture::default(),
         }
+    }
+
+    /// Also appends each captured outcome to the standard turn-outcome sink,
+    /// including when callers persist the transcript snapshot separately.
+    pub fn with_tool_outcome_sink(mut self, sink: ToolOutcomeSink) -> Self {
+        self.outcome_sink = Some(sink);
+        self
     }
 }
 
@@ -93,48 +102,29 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Transcript
         _state: &State,
         call: &mut tinyinference_llm::tool::ToolCall,
     ) -> Result<()> {
-        if let Ok(mut started) = self.started.lock() {
-            started.insert(
-                call.id.to_string(),
-                (Instant::now(), call.arguments.clone()),
-            );
-        }
+        self.capture.start(ctx, call);
         Ok(())
     }
 
     async fn after_tool(
         &self,
-        _ctx: &mut RunContext<Ctx>,
+        ctx: &mut RunContext<Ctx>,
         _state: &State,
         invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
-        let call_id = invocation.call_id().to_string();
-        let (duration_ms, arguments) = self
-            .started
-            .lock()
-            .ok()
-            .and_then(|mut started| started.remove(&call_id))
-            .map(|(start, args)| {
-                (
-                    start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-                    args,
-                )
-            })
-            .unwrap_or_default();
+        let outcome = self.capture.finish(ctx, invocation, result);
         if let Ok(mut snapshot) = self.sink.lock() {
-            let content = result.text();
+            let content = outcome.content.clone();
             snapshot
                 .messages
-                .push(Message::tool(call_id.clone(), content.clone()));
-            snapshot.tool_outcomes.push(ToolCallOutcome {
-                call_id,
-                name: invocation.tool_name().to_owned(),
-                arguments,
-                success: !result.is_error,
-                content,
-                duration_ms,
-            });
+                .push(Message::tool(outcome.call_id.clone(), content));
+            snapshot.tool_outcomes.push(outcome.clone());
+        }
+        if let Some(sink) = &self.outcome_sink {
+            if let Ok(mut sink) = sink.lock() {
+                sink.push(outcome);
+            }
         }
         Ok(())
     }
