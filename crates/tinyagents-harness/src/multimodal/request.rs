@@ -365,7 +365,10 @@ where
                     mime_type: Some(mime),
                 }));
             } else {
-                image_fallback.push(self.image_fallback(scope, &attachment, &annotations).await?);
+                image_fallback.push(
+                    self.image_fallback(scope, &attachment, &annotations)
+                        .await?,
+                );
             }
         }
 
@@ -442,11 +445,7 @@ where
         if !text_output.is_empty() {
             output.push(ContentBlock::Text(text_output));
         }
-        output.extend(
-            native_annotations
-                .into_iter()
-                .map(ContentBlock::Text),
-        );
+        output.extend(native_annotations.into_iter().map(ContentBlock::Text));
         output.extend(native_images);
         Ok(output)
     }
@@ -486,7 +485,8 @@ where
         }
         let fallback = match modality {
             InputModality::Image => {
-                self.image_fallback(scope, &attachment, &annotations).await?
+                self.image_fallback(scope, &attachment, &annotations)
+                    .await?
             }
             _ => {
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
@@ -533,7 +533,12 @@ where
         if modality == InputModality::Image && attachment.attachment.bytes.is_empty() {
             return Err(model_error("image reference has no bytes"));
         }
-        if require_file_mime && !self.config.files.is_mime_allowed(&attachment.attachment.mime) {
+        if require_file_mime
+            && !self
+                .config
+                .files
+                .is_mime_allowed(&attachment.attachment.mime)
+        {
             return Err(model_error(&format!(
                 "file MIME type '{}' is not allowed; supported: {}",
                 attachment.attachment.mime,
@@ -570,10 +575,13 @@ where
                 .map_err(|error| model_error(&error))?,
             None => "Image contents are unavailable to this text-only model.".to_string(),
         };
-        Ok(self.limit_context(join_annotations(annotations, &format!(
-            "[Image attachment: {} bytes; mime={mime}]\nImage readout (untrusted):\n{details}",
-            image.bytes.len()
-        ))))
+        Ok(self.limit_context(join_annotations(
+            annotations,
+            &format!(
+                "[Image attachment: {} bytes; mime={mime}]\nImage readout (untrusted):\n{details}",
+                image.bytes.len()
+            ),
+        )))
     }
 
     async fn file_fallback(
@@ -922,6 +930,15 @@ fn validated_image_mime(attachment: &ResolvedAttachment) -> tinyinference_llm::R
 
 fn model_error(message: &str) -> tinyinference_llm::Error {
     tinyinference_llm::Error::Model(message.to_string())
+}
+
+fn join_annotations(annotations: &[String], body: &str) -> String {
+    let mut output = annotations.join("\n");
+    if !output.is_empty() && !body.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.push_str(body);
+    output
 }
 
 #[cfg(test)]

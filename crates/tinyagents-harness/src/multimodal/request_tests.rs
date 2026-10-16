@@ -62,6 +62,7 @@ impl CaptureModel {
 #[derive(Default)]
 struct Resolver {
     sources: HashMap<String, ResolvedAttachment>,
+    annotations: HashMap<String, Vec<String>>,
     calls: AtomicUsize,
     scopes: Mutex<Vec<String>>,
     resolved_sources: Mutex<Vec<String>>,
@@ -80,7 +81,7 @@ impl MediaSourceResolver<String> for PendingResolver {
         _modality: InputModality,
         _source: &str,
         _max_bytes: usize,
-    ) -> std::result::Result<ResolvedAttachment, String> {
+    ) -> std::result::Result<ResolvedMedia, String> {
         self.entered.notify_one();
         std::future::pending().await
     }
@@ -94,7 +95,7 @@ impl MediaSourceResolver<String> for Resolver {
         _modality: InputModality,
         source: &str,
         max_bytes: usize,
-    ) -> std::result::Result<ResolvedAttachment, String> {
+    ) -> std::result::Result<ResolvedMedia, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.scopes.lock().unwrap().push(scope.clone());
         self.resolved_sources
@@ -109,7 +110,11 @@ impl MediaSourceResolver<String> for Resolver {
         if attachment.bytes.len() > max_bytes {
             return Err("source exceeds test limit".into());
         }
-        Ok(attachment)
+        let mut resolved = ResolvedMedia::new(attachment);
+        for annotation in self.annotations.get(source).into_iter().flatten() {
+            resolved = resolved.with_annotation(annotation.clone());
+        }
+        Ok(resolved)
     }
 }
 
@@ -682,6 +687,69 @@ async fn trusted_preparer_consumes_carrier_when_request_has_no_user_message() {
             .get("trusted_scope")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn resolver_annotations_survive_next_to_native_media_only_after_success() {
+    let model = Arc::new(CaptureModel::new(true));
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "recovered-image".into(),
+            attachment("image.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+        )]),
+        annotations: HashMap::from([(
+            "recovered-image".into(),
+            vec!["[Recovered attachment: image/png; workspace path: image.png]".into()],
+        )]),
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    );
+
+    wrapped
+        .invoke(&"tenant-a".into(), request("[IMAGE:recovered-image]"))
+        .await
+        .unwrap();
+
+    let captured = model.requests.lock().unwrap();
+    let Message::User(user) = &captured[0].messages[0] else {
+        panic!("prepared user message retained")
+    };
+    assert!(matches!(
+        &user.content[0],
+        ContentBlock::Text(text) if text.contains("Recovered attachment")
+    ));
+    assert!(matches!(
+        &user.content[1],
+        ContentBlock::Image(image) if image.url.starts_with("data:image/png;base64,")
+    ));
+    drop(captured);
+
+    let missing_model = Arc::new(CaptureModel::new(true));
+    let missing_resolver = Arc::new(Resolver {
+        annotations: HashMap::from([(
+            "missing-image".into(),
+            vec!["[Recovered attachment: fake label]".into()],
+        )]),
+        ..Resolver::default()
+    });
+    let missing_wrapper = wrapper(
+        missing_model.clone(),
+        MediaRequestConfig::default(),
+        missing_resolver,
+        Arc::default(),
+    );
+    assert!(
+        missing_wrapper
+            .invoke(&"tenant-a".into(), request("[IMAGE:missing-image]"))
+            .await
+            .is_err()
+    );
+    assert!(missing_model.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -105,7 +105,7 @@ pub use markers::{
 pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, truncate_chars};
 pub use request::{
     MediaHistoryFallback, MediaImageReadout, MediaRequestConfig, MediaRequestModel,
-    MediaSourceResolver,
+    MediaSourceResolver, ResolvedMedia,
 };
 pub use resolve::{
     NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
