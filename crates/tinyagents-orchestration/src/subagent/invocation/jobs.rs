@@ -23,7 +23,7 @@ use crate::subagent::{
 use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tokio::sync::watch;
 
-use super::types::{JobControl, JobMeta};
+use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
@@ -37,6 +37,12 @@ type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>)
 const LOG_PREFIX: &str = "[subagent-jobs]";
 const DEFAULT_AWAIT_TIMEOUT_SECS: u64 = 120;
 const MAX_AWAIT_TIMEOUT_SECS: u64 = 3600;
+
+struct JobExecutionControls {
+    cancellation: CancellationToken,
+    steering: SteeringHandle,
+    run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
 
 /// A fixed operation for a host-named alias of [`SubAgentJobsTool`].
 ///
@@ -168,6 +174,15 @@ impl SubAgentJobRegistry {
             .unwrap_or(false)
     }
 
+    #[cfg(test)]
+    pub(crate) fn drain_lane_for_test(&self, id: &SubAgentJobId, lane: QueueLane) -> Vec<Message> {
+        self.controls()
+            .get(id)
+            .and_then(|control| control.run_queue.as_ref())
+            .map(|queue| queue.drain_now(lane))
+            .unwrap_or_default()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
@@ -202,10 +217,12 @@ impl SubAgentJobRegistry {
             id.clone(),
             agent,
             owner,
-            cancellation,
             link,
-            steering.clone(),
-            run_queue,
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue,
+            },
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
         }
@@ -217,10 +234,8 @@ impl SubAgentJobRegistry {
         id: SubAgentJobId,
         agent: &str,
         owner: u64,
-        cancellation: CancellationToken,
         link: JobLink,
-        steering: SteeringHandle,
-        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+        execution: JobExecutionControls,
     ) -> Result<(), SubAgentJobError> {
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
@@ -244,13 +259,14 @@ impl SubAgentJobRegistry {
         if controls.contains_key(&id) {
             return Err(SubAgentJobError::AlreadyExists(id.as_str().to_owned()));
         }
-        self.steering.register(task_id.clone(), steering.clone());
+        self.steering
+            .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
             owner.to_string(),
             JobMeta,
             watcher,
-            cancellation,
+            execution.cancellation.clone(),
         ) {
             self.steering.deregister(&task_id);
             return Err(SubAgentJobError::Registry(error.to_string()));
@@ -260,7 +276,9 @@ impl SubAgentJobRegistry {
             JobControl {
                 status,
                 cancellation_requested: false,
-                run_queue,
+                run_queue: execution.run_queue,
+                steering: execution.steering,
+                cancellation: execution.cancellation,
             },
         );
         Ok(())
@@ -271,21 +289,26 @@ impl SubAgentJobRegistry {
     /// different root/parent/thread scope receive a distinct public job id.
     pub(crate) fn register_driver_job(
         &self,
-        key: crate::subagent::SubagentTaskKey,
-        agent: &str,
-        owner: u64,
-        cancellation: CancellationToken,
-        steering: Option<SteeringHandle>,
-        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+        registration: DriverJobRegistration,
     ) -> Result<
         (
             SubAgentJobId,
             SteeringHandle,
             tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
             bool,
         ),
         SubAgentJobError,
     > {
+        let DriverJobRegistration {
+            key,
+            agent,
+            owner,
+            cancellation,
+            steering,
+            run_queue,
+            continuing,
+        } = registration;
         let mut driver_jobs = self
             .driver_jobs
             .lock()
@@ -298,15 +321,34 @@ impl SubAgentJobRegistry {
             let control = controls
                 .get(id)
                 .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            if control.cancellation_requested {
+                return Err(SubAgentJobError::Cancelling(id.as_str().to_owned()));
+            }
             let queue = control
                 .run_queue
                 .clone()
                 .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
-            let steering = self
-                .tasks
-                .steering_handle(&TaskId::new(id.as_str()), &owner.to_string())
-                .map_err(|_| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
-            return Ok((id.clone(), steering, queue, false));
+            let status = control.status.borrow().status;
+            if status == SubAgentJobStatus::AwaitingInput && continuing {
+                control.status.send_modify(|job| {
+                    job.status = SubAgentJobStatus::Running;
+                    job.error = None;
+                });
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    queue,
+                    control.cancellation.clone(),
+                    true,
+                ));
+            }
+            return Ok((
+                id.clone(),
+                control.steering.clone(),
+                queue,
+                control.cancellation.clone(),
+                false,
+            ));
         }
 
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
@@ -317,21 +359,32 @@ impl SubAgentJobRegistry {
         });
         self.insert_job(
             id.clone(),
-            agent,
+            &agent,
             owner,
-            cancellation,
             JobLink::default(),
-            steering.clone(),
-            Some(queue.clone()),
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue: Some(queue.clone()),
+            },
         )?;
         driver_jobs.insert(key, id.clone());
-        Ok((id, steering, queue, true))
+        let token = self
+            .controls()
+            .get(&id)
+            .expect("inserted control")
+            .cancellation
+            .clone();
+        Ok((id, steering, queue, token, true))
     }
 
     pub(crate) fn mark_running(&self, id: &SubAgentJobId) {
         if let Some(control) = self.controls().get(id) {
             control.status.send_if_modified(|job| {
-                if job.status == SubAgentJobStatus::Queued {
+                if matches!(
+                    job.status,
+                    SubAgentJobStatus::Queued | SubAgentJobStatus::AwaitingInput
+                ) {
                     job.status = SubAgentJobStatus::Running;
                     true
                 } else {
@@ -424,13 +477,42 @@ impl SubAgentJobRegistry {
     }
 
     /// Mirrors a host-driver completion into the same registry used by the
-    /// Jobs and Message aliases. Durable pauses remain visible as incomplete
-    /// handbacks while the host session overlay retains the resumable state.
+    /// Jobs and Message aliases. Durable pauses remain nonterminal and resumable.
     pub(crate) fn mark_driver_result(
         &self,
         id: &SubAgentJobId,
         result: Result<crate::subagent::SubagentOutcome, String>,
     ) {
+        let is_pause = matches!(
+            &result,
+            Ok(outcome) if matches!(outcome.status, crate::subagent::SubagentOutcomeKind::AwaitingInput(_))
+        );
+        if is_pause {
+            if self
+                .controls()
+                .get(id)
+                .is_some_and(|control| control.cancellation_requested)
+            {
+                self.settle(id, |job, _| {
+                    job.status = SubAgentJobStatus::Cancelled;
+                    job.error = Some(TinyAgentsError::Cancelled.to_string());
+                });
+                return;
+            }
+            if let Some(control) = self.controls().get(id) {
+                control.status.send_modify(|job| {
+                    if let Ok(outcome) = result {
+                        job.output = Some(outcome.output);
+                        job.artifacts = outcome.artifacts;
+                        job.schema_error = outcome.schema_error;
+                        job.artifact_error = outcome.artifact_error;
+                        job.status = SubAgentJobStatus::AwaitingInput;
+                        job.error = None;
+                    }
+                });
+            }
+            return;
+        }
         self.settle(id, |job, cancellation_requested| {
             if cancellation_requested {
                 job.status = SubAgentJobStatus::Cancelled;
@@ -448,9 +530,7 @@ impl SubAgentJobRegistry {
                             job.status = SubAgentJobStatus::Completed;
                         }
                         crate::subagent::SubagentOutcomeKind::AwaitingInput(_) => {
-                            job.status = SubAgentJobStatus::Incomplete;
-                            job.incomplete_kind = Some(IncompleteKind::Unspecified);
-                            job.error = Some("subagent is awaiting user input".into());
+                            unreachable!("pause handled above")
                         }
                         crate::subagent::SubagentOutcomeKind::Incomplete(incomplete) => {
                             job.status = SubAgentJobStatus::Incomplete;
@@ -605,7 +685,8 @@ impl SubAgentJobRegistry {
         };
         loop {
             let snapshot = status.borrow().clone();
-            if snapshot.status.is_terminal() {
+            if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
+            {
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {

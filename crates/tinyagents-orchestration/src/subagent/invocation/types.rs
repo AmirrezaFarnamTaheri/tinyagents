@@ -20,6 +20,7 @@ use tinyagents_harness::events::EventSink;
 use tinyagents_harness::runtime::AgentHarness;
 use tokio::sync::watch;
 
+use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tinyinference_llm::message::Message;
 
@@ -221,6 +222,8 @@ pub enum SubAgentJobStatus {
     Queued,
     /// The child agent loop is executing.
     Running,
+    /// The durable child is paused for host/user input and can be resumed.
+    AwaitingInput,
     /// The child completed successfully.
     Completed,
     /// The child failed.
@@ -344,6 +347,18 @@ pub(crate) struct JobControl {
     pub(crate) cancellation_requested: bool,
     /// Optional loop-consumed message queue for typed message aliases.
     pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub(crate) steering: tinyagents_harness::steering::SteeringHandle,
+    pub(crate) cancellation: CancellationToken,
+}
+
+pub(crate) struct DriverJobRegistration {
+    pub(crate) key: crate::subagent::SubagentTaskKey,
+    pub(crate) agent: String,
+    pub(crate) owner: u64,
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) steering: Option<tinyagents_harness::steering::SteeringHandle>,
+    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub(crate) continuing: bool,
 }
 
 /// Error returned by job lookup or live-message delivery.

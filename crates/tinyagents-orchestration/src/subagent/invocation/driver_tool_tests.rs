@@ -45,6 +45,122 @@ impl SubagentExecutor<()> for Executor {
     }
 }
 
+struct BlockingExecutor {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Semaphore>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct PauseThenCompleteExecutor {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl SubagentExecutor<()> for PauseThenCompleteExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<()>,
+    ) -> std::result::Result<SubagentOutcome, SubagentError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            let mut outcome = SubagentOutcome::completed(execution.prepared.task_id, "waiting");
+            outcome.status = SubagentOutcomeKind::AwaitingInput(SubagentPause {
+                reason: "need a user answer".into(),
+                resume: SubagentResume::default(),
+            });
+            Ok(outcome)
+        } else {
+            Ok(SubagentOutcome::completed(
+                execution.prepared.task_id,
+                "resumed completion",
+            ))
+        }
+    }
+}
+
+#[derive(Default)]
+struct PausePersistence {
+    pause: std::sync::Mutex<Option<SubagentOutcome>>,
+    terminal: std::sync::Mutex<Option<SubagentOutcome>>,
+}
+
+#[async_trait]
+impl SubagentPersistence for PausePersistence {
+    async fn load_terminal(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(self.terminal.lock().unwrap().clone())
+    }
+
+    async fn load(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentResume>, SubagentError> {
+        Ok(self
+            .pause
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|outcome| match &outcome.status {
+                SubagentOutcomeKind::AwaitingInput(pause) => Some(pause.resume.clone()),
+                _ => None,
+            }))
+    }
+
+    async fn load_pause(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(self.pause.lock().unwrap().clone())
+    }
+
+    async fn save_pause(
+        &self,
+        pause: PersistedSubagentPause,
+    ) -> std::result::Result<SubagentPausePersistenceDisposition, SubagentError> {
+        let mut current = self.pause.lock().unwrap();
+        let disposition = if current.is_some() {
+            SubagentPausePersistenceDisposition::Replaced
+        } else {
+            SubagentPausePersistenceDisposition::Inserted
+        };
+        *current = Some(pause.outcome);
+        Ok(disposition)
+    }
+
+    async fn record_terminal(
+        &self,
+        _: &SubagentTaskKey,
+        outcome: &SubagentOutcome,
+        _: Option<&SubagentResume>,
+    ) -> std::result::Result<SubagentTerminalPersistenceDisposition, SubagentError> {
+        *self.terminal.lock().unwrap() = Some(outcome.clone());
+        Ok(SubagentTerminalPersistenceDisposition::Inserted)
+    }
+}
+
+#[async_trait]
+impl SubagentExecutor<()> for BlockingExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<()>,
+    ) -> std::result::Result<SubagentOutcome, SubagentError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.started.notify_one();
+        let permit = self
+            .release
+            .acquire()
+            .await
+            .map_err(|error| SubagentError::Execution(error.to_string()))?;
+        permit.forget();
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "controlled completion",
+        ))
+    }
+}
+
 struct Persistence;
 
 #[async_trait]
@@ -321,4 +437,362 @@ fn driver() -> Arc<SubagentDriver<(), ()>> {
         })
         .unwrap(),
     )
+}
+
+fn blocking_driver(
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Semaphore>,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+) -> Arc<SubagentDriver<(), ()>> {
+    Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(Planner)),
+            executor: Some(Arc::new(BlockingExecutor {
+                started,
+                release,
+                calls,
+            })),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = blocking_driver(started.clone(), release.clone(), calls.clone());
+    let schema = json!({
+        "type":"object",
+        "required":["agent_id","prompt"],
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+    });
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new(
+            "worker",
+            "worker description",
+            Arc::new(AgentHarness::new()),
+        )),
+        ChildDataPolicy::new(|_: &()| ()),
+    )
+    .with_job_registry(jobs.clone())
+    .with_tool_name("spawn_async_subagent")
+    .with_description("Run the allowed worker in the background.")
+    .with_parameters(schema)
+    .with_driver_and_completion(
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("child-run"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "same-host-task-id",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+            .map(|request| request.with_target("worker"))
+        },
+        |_| Some("parent-thread".into()),
+        {
+            let completions = completions.clone();
+            move |_, _| {
+                completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+    );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let first = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn"),
+        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let task_id = serde_json::from_str::<Value>(&first.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let duplicate = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-again"),
+        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let duplicate_value = serde_json::from_str::<Value>(&duplicate.output()).unwrap();
+    let duplicate_id = duplicate_value["task_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        duplicate_id, task_id,
+        "coalesced calls reuse the control id"
+    );
+    started.notified().await;
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let query = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_field("task_id")
+        .with_required_identifier();
+    let listed = ToolDispatch::<(), ()>::execute(
+        &query,
+        &(),
+        CallId::new("list"),
+        json!({"task_id":task_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed.output()).unwrap()["status"],
+        "running"
+    );
+
+    let steer = SubAgentMessageTool::new(jobs.clone())
+        .with_tool_name("steer_subagent")
+        .with_argument_fields("task_id", "session_id", "message", "request_id")
+        .with_lane_field("mode");
+    ToolDispatch::<(), ()>::execute(
+        &steer,
+        &(),
+        CallId::new("collect"),
+        json!({"task_id":task_id,"message":"quiet context","mode":"collect"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let control_id = SubAgentJobId(task_id.clone());
+    let queued = jobs.drain_lane_for_test(
+        &control_id,
+        tinyagents_harness::run_queue::QueueLane::Collect,
+    );
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].text(), "quiet context");
+
+    let foreign = RunContext::new(RunConfig::new("foreign-parent"), ());
+    assert!(
+        ToolDispatch::<(), ()>::execute(
+            &query,
+            &(),
+            CallId::new("foreign-query"),
+            json!({"task_id":task_id}),
+            tinytools::ToolCallOptions::default(),
+            &foreign,
+        )
+        .await
+        .is_err()
+    );
+    let other_scope = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-foreign"),
+        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &foreign,
+    )
+    .await
+    .unwrap();
+    let other_value = serde_json::from_str::<Value>(&other_scope.output()).unwrap();
+    let other_id = other_value["task_id"].as_str().unwrap().to_owned();
+    assert_ne!(
+        other_id, task_id,
+        "different task-key scope gets distinct controls"
+    );
+    started.notified().await;
+
+    let wait = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_required_identifier()
+        .with_legacy_await_timeout_field("timeout_secs");
+    let pending_wait = ToolDispatch::<(), ()>::execute(
+        &wait,
+        &(),
+        CallId::new("wait"),
+        json!({"task_id":task_id,"timeout_secs":1}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    tokio::pin!(pending_wait);
+    tokio::select! {
+        biased;
+        result = &mut pending_wait => panic!("job completed before the wait deadline: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    let pending = pending_wait.await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&pending.output()).unwrap()["status"],
+        "running"
+    );
+    assert!(jobs.holds_live_cancellation(&control_id));
+
+    release.add_permits(2);
+    let terminal_wait = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_required_identifier();
+    let terminal = ToolDispatch::<(), ()>::execute(
+        &terminal_wait,
+        &(),
+        CallId::new("collect-result"),
+        json!({"task_id":task_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&terminal.output()).unwrap()["status"],
+        "completed"
+    );
+    assert!(!jobs.holds_live_cancellation(&control_id));
+    assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    let replay = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-terminal-replay"),
+        json!({"agent_id":"worker","prompt":"do work","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let replay_value = serde_json::from_str::<Value>(&replay.output()).unwrap();
+    assert_eq!(replay_value["task_id"], task_id);
+    assert_eq!(replay_value["status"], "completed");
+    assert_eq!(replay_value["output"], "controlled completion");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
+    let jobs = SubAgentJobRegistry::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(Planner)),
+            executor: Some(Arc::new(PauseThenCompleteExecutor {
+                calls: calls.clone(),
+            })),
+            persistence: Some(Arc::new(PausePersistence::default())),
+        })
+        .unwrap(),
+    );
+    let schema = json!({
+        "type":"object",
+        "required":["agent_id","prompt"],
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"continue":{"type":"boolean"}}
+    });
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new(
+            "worker",
+            "worker description",
+            Arc::new(AgentHarness::new()),
+        )),
+        ChildDataPolicy::new(|_: &()| ()),
+    )
+    .with_job_registry(jobs.clone())
+    .with_tool_name("spawn_async_subagent")
+    .with_parameters(schema)
+    .with_driver(
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("child-run"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            let mut request = SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "pause-then-continue",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+            .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?
+            .with_target("worker");
+            if args["continue"] == true {
+                request.set_resume(Some(SubagentResume::default()));
+            }
+            Ok(request)
+        },
+        |_| Some("parent-thread".into()),
+    );
+    let parent = RunContext::new(RunConfig::new("pause-parent"), ());
+
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-pausing-child"),
+        json!({"agent_id":"worker","prompt":"wait","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let spawned_value = serde_json::from_str::<Value>(&spawned.output()).unwrap();
+    let task_id = spawned_value["task_id"].as_str().unwrap().to_owned();
+
+    let wait = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_required_identifier();
+    let paused = ToolDispatch::<(), ()>::execute(
+        &wait,
+        &(),
+        CallId::new("wait-for-pause"),
+        json!({"task_id":task_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let paused_value = serde_json::from_str::<Value>(&paused.output()).unwrap();
+    assert_eq!(paused_value["status"], "awaiting_input");
+    assert!(!jobs.get(&task_id).unwrap().status.is_terminal());
+    assert!(jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
+
+    let continued = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("continue-child"),
+        json!({"agent_id":"worker","prompt":"answer","continue":true,"mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let continued_value = serde_json::from_str::<Value>(&continued.output()).unwrap();
+    assert_eq!(continued_value["task_id"], task_id);
+    assert_eq!(continued_value["status"], "running");
+    let completed = ToolDispatch::<(), ()>::execute(
+        &wait,
+        &(),
+        CallId::new("wait-for-completion"),
+        json!({"task_id":task_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let completed_value = serde_json::from_str::<Value>(&completed.output()).unwrap();
+    assert_eq!(completed_value["status"], "completed");
+    assert_eq!(completed_value["output"], "resumed completion");
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }

@@ -248,9 +248,11 @@ impl<C, H> SubagentRequest<C, H> {
         mut self,
         steering: tinyagents_harness::steering::SteeringHandle,
         run_queue: tinyagents_harness::run_queue::RunQueueHandle,
+        cancellation: CancellationToken,
     ) -> Self {
         self.run_context.steering = Some(steering);
         self.run_context.run_queue = Some(run_queue);
+        self.run_context.cancellation = cancellation;
         self
     }
 

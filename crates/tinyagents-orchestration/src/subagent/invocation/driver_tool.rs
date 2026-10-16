@@ -14,6 +14,7 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{Tool, ToolResult};
 
+use super::types::DriverJobRegistration;
 use crate::subagent::{
     SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
 };
@@ -161,26 +162,49 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     {
         let task_id = request.task_id().to_owned();
         let bridged_job = if let Some(jobs) = &self.jobs {
-            let (id, steering, run_queue, created) = jobs.register_driver_job(
-                request.task_key().clone(),
-                request.target().unwrap_or(&self.name),
-                owner,
-                request.run_context().cancellation.clone(),
-                request.run_context().steering.clone(),
-                request.run_context().run_queue.clone(),
-            )?;
+            let continuing = request.resume().is_some();
+            let (id, steering, run_queue, cancellation, created) =
+                jobs.register_driver_job(DriverJobRegistration {
+                    key: request.task_key().clone(),
+                    agent: request.target().unwrap_or(&self.name).to_owned(),
+                    owner,
+                    cancellation: request.run_context().cancellation.clone(),
+                    steering: request.run_context().steering.clone(),
+                    run_queue: request.run_context().run_queue.clone(),
+                    continuing,
+                })?;
             if created {
                 jobs.mark_running(&id);
             }
-            request = request.with_job_controls(steering, run_queue);
-            Some((jobs.clone(), id))
+            request = request.with_job_controls(steering, run_queue, cancellation);
+            Some((jobs.clone(), id, created))
         } else {
             None
         };
         let public_task_id = bridged_job
             .as_ref()
-            .map(|(_, id)| id.as_str().to_owned())
+            .map(|(_, id, _)| id.as_str().to_owned())
             .unwrap_or_else(|| task_id.clone());
+        if let Some((jobs, id, false)) = &bridged_job {
+            let job = jobs
+                .get(id.as_str())
+                .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?;
+            let status = match job.status {
+                crate::subagent::SubAgentJobStatus::Queued => "queued",
+                crate::subagent::SubAgentJobStatus::Running => "running",
+                crate::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
+                crate::subagent::SubAgentJobStatus::Completed => "completed",
+                crate::subagent::SubAgentJobStatus::Failed => "failed",
+                crate::subagent::SubAgentJobStatus::Incomplete => "incomplete",
+                crate::subagent::SubAgentJobStatus::Cancelled => "cancelled",
+            };
+            return Ok(ToolResult::json(json!({
+                "task_id": public_task_id,
+                "status": status,
+                "output": job.output,
+                "error": job.error,
+            })));
+        }
         if let Some(target) = target {
             let cancellation = request.run_context().cancellation.clone();
             let driver = Arc::clone(&self.driver);
@@ -191,16 +215,18 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
-                        if let Some((jobs, id)) = &bridge {
+                        if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Ok(result.outcome.clone()));
                         }
-                        if let Some(completion) = completion {
+                        if result.should_emit_host_effects()
+                            && let Some(completion) = completion
+                        {
                             completion(&completion_target, Ok(result.outcome));
                         }
                     }
                     Err(error) => {
                         let error = error.to_string();
-                        if let Some((jobs, id)) = &bridge {
+                        if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Err(error.clone()));
                         }
                         if let Some(completion) = completion {
@@ -221,7 +247,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         match self.driver.run(request, cancellation).await {
             Ok(result) => {
                 let outcome = result.outcome;
-                if let Some((jobs, id)) = &bridged_job {
+                if let Some((jobs, id, _)) = &bridged_job {
                     jobs.mark_driver_result(id, Ok(outcome.clone()));
                 }
                 let (status, error) = match &outcome.status {
@@ -247,7 +273,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 })
             }
             Err(error) => {
-                if let Some((jobs, id)) = &bridged_job {
+                if let Some((jobs, id, _)) = &bridged_job {
                     jobs.mark_driver_result(id, Err(error.to_string()));
                 }
                 Ok(ToolResult::error(format!("subagent driver: {error}")))
