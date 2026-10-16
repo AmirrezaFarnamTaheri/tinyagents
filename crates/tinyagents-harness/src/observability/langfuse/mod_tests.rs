@@ -634,7 +634,7 @@ fn derives_the_otlp_trace_endpoint_beside_the_ingestion_endpoint() {
 /// One request captured by [`serve_once_with`]: the request line, the
 /// authorization header, the `x-langfuse-ingestion-version` header and the
 /// decoded body.
-type Captured = (String, String, String, Value);
+type Captured = (String, String, String, String, String, Value);
 
 /// Accepts one HTTP request on a loopback port, answers `status` with an empty
 /// JSON object, and returns what it received.
@@ -656,7 +656,8 @@ fn serve_once_with(
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        let (mut auth, mut version, mut len) = (String::new(), String::new(), 0_usize);
+        let (mut auth, mut version, mut custom, mut injected, mut len) =
+            (String::new(), String::new(), String::new(), String::new(), 0_usize);
         loop {
             let mut header = String::new();
             reader.read_line(&mut header).unwrap();
@@ -667,6 +668,8 @@ fn serve_once_with(
             match name.trim().to_ascii_lowercase().as_str() {
                 "authorization" => auth = value.trim().to_owned(),
                 "x-langfuse-ingestion-version" => version = value.trim().to_owned(),
+                "x-test-transport" => custom = value.trim().to_owned(),
+                "x-test-header" => injected = value.trim().to_owned(),
                 "content-length" => len = value.trim().parse().unwrap(),
                 _ => {}
             }
@@ -684,6 +687,8 @@ fn serve_once_with(
             line.trim().to_owned(),
             auth,
             version,
+            custom,
+            injected,
             serde_json::from_slice(&body).unwrap(),
         ))
         .unwrap();
@@ -697,7 +702,7 @@ async fn sends_otlp_json_to_the_trace_endpoint_with_basic_auth() {
     let client = LangfuseClient::direct(base, "pk-test", "sk-test").unwrap();
     let body = json!({"resourceSpans": []});
     client.send_otlp(body.clone()).await.unwrap();
-    let (line, auth, _, received) = rx.recv().unwrap();
+    let (line, auth, _, _, _, received) = rx.recv().unwrap();
     assert_eq!(line, "POST /api/public/otel/v1/traces HTTP/1.1");
     assert_eq!(auth, "Basic cGstdGVzdDpzay10ZXN0");
     assert_eq!(received, body);
@@ -716,7 +721,7 @@ async fn otlp_requests_select_the_langfuse_v4_ingestion_path() {
             .send_otlp(json!({"resourceSpans": []}))
             .await
             .unwrap();
-        let (_, _, version, _) = rx.recv().unwrap();
+        let (_, _, version, _, _, _) = rx.recv().unwrap();
         assert_eq!(version, "4", "proxied={proxied}");
     }
 }
@@ -734,6 +739,34 @@ async fn reports_spans_the_otlp_endpoint_partially_rejected() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("rejected 2"), "{err}");
+}
+
+#[tokio::test]
+async fn proxy_uses_injected_transport_and_headers_before_partial_success_validation() {
+    let (base, rx) = serve_once_with(
+        200,
+        r#"{"partialSuccess":{"rejectedSpans":"1","errorMessage":"invalid span"}}"#,
+    );
+    let mut defaults = reqwest::header::HeaderMap::new();
+    defaults.insert("x-test-transport", "injected-client".parse().unwrap());
+    let transport = reqwest::Client::builder()
+        .default_headers(defaults)
+        .build()
+        .unwrap();
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("x-test-header", "injected-header".parse().unwrap());
+    let client = LangfuseClient::proxy_with_transport(base, "token", transport, headers).unwrap();
+    let error = client
+        .send_otlp(json!({"resourceSpans": []}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("rejected 1"), "{error}");
+    let (_, auth, version, custom, injected, _) = rx.recv().unwrap();
+    assert_eq!(auth, "Bearer token");
+    assert_eq!(version, "4");
+    assert_eq!(custom, "injected-client");
+    assert_eq!(injected, "injected-header");
 }
 
 #[tokio::test]
@@ -795,7 +828,7 @@ async fn sends_observations_as_v4_otlp_spans() {
         .await
         .unwrap();
     assert_eq!(responses.len(), 1);
-    let (line, _, version, body) = rx.recv().unwrap();
+    let (line, _, version, _, _, body) = rx.recv().unwrap();
     assert_eq!(line, "POST /api/public/otel/v1/traces HTTP/1.1");
     assert_eq!(version, "4");
     let spans = body["resourceSpans"][0]["scopeSpans"][0]["spans"]
