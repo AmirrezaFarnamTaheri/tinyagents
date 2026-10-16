@@ -42,7 +42,14 @@ pub use in_memory_transcript::InMemoryTranscriptHistory;
 /// Use this when a test needs the same locator interface used by production
 /// session stores, but should not touch the filesystem.
 pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
-    crate::transcript::test_locator::driver_locator()
+    use crate::port::{DriverSessionStores, SessionStoreProvider};
+    use std::sync::Arc;
+    use tinystoragedrivers_core::MemoryStorage;
+
+    DriverSessionStores::new(Arc::new(MemoryStorage::new()))
+        .expect("driver session stores over memory")
+        .for_agent("test")
+        .transcripts
 }
 
 #[cfg(test)]
