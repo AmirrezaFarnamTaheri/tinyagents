@@ -190,6 +190,23 @@ impl MessageDto {
     }
 }
 
+/// `conversations.appends`: a message reserved at an offset of one
+/// incarnation's stream, until it is published. The id is
+/// `Key::of([thread_id, incarnation])`.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AppendIntent {
+    /// Identifies the attempt that reserved the slot.
+    pub token: String,
+    pub thread_id: String,
+    pub incarnation: String,
+    /// The stream offset the record goes to.
+    pub offset: u64,
+    /// The [`MessageDto`] object the stream row will hold, kept as the value
+    /// written so the row can be compared with it byte for byte.
+    pub record: Value,
+}
+
 #[cfg(test)]
 #[path = "dto_tests.rs"]
 mod tests;

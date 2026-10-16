@@ -34,7 +34,7 @@
 //!   record's expiry is its `_expires_ms`, which the store never sets.
 
 use super::schema_steps;
-use tinystoragedrivers_core::{CollectionSpec, Owner, Schema, ScopeClass};
+use tinystoragedrivers_core::{CollectionSpec, Key, Owner, Schema, ScopeClass, StorageError};
 
 /// The owner of the conversation store's collections and streams.
 pub(super) const OWNER: &str = "conversations";
@@ -47,8 +47,7 @@ pub(super) const APPENDS: &str = "conversations.appends";
 /// The per-incarnation message stream family: `conversations.messages/<thread>/<incarnation>`.
 pub(super) const MESSAGES: &str = "conversations.messages";
 
-/// The conversation store's declarations: the document collections the store
-/// reads (no secondary indexes) and the stream family.
+/// The thread collection's declaration (no secondary indexes).
 pub(super) fn thread_spec() -> CollectionSpec {
     CollectionSpec::new(THREADS)
 }
@@ -56,6 +55,16 @@ pub(super) fn thread_spec() -> CollectionSpec {
 /// The append-intent collection's declaration.
 pub(super) fn append_spec() -> CollectionSpec {
     CollectionSpec::new(APPENDS)
+}
+
+/// The name of an incarnation's message stream, `conversations.messages/<thread>/<incarnation>`:
+/// `thread` is the thread id, or the v1 digest of a migrated stream (see the
+/// module docs).
+///
+/// # Errors
+/// `InvalidInput` when `thread` is empty.
+pub(super) fn stream_name(thread: &str, incarnation: &str) -> Result<String, StorageError> {
+    Ok(format!("{MESSAGES}/{}", Key::of([thread, incarnation])?))
 }
 
 /// What the conversation store keeps (owner `conversations`, scope class

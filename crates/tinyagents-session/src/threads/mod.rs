@@ -19,6 +19,8 @@
 //! - `inverted_index` - in-memory index over message content.
 //! - `persistence` - the async [`ConversationPersistence`] contract.
 //! - `driver` - the [`DriverConversationStore`] implementation.
+//! - `dto` - the stored (v2) form of threads, messages and append intents.
+//! - `schema` - [`conversations_storage_schema`], with the v1 -> v2 steps.
 
 pub mod persistence;
 pub use persistence::{
@@ -26,10 +28,15 @@ pub use persistence::{
     ConversationTurnClaim, ConversationTurnClaimOutcome, ConversationTurnClaimRequest,
 };
 
+mod dto;
 mod inverted_index;
 mod labels;
+mod schema;
+mod schema_steps;
 mod tokenize;
 mod types;
+
+pub use schema::conversations_storage_schema;
 
 pub use types::{
     ConversationThread, CreateConversationThread, CrossThreadHit, DETERMINISTIC_MESSAGE_ID_PREFIX,
