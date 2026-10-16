@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::Arc;
 use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_harness::context::{RunConfig, RunContext};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -83,6 +84,28 @@ async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
     assert_eq!(closed.status, DurableSubagentStatus::Closed);
     assert!(!closed.reusable);
     assert!(find_reusable_session([closed], &selector("analysis")).is_none());
+}
+
+#[tokio::test]
+async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
+    let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread_id("thread"), ());
+
+    let request = SubagentRequest::continue_with_session_id(
+        &store,
+        &session.subagent_session_id,
+        fresh,
+        (),
+        "continue work",
+        None,
+    )
+    .await
+    .unwrap();
+    let parts = request.into_parts();
+
+    assert_eq!(parts.task_key, lifecycle_key());
+    assert_eq!(parts.input, "continue work");
 }
 
 #[test]

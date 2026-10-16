@@ -138,6 +138,31 @@ impl<C, H> SubagentRequest<C, H> {
         })
     }
 
+    /// Continues an authorized durable session by its public session id.
+    ///
+    /// The store resolves the id to the original lifecycle key; the request
+    /// never derives a replacement key from its fresh execution context.
+    pub async fn continue_with_session_id(
+        sessions: &dyn super::SubagentSessionStore,
+        session_id: &str,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        let session = sessions
+            .get(session_id)
+            .await?
+            .ok_or_else(|| SubagentError::InvalidRequest(format!("unknown subagent session `{session_id}`")))?;
+        Self::continue_with_key(
+            session.lifecycle_key,
+            fresh_owned_context,
+            host_request,
+            input,
+            resume,
+        )
+    }
+
     /// Names the sub-agent this lifecycle runs, for spawn-policy
     /// [`allowed_targets`](super::SpawnPolicy::allowed_targets) checks.
     ///

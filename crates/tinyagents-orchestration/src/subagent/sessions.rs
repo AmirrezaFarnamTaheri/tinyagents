@@ -186,6 +186,21 @@ pub trait SubagentSessionStore: Send + Sync {
     ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError>;
     /// Closes a session so it cannot be reused.
     async fn close(&self, id: &str) -> Result<bool, SubagentError>;
+    /// Records the latest result and reusable state after a completed turn.
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError>;
+    /// Records a failed turn while preserving the durable session for listing.
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> Result<bool, SubagentError>;
 }
 
 /// A `SubagentSessionStore` backed by the host's `tinystoragedrivers` document
@@ -391,6 +406,46 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         self.save(session).await?;
         Ok(true)
     }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let Some(mut session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        session.current_task_id = Some(task_id.to_owned());
+        session.status = status;
+        session.reusable = status.reusable();
+        session.latest_history = Some(history);
+        session.latest_error = None;
+        session.updated_at = chrono::Utc::now().to_rfc3339();
+        session.last_used_at = session.updated_at.clone();
+        self.save(session).await?;
+        Ok(true)
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let Some(mut session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        session.current_task_id = Some(task_id.to_owned());
+        session.status = DurableSubagentStatus::Failed;
+        session.reusable = false;
+        session.latest_error = Some(error);
+        session.updated_at = chrono::Utc::now().to_rfc3339();
+        session.last_used_at = session.updated_at.clone();
+        self.save(session).await?;
+        Ok(true)
+    }
 }
 
 /// Selects the most recently used reusable session matching `selector`.
@@ -443,7 +498,9 @@ pub fn normalize_task_key(input: &str) -> String {
         };
     }
     if output.len() > 96 {
-        output.truncate(72);
+        while output.len() > 72 {
+            output.pop();
+        }
         while output.ends_with('-') {
             output.pop();
         }
