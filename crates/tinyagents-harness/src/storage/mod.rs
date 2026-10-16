@@ -4,6 +4,9 @@
 
 mod kv;
 mod kv_import;
+mod steps;
+
+use tinystoragedrivers_core::{Owner, Schema, ScopeClass};
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_body, kv_id};
 pub use kv_import::{LegacyKv, import_legacy_kv};
@@ -19,3 +22,65 @@ pub(crate) const EMBEDDING_CACHE: &str = "harness.embedding_cache";
 
 /// The attachment stash's index: one row per stashed attachment.
 pub(crate) const ATTACHMENT_STASH: &str = "harness.attachment_stash";
+
+/// The harness's storage declarations: what it stores and the steps that bring
+/// the v1 names and shapes forward. The host composes it with
+/// `Registry::compose` and runs `Registry::migrate` per scope.
+///
+/// | v1 | v2 |
+/// |---|---|
+/// | `harness_run_status` | `harness.run_status` |
+/// | `harness_embedding_cache` | `harness.embedding_cache` |
+/// | `attachment_stash_index` | `harness.attachment_stash` |
+/// | blobs `attachments/`, `tool-results/`, `outputs/`, `workspace/`, `generated-media/` | `harness/attachments/`, `harness/tool_results/`, `harness/outputs/`, `harness/workspace/`, `harness/generated_media/` |
+///
+/// The key-value stores (`harness_store`, `harness_namespaced_store`,
+/// `harness_response_cache`) live in `tsd.kv`, which `tsd` owns, so a document
+/// step cannot write them: the host calls [`import_legacy_kv`] for each. The run
+/// journal's stream belongs to a later change.
+///
+/// Blob prefixes are declared one per directory (`harness/<dir>/`): a bare
+/// `harness/` is not a valid prefix, which needs at least one path segment.
+#[must_use]
+pub fn storage_schema() -> Schema {
+    let owner = Owner::new("harness").expect("`harness` is a valid owner");
+    let mut schema = Schema::new(owner)
+        .collection_with(
+            SCHEMA_VERSION,
+            crate::observability::DriverStatusStore::collection_spec(),
+            ScopeClass::Agent,
+        )
+        .collection_with(
+            SCHEMA_VERSION,
+            crate::tool::discover::DriverEmbeddingCache::collection_spec(),
+            ScopeClass::Agent,
+        )
+        .collection_with(
+            SCHEMA_VERSION,
+            crate::multimodal::BlobAttachmentStash::collection_spec(),
+            ScopeClass::Agent,
+        );
+    for (_, to) in steps::BLOB_PREFIXES {
+        schema = schema.blobs(to, ScopeClass::Agent);
+    }
+    schema = schema
+        .step(steps::run_status())
+        .step(steps::embedding_cache())
+        .step(steps::attachment_stash());
+    for (index, (from, to)) in steps::BLOB_PREFIXES.into_iter().enumerate() {
+        schema = schema.step(steps::blobs(BLOB_STEP_IDS[index], from, to));
+    }
+    schema
+}
+
+const BLOB_STEP_IDS: [&str; 5] = [
+    "attachment_blobs_v2",
+    "tool_result_blobs_v2",
+    "output_blobs_v2",
+    "workspace_blobs_v2",
+    "generated_media_blobs_v2",
+];
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
