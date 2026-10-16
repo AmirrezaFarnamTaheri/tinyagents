@@ -8,6 +8,9 @@ struct Host {
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
     hold_checkin: bool,
+    fail_run: bool,
+    fingerprint_started: Option<Arc<tokio::sync::Notify>>,
+    fingerprint_release: Option<Arc<tokio::sync::Notify>>,
     checkins: std::sync::atomic::AtomicUsize,
     runs: std::sync::atomic::AtomicUsize,
 }
@@ -33,6 +36,12 @@ impl TurnHost for Host {
         _request: &TurnRequest,
         _session: &TurnSession,
     ) -> Result<(), String> {
+        if let (Some(started), Some(release)) =
+            (&self.fingerprint_started, &self.fingerprint_release)
+        {
+            started.notify_one();
+            release.notified().await;
+        }
         if self.fingerprint_error {
             Err("fingerprint mismatch".into())
         } else {
@@ -54,6 +63,9 @@ impl TurnHost for Host {
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
         self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fail_run {
+            return Err("host run failed".into());
+        }
         if let (Some(started), Some(release)) = (&self.started, &self.release) {
             started.notify_one();
             tokio::select! {
@@ -273,9 +285,10 @@ async fn accepted_followup_is_dispatched_as_a_fresh_turn_after_primary_finishes(
         ..Host::default()
     });
     let events = Arc::new(Events::default());
+    let ingress = Arc::new(Ingress::default());
     let runner = Arc::new(runner(
         host.clone(),
-        Arc::new(Ingress::default()),
+        ingress.clone(),
         Arc::new(Replies::default()),
         events.clone(),
     ));
@@ -299,10 +312,133 @@ async fn accepted_followup_is_dispatched_as_a_fresh_turn_after_primary_finishes(
     release.notify_one();
     started.notified().await;
     assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(ingress.0.lock().unwrap().len(), 8);
     release.notify_one();
     primary.await.unwrap().unwrap();
 
     assert_eq!(events.terminal.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn natural_finish_dispatches_steer_before_followup() {
+    let host = Arc::new(OrderedHost::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+    };
+    host.started.notified().await;
+    for (request_id, disposition) in [
+        ("deferred", QueueDisposition::Followup),
+        ("urgent", QueueDisposition::Steer),
+    ] {
+        let mut queued = request(disposition, false);
+        queued.request_id = request_id.into();
+        assert!(matches!(runner.run(queued).await, Err(TurnRunnerError::Queued)));
+    }
+    host.release.notify_one();
+    primary.await.unwrap().unwrap();
+
+    assert_eq!(host.started_ids.lock().unwrap().as_slice(), ["request-a", "urgent", "deferred"]);
+}
+
+#[derive(Default)]
+struct OrderedHost {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    started_ids: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for OrderedHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession { session_id: request.request_id.clone(), fingerprint: None })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn run(
+        &self,
+        request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        _cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        self.started_ids.lock().unwrap().push(request.request_id.clone());
+        if request.request_id == "request-a" {
+            self.started.notify_one();
+            self.release.notified().await;
+        }
+        Ok(TurnResult { reply: "ok".into(), data: serde_json::Value::Null })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
+async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
+    let host = Arc::new(Host {
+        fail_run: true,
+        ..Host::default()
+    });
+    let events = Arc::new(BlockingFailureEvents::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let first = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            let mut first = request(QueueDisposition::Interrupt, false);
+            first.request_id = "failing-owner".into();
+            runner.run(first).await
+        })
+    };
+    events.terminal_started.notified().await;
+
+    let mut late = request(QueueDisposition::Steer, false);
+    late.request_id = "late-steer".into();
+    assert!(matches!(
+        runner.run(late).await,
+        Err(TurnRunnerError::Failed(_))
+    ));
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    events.release_terminal.notify_one();
+    assert!(matches!(first.await.unwrap(), Err(TurnRunnerError::Failed(_))));
+}
+
+#[derive(Default)]
+struct BlockingFailureEvents {
+    terminal_started: tokio::sync::Notify,
+    release_terminal: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl EventSink for BlockingFailureEvents {
+    async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
+    async fn terminal(&self, request: &TurnRequest, _event: TerminalEvent) {
+        if request.request_id == "failing-owner" {
+            self.terminal_started.notify_one();
+            self.release_terminal.notified().await;
+        }
+    }
 }
 
 #[tokio::test]
@@ -1023,6 +1159,34 @@ async fn checked_out_session_is_checked_in_when_fingerprint_validation_fails() {
     assert_eq!(host.checkins.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+#[tokio::test(start_paused = true)]
+async fn wall_deadline_covers_fingerprint_validation_and_checks_session_back_in() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        fingerprint_started: Some(started.clone()),
+        fingerprint_release: Some(release),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut turn = request(QueueDisposition::Interrupt, false);
+    turn.deadline = Some(std::time::Duration::from_secs(5));
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(turn).await })
+    };
+    started.notified().await;
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+
+    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("deadline")));
+    assert_eq!(host.checkins.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 #[tokio::test]
 async fn two_agents_can_run_the_same_thread_id_concurrently() {
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
@@ -1261,4 +1425,127 @@ async fn idle_guard_restarts_when_quiet_work_finishes() {
     assert!(
         matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("idle timeout"))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn continuous_progress_cannot_starve_the_wall_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let runner = Arc::new(TurnRunner::new(
+        Arc::new(FloodProgressHost { started: started.clone() }),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig {
+            idle_timeout: std::time::Duration::from_secs(60),
+            deadline: Some(std::time::Duration::from_secs(5)),
+            close_timeout: std::time::Duration::from_secs(1),
+        },
+    ));
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+    };
+    started.notified().await;
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+
+    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Failed(message)) if message.contains("wall-clock deadline")));
+}
+
+struct FloodProgressHost { started: Arc<tokio::sync::Notify> }
+
+#[async_trait::async_trait]
+impl TurnHost for FloodProgressHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> { self.checkout(request).await }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        self.started.notify_one();
+        loop {
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
+                sent = progress.send(TurnSignal::Progress(Box::new(crate::progress::AgentProgress::TurnStarted))) => sent.map_err(|error| error.to_string())?,
+            }
+        }
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_during_grounded_close_prevents_persisting_completion() {
+    let summary = Arc::new(BlockingSummary::default());
+    let replies = Arc::new(Replies::default());
+    let runner = Arc::new(TurnRunner::new(
+        Arc::new(PendingHost),
+        Arc::new(Ingress::default()),
+        replies.clone(),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        summary.clone(),
+        TurnRunnerConfig {
+            idle_timeout: std::time::Duration::from_secs(5),
+            deadline: None,
+            close_timeout: std::time::Duration::from_secs(60),
+        },
+    ));
+    let mut turn = request(QueueDisposition::Interrupt, false);
+    turn.idle_timeout = Some(std::time::Duration::from_secs(5));
+    let scope = turn.scope.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(turn).await })
+    };
+    summary.started.notified().await;
+    assert!(runner.cancel(&scope, "thread-a", Some("request-a")).await);
+    assert!(matches!(run.await.unwrap(), Err(TurnRunnerError::Cancelled)));
+    assert!(replies.0.lock().unwrap().is_empty());
+}
+
+struct PendingHost;
+
+#[async_trait::async_trait]
+impl TurnHost for PendingHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> { self.checkout(request).await }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        cancellation.cancelled().await;
+        Err("cancelled".into())
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[derive(Default)]
+struct BlockingSummary { started: tokio::sync::Notify }
+
+#[async_trait::async_trait]
+impl Summarizer for BlockingSummary {
+    async fn grounded_close(&self, _request: &TurnRequest, _reason: &str) -> Option<TurnResult> {
+        self.started.notify_one();
+        std::future::pending().await
+    }
 }
