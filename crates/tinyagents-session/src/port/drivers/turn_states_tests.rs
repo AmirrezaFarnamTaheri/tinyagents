@@ -1,9 +1,10 @@
 use super::*;
 use crate::turn_state::types::SubagentTranscriptItem;
 use crate::turn_state::{
-    SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus,
+    SubagentActivity, SubagentToolCall, ToolTimelineEntry, ToolTimelineStatus, TranscriptItem,
 };
 
+use serde_json::json;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn store() -> (DriverTurnStates, Arc<dyn DocumentStore>) {
@@ -177,7 +178,7 @@ fn an_unreadable_snapshot_is_an_error() {
             raw.put(
                 COLLECTION,
                 &id("t", "bodiless"),
-                json!({"thread_id": "t"}),
+                json!({"thread_id": "t", "request_id": "bodiless"}),
                 Precondition::None,
             )
             .await
@@ -185,14 +186,14 @@ fn an_unreadable_snapshot_is_an_error() {
         .unwrap()
         .unwrap();
     let error = turns.list_thread("t").unwrap_err();
-    assert!(error.contains("no body"), "{error}");
+    assert!(error.contains("unreadable"), "{error}");
     let raw = Arc::clone(&docs);
     bridge
         .run(async move {
             raw.put(
                 COLLECTION,
                 &id("t", "bodiless"),
-                json!({"thread_id": "t", "turn": "nope"}),
+                json!({"thread_id": "t", "request_id": "bodiless", "started_ms": "nope", "updated_ms": 0}),
                 Precondition::None,
             )
             .await
@@ -204,11 +205,140 @@ fn an_unreadable_snapshot_is_an_error() {
 }
 
 #[test]
-fn contention_is_reported_after_the_last_attempt() {
-    let error = contended("t", "r");
-    assert_eq!(error.kind(), ErrorKind::Conflict);
-    assert!(is_race(&error));
+fn only_a_lost_race_counts_as_contention() {
+    assert!(is_race(&StorageError::conflict("raced")));
     assert!(!is_race(&StorageError::unavailable("down")));
+}
+
+#[test]
+fn a_turn_is_stored_as_a_bare_snake_case_document_with_epoch_ms() {
+    let (turns, docs) = store();
+    let mut turn = started("thread/1", "req/1", 5);
+    turn.updated_at = "2026-01-01T00:06:30.250Z".into();
+    turn.max_iterations = 9;
+    turn.streaming_text = "hi".into();
+    turns.put(&turn).unwrap();
+
+    let bridge = Blocking::new().unwrap();
+    let stored = bridge
+        .run(async move {
+            docs.get("session.turn_states", "thread%2F1/req%2F1")
+                .await
+                .unwrap()
+        })
+        .unwrap()
+        .expect("stored under Key::of([thread, request])");
+    let started_ms = 1_767_225_600_000_i64 + 5 * 60_000; // 2026-01-01T00:05:00Z
+    assert_eq!(
+        stored.doc,
+        json!({
+            "thread_id": "thread/1",
+            "request_id": "req/1",
+            "lifecycle": "started",
+            "iteration": 0,
+            "max_iterations": 9,
+            "streaming_text": "hi",
+            "thinking": "",
+            "tool_timeline": [],
+            "started_ms": started_ms,
+            "updated_ms": started_ms + 90_250,
+        })
+    );
+    assert_eq!(stored.meta.schema, 2, "written at the collection's version");
+    assert_eq!(turns.get("thread/1").unwrap(), Some(turn));
+}
+
+#[test]
+fn nested_wire_fields_are_snake_case_in_storage_and_args_stay_verbatim() {
+    let (turns, docs) = store();
+    let mut turn = started("t", "r", 0);
+    turn.transcript = vec![
+        TranscriptItem::Thinking {
+            round: 1,
+            seq: 0,
+            text: "hmm".into(),
+            started_at: Some(1_000),
+            ended_at: Some(2_500),
+        },
+        TranscriptItem::ToolCall {
+            round: 1,
+            seq: 1,
+            call_id: "c1".into(),
+        },
+    ];
+    turn.tool_timeline.push(ToolTimelineEntry {
+        id: "c1".into(),
+        name: "search".into(),
+        round: 1,
+        status: ToolTimelineStatus::Success,
+        args_buffer: Some("{}".into()),
+        display_name: None,
+        detail: None,
+        source_tool_name: None,
+        subagent: Some(SubagentActivity {
+            task_id: "s".into(),
+            agent_id: "a".into(),
+            status: None,
+            mode: None,
+            dedicated_thread: None,
+            child_iteration: None,
+            child_max_iterations: None,
+            iterations: None,
+            elapsed_ms: Some(7),
+            output_chars: None,
+            worker_thread_id: None,
+            parent_call_id: None,
+            output: None,
+            tool_calls: vec![SubagentToolCall {
+                call_id: "k".into(),
+                tool_name: "fetch".into(),
+                status: ToolTimelineStatus::Success,
+                iteration: None,
+                elapsed_ms: None,
+                output_chars: None,
+                display_name: None,
+                detail: None,
+                args: Some(json!({"someKey": {"nestedCamel": 1}})),
+                failure: None,
+                output: None,
+            }],
+            transcript: Vec::new(),
+        }),
+        failure: None,
+        output: None,
+        seq: Some(2),
+    });
+    turns.put(&turn).unwrap();
+
+    let stored = Blocking::new()
+        .unwrap()
+        .run(async move { docs.get("session.turn_states", "t/r").await.unwrap() })
+        .unwrap()
+        .unwrap()
+        .doc;
+    assert_eq!(stored["transcript"][0]["started_ms"], 1_000);
+    assert_eq!(stored["transcript"][0]["ended_ms"], 2_500);
+    assert!(stored["transcript"][0].get("startedAt").is_none());
+    assert_eq!(stored["transcript"][1]["call_id"], "c1");
+    let entry = &stored["tool_timeline"][0];
+    assert_eq!(entry["args_buffer"], "{}");
+    assert_eq!(entry["subagent"]["task_id"], "s");
+    assert_eq!(entry["subagent"]["elapsed_ms"], 7);
+    assert_eq!(
+        entry["subagent"]["tool_calls"][0]["args"],
+        json!({"someKey": {"nestedCamel": 1}}),
+        "the tool's own arguments are not ours to rename"
+    );
+    assert_eq!(turns.get("t").unwrap(), Some(turn));
+}
+
+#[test]
+fn a_turn_whose_time_is_not_rfc3339_is_refused() {
+    let (turns, _) = store();
+    let mut turn = started("t", "r", 0);
+    turn.started_at = "yesterday".into();
+    let error = turns.put(&turn).unwrap_err();
+    assert!(error.contains("RFC 3339"), "{error}");
 }
 
 #[test]
