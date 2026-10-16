@@ -13,9 +13,11 @@ use crate::context::RunContext;
 use crate::error::Result;
 use crate::middleware::{Middleware, ToolInvocationIdentity};
 use crate::no_progress::{
-    FailurePolicy, NoProgress, NoProgressTracker, RecoverableFailureLadder, ToolAttempt,
-    fingerprint_arguments,
+    ClassifiedFailureTracker, ClassifiedStepWithCause, FailurePolicy, NoProgress,
+    NoProgressTracker, RecoverableFailureLadder, ToolAttempt, classified_step_with_cause,
+    clear_recovered, fingerprint_arguments,
 };
+use tinyinference_llm::model::ModelResponse;
 use crate::steering::{SteeringCommand, SteeringHandle};
 use crate::turn_outcome::HaltSummarySlot;
 
@@ -52,6 +54,17 @@ pub enum FailureAssessment {
         /// Error text passed to the host's halt-copy callback.
         error: String,
     },
+    /// Host-classified failure with a retry budget and optional corrective.
+    ClassifiedFailure {
+        /// Stable host-owned recovery class.
+        class: String,
+        /// Retries allowed after the first failure.
+        budget: usize,
+        /// Scrubbed failure text used for the typed stop cause.
+        error: String,
+        /// Host wording for the within-budget corrective, if this class has one.
+        nudge: Option<String>,
+    },
     /// Immediate host-classified halt, such as a terminal inference failure.
     Halt {
         /// Host-authored root-cause summary.
@@ -83,11 +96,39 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
         scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment;
+
+    /// Optional model-response fast halt, called after every model response.
+    fn terminal_model_halt(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _response: &ModelResponse,
+    ) -> Option<(String, Option<crate::no_progress::ClassifiedStopCause>)> {
+        None
+    }
+
+    /// Host copy applied to a generic ladder's stop summary.
+    fn halt_copy(&self, _kind: FailureStopKind, summary: String, _error: &str) -> String {
+        summary
+    }
+}
+
+/// Which generic stop mechanism produced a halt for host-authored copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureStopKind {
+    /// Identical or varied deterministic failure ladder.
+    NoProgress,
+    /// Host-classified recovery budget was exhausted.
+    Classified,
+    /// Extended transient failure budget was exhausted.
+    Recoverable,
+    /// Host detected a terminal failure immediately.
+    Terminal,
 }
 
 struct RunFailureState {
     tracker: NoProgressTracker,
     recoverable: RecoverableFailureLadder,
+    classified: ClassifiedFailureTracker,
     step: AtomicUsize,
 }
 
@@ -96,6 +137,7 @@ impl RunFailureState {
         Self {
             tracker: NoProgressTracker::new(identical_threshold),
             recoverable: RecoverableFailureLadder::default(),
+            classified: ClassifiedFailureTracker::default(),
             step: AtomicUsize::new(0),
         }
     }
