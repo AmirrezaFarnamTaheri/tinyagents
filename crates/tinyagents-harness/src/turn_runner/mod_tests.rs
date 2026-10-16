@@ -358,7 +358,6 @@ async fn checked_out_session_is_checked_in_when_fingerprint_validation_fails() {
     assert_eq!(host.checkins.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
 struct QuietWorkHost {
     started: Arc<tokio::sync::Notify>,
     finish: Arc<tokio::sync::Notify>,
