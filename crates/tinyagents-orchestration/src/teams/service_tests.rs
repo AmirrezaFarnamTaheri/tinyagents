@@ -19,6 +19,16 @@ impl TeamMemberExecutor for FixedExecutor {
     }
 }
 
+struct RecordingExecutor(Arc<std::sync::Mutex<Option<AgentTeamMember>>>);
+
+#[async_trait]
+impl TeamMemberExecutor for RecordingExecutor {
+    async fn execute(&self, member: &AgentTeamMember, _: &AgentTeamTask) -> Result<Vec<String>> {
+        *self.0.lock().unwrap() = Some(member.clone());
+        Ok(vec!["done".into()])
+    }
+}
+
 struct HangingExecutor(Arc<tokio::sync::Notify>);
 
 #[async_trait]
@@ -49,18 +59,24 @@ async fn start_member_runs_and_completes_claimed_task() {
         .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
         .unwrap();
 
+    let executed_member = Arc::new(std::sync::Mutex::new(None));
     let outcome = service
         .start_member(
             &team.team.id,
             &task.id,
             &member.id,
-            &FixedExecutor(Ok(vec!["done".into()])),
+            &RecordingExecutor(executed_member.clone()),
             true,
         )
         .await
         .unwrap();
 
     assert!(matches!(outcome, CompletionOutcome::Completed(_)));
+    let executed_member = executed_member.lock().unwrap().clone().unwrap();
+    assert_eq!(executed_member.member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(executed_member.current_task_id.as_deref(), Some(task.id.as_str()));
+    assert!(executed_member.worker_thread_id.is_some());
+    assert!(executed_member.run_id.is_some());
     assert_eq!(
         service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
         AgentTeamTaskStatus::Done

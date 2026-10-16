@@ -82,7 +82,7 @@ pub trait TeamLedger: Send + Sync {
         task_id: &str,
         worker_thread_id: &str,
         run_id: &str,
-    ) -> Result<bool>;
+    ) -> Result<Option<AgentTeamMember>>;
     /// Marks a running member idle after its worker finishes.
     fn mark_member_idle(&self, team_id: &str, member_id: &str) -> Result<bool>;
     /// Stops a member and releases its claimed tasks, returning the stopped
@@ -229,7 +229,7 @@ impl TeamLedger for SessionTeamLedger {
         task_id: &str,
         worker_thread_id: &str,
         run_id: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<AgentTeamMember>> {
         let (ledger, team, member, task, thread, run) = (
             Arc::clone(&self.ledger),
             team_id.to_owned(),
@@ -239,10 +239,9 @@ impl TeamLedger for SessionTeamLedger {
             run_id.to_owned(),
         );
         self.run(async move {
-            Ok(ledger
+            ledger
                 .mark_agent_team_member_running(&team, &member, &task, &thread, &run)
-                .await?
-                .is_some())
+                .await
         })
     }
     fn mark_member_idle(&self, team_id: &str, member_id: &str) -> Result<bool> {
@@ -526,25 +525,17 @@ impl<L: TeamLedger> TeamService<L> {
             member_id,
             armed: true,
         };
-        let member = self
-            .ledger
-            .list_members(team_id)?
-            .into_iter()
-            .find(|member| member.id == member_id)
-            .ok_or_else(|| anyhow!("unknown team member: {member_id}"))?;
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
         let run_id = format!("team-run-{}", Uuid::new_v4().simple());
-        match self.ledger.mark_member_running(
+        let member = match self.ledger.mark_member_running(
             team_id,
             member_id,
             task_id,
             &worker_thread_id,
             &run_id,
         ) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(anyhow!("unknown team member: {member_id}"));
-            }
+            Ok(Some(member)) => member,
+            Ok(None) => return Err(anyhow!("unknown team member: {member_id}")),
             Err(error) => {
                 return Err(error.context("mark team member running"));
             }
@@ -584,9 +575,15 @@ impl<L: TeamLedger> TeamService<L> {
     }
 
     fn release_and_idle(&self, team_id: &str, task_id: &str, member_id: &str) -> Result<()> {
-        self.ledger.release_task(team_id, task_id)?;
-        self.ledger.mark_member_idle(team_id, member_id)?;
-        Ok(())
+        let release = self.ledger.release_task(team_id, task_id);
+        let idle = self.ledger.mark_member_idle(team_id, member_id);
+        match (release, idle) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+            (Err(release), Err(idle)) => Err(anyhow!(
+                "failed to release team task: {release}; failed to idle team member: {idle}"
+            )),
+        }
     }
 
     pub fn shutdown_member(&self, team_id: &str, member_id: &str) -> Result<MemberShutdown> {

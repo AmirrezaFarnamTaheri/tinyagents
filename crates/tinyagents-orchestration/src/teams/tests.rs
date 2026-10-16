@@ -389,8 +389,8 @@ impl TeamLedger for FakeLedger {
         _: &str,
         _: &str,
         _: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(false)
+    ) -> anyhow::Result<Option<AgentTeamMember>> {
+        Ok(None)
     }
     fn mark_member_idle(&self, _: &str, _: &str) -> anyhow::Result<bool> {
         Ok(false)
