@@ -295,10 +295,7 @@ pub struct PrebuiltModelResolver<State: Send + Sync> {
 
 impl<State: Send + Sync> PrebuiltModelResolver<State> {
     /// Creates a resolver using `primary` as both the lead model and fallback.
-    pub fn new<I>(
-        primary: Arc<dyn ChatModel<State>>,
-        routes: I,
-    ) -> Self
+    pub fn new<I>(primary: Arc<dyn ChatModel<State>>, routes: I) -> Self
     where
         I: IntoIterator<Item = (String, Arc<dyn ChatModel<State>>)>,
     {

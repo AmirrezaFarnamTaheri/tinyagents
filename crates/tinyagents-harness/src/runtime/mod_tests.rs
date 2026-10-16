@@ -91,7 +91,10 @@ struct CarryCountOnUsageEvent {
 
 impl crate::events::EventListener for CarryCountOnUsageEvent {
     fn on_event(&self, record: &crate::events::EventRecord) {
-        if matches!(&record.event, crate::events::AgentEvent::UsageRecorded { .. }) {
+        if matches!(
+            &record.event,
+            crate::events::AgentEvent::UsageRecorded { .. }
+        ) {
             self.observed
                 .lock()
                 .expect("usage ordering lock")
@@ -1112,20 +1115,24 @@ async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_tur
         );
         let carried = Arc::new(AtomicUsize::new(0));
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.push_model_middleware(Arc::new(crate::middleware::FallbackObserverMiddleware::new(
-            "primary",
-        )));
-        let carried_by_middleware = Arc::clone(&carried);
         harness.push_model_middleware(Arc::new(
-            crate::middleware::UsageCarryMiddleware::new(move |response| {
+            crate::middleware::FallbackObserverMiddleware::new("primary"),
+        ));
+        let carried_by_middleware = Arc::clone(&carried);
+        harness.push_model_middleware(Arc::new(crate::middleware::UsageCarryMiddleware::new(
+            move |response| {
                 if response.usage.is_some() {
                     carried_by_middleware.fetch_add(1, Ordering::SeqCst);
                 }
-            }),
-        ));
+            },
+        )));
         let context = RunContext::new(
-            RunConfig::new(if streaming { "route-stream" } else { "route-buffer" })
-                .with_thread("workload"),
+            RunConfig::new(if streaming {
+                "route-stream"
+            } else {
+                "route-buffer"
+            })
+            .with_thread("workload"),
             (),
         );
         let recorder = Arc::new(RecordingListener::new());

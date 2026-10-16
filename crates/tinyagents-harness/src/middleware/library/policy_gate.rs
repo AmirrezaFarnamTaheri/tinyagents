@@ -347,10 +347,7 @@ impl StructuredDenialParts {
 
 /// Creates a [`DenialRenderer`] with shared structure and host-owned wording.
 pub fn structured_denial_renderer(
-    wording: impl Fn(&ToolCall, &str, &PolicyDecision) -> StructuredDenialParts
-    + Send
-    + Sync
-    + 'static,
+    wording: impl Fn(&ToolCall, &str, &PolicyDecision) -> StructuredDenialParts + Send + Sync + 'static,
 ) -> DenialRenderer {
     Arc::new(move |call, policy, decision| wording(call, policy, decision).render())
 }

@@ -754,9 +754,11 @@ async fn workload_observers_only_report_successful_fallback_and_carry_one_respon
             .await
             .is_err()
     );
-    assert!(events(&recorder)
-        .iter()
-        .all(|event| !matches!(event, AgentEvent::FallbackSelected { .. })));
+    assert!(
+        events(&recorder)
+            .iter()
+            .all(|event| !matches!(event, AgentEvent::FallbackSelected { .. }))
+    );
     assert_eq!(carried.load(Ordering::SeqCst), 0);
 
     let success = FakeModelBase::new(|_, request| {

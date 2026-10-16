@@ -30,7 +30,12 @@ fn projects_inference_routes_with_the_host_vision_hint() {
         router.fallback_policy("hint:chat").unwrap().models,
         vec!["hint:chat".to_string(), "hint:burst".to_string()]
     );
-    assert!(router.required_capabilities("hint:vision").unwrap().image_in);
+    assert!(
+        router
+            .required_capabilities("hint:vision")
+            .unwrap()
+            .image_in
+    );
     assert!(router.fallback_policy("hint:vision").is_none());
 
     let other_host = WorkloadRouter::from_workload_routes("vision-tier");

@@ -1,8 +1,8 @@
 use super::*;
 
 use async_trait::async_trait;
-use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::model::budget::{Spend, SpendLimits};
+use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::usage::Usage;
 
 struct ChargedModel;

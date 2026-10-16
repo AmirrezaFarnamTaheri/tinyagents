@@ -233,8 +233,14 @@ async fn prebuilt_resolver_prefers_lead_then_pin_then_hint_and_falls_back() {
     let resolver = PrebuiltModelResolver::new(
         Arc::new(EchoModel("primary")),
         [
-            ("pinned".to_string(), Arc::new(EchoModel("pinned")) as Arc<dyn ChatModel<()>>),
-            ("hint:fast".to_string(), Arc::new(EchoModel("hint")) as Arc<dyn ChatModel<()>>),
+            (
+                "pinned".to_string(),
+                Arc::new(EchoModel("pinned")) as Arc<dyn ChatModel<()>>,
+            ),
+            (
+                "hint:fast".to_string(),
+                Arc::new(EchoModel("hint")) as Arc<dyn ChatModel<()>>,
+            ),
         ],
     )
     .with_lead_model(Arc::new(EchoModel("lead")));

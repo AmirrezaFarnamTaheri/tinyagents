@@ -7,9 +7,7 @@ use tinyinference_llm::model::{CapabilitySet, ModelRequest, ModelResponse};
 
 use crate::context::RunContext;
 use crate::events::AgentEvent;
-use crate::middleware::{
-    MiddlewareModelOutcome, ModelHandler, ModelMiddleware,
-};
+use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 
 /// Stamps a route's required capabilities unless a stricter requirement was
 /// already attached to the request.
@@ -114,9 +112,7 @@ impl UsageCarryMiddleware {
 }
 
 #[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
-    for UsageCarryMiddleware
-{
+impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx> for UsageCarryMiddleware {
     fn name(&self) -> &str {
         "workload.usage_carry"
     }
