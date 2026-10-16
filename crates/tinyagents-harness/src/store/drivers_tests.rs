@@ -152,15 +152,57 @@ async fn read_from_follows_long_streams_and_prefixes_isolate() {
     assert_eq!(other.len("s").await.unwrap(), 0);
     let error = journal.append("", json!(1)).await;
     assert!(error.is_ok(), "a prefix makes the empty stream name valid");
-    let ab = DriverAppendStore::with_prefix(Arc::clone(&streams), "ab");
-    let a = DriverAppendStore::with_prefix(Arc::clone(&streams), "a");
-    ab.append("c", json!("ab/c")).await.unwrap();
-    assert_eq!(a.len("bc").await.unwrap(), 0, "prefixes never overlap");
-    let bare = DriverAppendStore::new(Arc::clone(scoped(&storage, "local").streams()));
-    bare.append("", json!("bare")).await.unwrap();
-    assert_eq!(bare.len("").await.unwrap(), 1, "a bare name is encoded too");
-    // A bare stream spelled like a prefixed one stays its own stream.
-    bare.append("1:ab", json!("bare")).await.unwrap();
-    assert_eq!(a.len("b").await.unwrap(), 0);
-    assert_eq!(a.len("").await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn streams_are_named_by_prefix_and_stream_without_a_length_prefix() {
+    let storage = MemoryStorage::new();
+    let scoped = scoped(&storage, "local");
+    let journal = DriverAppendStore::with_prefix(Arc::clone(scoped.streams()), "harness.journal/");
+    journal.append("run.1", json!(1)).await.unwrap();
+    let bare = DriverAppendStore::new(Arc::clone(scoped.streams()));
+    bare.append("plain", json!(2)).await.unwrap();
+    assert_eq!(
+        scoped.streams().streams("").await.unwrap(),
+        vec!["harness.journal/run.1".to_owned(), "plain".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn sealing_closes_a_stream_without_changing_what_a_reader_sees() {
+    let storage = MemoryStorage::new();
+    let scoped = scoped(&storage, "local");
+    let journal = DriverAppendStore::with_prefix(Arc::clone(scoped.streams()), "harness.journal/");
+    for i in 0..(READ_PAGE as u64 + 3) {
+        journal.append("run.1", json!({ "i": i })).await.unwrap();
+    }
+    let before_all = journal.read_from("run.1", 0).await.unwrap();
+    let before_window = journal.read_window("run.1", 5, 7).await.unwrap();
+    let before_len = journal.len("run.1").await.unwrap();
+
+    journal.seal("run.1").await.unwrap();
+    journal.seal("run.1").await.unwrap();
+
+    assert_eq!(journal.read_from("run.1", 0).await.unwrap(), before_all);
+    assert_eq!(journal.read_window("run.1", 5, 7).await.unwrap(), before_window);
+    assert_eq!(journal.len("run.1").await.unwrap(), before_len);
+    let info = scoped
+        .streams()
+        .info("harness.journal/run.1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(info.sealed_ms.is_some(), "the driver stream is sealed");
+    assert!(
+        journal.append("run.1", json!("late")).await.is_err(),
+        "a sealed stream refuses appends"
+    );
+}
+
+#[tokio::test]
+async fn sealing_a_stream_nothing_was_written_to_is_a_no_op() {
+    let storage = MemoryStorage::new();
+    let journal = DriverAppendStore::new(Arc::clone(scoped(&storage, "local").streams()));
+    journal.seal("never-written").await.unwrap();
+    assert_eq!(journal.len("never-written").await.unwrap(), 0);
 }
