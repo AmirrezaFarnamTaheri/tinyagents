@@ -157,7 +157,10 @@ struct LeaderGuard {
 
 impl LeaderGuard {
     fn finish(&mut self, result: &Result<ModelResponse>) {
-        self.entry.complete(result.clone().map_err(|_| ()));
+        self.entry.complete(match result {
+            Ok(response) => Ok(response.clone()),
+            Err(_) => Err(()),
+        });
         self.inflight.retire(&self.key, &self.entry);
     }
 }
