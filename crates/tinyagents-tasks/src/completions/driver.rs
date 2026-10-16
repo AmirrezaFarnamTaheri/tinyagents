@@ -7,11 +7,12 @@
 //!
 //! # Layout
 //!
-//! One collection (default [`DriverCompletionStore::DEFAULT_COLLECTION`]) with
-//! one document per task id:
-//! `{ taskId, parentKey, state, updatedAtMs, record }`. The scalar fields are
-//! indexed projections for [`CompletionStore::list`] and
-//! [`CompletionStore::compact`]; `record` is the full record. `put` is an
+//! One collection, `tasks.completions` (see [`storage_schema`](crate::storage_schema)),
+//! with one document per task id under `Key::of([task_id])`: a bare snake_case
+//! body (`task_id`, `parent_key`, `agent_id`, `state`, `result`, `finished_ms`,
+//! ...). `parent_key` and `state` are indexed for [`CompletionStore::list`] and
+//! [`CompletionStore::compact`]. The record's last-update time is the document's
+//! `updated_ms` metadata, which the driver stamps on every write. `put` is an
 //! upsert, which is all the contract asks of it: the router serialises its
 //! read-modify-write sequences.
 //!
@@ -22,19 +23,20 @@
 //! runtime or not.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
-use serde_json::{Value, json};
-use tinyagents_harness::driver_ids::hashed_id;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
-    Query, StorageError,
+    Blocking, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Repo, StorageError,
+    UPDATED_FIELD, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
 use super::store::CompletionStore;
 use super::types::{CompletionRecord, CompletionState};
+use crate::storage::{
+    COMPLETIONS, CompletionDoc, SCHEMA_VERSION, completions_spec, task_id_key, to_ms,
+};
 
 const LOG_PREFIX: &str = "[completion-store]";
 
@@ -42,15 +44,10 @@ fn map_error(error: StorageError) -> TinyAgentsError {
     TinyAgentsError::Storage(format!("completion store: {error}"))
 }
 
-fn millis(time: SystemTime) -> u64 {
-    time.duration_since(UNIX_EPOCH).map_or(0, |elapsed| {
-        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-    })
-}
-
-fn decode(record: &Value) -> Option<CompletionRecord> {
-    match serde_json::from_value(record.clone()) {
-        Ok(record) => Some(record),
+fn decode(row: Versioned<serde_json::Value>) -> Option<CompletionRecord> {
+    let updated_ms = row.meta.updated_ms;
+    match serde_json::from_value::<CompletionDoc>(row.doc) {
+        Ok(doc) => Some(doc.into_record(updated_ms)),
         Err(error) => {
             // One unreadable record must not block every other completion.
             tracing::warn!(error = %error, "{LOG_PREFIX} skipping unreadable record");
@@ -64,15 +61,12 @@ fn decode(record: &Value) -> Option<CompletionRecord> {
 pub struct DriverCompletionStore {
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
-    collection: String,
+    repo: Repo<CompletionDoc>,
     declared: Arc<OnceCell<()>>,
 }
 
 impl DriverCompletionStore {
-    /// The collection used by [`DriverCompletionStore::new`].
-    pub const DEFAULT_COLLECTION: &'static str = "orchestration_completions";
-
-    /// Store completions in [`Self::DEFAULT_COLLECTION`], with its own bridge.
+    /// Store completions in `tasks.completions`, with its own bridge.
     ///
     /// # Errors
     ///
@@ -81,31 +75,22 @@ impl DriverCompletionStore {
         Ok(Self::with_bridge(docs, Blocking::new()?))
     }
 
-    /// Store completions in [`Self::DEFAULT_COLLECTION`], running the
-    /// synchronous trait on `bridge` so several stores share one thread.
+    /// Store completions in `tasks.completions`, running the synchronous trait
+    /// on `bridge` so several stores share one thread.
+    ///
+    /// # Panics
+    ///
+    /// Never: the collection name is a valid constant.
+    #[allow(clippy::expect_used, reason = "the collection name is a constant")]
     pub fn with_bridge(docs: Arc<dyn DocumentStore>, bridge: Blocking) -> Self {
-        Self::with_collection(docs, bridge, Self::DEFAULT_COLLECTION)
-    }
-
-    /// Store completions in `collection`, so independent stores can share a backend.
-    pub fn with_collection(
-        docs: Arc<dyn DocumentStore>,
-        bridge: Blocking,
-        collection: impl Into<String>,
-    ) -> Self {
         Self {
+            repo: Repo::new(&docs, COMPLETIONS)
+                .expect("tasks.completions is a valid collection")
+                .with_options(WriteOptions::new().schema(SCHEMA_VERSION)),
             docs,
             bridge,
-            collection: collection.into(),
             declared: Arc::new(OnceCell::new()),
         }
-    }
-
-    /// The declaration a store using `collection` needs.
-    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
-        CollectionSpec::new(collection)
-            .index(IndexSpec::new("by_parent", ["parentKey"]))
-            .index(IndexSpec::new("by_state_updated", ["state", "updatedAtMs"]))
     }
 
     fn run<T: Send + 'static>(
@@ -121,7 +106,7 @@ impl DriverCompletionStore {
         self.declared
             .get_or_try_init(|| async {
                 self.docs
-                    .ensure_collection(&Self::collection_spec(self.collection.clone()))
+                    .ensure_collection(&completions_spec())
                     .await
                     .map_err(map_error)
             })
@@ -133,15 +118,12 @@ impl DriverCompletionStore {
 impl CompletionStore for DriverCompletionStore {
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let this = self.clone();
-        let id = hashed_id(&[task_id]);
+        let task_id = task_id.to_owned();
         self.run(async move {
             this.declare().await?;
-            let found = this
-                .docs
-                .get(&this.collection, &id)
-                .await
-                .map_err(map_error)?;
-            Ok(found.and_then(|row| decode(row.doc.get("record")?)))
+            let id = task_id_key(&task_id).map_err(map_error)?;
+            let found = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)?;
+            Ok(found.and_then(decode))
         })
         .inspect_err(|error| tracing::warn!(error = %error, "{LOG_PREFIX} read failed"))
         .ok()
@@ -153,20 +135,9 @@ impl CompletionStore for DriverCompletionStore {
         let record = record.clone();
         self.run(async move {
             this.declare().await?;
-            let doc = json!({
-                "taskId": record.task_id,
-                "parentKey": record.parent_key,
-                "state": serde_json::to_value(record.state)?,
-                "updatedAtMs": millis(record.updated_at),
-                "record": serde_json::to_value(&record)?,
-            });
-            this.docs
-                .put(
-                    &this.collection,
-                    &hashed_id(&[&record.task_id]),
-                    doc,
-                    Precondition::None,
-                )
+            let id = task_id_key(&record.task_id).map_err(map_error)?;
+            this.repo
+                .put(&id, &CompletionDoc::from_record(&record))
                 .await
                 .map(|_| ())
                 .map_err(map_error)
@@ -179,18 +150,15 @@ impl CompletionStore for DriverCompletionStore {
         self.run(async move {
             this.declare().await?;
             let filter = match &parent_key {
-                Some(parent) => Filter::eq("parentKey", parent.as_str()),
+                Some(parent) => Filter::eq("parent_key", parent.as_str()),
                 None => Filter::default(),
             };
             let rows = this
                 .docs
-                .query_all(&this.collection, &Query::filter(filter))
+                .query_all(COMPLETIONS, &Query::filter(filter))
                 .await
                 .map_err(map_error)?;
-            Ok(rows
-                .into_iter()
-                .filter_map(|row| decode(row.doc.get("record")?))
-                .collect())
+            Ok(rows.into_iter().filter_map(decode).collect())
         })
         .inspect_err(|error| tracing::warn!(error = %error, "{LOG_PREFIX} list failed"))
         .unwrap_or_default()
@@ -198,41 +166,25 @@ impl CompletionStore for DriverCompletionStore {
 
     fn compact(&self, retain: Duration) -> Result<usize> {
         let this = self.clone();
-        let cutoff = millis(SystemTime::now())
-            .saturating_sub(u64::try_from(retain.as_millis()).unwrap_or(u64::MAX));
+        let cutoff = to_ms(SystemTime::now())
+            .saturating_sub(i64::try_from(retain.as_millis()).unwrap_or(i64::MAX));
         self.run(async move {
             this.declare().await?;
-            // Settled means anything but pending. `lt` on the millisecond
-            // projection finds candidates; the exact instant is re-checked on
-            // the record so a sub-millisecond boundary never drops live work.
+            // Settled means anything but pending, last written more than
+            // `retain` ago: the document's own `updated_ms`.
             let filter = Filter::ne("state", serde_json::to_value(CompletionState::Pending)?)
-                .and(Filter::lt("updatedAtMs", cutoff.saturating_add(1)));
+                .and(Filter::lt(UPDATED_FIELD, cutoff));
             let rows = this
                 .docs
-                .query_all(&this.collection, &Query::filter(filter))
+                .query_all(COMPLETIONS, &Query::filter(filter))
                 .await
                 .map_err(map_error)?;
-            let now = SystemTime::now();
             let mut dropped = 0;
             for row in rows {
-                let Some(record) = row.doc.get("record").and_then(decode) else {
-                    continue;
-                };
-                let expired = record.state != CompletionState::Pending
-                    && now
-                        .duration_since(record.updated_at)
-                        .is_ok_and(|age| age > retain);
-                if !expired {
-                    continue;
-                }
                 // Only the version we saw: a record refreshed since is live again.
                 match this
                     .docs
-                    .delete(
-                        &this.collection,
-                        &row.id,
-                        Precondition::Version(row.version),
-                    )
+                    .delete(COMPLETIONS, &row.id, Precondition::Version(row.version))
                     .await
                 {
                     Ok(removed) => dropped += usize::from(removed),

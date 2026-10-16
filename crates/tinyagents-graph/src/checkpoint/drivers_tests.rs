@@ -1,11 +1,14 @@
 use std::time::Duration;
 
 use super::*;
+use crate::storage::subgraph_key;
 use crate::testkit::conformance::{
     checkpointer_concurrent_contract, checkpointer_contract, checkpointer_lineage_contract,
     checkpointer_writes_contract,
 };
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use serde::Serialize;
+use serde_json::json;
+use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn docs(storage: &MemoryStorage, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -47,18 +50,18 @@ async fn passes_the_concurrent_contract() {
 }
 
 #[tokio::test]
-async fn scopes_and_prefixes_keep_threads_apart() {
+async fn scopes_and_namespaces_keep_threads_apart() {
     let storage = MemoryStorage::new();
     let alice = DriverCheckpointer::<i32>::new(docs(&storage, "alice"));
     let bob = DriverCheckpointer::<i32>::new(docs(&storage, "bob"));
-    let other = DriverCheckpointer::<i32>::with_prefix(docs(&storage, "alice"), "other");
+    let other = DriverCheckpointer::<i32>::with_namespace(docs(&storage, "alice"), "other");
     let checkpoint = sample("t", "c1", None, 1);
     alice.put(checkpoint).await.unwrap();
     assert!(bob.get("t", None).await.unwrap().is_none());
     assert!(other.get("t", None).await.unwrap().is_none());
     assert_eq!(alice.list_threads().await.unwrap(), vec!["t".to_owned()]);
     assert!(bob.list_threads().await.unwrap().is_empty());
-    assert!(format!("{alice:?}").contains("graph_checkpoints"));
+    assert!(format!("{alice:?}").contains("graph"));
     let _ = alice.clone();
 }
 
@@ -107,32 +110,20 @@ async fn leases_follow_the_claim_protocol() {
 }
 
 #[test]
-fn long_keys_are_hashed_and_tuples_never_collide() {
-    assert_ne!(key(&["a/b", "c"]), key(&["a", "b/c"]));
-    let long = "t".repeat(500);
-    let hashed = key(&[&long]);
-    assert!(hashed.starts_with("h:") && hashed.len() == 66, "{hashed}");
-    assert_ne!(hashed, key(&[&"u".repeat(500)]));
-    assert_ne!(
-        key(&[&"t".repeat(500)]),
-        key(&[&"t".repeat(499), "t"]),
-        "the hash covers the length-prefixed tuple"
-    );
-}
-
-#[test]
 fn namespaces_encode_injectively() {
     let ns = |parts: &[&str]| parts.iter().map(|p| (*p).to_string()).collect::<Vec<_>>();
     assert_ne!(
-        namespace_key(&ns(&["a", "b"])),
-        namespace_key(&ns(&["a\u{1f}b"]))
+        subgraph_key(&ns(&["a", "b"])),
+        subgraph_key(&ns(&["a\u{1f}b"]))
     );
+    assert_ne!(subgraph_key(&ns(&["a", "b"])), subgraph_key(&ns(&["a/b"])));
+    assert_ne!(subgraph_key(&ns(&["ab"])), subgraph_key(&ns(&["a", "b"])));
+    assert_eq!(subgraph_key(&[]), "");
     assert_ne!(
-        namespace_key(&ns(&["a", "b"])),
-        namespace_key(&ns(&["a/b"]))
+        subgraph_key(&ns(&[""])),
+        subgraph_key(&[]),
+        "the empty segment is not the root"
     );
-    assert_ne!(namespace_key(&ns(&["ab"])), namespace_key(&ns(&["a", "b"])));
-    assert_eq!(namespace_key(&[]), "");
 }
 
 #[tokio::test]
@@ -212,9 +203,9 @@ async fn a_corrupt_record_is_a_checkpoint_error() {
     cp.put(sample("t", "c1", None, 1)).await.unwrap();
     let stored = cp.thread_docs("t").await.unwrap().remove(0);
     docs.put(
-        "graph_checkpoints",
+        "graph.checkpoints",
         &stored.id,
-        json!({"thread": "t", "seq": 0, "checkpoint_id": "c1", "record": "nope"}),
+        json!({"ns": "graph", "thread": "t", "subgraph": "", "seq": 0, "checkpoint_id": "c1", "checkpoint": "nope"}),
         Precondition::None,
     )
     .await
@@ -300,4 +291,80 @@ async fn put_with_writes_persists_the_checkpoint_and_its_writes() {
     let stored = cp.get_writes(&config).await.unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].channel, "out");
+}
+
+#[tokio::test]
+async fn documents_are_v2_bodies_with_the_namespace_in_ids_and_fields() {
+    let storage = MemoryStorage::new();
+    let docs = docs(&storage, "local");
+    let delegation = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "delegation");
+    let flows = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "flows");
+    delegation.put(sample("a/b", "c1", None, 1)).await.unwrap();
+    flows.put(sample("a/b", "c1", None, 2)).await.unwrap();
+
+    let row = docs
+        .get("graph.checkpoints", &format!("delegation/a%2Fb/{:020}", 0))
+        .await
+        .unwrap()
+        .expect("id is Key::of([ns, thread, seq])");
+    assert_eq!(row.doc["ns"], "delegation");
+    assert_eq!(row.doc["thread"], "a/b");
+    assert_eq!(row.doc["subgraph"], "");
+    assert_eq!(row.doc["seq"], 0);
+    assert_eq!(row.doc["checkpoint_id"], "c1");
+    assert!(
+        row.doc["checkpoint"].is_object(),
+        "typed, not a JSON string"
+    );
+    assert_eq!(row.meta.schema, 4);
+    let counter = docs
+        .get("graph.threads", "flows/a%2Fb")
+        .await
+        .unwrap()
+        .expect("id is Key::of([ns, thread])");
+    assert_eq!(
+        (counter.doc["ns"].as_str(), counter.doc["next"].as_u64()),
+        (Some("flows"), Some(1))
+    );
+    assert_eq!(delegation.get("a/b", None).await.unwrap().unwrap().state, 1);
+    assert_eq!(flows.get("a/b", None).await.unwrap().unwrap().state, 2);
+    assert_eq!(delegation.list_threads().await.unwrap(), ["a/b"]);
+}
+
+#[tokio::test]
+async fn the_lease_lives_in_tsd_leases_and_its_epoch_moves_on_every_new_tenure() {
+    let storage = MemoryStorage::new();
+    let docs = docs(&storage, "local");
+    let cp = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "flows");
+    let minute = Duration::from_secs(60);
+    let (owner, key) = cp.lease_key("t");
+    let leases = tinystoragedrivers_core::Leases::new(&docs);
+
+    assert!(cp.try_claim("t", "a", minute).await.unwrap());
+    let first = leases.current(owner, &key).await.unwrap().unwrap();
+    assert_eq!((first.holder.as_str(), first.epoch), ("a", 1));
+    assert!(cp.try_claim("t", "a", minute).await.unwrap());
+    assert_eq!(
+        leases.current(owner, &key).await.unwrap().unwrap().epoch,
+        1,
+        "re-claim keeps the epoch"
+    );
+
+    cp.release("t", "a").await.unwrap();
+    assert!(leases.current(owner, &key).await.unwrap().is_none());
+    assert!(cp.try_claim("t", "a", minute).await.unwrap());
+    let second = leases.current(owner, &key).await.unwrap().unwrap();
+    assert_eq!(
+        second.epoch, 2,
+        "a new tenure of the same holder is a new epoch"
+    );
+    assert!(
+        !cp.try_claim("t", "b", minute).await.unwrap(),
+        "namespaces share no lease, but a thread's claim is exclusive"
+    );
+    let other = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "delegation");
+    assert!(
+        other.try_claim("t", "b", minute).await.unwrap(),
+        "another namespace's thread is free"
+    );
 }

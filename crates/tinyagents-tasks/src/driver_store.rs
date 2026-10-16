@@ -8,24 +8,27 @@
 //!
 //! # Layout
 //!
-//! Two collections, named from a prefix (default `orchestration`):
+//! Two collections of the `tasks` owner (see [`storage_schema`](crate::storage_schema)):
 //!
-//! - `<prefix>_tasks`: the latest record per task,
-//!   `{ taskId, status, kind, parentRunId, rootRunId, threadId, nodeId, rev, record }`.
-//!   The scalar fields are indexed projections for [`TaskStore::list`]; `rev`
-//!   counts transitions.
-//! - `<prefix>_task_history`: one immutable snapshot per transition,
-//!   `{ taskId, rev, record }`, so [`TaskStore::history`] returns the whole
+//! - `tasks.records`: the latest record per task under `Key::of([task_id])`, a
+//!   bare snake_case body (`task_id`, `status`, `kind_label`, the lineage ids,
+//!   `rev`, the result and `*_ms` times). The scalar fields are indexed for
+//!   [`TaskStore::list`]; `rev` counts transitions. The last-update time is the
+//!   document's `updated_ms` metadata.
+//! - `tasks.history`: one immutable snapshot per transition under
+//!   `Key::of([task_id, rev])`, so [`TaskStore::history`] returns the whole
 //!   timeline oldest to newest.
 //!
 //! # Transitions
 //!
-//! Every transition reads the record, applies the same pure state machine
-//! [`InMemoryTaskStore`](crate::InMemoryTaskStore) uses, and commits the new
-//! record together with its history snapshot in one atomic batch guarded by the
-//! version it read. A concurrent writer makes the batch conflict and the
-//! transition is re-evaluated against the winner's record, so two executors
-//! racing to settle one task cannot both succeed.
+//! Every transition is one [`Repo::update`] compare-and-swap on the task's
+//! record: it applies the same pure state machine
+//! [`InMemoryTaskStore`](crate::InMemoryTaskStore) uses, and a concurrent writer
+//! makes the swap re-run against the winner's record, so two executors racing to
+//! settle one task cannot both succeed. Only the winner then writes the
+//! snapshot for the revision it committed. The snapshot follows the record, not
+//! the same commit, so a crash between the two leaves the history one snapshot
+//! short while the record stays correct.
 //!
 //! # Sync trait
 //!
@@ -33,33 +36,34 @@
 //! [`Blocking`] bridge thread; this works from any caller, inside a tokio
 //! runtime or not.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use serde_json::{Value, json};
-use tinyagents_harness::driver_ids::hashed_id;
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::ids::TaskId;
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
-    Precondition, Query, Sort, StorageError, WriteOp,
+    Blocking, DocumentStore, DocumentStoreExt, ErrorKind, Filter, Query, Repo, Sort, StorageError,
+    Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
+use crate::storage::{
+    HISTORY, RECORDS, SCHEMA_VERSION, TaskDoc, history_id_key, history_spec, records_spec,
+    task_id_key,
+};
 use crate::store::{control_outcome, orchestration_not_found, transition};
 use crate::types::{
     OrchestrationControlOutcome, OrchestrationTaskFilter, OrchestrationTaskRecord,
     OrchestrationTaskResult, OrchestrationTaskSpec,
 };
 
-/// How many times a transition retries a version conflict.
-const CAS_ATTEMPTS: usize = 64;
-
 fn map_error(error: StorageError) -> TinyAgentsError {
     TinyAgentsError::Storage(format!("task store: {error}"))
 }
 
-fn decode(record: Value) -> Result<OrchestrationTaskRecord> {
-    serde_json::from_value(record)
+fn decode(row: Versioned<serde_json::Value>) -> Result<OrchestrationTaskRecord> {
+    let updated_ms = row.meta.updated_ms;
+    serde_json::from_value::<TaskDoc>(row.doc)
+        .map(|doc| doc.into_record(updated_ms))
         .map_err(|e| TinyAgentsError::Storage(format!("task store: decode record: {e}")))
 }
 
@@ -68,16 +72,13 @@ fn decode(record: Value) -> Result<OrchestrationTaskRecord> {
 pub struct DriverTaskStore {
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
-    tasks: String,
-    history: String,
+    records: Repo<TaskDoc>,
+    history: Repo<TaskDoc>,
     declared: Arc<OnceCell<()>>,
 }
 
 impl DriverTaskStore {
-    /// The collection prefix used by [`DriverTaskStore::new`].
-    pub const DEFAULT_PREFIX: &'static str = "orchestration";
-
-    /// Store tasks in the `orchestration_*` collections, with its own bridge.
+    /// Store tasks in the `tasks.*` collections, with its own bridge.
     ///
     /// # Errors
     ///
@@ -86,43 +87,26 @@ impl DriverTaskStore {
         Ok(Self::with_bridge(docs, Blocking::new()?))
     }
 
-    /// Store tasks in the `orchestration_*` collections, running the
-    /// synchronous trait on `bridge` so several stores share one thread.
+    /// Store tasks in the `tasks.*` collections, running the synchronous trait
+    /// on `bridge` so several stores share one thread.
+    ///
+    /// # Panics
+    ///
+    /// Never: the collection names are valid constants.
+    #[allow(clippy::expect_used, reason = "the collection names are constants")]
     pub fn with_bridge(docs: Arc<dyn DocumentStore>, bridge: Blocking) -> Self {
-        Self::with_prefix(docs, bridge, Self::DEFAULT_PREFIX)
-    }
-
-    /// Store tasks in `<prefix>_tasks` and `<prefix>_task_history`, so
-    /// independent stores can share a backend.
-    pub fn with_prefix(
-        docs: Arc<dyn DocumentStore>,
-        bridge: Blocking,
-        prefix: impl AsRef<str>,
-    ) -> Self {
-        let prefix = prefix.as_ref();
+        let options = WriteOptions::new().schema(SCHEMA_VERSION);
         Self {
+            records: Repo::new(&docs, RECORDS)
+                .expect("tasks.records is a valid collection")
+                .with_options(options),
+            history: Repo::new(&docs, HISTORY)
+                .expect("tasks.history is a valid collection")
+                .with_options(options),
             docs,
             bridge,
-            tasks: format!("{prefix}_tasks"),
-            history: format!("{prefix}_task_history"),
             declared: Arc::new(OnceCell::new()),
         }
-    }
-
-    /// The declarations a store using `prefix` needs.
-    pub fn collection_specs(prefix: impl AsRef<str>) -> Vec<CollectionSpec> {
-        let prefix = prefix.as_ref();
-        vec![
-            CollectionSpec::new(format!("{prefix}_tasks"))
-                .index(IndexSpec::new("status", ["status"]))
-                .index(IndexSpec::new("root", ["rootRunId"]))
-                .index(IndexSpec::new("parent", ["parentRunId"]))
-                .index(IndexSpec::new("thread", ["threadId"]))
-                .index(IndexSpec::new("node", ["nodeId"]))
-                .index(IndexSpec::new("kind", ["kind"])),
-            CollectionSpec::new(format!("{prefix}_task_history"))
-                .index(IndexSpec::new("task_rev", ["taskId", "rev"]).unique()),
-        ]
     }
 
     /// Declare the collections now, so a backend that cannot hold them is
@@ -148,8 +132,7 @@ impl DriverTaskStore {
     async fn declare(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
-                let prefix = self.tasks.trim_end_matches("_tasks");
-                for spec in Self::collection_specs(prefix) {
+                for spec in [records_spec(), history_spec()] {
                     self.docs
                         .ensure_collection(&spec)
                         .await
@@ -161,35 +144,27 @@ impl DriverTaskStore {
             .map(|_| ())
     }
 
-    fn task_doc(record: &OrchestrationTaskRecord, rev: u64) -> Result<Value> {
-        Ok(json!({
-            "taskId": record.spec.task_id.as_str(),
-            "status": serde_json::to_value(record.status)?,
-            "kind": record.spec.kind.as_str(),
-            "parentRunId": record.spec.parent_run_id.as_ref().map(|id| id.as_str()),
-            "rootRunId": record.spec.root_run_id.as_ref().map(|id| id.as_str()),
-            "threadId": record.spec.thread_id.as_ref().map(|id| id.as_str()),
-            "nodeId": record.spec.node_id.as_ref().map(|id| id.as_str()),
-            "rev": rev,
-            "record": serde_json::to_value(record)?,
-        }))
+    /// Write the snapshot of `record` at `rev`. A snapshot that already exists
+    /// is kept: revisions are immutable.
+    async fn snapshot(&self, record: &OrchestrationTaskRecord, rev: u64) -> Result<()> {
+        let id = history_id_key(record.spec.task_id.as_str(), rev).map_err(map_error)?;
+        match self
+            .history
+            .insert(&id, &TaskDoc::from_record(record, rev))
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(map_error(error)),
+        }
     }
 
-    fn history_write(record: &OrchestrationTaskRecord, rev: u64, history: &str) -> Result<WriteOp> {
-        Ok(WriteOp::Put {
-            collection: history.to_owned(),
-            id: hashed_id(&[record.spec.task_id.as_str(), &rev.to_string()]),
-            doc: json!({
-                "taskId": record.spec.task_id.as_str(),
-                "rev": rev,
-                "record": serde_json::to_value(record)?,
-            }),
-            precondition: Precondition::Absent,
-        })
-    }
-
-    /// Read `task_id`, apply `change`, and commit the result with its history
-    /// snapshot, retrying only version conflicts.
+    /// Read `task_id`, apply `change`, and commit the result with one
+    /// compare-and-swap, then record its history snapshot.
     fn modify<R: Send + 'static>(
         &self,
         task_id: &TaskId,
@@ -199,33 +174,53 @@ impl DriverTaskStore {
         let task_id = task_id.clone();
         self.run(async move {
             this.declare().await?;
-            let id = hashed_id(&[task_id.as_str()]);
-            for _ in 0..CAS_ATTEMPTS {
-                let Some(found) = this.docs.get(&this.tasks, &id).await.map_err(map_error)? else {
-                    return Err(orchestration_not_found(&task_id));
-                };
-                let rev = found.doc.get("rev").and_then(Value::as_u64).unwrap_or(0);
-                let mut record = decode(found.doc.get("record").cloned().unwrap_or(Value::Null))?;
-                let outcome = change(&mut record)?;
-                let next = rev + 1;
-                let writes = vec![
-                    WriteOp::Put {
-                        collection: this.tasks.clone(),
-                        id: id.clone(),
-                        doc: Self::task_doc(&record, next)?,
-                        precondition: Precondition::Version(found.version),
-                    },
-                    Self::history_write(&record, next, &this.history)?,
-                ];
-                match this.docs.atomic_batch(writes).await {
-                    Ok(_) => return Ok(outcome),
-                    Err(error) if error.kind() == ErrorKind::Conflict => continue,
-                    Err(error) => return Err(map_error(error)),
-                }
-            }
-            Err(TinyAgentsError::Storage(
-                "task store: transition contention budget exhausted".into(),
-            ))
+            let id = task_id_key(task_id.as_str()).map_err(map_error)?;
+            // What the closure decided, kept outside it: `update` may run it
+            // again after a lost swap, and only the last run's outcome stands.
+            let decided: Mutex<Option<Result<(R, OrchestrationTaskRecord)>>> = Mutex::new(None);
+            let stored = this
+                .records
+                .update(&id, |current| {
+                    let outcome = match current {
+                        None => Err(orchestration_not_found(&task_id)),
+                        Some(doc) => {
+                            let rev = doc.rev;
+                            // The update time is metadata, which `update` does not
+                            // hand over; every transition stamps its own.
+                            let mut record = doc.into_record(0);
+                            change(&mut record).map(|outcome| (outcome, record, rev))
+                        }
+                    };
+                    match outcome {
+                        Ok((outcome, record, rev)) => {
+                            let doc = TaskDoc::from_record(&record, rev + 1);
+                            *decided
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(Ok((outcome, record)));
+                            Ok(Some(doc))
+                        }
+                        Err(error) => {
+                            *decided
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                                Some(Err(error));
+                            Ok(None)
+                        }
+                    }
+                })
+                .await
+                .map_err(map_error)?;
+            let decided = decided
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ok_or_else(|| TinyAgentsError::Storage("task store: no transition ran".into()))?;
+            let (outcome, record) = decided?;
+            let (doc, _) = stored.ok_or_else(|| {
+                TinyAgentsError::Storage("task store: transition was not stored".into())
+            })?;
+            this.snapshot(&record, doc.rev).await?;
+            Ok(outcome)
         })
     }
 }
@@ -236,40 +231,36 @@ impl crate::store::TaskStore for DriverTaskStore {
         self.run(async move {
             this.declare().await?;
             let record = OrchestrationTaskRecord::pending(spec);
-            let id = hashed_id(&[record.spec.task_id.as_str()]);
-            let writes = vec![
-                WriteOp::Put {
-                    collection: this.tasks.clone(),
-                    id,
-                    doc: Self::task_doc(&record, 1)?,
-                    precondition: Precondition::Absent,
-                },
-                Self::history_write(&record, 1, &this.history)?,
-            ];
-            match this.docs.atomic_batch(writes).await {
-                Ok(_) => Ok(record),
+            let id = task_id_key(record.spec.task_id.as_str()).map_err(map_error)?;
+            match this
+                .records
+                .insert(&id, &TaskDoc::from_record(&record, 1))
+                .await
+            {
+                Ok(_) => {}
                 Err(error)
                     if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
                 {
-                    Err(TinyAgentsError::DuplicateComponent(format!(
+                    return Err(TinyAgentsError::DuplicateComponent(format!(
                         "orchestration task `{}`",
                         record.spec.task_id
-                    )))
+                    )));
                 }
-                Err(error) => Err(map_error(error)),
+                Err(error) => return Err(map_error(error)),
             }
+            this.snapshot(&record, 1).await?;
+            Ok(record)
         })
     }
 
     fn get(&self, task_id: &TaskId) -> Option<OrchestrationTaskRecord> {
         let this = self.clone();
-        let id = hashed_id(&[task_id.as_str()]);
+        let task_id = task_id.clone();
         self.run(async move {
             this.declare().await?;
-            let found = this.docs.get(&this.tasks, &id).await.map_err(map_error)?;
-            found
-                .map(|row| decode(row.doc.get("record").cloned().unwrap_or(Value::Null)))
-                .transpose()
+            let id = task_id_key(task_id.as_str()).map_err(map_error)?;
+            let found = this.docs.get(RECORDS, &id).await.map_err(map_error)?;
+            found.map(decode).transpose()
         })
         .inspect_err(|error| tracing::warn!("[orchestration] task store read failed: {error}"))
         .ok()
@@ -283,16 +274,16 @@ impl crate::store::TaskStore for DriverTaskStore {
             let mut query_filter = Filter::default();
             for (field, value) in [
                 (
-                    "rootRunId",
+                    "root_run_id",
                     filter.root_run_id.as_ref().map(|id| id.as_str()),
                 ),
                 (
-                    "parentRunId",
+                    "parent_run_id",
                     filter.parent_run_id.as_ref().map(|id| id.as_str()),
                 ),
-                ("threadId", filter.thread_id.as_ref().map(|id| id.as_str())),
-                ("nodeId", filter.node_id.as_ref().map(|id| id.as_str())),
-                ("kind", filter.kind.as_deref()),
+                ("thread_id", filter.thread_id.as_ref().map(|id| id.as_str())),
+                ("node_id", filter.node_id.as_ref().map(|id| id.as_str())),
+                ("kind_label", filter.kind.as_deref()),
             ] {
                 if let Some(value) = value {
                     query_filter = query_filter.and(Filter::eq(field, value));
@@ -304,12 +295,12 @@ impl crate::store::TaskStore for DriverTaskStore {
             }
             let rows = this
                 .docs
-                .query_all(&this.tasks, &Query::filter(query_filter))
+                .query_all(RECORDS, &Query::filter(query_filter))
                 .await
                 .map_err(map_error)?;
             let mut records = Vec::with_capacity(rows.len());
             for row in rows {
-                let record = decode(row.doc.get("record").cloned().unwrap_or(Value::Null))?;
+                let record = decode(row)?;
                 // The time window is the part the projections cannot answer.
                 if filter.matches(&record) {
                     records.push(record);
@@ -330,14 +321,12 @@ impl crate::store::TaskStore for DriverTaskStore {
             let rows = this
                 .docs
                 .query_all(
-                    &this.history,
-                    &Query::filter(Filter::eq("taskId", task_id)).sort(Sort::asc("rev")),
+                    HISTORY,
+                    &Query::filter(Filter::eq("task_id", task_id)).sort(Sort::asc("rev")),
                 )
                 .await
                 .map_err(map_error)?;
-            rows.into_iter()
-                .map(|row| decode(row.doc.get("record").cloned().unwrap_or(Value::Null)))
-                .collect()
+            rows.into_iter().map(decode).collect()
         })
         .inspect_err(|error| tracing::warn!("[orchestration] task history read failed: {error}"))
         .unwrap_or_default()
