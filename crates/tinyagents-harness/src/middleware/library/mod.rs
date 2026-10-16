@@ -114,7 +114,9 @@ pub use credential_scrub::{
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
-pub use failure_scope::{FailureAssessment, FailureScope, FailureScopeMiddleware, FailureScopePolicy};
+pub use failure_scope::{
+    FailureAssessment, FailureScope, FailureScopeMiddleware, FailureScopePolicy,
+};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,

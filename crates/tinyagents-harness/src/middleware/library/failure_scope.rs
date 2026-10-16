@@ -2,8 +2,8 @@
 //! sharing the harness's repeat and recoverable-failure accounting.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use tinyinference_llm::tool::ToolCall;
@@ -150,14 +150,22 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
     }
 
     fn run_state(&self, instance_id: u64) -> Arc<RunFailureState> {
-        let mut runs = self.runs.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut runs = self
+            .runs
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         Arc::clone(
             runs.entry(instance_id)
                 .or_insert_with(|| Arc::new(RunFailureState::new(self.identical_threshold))),
         )
     }
 
-    fn halt<C>(&self, ctx: &mut RunContext<C>, summary: String, cause: Option<crate::no_progress::ClassifiedStopCause>) {
+    fn halt<C>(
+        &self,
+        ctx: &mut RunContext<C>,
+        summary: String,
+        cause: Option<crate::no_progress::ClassifiedStopCause>,
+    ) {
         let first = {
             let mut slot = self
                 .halt_summary
@@ -197,12 +205,10 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {
-                if let Some(summary) = run.recoverable.record(
-                    self.policy.as_ref(),
-                    tool,
-                    &argument_key,
-                    &error,
-                ) {
+                if let Some(summary) =
+                    run.recoverable
+                        .record(self.policy.as_ref(), tool, &argument_key, &error)
+                {
                     self.halt(ctx, summary, None);
                     run.recoverable.reset_streak();
                 }
