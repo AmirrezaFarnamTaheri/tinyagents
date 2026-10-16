@@ -431,32 +431,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                 GateVerdict::Blocked(decision)
             }
             session_decision => {
-            let builder_decision = self.gate.check(ctx, &call, false).await;
-            match (builder_decision, session_decision) {
-                (decision @ PolicyDecision::Deny { .. }, _) => GateVerdict::Blocked(decision),
-                (PolicyDecision::RequireApproval { reason }, PolicyDecision::Allow) => {
-                    GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                let builder_decision = self.gate.check(ctx, &call, false).await;
+                match (builder_decision, session_decision) {
+                    (decision @ PolicyDecision::Deny { .. }, _) => GateVerdict::Blocked(decision),
+                    (PolicyDecision::RequireApproval { reason }, PolicyDecision::Allow) => {
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (PolicyDecision::Allow, PolicyDecision::RequireApproval { reason }) => {
+                        policy_name = self
+                            .session_ceiling
+                            .as_ref()
+                            .map(|session| session.name().to_owned())
+                            .unwrap_or_else(|| self.gate.policy_name().to_owned());
+                        GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
+                    }
+                    (
+                        PolicyDecision::RequireApproval { reason: builder },
+                        PolicyDecision::RequireApproval { reason: session },
+                    ) => GateVerdict::Blocked(PolicyDecision::RequireApproval {
+                        reason: format!("{builder}; {session}"),
+                    }),
+                    (PolicyDecision::Allow, PolicyDecision::Allow) => {
+                        GateVerdict::Proceed { ticket: None }
+                    }
+                    // A session denial was returned above.
+                    (_, PolicyDecision::Deny { .. }) => {
+                        unreachable!("session denial handled first")
+                    }
                 }
-                (PolicyDecision::Allow, PolicyDecision::RequireApproval { reason }) => {
-                    policy_name = self
-                        .session_ceiling
-                        .as_ref()
-                        .map(|session| session.name().to_owned())
-                        .unwrap_or_else(|| self.gate.policy_name().to_owned());
-                    GateVerdict::Blocked(PolicyDecision::RequireApproval { reason })
-                }
-                (
-                    PolicyDecision::RequireApproval { reason: builder },
-                    PolicyDecision::RequireApproval { reason: session },
-                ) => GateVerdict::Blocked(PolicyDecision::RequireApproval {
-                    reason: format!("{builder}; {session}"),
-                }),
-                (PolicyDecision::Allow, PolicyDecision::Allow) => {
-                    GateVerdict::Proceed { ticket: None }
-                }
-                // A session denial was returned above.
-                (_, PolicyDecision::Deny { .. }) => unreachable!("session denial handled first"),
-            }
             }
         };
         if let (GateVerdict::Blocked(PolicyDecision::RequireApproval { .. }), Some(resolver)) =
