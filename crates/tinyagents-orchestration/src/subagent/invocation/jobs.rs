@@ -1152,8 +1152,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .await?
                         .filter(|session| session.parent_session == key(parent.instance_id()))
                         .and_then(|session| {
-                            self.jobs
-                                .driver_job_for_key(&session.lifecycle_key, &owner)
+                            session
+                                .lifecycle_key
+                                .as_ref()
+                                .and_then(|key| self.jobs.driver_job_for_key(key, &owner))
                                 .map(|job_id| job_id.as_str().to_owned())
                                 .or_else(|| {
                                     let task_id = session.current_task_id?;
@@ -1439,8 +1441,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             let task_id = session
                 .current_task_id
                 .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?;
-            self.jobs
-                .driver_job_for_key(&session.lifecycle_key, &owner)
+            session
+                .lifecycle_key
+                .as_ref()
+                .and_then(|key| self.jobs.driver_job_for_key(key, &owner))
                 .map(|job_id| job_id.as_str().to_owned())
                 .or_else(|| {
                     self.jobs

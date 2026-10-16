@@ -41,7 +41,7 @@ fn lifecycle_key() -> SubagentTaskKey {
 fn upsert(force_fresh: bool, task_id: &str) -> SubagentSessionUpsert {
     SubagentSessionUpsert {
         selector: selector("analysis"),
-        lifecycle_key: lifecycle_key(),
+        lifecycle_key: Some(lifecycle_key()),
         display_name: Some("Researcher".into()),
         task_title: "Analyze the repository".into(),
         worker_thread_id: Some("worker-thread".into()),
