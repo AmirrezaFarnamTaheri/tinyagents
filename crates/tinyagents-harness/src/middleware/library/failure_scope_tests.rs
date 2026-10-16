@@ -277,7 +277,7 @@ async fn terminal_model_callback_halts_before_tool_accounting() {
     let summary = Arc::new(std::sync::Mutex::new(None));
     let middleware =
         FailureScopeMiddleware::new(handle.clone(), summary.clone(), Arc::new(ModelPolicy));
-    let mut ctx = context();
+    let mut ctx = context(41);
     let mut response = tinyinference_llm::model::ModelResponse::assistant("unavailable");
     middleware
         .after_model(&mut ctx, &(), &mut response)

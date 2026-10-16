@@ -474,7 +474,7 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
             .unwrap_or_else(|| {
                 (
                     ToolCall::new(
-                        invocation.call_id(),
+                        invocation.call_id().to_string(),
                         invocation.tool_name(),
                         serde_json::Value::Null,
                     ),
