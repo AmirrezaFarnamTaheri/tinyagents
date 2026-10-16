@@ -2,7 +2,9 @@ use super::*;
 use crate::context::{RunConfig, RunContext};
 use crate::middleware::Middleware;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock};
+use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
+use tinyinference_llm::usage::Usage;
 
 #[test]
 fn accepted_prefix_is_clamped_after_the_seeded_input() {
@@ -86,4 +88,74 @@ async fn snapshot_captures_arguments_success_and_final_tool_text() {
             .text()
             .contains("final answer")
     );
+}
+
+#[tokio::test]
+async fn snapshot_marks_dispatched_requests_and_excludes_cache_replay_from_spend() {
+    let sink = new_transcript_snapshot_sink();
+    let outcomes = crate::turn_outcome::new_tool_outcome_sink();
+    let middleware = TranscriptSnapshotMiddleware::new(Arc::clone(&sink))
+        .with_tool_outcome_sink(Arc::clone(&outcomes));
+    let mut ctx = RunContext::new(RunConfig::new("snapshot-rounds"), ());
+
+    let mut request = ModelRequest {
+        messages: vec![Message::user("seed"), Message::assistant("first turn")],
+        ..ModelRequest::default()
+    };
+    middleware
+        .before_model_dispatch(&mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    let mut first = ModelResponse::assistant("round one");
+    first.usage = Some(Usage {
+        input_tokens: 10,
+        output_tokens: 3,
+        cache_read_tokens: 2,
+        ..Usage::default()
+    });
+    middleware
+        .after_model(&mut ctx, &(), &mut first)
+        .await
+        .unwrap();
+
+    // The next provider request includes the completed response and is the
+    // boundary later associated with the tool result.
+    let mut second_request = ModelRequest {
+        messages: vec![
+            Message::user("seed"),
+            Message::assistant("first turn"),
+            Message::assistant("round one"),
+        ],
+        ..ModelRequest::default()
+    };
+    middleware
+        .before_model_dispatch(&mut ctx, &(), &mut second_request)
+        .await
+        .unwrap();
+    let mut replay = ModelResponse::assistant("round two");
+    replay.served_from_cache = true;
+    replay.usage = Some(Usage {
+        input_tokens: 10,
+        output_tokens: 4,
+        cache_read_tokens: 10,
+        ..Usage::default()
+    });
+    middleware
+        .after_model(&mut ctx, &(), &mut replay)
+        .await
+        .unwrap();
+
+    let snapshot = sink.lock().unwrap();
+    assert_eq!(snapshot.accepted_len, 3);
+    assert_eq!(snapshot.request_base_len, 0);
+    assert_eq!(snapshot.accepted_end(), 3);
+    assert_eq!(snapshot.model_calls, 2);
+    assert_eq!(snapshot.input_tokens, 10);
+    assert_eq!(snapshot.output_tokens, 3);
+    assert_eq!(snapshot.cached_input_tokens, 2);
+    assert_eq!(snapshot.last_call_input_tokens, 10);
+    assert_eq!(snapshot.last_call_output_tokens, 4);
+    assert_eq!(snapshot.messages.len(), 4);
+    drop(snapshot);
+    assert!(outcomes.lock().unwrap().is_empty());
 }

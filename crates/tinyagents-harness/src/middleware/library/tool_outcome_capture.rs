@@ -20,11 +20,7 @@ pub(super) struct ToolCallCapture {
 }
 
 impl ToolCallCapture {
-    pub(super) fn start<Ctx>(
-        &self,
-        ctx: &RunContext<Ctx>,
-        call: &ToolCall,
-    ) {
+    pub(super) fn start<Ctx>(&self, ctx: &RunContext<Ctx>, call: &ToolCall) {
         if let Ok(mut started) = self.started.lock() {
             started.insert(
                 (ctx.instance_id(), call.id.to_string()),
@@ -64,7 +60,7 @@ impl ToolCallCapture {
     }
 }
 
-/// Captures tool outcomes in the shared [`ToolOutcomeSink`]. Register it after
+/// Captures tool outcomes in the shared [`ToolOutcomeSink`]. Register it before
 /// middleware that changes model-visible result content so reverse-order
 /// `after_tool` execution records the final text.
 pub struct ToolOutcomeCaptureMiddleware {
@@ -83,9 +79,7 @@ impl ToolOutcomeCaptureMiddleware {
 }
 
 #[async_trait]
-impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx>
-    for ToolOutcomeCaptureMiddleware
-{
+impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for ToolOutcomeCaptureMiddleware {
     fn name(&self) -> &str {
         "tool_outcome_capture"
     }

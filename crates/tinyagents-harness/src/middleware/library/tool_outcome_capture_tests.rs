@@ -10,7 +10,10 @@ async fn outcome_capture_records_arguments_and_final_result_in_shared_sink() {
     let middleware = ToolOutcomeCaptureMiddleware::new(Arc::clone(&sink));
     let mut ctx = RunContext::new(RunConfig::new("outcome-test"), ());
     let mut call = ToolCall::new("call-1", "search", serde_json::json!({"q": "cats"}));
-    middleware.before_tool(&mut ctx, &(), &mut call).await.unwrap();
+    middleware
+        .before_tool(&mut ctx, &(), &mut call)
+        .await
+        .unwrap();
     let invocation = ToolInvocationIdentity::new("call-1", "search");
     let mut result = ToolResult::error("redacted by host policy");
     middleware
