@@ -224,7 +224,7 @@ pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
 pub struct DelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     config: Arc<dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync>,
@@ -234,7 +234,7 @@ where
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     /// Constructs the tool from a host config factory and stage worker.
@@ -254,7 +254,7 @@ impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx> for DelegationTool<State,
 where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
-    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     fn tool(&self) -> Arc<dyn Tool> {
@@ -278,7 +278,7 @@ where
         }
         let worker = Arc::clone(&self.worker);
         let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
-            worker(&args, stage, graph)
+            worker(args.clone(), stage, graph)
         })
         .await
         .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
