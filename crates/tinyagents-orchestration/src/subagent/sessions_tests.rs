@@ -260,13 +260,13 @@ async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
     let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread("thread"), ());
 
-    let request = SubagentRequest::continue_with_session_id(
-        &store,
-        &session.subagent_session_id,
+    let request = SubagentRequest::continue_with_key(
+        session.subagent_session_id.as_str(),
         fresh,
         (),
         "continue work",
         None,
+        Some(&store),
     )
     .await
     .unwrap();
@@ -274,6 +274,25 @@ async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
 
     assert_eq!(parts.task_key, lifecycle_key());
     assert_eq!(parts.input, "continue work");
+}
+
+#[tokio::test]
+async fn continuation_by_unknown_session_id_is_rejected() {
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread("thread"), ());
+
+    let error = SubagentRequest::continue_with_key(
+        "missing-session",
+        fresh,
+        (),
+        "continue work",
+        None,
+        Some(&store),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(error.to_string().contains("unknown subagent session"));
 }
 
 #[test]
