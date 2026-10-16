@@ -92,6 +92,7 @@ mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
 mod wind_down;
+mod workload;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -179,6 +180,9 @@ pub use verify_before_finish::{
     MIN_REMAINING_MODEL_CALLS, VerifyBeforeFinishMiddleware,
 };
 pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
+pub use workload::{
+    FallbackObserverMiddleware, RequiredCapabilitiesMiddleware, UsageCarryMiddleware,
+};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
