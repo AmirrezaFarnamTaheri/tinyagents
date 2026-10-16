@@ -3,10 +3,14 @@
 mod hooks;
 mod latch;
 mod budget;
+#[cfg(feature = "goals")]
+mod goal_budget;
 
 pub use hooks::{StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState};
 pub use latch::StopLatch;
 pub use budget::BudgetStopHook;
+#[cfg(feature = "goals")]
+pub use goal_budget::GoalBudgetStopHook;
 
 impl StopHookMetrics for tinyagents_harness::cost::TurnCost {
     fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {
