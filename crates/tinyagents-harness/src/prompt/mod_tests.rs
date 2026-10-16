@@ -40,6 +40,8 @@ fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
     assert_eq!(first.parts[0], second.parts[0]);
     assert_eq!(first.parts[1].1, "project A\n\n");
     assert_eq!(second.parts[1].1, "project B\n\n");
+    assert_eq!(first.parts[2].0, PromptTier::Volatile);
+    assert_ne!(first.parts[2].1, second.parts[2].1);
     assert!(first.breakpoints[0] < first.text.len());
 
     let mut request = PromptBuilder::new();
