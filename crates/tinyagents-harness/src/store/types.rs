@@ -165,6 +165,10 @@ impl<S: AppendStore + ?Sized> AppendStore for Arc<S> {
     async fn len(&self, stream: &str) -> Result<u64> {
         (**self).len(stream).await
     }
+
+    async fn seal(&self, stream: &str) -> Result<()> {
+        (**self).seal(stream).await
+    }
 }
 
 // ── StoreRecord ───────────────────────────────────────────────────────────────
