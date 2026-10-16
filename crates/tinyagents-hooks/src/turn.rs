@@ -8,6 +8,10 @@ use tinyagents_harness::host::{LearningSink, TurnSummary};
 /// Sink failures are advisory: they are logged and never change the already
 /// committed turn. The summary is cloned per sink so callbacks may run
 /// independently without sharing mutable data.
+///
+/// The generic hook crate does not provide a host dispatch context. Hosts
+/// needing one should bind it into their `LearningSink` adapter when they
+/// construct the sink; this function only schedules the harness contract.
 pub fn fire_learning_hooks(hooks: &[Arc<dyn LearningSink>], summary: TurnSummary) {
     for hook in hooks {
         let hook = Arc::clone(hook);
