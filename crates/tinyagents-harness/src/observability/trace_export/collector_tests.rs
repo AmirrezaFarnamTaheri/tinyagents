@@ -734,6 +734,16 @@ fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_spa
         "run-rollup",
         2,
         7,
+        AgentEvent::UsageRecorded {
+            usage: Usage { input_tokens: 10, output_tokens: 2, ..Default::default() },
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child-run",
+        Some("run-rollup"),
+        "run-rollup",
+        3,
+        8,
         AgentEvent::CostRecorded {
             cost: crate::cost::CostTotals {
                 total_cost: 0.25,
@@ -858,6 +868,16 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
             "parent",
             2,
             at + 1,
+            AgentEvent::UsageRecorded {
+                usage: Usage { input_tokens: 10, ..Default::default() },
+            },
+        ));
+        collector.record(&observation_in_run(
+            run,
+            Some("parent"),
+            "parent",
+            3,
+            at + 2,
             AgentEvent::CostRecorded {
                 cost: crate::cost::CostTotals {
                     total_cost: cost,
