@@ -57,6 +57,7 @@ fn render_tool_results_spends_the_budget_on_newest_results() {
     let rendered = render_tool_results(&results, 30);
     assert!(rendered.contains("new"));
     assert!(!rendered.contains("old output"));
+    assert!(rendered.chars().count() <= 30);
 }
 
 #[test]

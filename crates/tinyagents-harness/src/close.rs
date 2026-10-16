@@ -86,6 +86,12 @@ pub fn render_tool_results(results: &[CloseToolResult], total_budget: usize) -> 
         if remaining == 0 {
             break;
         }
+        if !rendered.is_empty() {
+            if remaining <= 1 {
+                break;
+            }
+            remaining -= 1;
+        }
         let status = if result.success { "ok" } else { "failed" };
         let prefix = format!("- `{}` ({status}): ", result.name);
         if prefix.chars().count() >= remaining {
@@ -93,13 +99,18 @@ pub fn render_tool_results(results: &[CloseToolResult], total_budget: usize) -> 
             break;
         }
         remaining -= prefix.chars().count();
-        let content: String = result.content.trim().chars().take(remaining).collect();
-        remaining -= content.chars().count();
-        let truncated = content.chars().count() < result.content.trim().chars().count();
-        rendered.push(format!(
-            "{prefix}{content}{}",
-            if truncated { "…" } else { "" }
-        ));
+        let source = result.content.trim();
+        let source_chars = source.chars().count();
+        let truncated = source_chars > remaining;
+        let content_limit = if truncated {
+            remaining.saturating_sub(1)
+        } else {
+            remaining
+        };
+        let content: String = source.chars().take(content_limit).collect();
+        let suffix = if truncated { "…" } else { "" };
+        remaining = remaining.saturating_sub(content.chars().count() + suffix.len());
+        rendered.push(format!("{prefix}{content}{suffix}"));
     }
     rendered.reverse();
     rendered.join("\n")
