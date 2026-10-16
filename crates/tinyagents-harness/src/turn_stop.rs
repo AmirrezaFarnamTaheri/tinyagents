@@ -11,9 +11,8 @@
 //!
 //! [`TurnStop`] carries that fact from where it is decided to the progress
 //! events, the trace collector and the parent tool result. It is
-//! content-free by construction: the failure class and operation are read
-//! from the breaker's fixed note template and reduced to identifier
-//! characters, never the quoted tool output or target.
+//! content-free by construction: a typed breaker cause carries only stable
+//! class and operation identifiers, never the quoted tool output or target.
 
 /// Which mechanism stopped the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

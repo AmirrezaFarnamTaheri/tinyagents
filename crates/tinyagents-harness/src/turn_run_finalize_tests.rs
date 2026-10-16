@@ -7,6 +7,7 @@ fn inputs() -> TurnEndInputs<'static> {
         pause_at_cap: true,
         early_exit: false,
         breaker_halt: None,
+        failure_cause: None,
         wrap_up_injected: false,
     }
 }
