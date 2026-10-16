@@ -485,7 +485,6 @@ where
             } {
                 Some(guard) => Some(guard),
                 None => {
-                    self.clear_tracking(&request).await;
                     self.events
                         .terminal(
                             &request,
@@ -506,13 +505,11 @@ where
         let session = match checkout {
             Ok(session) => session,
             Err(error) => {
-                self.clear_tracking(&request).await;
                 return self.fail(&request, error).await;
             }
         };
         if let Err(error) = self.host.validate_fingerprint(&request, &session).await {
             self.host.checkin(&request).await;
-            self.clear_tracking(&request).await;
             return self.fail(&request, error).await;
         }
         let origin = self.host.run_origin(&request);
