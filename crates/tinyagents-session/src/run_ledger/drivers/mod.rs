@@ -314,10 +314,13 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<WorkflowLeaseClaim> {
-        self.claim_workflow_at(id, owner, lease_for, Utc::now())
+        self.claim_workflow_at(id, owner, lease_for, now())
             .await
     }
 
+    /// The lease is checked first and renewed (or ended, for a terminal status)
+    /// after the revision-fenced record write; the two are separate documents,
+    /// so a lease that lapses in between does not undo the write.
     async fn compare_and_swap_workflow_run(
         &self,
         upsert: WorkflowRunUpsert,
@@ -325,28 +328,46 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<Option<WorkflowRun>> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, None));
-            };
-            if row.revision != expected_revision
-                || row.lease_owner.as_deref() != Some(owner)
-                || row.lease_expires_at.is_none_or(|expires| expires <= now)
+        let now = now();
+        let leases = self.leases_at(now);
+        let lease_key = workflow_lease_key(&upsert.id)?;
+        let Some(held) = leases
+            .current(LEDGER_OWNER, &lease_key)
+            .await?
+            .filter(|lease| lease.holder == owner)
+        else {
+            return Ok(None);
+        };
+        let written = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                if row.revision != expected_revision {
+                    return Ok((None, None));
+                }
+                apply_workflow(&mut row, &upsert, now)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        let Some(mut row) = written else {
+            return Ok(None);
+        };
+        if row.status.is_terminal() {
+            leases
+                .release(LEDGER_OWNER, &lease_key, owner, held.epoch)
+                .await?;
+        } else {
+            let ttl_ms = lease_for.num_milliseconds().max(1);
+            if let Some(lease) = leases
+                .renew(LEDGER_OWNER, &lease_key, owner, held.epoch, ttl_ms)
+                .await?
             {
-                return Ok((None, None));
+                row.lease_owner = Some(lease.holder);
+                row.lease_expires_at = Some(dto::from_ms(lease.expires_ms)?);
             }
-            apply_workflow(&mut row, &upsert, now)?;
-            if row.status.is_terminal() {
-                row.lease_owner = None;
-                row.lease_expires_at = None;
-            } else {
-                row.lease_expires_at = Some(now + lease_for);
-            }
-            Ok((Some(row.clone()), Some(row)))
-        })
-        .await
-        .map_err(Into::into)
+        }
+        Ok(Some(row))
     }
 
     async fn renew_workflow_run_lease(
@@ -355,8 +376,7 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<bool> {
-        self.renew_workflow_at(id, owner, lease_for, Utc::now())
-            .await
+        self.renew_workflow_at(id, owner, lease_for, now()).await
     }
 
     async fn compare_and_swap_workflow_run_lifecycle(
@@ -364,21 +384,23 @@ impl RunLedgerStore for DriverRunLedger {
         upsert: WorkflowRunUpsert,
         expected_revision: u64,
     ) -> Result<Option<WorkflowRun>> {
-        let now = Utc::now();
-        self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let Some(mut row) = previous else {
-                return Ok((None, None));
-            };
-            if row.revision != expected_revision {
-                return Ok((None, None));
-            }
-            apply_workflow(&mut row, &upsert, now)?;
-            row.lease_owner = None;
-            row.lease_expires_at = None;
-            Ok((Some(row.clone()), Some(row)))
-        })
-        .await
-        .map_err(Into::into)
+        let now = now();
+        let written = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let Some(mut row) = previous else {
+                    return Ok((None, None));
+                };
+                if row.revision != expected_revision {
+                    return Ok((None, None));
+                }
+                apply_workflow(&mut row, &upsert, now)?;
+                Ok((Some(row.clone()), Some(row)))
+            })
+            .await?;
+        if let Some(row) = &written {
+            self.release_workflow_lease(&row.id, now).await?;
+        }
+        Ok(written)
     }
 
     /// Implement [`RunLedgerStore::append_run_event`] without a weaker fallback.
@@ -388,7 +410,7 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::upsert_run_telemetry`] without a weaker fallback.
     async fn upsert_run_telemetry(&self, upsert: RunTelemetryUpsert) -> Result<RunTelemetry> {
-        let now = Utc::now();
+        let now = now();
         self.merge(
             TELEMETRY,
             &upsert.run_id,
@@ -480,10 +502,10 @@ impl RunLedgerStore for DriverRunLedger {
 
     /// Implement [`RunLedgerStore::get_workflow_run`] without a weaker fallback.
     async fn get_workflow_run(&self, id: &str) -> Result<Option<WorkflowRun>> {
-        Ok(self
-            .read::<WorkflowRun>(WORKFLOWS, id)
-            .await?
-            .map(|row| row.doc))
+        let Some(found) = self.read::<WorkflowRun>(WORKFLOWS, id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.with_lease(found.doc, now()).await?))
     }
 
     /// Implement [`RunLedgerStore::list_workflow_runs`] without a weaker fallback.
@@ -493,13 +515,13 @@ impl RunLedgerStore for DriverRunLedger {
     ) -> Result<WorkflowRunListResponse> {
         let filter = eq_nonblank(
             Filter::default(),
-            "record.definitionId",
+            "definition_id",
             request.definition_id.as_deref(),
         );
-        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(filter, "status", request.status.as_deref());
         let filter = eq_nonblank(
             filter,
-            "record.parentThreadId",
+            "parent_thread_id",
             request.parent_thread_id.as_deref(),
         );
         let (runs, count) = self
@@ -510,11 +532,16 @@ impl RunLedgerStore for DriverRunLedger {
                 request.offset.unwrap_or(0),
             )
             .await?;
-        Ok(WorkflowRunListResponse { runs, count })
+        let at = now();
+        let mut leased = Vec::with_capacity(runs.len());
+        for run in runs {
+            leased.push(self.with_lease(run, at).await?);
+        }
+        Ok(WorkflowRunListResponse { runs: leased, count })
     }
 
     async fn upsert_agent_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(TEAMS, &upsert.id, |previous: Option<AgentTeam>| AgentTeam {
                 id: upsert.id.clone(),
@@ -551,10 +578,10 @@ impl RunLedgerStore for DriverRunLedger {
     ) -> Result<AgentTeamListResponse> {
         let filter = eq_nonblank(
             Filter::default(),
-            "record.parentThreadId",
+            "parent_thread_id",
             request.parent_thread_id.as_deref(),
         );
-        let filter = eq_nonblank(filter, "record.status", request.status.as_deref());
+        let filter = eq_nonblank(filter, "status", request.status.as_deref());
         let (teams, count) = self
             .page(
                 TEAMS,
@@ -570,7 +597,7 @@ impl RunLedgerStore for DriverRunLedger {
         &self,
         upsert: AgentTeamMemberUpsert,
     ) -> Result<AgentTeamMember> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(MEMBERS, &upsert.id, |previous: Option<AgentTeamMember>| {
                 AgentTeamMember {
@@ -617,13 +644,13 @@ impl RunLedgerStore for DriverRunLedger {
         Ok(self
             .records(
                 MEMBERS,
-                Query::filter(Filter::eq("record.teamId", team_id)).sort(Sort::asc("createdSql")),
+                Query::filter(Filter::eq("team_id", team_id)).sort(Sort::asc("created_ms")),
             )
             .await?)
     }
 
     async fn upsert_agent_team_task(&self, upsert: AgentTeamTaskUpsert) -> Result<AgentTeamTask> {
-        let now = Utc::now();
+        let now = now();
         Ok(self
             .merge(TASKS, &upsert.id, |previous: Option<AgentTeamTask>| {
                 let live = previous
@@ -681,9 +708,9 @@ impl RunLedgerStore for DriverRunLedger {
         Ok(self
             .records(
                 TASKS,
-                Query::filter(Filter::eq("record.teamId", team_id))
-                    .sort(Sort::asc("record.orderIndex"))
-                    .sort(Sort::asc("createdSql")),
+                Query::filter(Filter::eq("team_id", team_id))
+                    .sort(Sort::asc("order_index"))
+                    .sort(Sort::asc("created_ms")),
             )
             .await?)
     }
@@ -730,7 +757,7 @@ impl RunLedgerStore for DriverRunLedger {
         worker_thread_id: &str,
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        let now = Utc::now();
+        let now = now();
         self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
             let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
                 return Ok((None, None));
@@ -751,7 +778,7 @@ impl RunLedgerStore for DriverRunLedger {
         team_id: &str,
         member_id: &str,
     ) -> Result<Option<AgentTeamMember>> {
-        let now = Utc::now();
+        let now = now();
         self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
             let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
                 return Ok((None, None));
@@ -766,7 +793,7 @@ impl RunLedgerStore for DriverRunLedger {
     }
 
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
-        let now = Utc::now();
+        let now = now();
         self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
             let Some(mut row) = previous.filter(|row| {
                 row.team_id == team_id && row.status == AgentTeamTaskStatus::InProgress
