@@ -24,8 +24,13 @@ pub struct FileSubagentPersistence {
 
 #[derive(Serialize, Deserialize)]
 struct TerminalRecord {
-    key: SubagentTaskKey,
+    #[serde(default)]
+    key: Option<SubagentTaskKey>,
     outcome: SubagentOutcome,
+    #[serde(default)]
+    agent_id: String,
+    #[serde(default)]
+    elapsed_ms: u64,
 }
 
 #[derive(Deserialize)]
@@ -148,8 +153,10 @@ impl FileSubagentPersistence {
         Ok(Some(match record {
             CompatibleTerminalRecord::Current(record) => record,
             CompatibleTerminalRecord::Legacy(outcome) => TerminalRecord {
-                key: key.clone(),
+                key: Some(key.clone()),
                 outcome,
+                agent_id: String::new(),
+                elapsed_ms: 0,
             },
         }))
     }
@@ -305,7 +312,12 @@ impl SubagentPersistence for FileSubagentPersistence {
         if !expected_matches {
             return Ok(SubagentTerminalPersistenceDisposition::PauseExisting);
         }
-        let record = TerminalRecord { key: key.clone(), outcome: outcome.clone() };
+        let record = TerminalRecord {
+            key: Some(key.clone()),
+            outcome: outcome.clone(),
+            agent_id: String::new(),
+            elapsed_ms: 0,
+        };
         let inserted = self.insert_file(
             &self.terminal_path(key)?,
             serde_json::to_vec(&record).map_err(persistence_error)?,
