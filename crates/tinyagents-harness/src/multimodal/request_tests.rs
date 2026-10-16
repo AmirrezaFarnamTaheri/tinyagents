@@ -140,6 +140,26 @@ impl MediaImageReadout<String> for Readout {
     }
 }
 
+struct SafeHistory;
+
+impl MediaHistoryFallback<String> for SafeHistory {
+    fn omitted(&self, _scope: &String, _modality: InputModality, _source: &str) -> String {
+        "[Earlier attachment omitted by history budget]".into()
+    }
+
+    fn unavailable(
+        &self,
+        _scope: &String,
+        _modality: InputModality,
+        _source: &str,
+        error: &str,
+    ) -> Option<String> {
+        error
+            .contains("missing test source")
+            .then(|| "[Earlier attachment unavailable at workspace path: safe-hint]".into())
+    }
+}
+
 fn attachment(name: &str, mime: &str, bytes: &[u8]) -> ResolvedAttachment {
     ResolvedAttachment {
         bytes: bytes.to_vec(),
@@ -206,7 +226,7 @@ async fn hard_zero_also_blocks_media_only_present_in_history() {
         },
         ..MediaRequestConfig::default()
     };
-    let wrapped = wrapper(model, disabled, resolver.clone(), Arc::default());
+    let wrapped = wrapper(model.clone(), disabled, resolver.clone(), Arc::default());
     let mut request = request("latest text only");
     request.messages.insert(
         0,
@@ -379,6 +399,129 @@ async fn concurrent_calls_keep_their_immutable_scope_separate() {
     let mut scopes = resolver.scopes.lock().unwrap().clone();
     scopes.sort();
     assert_eq!(scopes, vec!["scope-a", "scope-b"]);
+}
+
+#[tokio::test]
+async fn request_metadata_scope_is_consumed_per_concurrent_call() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    sources.insert("image".into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
+    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let wrapped = MediaRequestModel::new(
+        model.clone(),
+        MediaRequestConfig::default(),
+        |_state: &String, request: &mut ModelRequest| {
+            request
+                .metadata
+                .as_object_mut()
+                .and_then(|metadata| metadata.remove("trusted_scope"))
+                .and_then(|scope| scope.as_str().map(str::to_string))
+                .ok_or_else(|| "missing trusted test scope".to_string())
+        },
+        resolver.clone(),
+        Arc::default(),
+    );
+    let operator = "same-operator".to_string();
+    let mut first = request("[IMAGE:image]");
+    first.metadata = serde_json::json!({"trusted_scope":"workspace-a"});
+    let mut second = request("[IMAGE:image]");
+    second.metadata = serde_json::json!({"trusted_scope":"workspace-b"});
+
+    let (a, b) = tokio::join!(wrapped.invoke(&operator, first), wrapped.invoke(&operator, second));
+
+    a.unwrap();
+    b.unwrap();
+    let mut scopes = resolver.scopes.lock().unwrap().clone();
+    scopes.sort();
+    assert_eq!(scopes, vec!["workspace-a", "workspace-b"]);
+    for request in model.requests.lock().unwrap().iter() {
+        assert!(request.metadata.get("trusted_scope").is_none());
+    }
+}
+
+#[tokio::test]
+async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    for source in ["oldest", "newest"] {
+        sources.insert(source.into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
+    }
+    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let config = MediaRequestConfig {
+        max_historical_media_blocks: 1,
+        ..MediaRequestConfig::default()
+    };
+    let wrapped = wrapper(model.clone(), config, resolver.clone(), Arc::default());
+    let mut request = ModelRequest::default();
+    request.messages = vec![
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: "oldest".into(),
+                mime_type: Some("image/png".into()),
+            })],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: "newest".into(),
+                mime_type: Some("image/png".into()),
+            })],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("latest".into())],
+        }),
+    ];
+
+    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
+
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resolver.scopes.lock().unwrap().len(), 1);
+    let calls = model.requests.lock().unwrap();
+    assert!(matches!(
+        &calls[0].messages[0],
+        Message::User(user) if matches!(&user.content[0], ContentBlock::Text(text) if text.contains("omitted by history budget"))
+    ));
+    assert!(matches!(
+        &calls[0].messages[1],
+        Message::User(user) if matches!(&user.content[0], ContentBlock::Image(_))
+    ));
+}
+
+#[tokio::test]
+async fn missing_history_media_degrades_safely_but_missing_latest_media_fails() {
+    let model = Arc::new(CaptureModel::new(true));
+    let resolver = Arc::new(Resolver::default());
+    let wrapped = wrapper(model.clone(), MediaRequestConfig::default(), resolver, Arc::default())
+        .with_history_fallback(Arc::new(SafeHistory));
+    let mut history = ModelRequest::default();
+    history.messages = vec![
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: "/private-value/also-private".into(),
+                mime_type: Some("image/png".into()),
+            })],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("latest text".into())],
+        }),
+    ];
+
+    wrapped.invoke(&"tenant-a".into(), history).await.unwrap();
+    let calls = model.requests.lock().unwrap();
+    let Message::User(old_user) = &calls[0].messages[0] else {
+        panic!("historical message retained")
+    };
+    let ContentBlock::Text(placeholder) = &old_user.content[0] else {
+        panic!("missing historical media becomes text")
+    };
+    assert!(placeholder.contains("safe-hint"));
+    assert!(!placeholder.contains("private-value"));
+    drop(calls);
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), request("[IMAGE:latest-missing]"))
+        .await
+        .expect_err("latest attachment failures remain fatal");
+    assert!(error.to_string().contains("missing test source latest-missing"));
 }
 
 #[tokio::test]
