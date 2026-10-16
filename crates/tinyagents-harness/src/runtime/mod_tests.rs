@@ -84,6 +84,22 @@ struct SecretAfterModelMiddleware;
 
 struct FallbackGuidance;
 
+struct CarryCountOnUsageEvent {
+    carried: Arc<AtomicUsize>,
+    observed: Arc<Mutex<Vec<usize>>>,
+}
+
+impl crate::events::EventListener for CarryCountOnUsageEvent {
+    fn on_event(&self, record: &crate::events::EventRecord) {
+        if matches!(&record.event, crate::events::AgentEvent::UsageRecorded { .. }) {
+            self.observed
+                .lock()
+                .expect("usage ordering lock")
+                .push(self.carried.load(Ordering::SeqCst));
+        }
+    }
+}
+
 #[async_trait]
 impl Middleware<()> for FallbackGuidance {
     fn name(&self) -> &str {
@@ -1114,6 +1130,11 @@ async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_tur
         );
         let recorder = Arc::new(RecordingListener::new());
         context.events.subscribe(recorder.clone());
+        let carry_order = Arc::new(Mutex::new(Vec::new()));
+        context.events.subscribe(Arc::new(CarryCountOnUsageEvent {
+            carried: Arc::clone(&carried),
+            observed: Arc::clone(&carry_order),
+        }));
         let invocation = AgentInvocation::new(
             host,
             AgentTurnRequest::new(
@@ -1135,6 +1156,11 @@ async fn workload_observers_carry_one_usage_record_on_buffered_and_streaming_tur
         }
         let events = recorder.events();
         assert_eq!(carried.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *carry_order.lock().expect("usage ordering lock"),
+            vec![1],
+            "the host usage carry must run before the corresponding UsageRecorded event"
+        );
         assert_eq!(
             events
                 .iter()
