@@ -580,7 +580,11 @@ async fn bounded_await_returns_still_running_without_cancelling_and_observes_ter
         &parent,
     );
     tokio::pin!(waiting);
-    tokio::task::yield_now().await;
+    tokio::select! {
+        biased;
+        result = &mut waiting => panic!("job unexpectedly completed before timeout: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
     let still_running = waiting.await.expect("timeout is a normal job snapshot");
     let value: Value = serde_json::from_str(&still_running.output()).unwrap();
@@ -601,7 +605,11 @@ async fn bounded_await_returns_still_running_without_cancelling_and_observes_ter
         &parent,
     );
     tokio::pin!(terminal_wait);
-    tokio::task::yield_now().await;
+    tokio::select! {
+        biased;
+        result = &mut terminal_wait => panic!("job unexpectedly completed before timeout: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
     jobs.mark_aborted(&terminal_id, true);
     let terminal = terminal_wait

@@ -192,6 +192,8 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) result_policy: crate::subagent::ResultPolicy,
     /// Optional host-planned invocation installed by `with_driver`.
     pub(crate) driver_dispatch: Option<Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>>,
+    /// Optional shared job/control registry bridged by driver-backed aliases.
+    pub(crate) job_registry: Option<SubAgentJobRegistry>,
 }
 
 /// Stable identifier returned immediately when a subagent job is spawned.
@@ -310,6 +312,8 @@ pub struct SubAgentJobRegistry {
     /// Status senders and cancel flags. Also the transition gate: every
     /// mutation holds this lock, so a settle and a cancel never interleave.
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
+    /// Scoped bridge from driver task identity to the public job control id.
+    pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -323,6 +327,7 @@ impl Default for SubAgentJobRegistry {
             }),
             steering,
             controls: Arc::default(),
+            driver_jobs: Arc::default(),
         }
     }
 }
@@ -351,6 +356,12 @@ pub enum SubAgentJobError {
     /// A lane-aware message was requested for a job without a message queue.
     #[error("subagent job `{0}` has no lane-aware message queue")]
     LaneUnavailable(String),
+    /// A job with this public id is already registered.
+    #[error("subagent job `{0}` is already registered")]
+    AlreadyExists(String),
+    /// The underlying detached task registry rejected a driver bridge.
+    #[error("subagent job registry failed: {0}")]
+    Registry(String),
     /// Messages and cancellation only apply while a job is queued or running.
     #[error("subagent job `{job_id}` is already {status:?}")]
     Terminal {

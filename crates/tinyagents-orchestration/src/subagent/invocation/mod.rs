@@ -667,6 +667,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
             driver_dispatch: None,
+            job_registry: None,
         }
     }
 
@@ -700,7 +701,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     where
         H: Send + Sync + 'static,
     {
-        let dispatch = DriverSubAgentTool::new(
+        let mut dispatch = DriverSubAgentTool::new(
             self.tool_name.clone(),
             self.tool_description.clone(),
             driver,
@@ -708,6 +709,9 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             delivery_target,
         )
         .with_parameters(self.parameters.clone());
+        if let Some(jobs) = &self.job_registry {
+            dispatch = dispatch.with_job_registry(jobs.clone());
+        }
         self.driver_dispatch = Some(Arc::new(dispatch));
         self
     }
@@ -741,7 +745,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     where
         H: Send + Sync + 'static,
     {
-        let dispatch = DriverSubAgentTool::new(
+        let mut dispatch = DriverSubAgentTool::new(
             self.tool_name.clone(),
             self.tool_description.clone(),
             driver,
@@ -750,6 +754,9 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         )
         .with_parameters(self.parameters.clone())
         .with_completion_handler(completion);
+        if let Some(jobs) = &self.job_registry {
+            dispatch = dispatch.with_job_registry(jobs.clone());
+        }
         self.driver_dispatch = Some(Arc::new(dispatch));
         self
     }
@@ -834,7 +841,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
 
     /// Uses a host-shared registry for spawned jobs and control tools.
     pub fn with_job_registry(mut self, jobs: SubAgentJobRegistry) -> Self {
-        self.jobs = jobs;
+        self.jobs = jobs.clone();
+        self.job_registry = Some(jobs);
         self
     }
 

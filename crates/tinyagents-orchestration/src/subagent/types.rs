@@ -240,6 +240,20 @@ impl<C, H> SubagentRequest<C, H> {
         &self.run_context
     }
 
+    /// Attaches the live control channels registered for this lifecycle.
+    /// Hosts normally construct a child context without these channels; the
+    /// driver-backed tool uses this after admission so its generic job and
+    /// message tools control the exact request being executed.
+    pub fn with_job_controls(
+        mut self,
+        steering: tinyagents_harness::steering::SteeringHandle,
+        run_queue: tinyagents_harness::run_queue::RunQueueHandle,
+    ) -> Self {
+        self.run_context.steering = Some(steering);
+        self.run_context.run_queue = Some(run_queue);
+        self
+    }
+
     pub(crate) fn resume(&self) -> Option<&SubagentResume> {
         self.resume.as_ref()
     }
