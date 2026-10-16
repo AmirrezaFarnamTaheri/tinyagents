@@ -57,23 +57,6 @@ pub use status::{
 };
 pub use types::*;
 
-/// The stored form of the v1 journal entry `entry` of `run`'s stream, for the
-/// storage step; an entry that is not an observation of `run` is returned as is.
-pub(crate) fn journal_entry_from_v1(run: &str, entry: serde_json::Value) -> serde_json::Value {
-    let Ok(obs) = serde_json::from_value::<AgentObservation>(entry.clone()) else {
-        tracing::warn!(
-            run,
-            "[journal] v1 entry is not an observation; copied as is"
-        );
-        return entry;
-    };
-    if obs.run_id.as_str() != run {
-        tracing::warn!(run, "[journal] v1 entry names another run; copied as is");
-        return entry;
-    }
-    serde_json::to_value(JournalEntry::from_observation(&obs)).unwrap_or(entry)
-}
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -85,6 +68,7 @@ use crate::events::{AgentEvent, EventListener, EventRecord, HarnessRunStatus};
 use crate::ids::{CallId, RunId};
 use crate::store::AppendStore;
 use journal_entry::JournalEntry;
+pub(crate) use journal_entry::journal_entry_from_v1;
 
 // ---------------------------------------------------------------------------
 // AgentLatencyMetrics

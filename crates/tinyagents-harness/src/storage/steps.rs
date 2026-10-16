@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use tinystoragedrivers_core::{Key, Result, SourceRecord, Step, TargetRecord};
 
 use super::{ATTACHMENT_STASH, EMBEDDING_CACHE, JOURNAL, RUN_STATUS, SCHEMA_VERSION};
-use crate::observability::{self, status_record};
+use crate::observability::{journal_entry_from_v1, status_record};
 
 /// The blob prefixes that move under `harness/`: `(v1 prefix, v2 prefix)`.
 pub(super) const BLOB_PREFIXES: [(&str, &str); 5] = [
@@ -130,7 +130,7 @@ pub(super) fn run_journal() -> Step {
             };
             let entries = entries
                 .into_iter()
-                .map(|entry| observability::journal_entry_from_v1(run, entry))
+                .map(|entry| journal_entry_from_v1(run, entry))
                 .collect();
             Ok(Some((format!("{JOURNAL}/{run}"), entries)))
         },
