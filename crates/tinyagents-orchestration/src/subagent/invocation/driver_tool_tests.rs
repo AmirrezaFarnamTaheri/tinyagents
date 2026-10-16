@@ -295,7 +295,7 @@ async fn background_request_without_delivery_target_runs_inline() {
         "worker",
         "worker description",
         driver(),
-        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("worker-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -857,7 +857,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     .with_parameters(schema)
     .with_driver(
         driver,
-        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
