@@ -457,7 +457,7 @@ async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch(
         })
         .unwrap();
     let result_text = serde_json::to_string(&tool_result.content).unwrap();
-    assert!(result_text.contains("deny") || result_text.contains("refus"), "{result_text}");
+    assert!(result_text.contains("not permitted"), "{result_text}");
 }
 
 struct RecordingParentDispatch {
