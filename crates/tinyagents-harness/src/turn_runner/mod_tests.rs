@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct Host {
-    queued: Mutex<Vec<QueueDisposition>>,
     started: Option<Arc<tokio::sync::Notify>>,
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
@@ -16,6 +15,13 @@ impl TurnHost for Host {
         Ok(TurnSession {
             session_id: request.thread_id.clone(),
             fingerprint: Some("stable".into()),
+        })
+    }
+
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: format!("fork:{}", request.thread_id),
+            fingerprint: Some("fork".into()),
         })
     }
 
@@ -62,10 +68,6 @@ impl TurnHost for Host {
     }
     async fn cancel_children(&self, _request: &TurnRequest) {}
 
-    async fn queue(&self, _request: &TurnRequest, mode: QueueDisposition) -> Result<bool, String> {
-        self.queued.lock().unwrap().push(mode);
-        Ok(true)
-    }
 }
 
 #[derive(Default)]
@@ -151,6 +153,7 @@ fn request(disposition: QueueDisposition, host_authored: bool) -> TurnRequest {
         thread_id: "thread-a".into(),
         request_id: "request-a".into(),
         text: "hello".into(),
+        payload: serde_json::json!({"attachment": "file-token"}),
         host_authored,
         disposition,
         deadline: None,
@@ -160,7 +163,13 @@ fn request(disposition: QueueDisposition, host_authored: bool) -> TurnRequest {
 
 #[tokio::test]
 async fn ingress_stages_run_in_order_before_queue_acceptance() {
-    let host = Arc::new(Host::default());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
     let ingress = Arc::new(Ingress::default());
     let runner = runner(
         host.clone(),
@@ -169,10 +178,18 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
         Arc::new(Events::default()),
     );
 
-    assert!(matches!(
-        runner.run(request(QueueDisposition::Steer, false)).await,
-        Err(TurnRunnerError::Queued)
-    ));
+    let primary = {
+        let runner = &runner;
+        tokio::spawn(async move { runner.run(request(QueueDisposition::Interrupt, false)).await })
+    };
+    started.notified().await;
+    let mut steered = request(QueueDisposition::Steer, false);
+    steered.request_id = "steered".into();
+    assert!(matches!(runner.run(steered).await, Err(TurnRunnerError::Queued)));
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+    assert_eq!(runner.queue_status(&scope, "thread-a").await.steers, 1);
+    release.notify_one();
+    primary.await.unwrap().unwrap();
     assert_eq!(
         *ingress.0.lock().unwrap(),
         [
@@ -182,7 +199,6 @@ async fn ingress_stages_run_in_order_before_queue_acceptance() {
             IngressStage::BeforeSubmit,
         ]
     );
-    assert_eq!(*host.queued.lock().unwrap(), [QueueDisposition::Steer]);
 }
 
 #[tokio::test]
@@ -217,7 +233,6 @@ async fn host_authored_turn_never_enters_inflight_while_running() {
     let release = Arc::new(tokio::sync::Notify::new());
     let runner = Arc::new(runner(
         Arc::new(Host {
-            queued: Mutex::default(),
             started: Some(started.clone()),
             release: Some(release.clone()),
             ..Host::default()
@@ -246,7 +261,6 @@ async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
     let release = Arc::new(tokio::sync::Notify::new());
     let runner = Arc::new(runner(
         Arc::new(Host {
-            queued: Mutex::default(),
             started: Some(started.clone()),
             release: Some(release.clone()),
             ..Host::default()
@@ -305,34 +319,6 @@ async fn checked_out_session_is_checked_in_when_fingerprint_validation_fails() {
 }
 
 #[tokio::test]
-async fn every_queued_mode_is_delegated_to_the_host_after_ingress() {
-    let host = Arc::new(Host::default());
-    let runner = runner(
-        host.clone(),
-        Arc::new(Ingress::default()),
-        Arc::new(Replies::default()),
-        Arc::new(Events::default()),
-    );
-    for mode in [
-        QueueDisposition::Steer,
-        QueueDisposition::Followup,
-        QueueDisposition::Collect,
-    ] {
-        assert!(matches!(
-            runner.run(request(mode, false)).await,
-            Err(TurnRunnerError::Queued)
-        ));
-    }
-    assert_eq!(
-        *host.queued.lock().unwrap(),
-        [
-            QueueDisposition::Steer,
-            QueueDisposition::Followup,
-            QueueDisposition::Collect,
-        ]
-    );
-}
-
 struct QuietWorkHost {
     started: Arc<tokio::sync::Notify>,
     finish: Arc<tokio::sync::Notify>,
@@ -345,6 +331,9 @@ impl TurnHost for QuietWorkHost {
             session_id: request.thread_id.clone(),
             fingerprint: None,
         })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
     }
     fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
         serde_json::Value::Null
