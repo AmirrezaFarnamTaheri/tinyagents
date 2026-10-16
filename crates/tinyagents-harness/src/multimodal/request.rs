@@ -220,19 +220,9 @@ where
                 }
                 let recovery = historical.then(|| media_source_hint(&block)).flatten();
                 match block {
-                    ContentBlock::Text(text) => match self.prepare_text(&scope, &text).await {
-                        Ok(blocks) => prepared.extend(blocks),
-                        Err(error) => {
-                            if let Some((modality, source)) = recovery.as_ref()
-                                && let Some(placeholder) =
-                                    self.recover_history(&scope, *modality, source, &error)
-                            {
-                                prepared.push(ContentBlock::Text(placeholder));
-                            } else {
-                                return Err(error);
-                            }
-                        }
-                    },
+                    ContentBlock::Text(text) => {
+                        prepared.extend(self.prepare_text(&scope, &text, historical).await?);
+                    }
                     block @ (ContentBlock::Image(_)
                     | ContentBlock::Audio(_)
                     | ContentBlock::Video(_)
@@ -263,6 +253,7 @@ where
         &self,
         scope: &Scope,
         text: &str,
+        historical: bool,
     ) -> tinyinference_llm::Result<Vec<ContentBlock>> {
         let (without_images, images) = parse_image_markers(text);
         let (clean_text, files) = parse_file_markers(&without_images);
@@ -273,7 +264,7 @@ where
         let mut native_images = Vec::new();
         let mut image_fallback = Vec::new();
         for source in images {
-            let attachment = self
+            let attachment = match self
                 .resolve(
                     scope,
                     InputModality::Image,
@@ -281,7 +272,23 @@ where
                     self.config.images.max_image_bytes(),
                     false,
                 )
-                .await?;
+                .await
+            {
+                Ok(attachment) => attachment,
+                Err(error) if historical => {
+                    if let Some(placeholder) = self.recover_history(
+                        scope,
+                        InputModality::Image,
+                        &source,
+                        &error,
+                    ) {
+                        image_fallback.push(placeholder);
+                        continue;
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
             if self.native(InputModality::Image, &attachment.mime) {
                 let mime = validated_image_mime(&attachment)?;
                 native_images.push(ContentBlock::Image(ImageRef {
@@ -296,7 +303,7 @@ where
         let mut file_payloads = Vec::new();
         let mut file_fallback_text = Vec::new();
         for source in files {
-            let attachment = self
+            let attachment = match self
                 .resolve(
                     scope,
                     InputModality::Document,
@@ -304,7 +311,23 @@ where
                     self.config.files.max_file_bytes(),
                     true,
                 )
-                .await?;
+                .await
+            {
+                Ok(attachment) => attachment,
+                Err(error) if historical => {
+                    if let Some(placeholder) = self.recover_history(
+                        scope,
+                        InputModality::Document,
+                        &source,
+                        &error,
+                    ) {
+                        file_fallback_text.push(placeholder);
+                        continue;
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
             if self.native(InputModality::Document, &attachment.mime) {
                 native_images.push(ContentBlock::Document(MediaRef::base64(
                     STANDARD.encode(&attachment.bytes),
