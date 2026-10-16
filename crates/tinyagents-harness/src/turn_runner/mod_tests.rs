@@ -112,13 +112,21 @@ impl ReplyStore for Replies {
 }
 
 #[derive(Default)]
-struct Events(Mutex<Vec<TerminalEvent>>);
+struct Events {
+    terminal: Mutex<Vec<TerminalEvent>>,
+    collected: Mutex<Vec<Vec<String>>>,
+}
 
 #[async_trait::async_trait]
 impl EventSink for Events {
     async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
     async fn terminal(&self, _request: &TurnRequest, event: TerminalEvent) {
-        self.0.lock().unwrap().push(event);
+        self.terminal.lock().unwrap().push(event);
+    }
+    async fn collected(&self, _request: &TurnRequest, items: Vec<TurnRequest>) {
+        self.collected.lock().unwrap().push(
+            items.into_iter().map(|item| item.request_id).collect(),
+        );
     }
 }
 
@@ -315,7 +323,7 @@ async fn host_authored_turn_persists_reply_without_an_inflight_slot() {
     assert_eq!(result.reply, "done");
     assert!(!runner.is_in_flight(&scope, &thread).await);
     assert_eq!(replies.0.lock().unwrap().len(), 1);
-    assert_eq!(events.0.lock().unwrap().len(), 1);
+    assert_eq!(events.terminal.lock().unwrap().len(), 1);
     assert_eq!(
         replies.0.lock().unwrap()[0],
         deterministic_reply_id(&scope, &thread, &request.request_id)
