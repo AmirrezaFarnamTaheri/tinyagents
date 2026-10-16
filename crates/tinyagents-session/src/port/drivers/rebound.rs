@@ -13,14 +13,14 @@ use serde_json::Value;
 use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_core::{StorageBackend, StorageError};
 
-use super::{AgentStores, SessionStoreProvider, TurnStates};
+use super::{AgentStores, SessionStoreProvider};
 use crate::DriverSessionStores;
-use crate::port::TurnState;
-use crate::port::types::TurnLifecycle;
+use crate::port::{TurnState, TurnStates};
 use crate::transcript::{
     SessionAdoption, SessionRef, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
     TranscriptMeta, TranscriptPartial, TranscriptRead,
 };
+use crate::turn_state::TurnLifecycle;
 
 /// Scopes live provider handles so one test or runtime can rebind its own
 /// stores without moving unrelated providers.
