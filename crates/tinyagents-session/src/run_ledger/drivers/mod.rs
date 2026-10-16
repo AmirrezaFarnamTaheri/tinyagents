@@ -5,6 +5,8 @@
 //! individual writes or switch to a local SQLite database.
 
 mod agents;
+mod dto;
+mod dto_history;
 mod effects;
 mod entry_tree;
 mod events;
@@ -14,7 +16,11 @@ mod history_retention;
 mod import;
 #[cfg(feature = "legacy-import")]
 mod legacy_import;
+mod legacy_state;
 mod retention;
+mod schema;
+mod steps;
+mod steps_history;
 mod storage;
 mod team;
 #[cfg(feature = "legacy-import")]
@@ -25,8 +31,15 @@ pub use import::AgentImportReport;
 pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
 
 use std::sync::Arc;
-use storage::{MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank};
-use tinystoragedrivers_core::{Filter, Query, Scope, ScopedStorage, Sort, StorageError};
+pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
+pub use schema::{history_storage_schema, ledger_storage_schema};
+use storage::{
+    LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now,
+    workflow_lease_key,
+};
+use tinystoragedrivers_core::{
+    Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError,
+};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
