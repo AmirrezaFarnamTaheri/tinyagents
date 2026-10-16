@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Value, json};
 
 use crate::events::AgentEvent;
+use crate::ids::{CallId, RunId};
 use crate::observability::AgentObservation;
 
 use super::serialize::{
@@ -42,6 +43,7 @@ pub struct SpanCollector {
     spans: Vec<TraceSpan>,
     root: Option<usize>,
     open_models: HashMap<String, CallStart>,
+    generation_by_call: HashMap<String, usize>,
     open_tools: HashMap<String, usize>,
     open_subagents: HashMap<String, usize>,
     run_roots: HashMap<String, usize>,
@@ -66,6 +68,7 @@ impl SpanCollector {
             spans: Vec::new(),
             root: None,
             open_models: HashMap::new(),
+            generation_by_call: HashMap::new(),
             open_tools: HashMap::new(),
             open_subagents: HashMap::new(),
             run_roots: HashMap::new(),
@@ -122,13 +125,19 @@ impl SpanCollector {
     }
 
     /// Folds a live event using the caller's observation timestamp.
+    ///
+    /// Without an observation identity this is a root-run convenience; child
+    /// events should be passed through [`Self::record`] so lineage and scoped
+    /// call IDs are preserved.
     pub fn record_event(&mut self, event: &AgentEvent, timestamp_ms: u64) {
         if self.finished {
             return;
         }
         self.last_activity_ms = self.last_activity_ms.max(timestamp_ms);
         match event {
-            AgentEvent::RunStarted { .. } => {
+            AgentEvent::RunStarted { run_id, .. } => {
+                self.current_run_id.get_or_insert_with(|| run_id.as_str().to_owned());
+                self.root_run_id.get_or_insert_with(|| run_id.as_str().to_owned());
                 self.ensure_run_root(timestamp_ms);
             }
             AgentEvent::ModelStarted { call_id, model } => {
@@ -142,6 +151,8 @@ impl SpanCollector {
                     timestamp_ms,
                     attrs,
                 );
+                self.generation_by_call
+                    .insert(self.scoped_id(call_id.as_str()), index);
                 if let Some(previous) = self.open_models.insert(
                     self.scoped_id(call_id.as_str()),
                     CallStart {
@@ -546,6 +557,27 @@ impl SpanCollector {
             }
             _ => {}
         }
+    }
+
+    /// Adds host-owned provider, pricing, or other per-call metadata to the
+    /// generation identified by its native run and call IDs.
+    ///
+    /// This intentionally does not infer values from the model name. It lets a
+    /// host enrich a generation after the native observations have been folded
+    /// without implementing a second event state machine. Returns `false` if
+    /// the collector has not seen that generation.
+    pub fn enrich_generation(
+        &mut self,
+        run_id: &RunId,
+        call_id: &CallId,
+        attributes: impl IntoIterator<Item = (String, Value)>,
+    ) -> bool {
+        let key = format!("{}\0{}", run_id.as_str(), call_id.as_str());
+        let Some(index) = self.generation_by_call.get(&key).copied() else {
+            return false;
+        };
+        self.spans[index].attributes.extend(attributes);
+        true
     }
 
     /// Closes open spans deterministically. Missing terminal events are marked
