@@ -33,6 +33,100 @@ use tokio::sync::broadcast;
 use crate::Result;
 use tinyinference_llm::model::ModelResponse;
 
+/// A typed in-flight registry for callers that need to choose their own
+/// follower policy. Entries are shared across clones of this registry.
+///
+/// Unlike [`SingleFlight`], this primitive does not decide whether followers
+/// retry on an error; it publishes the leader's complete typed result.
+#[derive(Clone)]
+pub struct SharedFlightMap<K, V, E> {
+    entries: Arc<Mutex<HashMap<K, Arc<SharedFlightEntry<V, E>>>>>,
+}
+
+impl<K, V, E> Default for SharedFlightMap<K, V, E> {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+/// A claim on one typed in-flight entry.
+#[derive(Clone)]
+pub struct SharedFlightEntry<V, E> {
+    state: Arc<SharedFlightState<V, E>>,
+}
+
+struct SharedFlightState<V, E> {
+    result: Mutex<Option<Result<V, E>>>,
+    notify: tokio::sync::Notify,
+}
+
+impl<K, V, E> SharedFlightMap<K, V, E>
+where
+    K: Eq + std::hash::Hash,
+{
+    /// Claims leadership for `key`, or returns the current shared entry.
+    pub fn claim(&self, key: K) -> (SharedFlightEntry<V, E>, bool) {
+        let mut entries = self.entries.lock().expect("shared-flight map poisoned");
+        match entries.get(&key) {
+            Some(entry) => (entry.clone(), false),
+            None => {
+                let entry = SharedFlightEntry {
+                    state: Arc::new(SharedFlightState {
+                        result: Mutex::new(None),
+                        notify: tokio::sync::Notify::new(),
+                    }),
+                };
+                entries.insert(key, entry.clone());
+                (entry, true)
+            }
+        }
+    }
+
+    /// Removes `key` only if it still points at `entry`.
+    pub fn retire(&self, key: &K, entry: &SharedFlightEntry<V, E>) {
+        let mut entries = self.entries.lock().expect("shared-flight map poisoned");
+        if entries
+            .get(key)
+            .is_some_and(|current| Arc::ptr_eq(&current.state, &entry.state))
+        {
+            entries.remove(key);
+        }
+    }
+}
+
+impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
+    /// Waits for the leader to publish its complete result.
+    pub async fn wait(&self) -> Result<V, E> {
+        loop {
+            let notified = self.state.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(result) = self
+                .state
+                .result
+                .lock()
+                .expect("shared-flight result poisoned")
+                .clone()
+            {
+                return result;
+            }
+            notified.await;
+        }
+    }
+
+    /// Publishes a result to all current and future waiters on this entry.
+    pub fn complete(&self, result: Result<V, E>) {
+        *self
+            .state
+            .result
+            .lock()
+            .expect("shared-flight result poisoned") = Some(result);
+        self.state.notify.notify_waiters();
+    }
+}
+
 /// What a leader broadcasts to its followers when it finishes.
 #[derive(Clone, Debug)]
 enum Outcome {
@@ -169,3 +263,7 @@ impl SingleFlight {
         result.map(|response| (response, false))
     }
 }
+
+#[cfg(test)]
+#[path = "singleflight_tests.rs"]
+mod shared_tests;
