@@ -64,7 +64,7 @@ fn class_without_instruction_stays_within_budget() {
 #[test]
 fn uncertain_side_effect_halt_carries_the_reconcile_suffix() {
     let t = ClassifiedFailureTracker::default();
-    match classified_step(
+    match classified_step_with_cause(
         &t,
         "uncertain_side_effect",
         "gmail_send",
@@ -72,7 +72,7 @@ fn uncertain_side_effect_halt_carries_the_reconcile_suffix() {
         0,
         "timeout",
     ) {
-        ClassifiedStep::Halt(s) => {
+        ClassifiedStepWithCause::Halt(s) => {
             assert_eq!(s.class, "uncertain_side_effect");
             assert_eq!(s.operation, "gmail_send");
             assert!(s.summary.ends_with(UNCERTAIN_SIDE_EFFECT_HALT_SUFFIX));
