@@ -156,7 +156,7 @@ fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client
     assert_eq!(reason_of(&client_error), FailoverReason::Format);
     assert_eq!(
         reason_of(&TinyAgentsError::Model("upstream returned 503".into())),
-        FailoverReason::Overloaded
+        FailoverReason::Transport
     );
     let unrelated = TinyAgentsError::Model("reconnection is disabled".into());
     assert_eq!(reason_of(&unrelated), FailoverReason::Transport);
