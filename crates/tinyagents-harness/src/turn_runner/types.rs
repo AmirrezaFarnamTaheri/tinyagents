@@ -128,6 +128,7 @@ pub trait TurnHost<P = serde_json::Value>: Send + Sync {
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<TurnRequest<P>>>,
         progress: mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String>;
     /// Release the session after the run, including on cancellation or failure.
@@ -158,6 +159,7 @@ pub trait EventSink<P = serde_json::Value>: Send + Sync {
     async fn progress(&self, request: &TurnRequest<P>, event: AgentProgress);
     async fn terminal(&self, request: &TurnRequest<P>, event: TerminalEvent);
     async fn suggestions(&self, _request: &TurnRequest<P>, _suggestions: Vec<String>) {}
+    async fn collected(&self, _request: &TurnRequest<P>, _items: Vec<TurnRequest<P>>) {}
 }
 
 pub trait FailureClassifier: Send + Sync {
@@ -277,25 +279,39 @@ where
 
     /// Cancel only the active generation named by `request_id`; a stale cancel
     /// cannot target a newer turn that reused the same thread.
-    pub async fn cancel(&self, scope: &ScopeKey, thread_id: &str, request_id: &str) -> bool {
+    pub async fn cancel(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        request_id: Option<&str>,
+    ) -> bool {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
-        if let Some(turn) = active
-            .get(&key)
-            .filter(|turn| turn.request_id == request_id)
-        {
+        if let Some(turn) = active.get(&key).filter(|turn| {
+            request_id.is_none_or(|id| turn.request_id == id)
+        }) {
             turn.cancel.cancel();
+            drop(active);
+            self.clear_queue(scope, thread_id).await;
             true
         } else {
             drop(active);
-            self.parallel_active
-                .lock()
-                .await
-                .get(&(scope.clone(), thread_id.to_owned(), request_id.to_owned()))
-                .is_some_and(|token| {
-                    token.cancel();
-                    true
+            let mut parallel = self.parallel_active.lock().await;
+            let keys: Vec<_> = parallel
+                .keys()
+                .filter(|(owner, thread, req)| {
+                    owner == scope
+                        && thread == thread_id
+                        && request_id.is_none_or(|id| req == id)
                 })
+                .cloned()
+                .collect();
+            for key in &keys {
+                if let Some(token) = parallel.remove(key) {
+                    token.cancel();
+                }
+            }
+            !keys.is_empty()
         }
     }
 
@@ -307,7 +323,25 @@ where
             .contains_key(&(scope.clone(), thread_id.to_owned()))
     }
 
-    pub async fn run(&self, mut request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
+    pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
+        let result = self.run_one(request.clone()).await;
+        if result.is_ok() && request.disposition != QueueDisposition::Parallel {
+            let followups = self
+                .take_queued(
+                    &request.scope,
+                    &request.thread_id,
+                    QueueLane::Followup,
+                    QueueMode::All,
+                )
+                .await;
+            for followup in followups {
+                let _ = self.run(followup).await;
+            }
+        }
+        result
+    }
+
+    async fn run_one(&self, mut request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
             IngressStage::Guardrail,
@@ -358,8 +392,10 @@ where
             if let Some(previous) = previous {
                 previous.cancel.cancel();
                 self.host.cancel_children(&previous.request).await;
+                self.clear_queue(&request.scope, &request.thread_id).await;
             }
         }
+        let run_queue = self.queue_for(key.clone()).await;
         let lock = {
             let mut locks = self.locks.lock().await;
             locks.retain(|_, lock| lock.strong_count() > 0);
@@ -414,7 +450,13 @@ where
         let origin = self.host.run_origin(&request);
 
         let result = self
-            .run_guarded(&request, &session, &origin, cancellation.clone())
+            .run_guarded(
+                &request,
+                &session,
+                &origin,
+                cancellation.clone(),
+                Arc::clone(&run_queue),
+            )
             .await;
         self.host.checkin(&request).await;
         if !request.host_authored {
@@ -430,6 +472,8 @@ where
                 }
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
+                let collected = run_queue.take(QueueLane::Collect, QueueMode::All).await;
+                self.events.collected(&request, collected).await;
                 self.events
                     .terminal(
                         &request,
@@ -529,11 +573,20 @@ where
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<TurnRequest<P>>>,
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
+        let task_cancellation = crate::CancellationToken::new();
         let run = self
             .host
-            .run(request, session, origin, cancellation.clone(), progress_tx);
+            .run(
+                request,
+                session,
+                origin,
+                task_cancellation.clone(),
+                queue,
+                progress_tx,
+            );
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
         let deadline = request.deadline.or(self.config.deadline);
         let started = Instant::now();
@@ -547,6 +600,7 @@ where
             tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => {
+                    task_cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return Err("turn cancelled".into());
                 }
@@ -568,12 +622,12 @@ where
                 },
                 result = &mut run => return result,
                 _ = tokio::time::sleep(idle_left), if work_in_flight == 0 => {
-                    cancellation.cancel();
+                    task_cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "idle timeout").await;
                 }
                 _ = async { if let Some(left) = deadline_left { tokio::time::sleep(left).await } else { std::future::pending().await } }, if deadline_left.is_some() => {
-                    cancellation.cancel();
+                    task_cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "wall-clock deadline").await;
                 }
