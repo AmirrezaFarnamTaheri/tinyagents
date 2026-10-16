@@ -115,7 +115,10 @@ async fn run_status_moves_to_a_bare_snake_case_document_under_its_run_id() {
     assert_eq!(row.doc["updated_ms"], 1_700_000_010_000_u64);
     assert!(row.doc.get("record").is_none());
     assert!(row.doc.get("runId").is_none());
-    assert_eq!(row.meta.created_ms, 1_700_000_000_000, "history keeps its time");
+    assert_eq!(
+        row.meta.created_ms, 1_700_000_000_000,
+        "history keeps its time"
+    );
     assert_eq!(row.meta.schema, 2);
     let count = storage
         .documents()
@@ -144,7 +147,10 @@ async fn embedding_vectors_move_to_a_key_of_signature_and_hex() {
     migrate(&storage).await;
     let row = storage
         .documents()
-        .get("harness.embedding_cache", "provider=bag;dims=3/00000000000000ab")
+        .get(
+            "harness.embedding_cache",
+            "provider=bag;dims=3/00000000000000ab",
+        )
         .await
         .unwrap()
         .expect("Key::of([sig, key])");
@@ -202,7 +208,11 @@ async fn blobs_move_under_harness_with_their_bytes_and_content_type() {
         ("harness/workspace/notes.md", b"n"),
         ("harness/generated_media/clip.png", b"img"),
     ] {
-        let blob = blobs.get(key).await.unwrap().unwrap_or_else(|| panic!("{key}"));
+        let blob = blobs
+            .get(key)
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("{key}"));
         assert_eq!(blob.bytes, bytes, "{key}");
         assert_eq!(blob.meta.content_type.as_deref(), Some("application/test"));
     }

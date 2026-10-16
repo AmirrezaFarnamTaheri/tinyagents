@@ -81,10 +81,12 @@ pub fn artifact_read_target(
 /// recognised too, so a transcript written before the move keeps paging.
 fn is_artifact_key(path: &str) -> bool {
     let path = path.trim_start_matches("./");
-    std::iter::once(&ARTIFACT_ROOT).chain(&LEGACY_ARTIFACT_ROOTS).any(|root| {
-        path.strip_prefix(root)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
+    std::iter::once(&ARTIFACT_ROOT)
+        .chain(&LEGACY_ARTIFACT_ROOTS)
+        .any(|root| {
+            path.strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 fn read_target_matching(
@@ -860,7 +862,10 @@ fn canonical_key(key: &str) -> anyhow::Result<String> {
                 .strip_prefix(root)
                 .filter(|rest| rest.starts_with('/'))
         })
-        .map_or_else(|| trimmed.to_owned(), |rest| format!("{ARTIFACT_ROOT}{rest}"));
+        .map_or_else(
+            || trimmed.to_owned(),
+            |rest| format!("{ARTIFACT_ROOT}{rest}"),
+        );
     let under_namespace = canonical
         .strip_prefix(ARTIFACT_ROOT)
         .is_some_and(|rest| rest.starts_with('/'));

@@ -34,8 +34,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, Repo, WriteOptions};
 use tinyinference_llm::model::ModelResponse;
+use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, Repo, WriteOptions};
 use tokio::sync::OnceCell;
 
 use super::types::{CacheStats, ResponseCache};
@@ -132,12 +132,7 @@ impl DriverResponseCache {
 impl ResponseCache for DriverResponseCache {
     async fn get(&self, key: &str) -> Result<Option<ModelResponse>> {
         self.declared().await?;
-        let Some(found) = self
-            .docs
-            .get(KV, &self.id(key)?)
-            .await
-            .map_err(map_error)?
-        else {
+        let Some(found) = self.docs.get(KV, &self.id(key)?).await.map_err(map_error)? else {
             self.counters.misses.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         };
@@ -171,8 +166,9 @@ impl ResponseCache for DriverResponseCache {
             &self.owner,
             &self.kv_ns(),
             key,
-            serde_json::to_value(&value)
-                .map_err(|e| TinyAgentsError::Storage(format!("encode response cache entry: {e}")))?,
+            serde_json::to_value(&value).map_err(|e| {
+                TinyAgentsError::Storage(format!("encode response cache entry: {e}"))
+            })?,
         );
         Repo::<KvEntry>::new(&self.docs, KV)
             .map_err(map_error)?
@@ -186,8 +182,8 @@ impl ResponseCache for DriverResponseCache {
 
     async fn clear(&self) -> Result<()> {
         self.declared().await?;
-        let filter = Filter::eq("owner", self.owner.as_str())
-            .and(Filter::eq("ns", self.kv_ns().as_str()));
+        let filter =
+            Filter::eq("owner", self.owner.as_str()).and(Filter::eq("ns", self.kv_ns().as_str()));
         let dropped = self
             .docs
             .delete_where(KV, &filter)

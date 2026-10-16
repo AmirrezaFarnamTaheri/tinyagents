@@ -125,5 +125,8 @@ pub(crate) fn from_v1(body: &Value) -> Option<(String, Value)> {
         .ok()?
         .as_str()
         .to_owned();
-    Some((id, serde_json::to_value(RunStatusRecord::from(&status)).ok()?))
+    Some((
+        id,
+        serde_json::to_value(RunStatusRecord::from(&status)).ok()?,
+    ))
 }

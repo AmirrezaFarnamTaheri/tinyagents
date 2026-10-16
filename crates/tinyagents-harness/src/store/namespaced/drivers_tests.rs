@@ -256,7 +256,12 @@ async fn items_are_tsd_kv_documents_with_times_in_metadata() {
     let documents = docs(&storage, "local");
     let store = DriverNamespacedStore::new(Arc::clone(&documents));
     store
-        .put_with_ttl(&ns(&["users", "alice"]), "likes", json!({"food": "tea"}), Some(60.0))
+        .put_with_ttl(
+            &ns(&["users", "alice"]),
+            "likes",
+            json!({"food": "tea"}),
+            Some(60.0),
+        )
         .await
         .unwrap();
 
@@ -321,7 +326,10 @@ async fn expired_items_read_as_absent_and_a_sweep_is_harmless() {
         .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))
         .await
         .unwrap();
-    store.put_with_ttl(&n, "keep", json!(2), None).await.unwrap();
+    store
+        .put_with_ttl(&n, "keep", json!(2), None)
+        .await
+        .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     assert!(store.get(&n, "gone").await.unwrap().is_none());
     store.sweep_expired().await.unwrap();

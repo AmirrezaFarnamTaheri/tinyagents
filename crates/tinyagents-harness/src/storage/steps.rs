@@ -17,12 +17,7 @@ pub(super) const BLOB_PREFIXES: [(&str, &str); 5] = [
 ];
 
 /// A target record that keeps the source's first-write time when it had one.
-fn target(
-    collection: &str,
-    id: String,
-    body: Value,
-    source: &SourceRecord,
-) -> TargetRecord {
+fn target(collection: &str, id: String, body: Value, source: &SourceRecord) -> TargetRecord {
     let record = TargetRecord::new(collection, id, body);
     if source.meta.created_ms > 0 {
         record.created_ms(source.meta.created_ms)
@@ -49,48 +44,66 @@ pub(super) fn run_status() -> Step {
 /// `harness_embedding_cache` -> `harness.embedding_cache`: the body is already
 /// `{sig, key, vector}`; the id becomes `Key::of([sig, key])`.
 pub(super) fn embedding_cache() -> Step {
-    Step::new("embedding_cache_v2", EMBEDDING_CACHE, 1, SCHEMA_VERSION, |batch| {
-        Ok(batch
-            .iter()
-            .filter_map(|source| {
-                let sig = source.body.get("sig")?.as_str()?;
-                let key = source.body.get("key")?.as_str()?;
-                let id = Key::of([sig, key]).ok()?.as_str().to_owned();
-                Some(target(EMBEDDING_CACHE, id, source.body.clone(), source))
-            })
-            .collect())
-    })
+    Step::new(
+        "embedding_cache_v2",
+        EMBEDDING_CACHE,
+        1,
+        SCHEMA_VERSION,
+        |batch| {
+            Ok(batch
+                .iter()
+                .filter_map(|source| {
+                    let sig = source.body.get("sig")?.as_str()?;
+                    let key = source.body.get("key")?.as_str()?;
+                    let id = Key::of([sig, key]).ok()?.as_str().to_owned();
+                    Some(target(EMBEDDING_CACHE, id, source.body.clone(), source))
+                })
+                .collect())
+        },
+    )
     .source("harness_embedding_cache")
 }
 
 /// `attachment_stash_index` -> `harness.attachment_stash`: `touchedAtMs` becomes
 /// `touched_ms` and `key` the blob's new `harness/attachments/<id>` key.
 pub(super) fn attachment_stash() -> Step {
-    Step::new("attachment_stash_v2", ATTACHMENT_STASH, 1, SCHEMA_VERSION, |batch| {
-        Ok(batch
-            .iter()
-            .filter_map(|source| {
-                let body = &source.body;
-                let id = body.get("id")?.as_str()?;
-                let record = json!({
-                    "id": id,
-                    "key": format!("harness/attachments/{id}"),
-                    "mime": body.get("mime")?.as_str()?,
-                    "len": body.get("len")?.as_u64()?,
-                    "touched_ms": body.get("touchedAtMs")?.as_u64()?,
-                });
-                Some(target(ATTACHMENT_STASH, source.id.clone(), record, source))
-            })
-            .collect::<Vec<_>>())
-    })
+    Step::new(
+        "attachment_stash_v2",
+        ATTACHMENT_STASH,
+        1,
+        SCHEMA_VERSION,
+        |batch| {
+            Ok(batch
+                .iter()
+                .filter_map(|source| {
+                    let body = &source.body;
+                    let id = body.get("id")?.as_str()?;
+                    let record = json!({
+                        "id": id,
+                        "key": format!("harness/attachments/{id}"),
+                        "mime": body.get("mime")?.as_str()?,
+                        "len": body.get("len")?.as_u64()?,
+                        "touched_ms": body.get("touchedAtMs")?.as_u64()?,
+                    });
+                    Some(target(ATTACHMENT_STASH, source.id.clone(), record, source))
+                })
+                .collect::<Vec<_>>())
+        },
+    )
     .source("attachment_stash_index")
 }
 
 /// Move the blobs under the v1 prefix `from` to the v2 prefix `to`, unchanged.
 pub(super) fn blobs(id: &'static str, from: &'static str, to: &'static str) -> Step {
-    Step::blobs(id, to, 1, SCHEMA_VERSION, move |key, content_type, bytes| {
-        let rest = key.strip_prefix(from).unwrap_or(&key).to_owned();
-        Result::Ok(Some((format!("{to}{rest}"), content_type, bytes)))
-    })
+    Step::blobs(
+        id,
+        to,
+        1,
+        SCHEMA_VERSION,
+        move |key, content_type, bytes| {
+            let rest = key.strip_prefix(from).unwrap_or(&key).to_owned();
+            Result::Ok(Some((format!("{to}{rest}"), content_type, bytes)))
+        },
+    )
     .source_prefix(from)
 }

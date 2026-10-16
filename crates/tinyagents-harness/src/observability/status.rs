@@ -140,16 +140,18 @@ impl DriverStatusStore {
             .map_err(map_error)?;
         Ok(rows
             .into_iter()
-            .filter_map(|row| match serde_json::from_value::<RunStatusRecord>(row.doc) {
-                Ok(record) => Some(HarnessRunStatus::from(record)),
-                Err(err) => {
-                    tracing::debug!(
-                        "[journal] skipping undecodable run status id={} err={err}",
-                        row.id
-                    );
-                    None
-                }
-            })
+            .filter_map(
+                |row| match serde_json::from_value::<RunStatusRecord>(row.doc) {
+                    Ok(record) => Some(HarnessRunStatus::from(record)),
+                    Err(err) => {
+                        tracing::debug!(
+                            "[journal] skipping undecodable run status id={} err={err}",
+                            row.id
+                        );
+                        None
+                    }
+                },
+            )
             .collect())
     }
 }

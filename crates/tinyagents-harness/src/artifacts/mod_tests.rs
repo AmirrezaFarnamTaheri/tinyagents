@@ -487,13 +487,25 @@ async fn read_accepts_the_pre_v2_directory_names() {
         .write(ArtifactKind::Scratch, "b.md", "scratch")
         .await
         .expect("write scratch");
-    assert_eq!(offload.read("outputs/a.md").await.unwrap().as_deref(), Some("out"));
-    assert_eq!(offload.read("workspace/b.md").await.unwrap().as_deref(), Some("scratch"));
+    assert_eq!(
+        offload.read("outputs/a.md").await.unwrap().as_deref(),
+        Some("out")
+    );
+    assert_eq!(
+        offload.read("workspace/b.md").await.unwrap().as_deref(),
+        Some("scratch")
+    );
 }
 
 #[tokio::test]
 async fn read_returns_none_for_a_missing_artifact() {
-    assert_eq!(offload().read("harness/outputs/nope.md").await.expect("read"), None);
+    assert_eq!(
+        offload()
+            .read("harness/outputs/nope.md")
+            .await
+            .expect("read"),
+        None
+    );
 }
 
 #[tokio::test]

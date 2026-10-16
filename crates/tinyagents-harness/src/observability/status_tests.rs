@@ -312,7 +312,10 @@ async fn a_run_is_a_bare_snake_case_document_keyed_by_its_run_id() {
     // The wire type still serialises whole seconds, as before.
     let back = store.get_status("run.fixture").await.unwrap().unwrap();
     assert_eq!(back.started_at, status.started_at);
-    assert_eq!(serde_json::to_value(&back).unwrap()["started_at"], 1_700_000_000_u64);
+    assert_eq!(
+        serde_json::to_value(&back).unwrap()["started_at"],
+        1_700_000_000_u64
+    );
     assert_eq!(back.status, ExecutionStatus::Running);
 }
 
@@ -320,7 +323,11 @@ async fn a_run_is_a_bare_snake_case_document_keyed_by_its_run_id() {
 fn the_declared_collection_indexes_the_three_projections() {
     let spec = DriverStatusStore::collection_spec();
     assert_eq!(spec.name, "harness.run_status");
-    let names: Vec<_> = spec.indexes.iter().map(|index| index.name.as_str()).collect();
+    let names: Vec<_> = spec
+        .indexes
+        .iter()
+        .map(|index| index.name.as_str())
+        .collect();
     assert_eq!(names, ["by_root", "by_thread", "by_active"]);
     assert_eq!(spec.indexes[0].fields, ["root_run_id"]);
 }

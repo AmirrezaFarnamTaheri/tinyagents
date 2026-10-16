@@ -1,6 +1,6 @@
 use super::*;
-use std::time::Duration;
 use crate::store::Store as _;
+use std::time::Duration;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
@@ -173,7 +173,9 @@ async fn clear_drops_only_its_own_namespace_of_the_shared_collection() {
     let storage = MemoryStorage::new();
     let documents = docs(&storage, "local");
     let flat = crate::store::DriverStore::new(Arc::clone(&documents));
-    flat.put("default", "k", serde_json::json!("flat")).await.unwrap();
+    flat.put("default", "k", serde_json::json!("flat"))
+        .await
+        .unwrap();
     let cache = DriverResponseCache::new(Arc::clone(&documents));
     cache.put("k", ModelResponse::assistant("c")).await.unwrap();
     cache.clear().await.unwrap();

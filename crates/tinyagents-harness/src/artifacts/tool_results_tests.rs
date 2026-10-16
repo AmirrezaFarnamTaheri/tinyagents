@@ -48,11 +48,9 @@ async fn threshold_persists_redacted_preview_and_file() {
 
     assert!(outcome.persisted);
     assert!(out.contains("artifact_path: harness/tool_results/session_one/shell/call-1.txt"));
-    assert!(
-        out.contains(
-            "read_with: file_read {\"path\":\"harness/tool_results/session_one/shell/call-1.txt\"}"
-        )
-    );
+    assert!(out.contains(
+        "read_with: file_read {\"path\":\"harness/tool_results/session_one/shell/call-1.txt\"}"
+    ));
     assert!(out.contains("original_bytes:"));
     assert!(out.contains("[preview]"));
     assert!(out.contains("Credential/PII redaction was applied"));
@@ -588,7 +586,10 @@ async fn in_memory_stores_do_not_share_artifacts() {
             .unwrap()
             .is_some()
     );
-    assert_eq!(b.read("harness/tool_results/s/shell/c.txt").await.unwrap(), None);
+    assert_eq!(
+        b.read("harness/tool_results/s/shell/c.txt").await.unwrap(),
+        None
+    );
 }
 
 /// The pointer is a blob key on a host-supplied store, not a filesystem path.
@@ -702,7 +703,9 @@ async fn purge_session_removes_only_this_sessions_artifacts() {
 
     assert_eq!(old.purge_session().await.unwrap(), 2);
     assert_eq!(
-        old.read("harness/tool_results/old/shell/a.txt").await.unwrap(),
+        old.read("harness/tool_results/old/shell/a.txt")
+            .await
+            .unwrap(),
         None
     );
     assert!(
@@ -711,7 +714,13 @@ async fn purge_session_removes_only_this_sessions_artifacts() {
             .unwrap()
             .is_some()
     );
-    assert!(blobs.head("harness/outputs/keep.md").await.unwrap().is_some());
+    assert!(
+        blobs
+            .head("harness/outputs/keep.md")
+            .await
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(old.purge_session().await.unwrap(), 0, "idempotent");
 }
 
@@ -727,7 +736,10 @@ async fn retention_lets_a_ttl_capable_driver_expire_the_artifact() {
         .await
         .unwrap();
     assert_eq!(
-        expired.read("harness/tool_results/s/shell/c.txt").await.unwrap(),
+        expired
+            .read("harness/tool_results/s/shell/c.txt")
+            .await
+            .unwrap(),
         None,
         "a zero lifetime is already expired"
     );

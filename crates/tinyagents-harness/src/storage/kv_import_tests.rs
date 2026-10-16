@@ -41,8 +41,14 @@ async fn a_flat_v1_store_moves_into_tsd_kv_with_the_value_unwrapped() {
     assert_eq!(moved, 2);
 
     let kv = Kv::ns(storage.documents(), "harness", "ns").unwrap();
-    assert_eq!(kv.get::<serde_json::Value>("k1").await.unwrap(), Some(json!({"v": 1})));
-    assert_eq!(kv.get::<serde_json::Value>("k2").await.unwrap(), Some(json!("two")));
+    assert_eq!(
+        kv.get::<serde_json::Value>("k1").await.unwrap(),
+        Some(json!({"v": 1}))
+    );
+    assert_eq!(
+        kv.get::<serde_json::Value>("k2").await.unwrap(),
+        Some(json!("two"))
+    );
     let left = storage
         .documents()
         .count("harness_store", &tinystoragedrivers_core::Filter::default())

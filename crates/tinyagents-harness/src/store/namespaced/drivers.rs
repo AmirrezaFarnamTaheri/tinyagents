@@ -105,7 +105,9 @@ impl DriverNamespacedStore {
         if let Some(at) = expires_ms {
             options = options.expires_ms(i64::try_from(at).unwrap_or(i64::MAX));
         }
-        Ok(Repo::new(&self.docs, KV).map_err(map_error)?.with_options(options))
+        Ok(Repo::new(&self.docs, KV)
+            .map_err(map_error)?
+            .with_options(options))
     }
 
     async fn declared(&self) -> Result<()> {
@@ -174,7 +176,10 @@ impl DriverNamespacedStore {
             return false;
         };
         root.is_none_or(|root| {
-            ns == root || ns.strip_prefix(root).is_some_and(|rest| rest.starts_with('.'))
+            ns == root
+                || ns
+                    .strip_prefix(root)
+                    .is_some_and(|rest| rest.starts_with('.'))
         })
     }
 
@@ -183,11 +188,7 @@ impl DriverNamespacedStore {
     async fn live_items(&self, prefix: &[String], now: u64) -> Result<Vec<Item>> {
         let root = prefix.first().map(String::as_str);
         let query = Query::filter(self.root_filter(root));
-        let rows = self
-            .docs
-            .query_all(KV, &query)
-            .await
-            .map_err(map_error)?;
+        let rows = self.docs.query_all(KV, &query).await.map_err(map_error)?;
         let mut items = Vec::with_capacity(rows.len());
         for row in rows.iter().filter(|row| Self::in_root(row, root)) {
             let item = Self::item(row)?;

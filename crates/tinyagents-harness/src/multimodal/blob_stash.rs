@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tinystoragedrivers_core::{
-    BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
-    Query, Sort, WriteOptions,
+    BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Sort,
+    WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};
 

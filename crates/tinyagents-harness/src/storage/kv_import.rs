@@ -147,7 +147,8 @@ pub async fn import_legacy_kv(
                 .await
             {
                 Ok(_) => written += 1,
-                Err(error) if matches!(error.kind(), ErrorKind::AlreadyExists | ErrorKind::Conflict) => {}
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::AlreadyExists | ErrorKind::Conflict) => {}
                 Err(error) => return Err(error),
             }
         }

@@ -154,7 +154,6 @@ pub use observability::{
     RedactingSink, StoreEventJournal,
 };
 pub use observability::{DriverStatusStore, mint_run_id, reap_orphaned_runs};
-pub use storage::storage_schema;
 #[cfg(feature = "langfuse")]
 pub use observability::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
@@ -167,5 +166,6 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
+pub use storage::storage_schema;
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;

@@ -8,7 +8,7 @@ mod steps;
 
 use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
 
-pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_body, kv_id};
+pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
 pub use kv_import::{LegacyKv, import_legacy_kv};
 
 /// The body version of every harness collection a v1 -> v2 step produces.
@@ -61,11 +61,7 @@ pub fn storage_schema() -> Schema {
             crate::tool::discover::DriverEmbeddingCache::collection_spec(),
             ScopeClass::Agent,
         )
-        .collection_with(
-            SCHEMA_VERSION,
-            attachment_stash_spec(),
-            ScopeClass::Agent,
-        );
+        .collection_with(SCHEMA_VERSION, attachment_stash_spec(), ScopeClass::Agent);
     for (_, to) in steps::BLOB_PREFIXES {
         schema = schema.blobs(to, ScopeClass::Agent);
     }

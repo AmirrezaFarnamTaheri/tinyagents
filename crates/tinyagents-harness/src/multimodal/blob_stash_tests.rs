@@ -179,8 +179,22 @@ async fn bytes_and_index_use_the_v2_names() {
     let s = stash_on(&storage, u64::MAX, Duration::from_secs(3600));
     s.write("abc123", TINY_PNG).await.unwrap();
 
-    assert!(storage.blobs().head("harness/attachments/abc123").await.unwrap().is_some());
-    assert!(storage.blobs().head("attachments/abc123").await.unwrap().is_none());
+    assert!(
+        storage
+            .blobs()
+            .head("harness/attachments/abc123")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        storage
+            .blobs()
+            .head("attachments/abc123")
+            .await
+            .unwrap()
+            .is_none()
+    );
     let row = storage
         .documents()
         .get("harness.attachment_stash", "abc123")

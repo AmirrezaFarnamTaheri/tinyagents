@@ -61,7 +61,10 @@ impl DriverEmbeddingCache {
 
     /// `Key::of([signature, key as 16 hex digits])`.
     pub(crate) fn id(signature: &str, key: &str) -> Result<String> {
-        Ok(Key::of([signature, key]).map_err(map_error)?.as_str().to_owned())
+        Ok(Key::of([signature, key])
+            .map_err(map_error)?
+            .as_str()
+            .to_owned())
     }
 
     async fn declared(&self) -> Result<()> {
@@ -87,7 +90,11 @@ impl EmbeddingCache for DriverEmbeddingCache {
                 let id = Self::id(signature, &format!("{key:016x}"));
                 async move {
                     let row = match id {
-                        Ok(id) => self.docs.get(Self::COLLECTION, &id).await.map_err(map_error),
+                        Ok(id) => self
+                            .docs
+                            .get(Self::COLLECTION, &id)
+                            .await
+                            .map_err(map_error),
                         Err(error) => Err(error),
                     };
                     (*key, row)
