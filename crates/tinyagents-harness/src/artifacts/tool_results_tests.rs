@@ -47,10 +47,10 @@ async fn threshold_persists_redacted_preview_and_file() {
         apply_per_result_persistence(raw, None, Some(&store), "shell", Some("call-1"), 1024).await;
 
     assert!(outcome.persisted);
-    assert!(out.contains("artifact_path: tool-results/session_one/shell/call-1.txt"));
+    assert!(out.contains("artifact_path: harness/tool_results/session_one/shell/call-1.txt"));
     assert!(
         out.contains(
-            "read_with: file_read {\"path\":\"tool-results/session_one/shell/call-1.txt\"}"
+            "read_with: file_read {\"path\":\"harness/tool_results/session_one/shell/call-1.txt\"}"
         )
     );
     assert!(out.contains("original_bytes:"));
@@ -59,7 +59,7 @@ async fn threshold_persists_redacted_preview_and_file() {
     assert!(!out.contains(&test_github_token()));
 
     let stored = store
-        .read("tool-results/session_one/shell/call-1.txt")
+        .read("harness/tool_results/session_one/shell/call-1.txt")
         .await
         .unwrap()
         .expect("artifact stored");
@@ -75,7 +75,7 @@ async fn a_call_without_an_id_gets_a_random_hex_name() {
     let b = store.path_for_read_tool("shell", None);
     assert_ne!(a, b);
     let stem = a
-        .strip_prefix("tool-results/s/shell/")
+        .strip_prefix("harness/tool_results/s/shell/")
         .and_then(|rest| rest.strip_suffix(".txt"))
         .expect("path shape");
     assert_eq!(stem.len(), 32);
@@ -139,7 +139,7 @@ async fn persisted_preview_is_bounded_for_small_budget() {
     assert!(out.contains("[tool_result_preview]"));
     assert!(
         store
-            .read("tool-results/session/shell/call.txt")
+            .read("harness/tool_results/session/shell/call.txt")
             .await
             .unwrap()
             .is_some()
@@ -159,7 +159,7 @@ async fn tiny_per_result_budget_keeps_the_recovery_pointer() {
     )
     .await;
     assert!(outcome.persisted);
-    assert!(out.contains("artifact_path: tool-results/session/shell/call.txt"));
+    assert!(out.contains("artifact_path: harness/tool_results/session/shell/call.txt"));
     assert!(out.contains("read_with: file_read"));
 }
 
@@ -228,7 +228,7 @@ async fn aggregate_spills_largest_until_under_budget() {
     assert!(!results[0].output.starts_with("[tool_result_preview]\n"));
     assert!(
         store
-            .read("tool-results/session/largest/largest.txt")
+            .read("harness/tool_results/session/largest/largest.txt")
             .await
             .unwrap()
             .is_some()
@@ -284,7 +284,7 @@ async fn aggregate_forces_budget_when_envelope_has_no_savings() {
     );
     assert!(
         store
-            .read("tool-results/session/one/one.txt")
+            .read("harness/tool_results/session/one/one.txt")
             .await
             .unwrap()
             .is_some()
@@ -565,8 +565,8 @@ tool: shell\n\
 reason: r\n\
 original_bytes: 11\n\
 stored_bytes: 11\n\
-artifact_path: tool-results/s/shell/c.txt\n\
-read_with: file_read {\"path\":\"tool-results/s/shell/c.txt\"} (a long read returns one page and names the \"offset\" to continue from)\n\
+artifact_path: harness/tool_results/s/shell/c.txt\n\
+read_with: file_read {\"path\":\"harness/tool_results/s/shell/c.txt\"} (a long read returns one page and names the \"offset\" to continue from)\n\
 notes: Full scrubbed output was persisted on the artifact store at the artifact_path above (not part of the project).\n\n\
 [preview]\nhello world";
     assert_eq!(persisted.output, expected);
@@ -583,12 +583,12 @@ async fn in_memory_stores_do_not_share_artifacts() {
         .await
         .unwrap();
     assert!(
-        a.read("tool-results/s/shell/c.txt")
+        a.read("harness/tool_results/s/shell/c.txt")
             .await
             .unwrap()
             .is_some()
     );
-    assert_eq!(b.read("tool-results/s/shell/c.txt").await.unwrap(), None);
+    assert_eq!(b.read("harness/tool_results/s/shell/c.txt").await.unwrap(), None);
 }
 
 /// The pointer is a blob key on a host-supplied store, not a filesystem path.
@@ -610,9 +610,9 @@ async fn a_host_supplied_blob_store_receives_the_redacted_body() {
         .persist("shell", Some("c"), &body, None, 1024, "r")
         .await
         .unwrap();
-    assert_eq!(persisted.path, "tool-results/session/shell/c.txt");
+    assert_eq!(persisted.path, "harness/tool_results/session/shell/c.txt");
     let blob = blobs
-        .get("tool-results/session/shell/c.txt")
+        .get("harness/tool_results/session/shell/c.txt")
         .await
         .unwrap()
         .expect("stored on the host blob store");
@@ -634,11 +634,11 @@ async fn read_refuses_keys_outside_the_artifact_namespace() {
         .await
         .unwrap();
     for key in [
-        "outputs/x.md",
+        "harness/outputs/x.md",
         "tool-results",
-        "tool-results/../outputs/x.md",
-        "tool-results//s/shell/c.txt",
-        "tool-results/s/shell/c.txt\n",
+        "harness/tool_results/../outputs/x.md",
+        "harness/tool_results//s/shell/c.txt",
+        "harness/tool_results/s/shell/c.txt\n",
         "tool-results\\s\\shell\\c.txt",
         "tool-results-backup/s/shell/c.txt",
         "artifacts/other/s/shell/c.txt",
@@ -663,7 +663,7 @@ async fn read_accepts_the_legacy_relative_pointer() {
     }
     assert_eq!(
         store
-            .read("tool-results/s/shell/missing.txt")
+            .read("harness/tool_results/s/shell/missing.txt")
             .await
             .unwrap(),
         None
@@ -696,22 +696,22 @@ async fn purge_session_removes_only_this_sessions_artifacts() {
         .await
         .unwrap();
     blobs
-        .put("outputs/keep.md", b"k".to_vec(), None)
+        .put("harness/outputs/keep.md", b"k".to_vec(), None)
         .await
         .unwrap();
 
     assert_eq!(old.purge_session().await.unwrap(), 2);
     assert_eq!(
-        old.read("tool-results/old/shell/a.txt").await.unwrap(),
+        old.read("harness/tool_results/old/shell/a.txt").await.unwrap(),
         None
     );
     assert!(
-        live.read("tool-results/live/shell/a.txt")
+        live.read("harness/tool_results/live/shell/a.txt")
             .await
             .unwrap()
             .is_some()
     );
-    assert!(blobs.head("outputs/keep.md").await.unwrap().is_some());
+    assert!(blobs.head("harness/outputs/keep.md").await.unwrap().is_some());
     assert_eq!(old.purge_session().await.unwrap(), 0, "idempotent");
 }
 
@@ -727,7 +727,7 @@ async fn retention_lets_a_ttl_capable_driver_expire_the_artifact() {
         .await
         .unwrap();
     assert_eq!(
-        expired.read("tool-results/s/shell/c.txt").await.unwrap(),
+        expired.read("harness/tool_results/s/shell/c.txt").await.unwrap(),
         None,
         "a zero lifetime is already expired"
     );
@@ -737,7 +737,7 @@ async fn retention_lets_a_ttl_capable_driver_expire_the_artifact() {
         .await
         .unwrap();
     assert_eq!(
-        kept.read("tool-results/s/shell/c.txt")
+        kept.read("harness/tool_results/s/shell/c.txt")
             .await
             .unwrap()
             .as_deref(),
