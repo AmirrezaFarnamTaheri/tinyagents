@@ -275,7 +275,12 @@ mod journal_step {
 
     /// The observations of `run` as the v1 journal appended them: the whole
     /// wire type, in a length-prefixed stream.
-    async fn seed_v1(storage: &ScopedStorage, run: &str, count: u64, root: &str) -> Vec<AgentObservation> {
+    async fn seed_v1(
+        storage: &ScopedStorage,
+        run: &str,
+        count: u64,
+        root: &str,
+    ) -> Vec<AgentObservation> {
         let sink = EventSink::with_stream_id(if root == run { run } else { root });
         let mut written = Vec::new();
         for i in 0..count {
@@ -303,7 +308,8 @@ mod journal_step {
 
     fn journal(storage: &ScopedStorage) -> StoreEventJournal<Arc<dyn AppendStore>> {
         StoreEventJournal::new(
-            Arc::new(DriverAppendStore::journal(Arc::clone(storage.streams()))) as Arc<dyn AppendStore>,
+            Arc::new(DriverAppendStore::journal(Arc::clone(storage.streams())))
+                as Arc<dyn AppendStore>,
         )
     }
 
@@ -338,8 +344,17 @@ mod journal_step {
         assert_eq!(journal.read_from("run.top", 0).await.unwrap(), top);
         assert_eq!(journal.read_from("run.child", 0).await.unwrap(), child);
         let gap = journal.read_from("run.gap", 0).await.unwrap();
-        assert_eq!((gap[0].offset, gap[0].event_id.as_str()), (40, "run.gap-evt-40"));
-        for (position, obs) in journal.read_from("run.top", 0).await.unwrap().iter().enumerate() {
+        assert_eq!(
+            (gap[0].offset, gap[0].event_id.as_str()),
+            (40, "run.gap-evt-40")
+        );
+        for (position, obs) in journal
+            .read_from("run.top", 0)
+            .await
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
             assert_eq!(obs.offset, position as u64, "offsets are unchanged");
             assert_eq!(obs.event_id.as_str(), format!("run.top-evt-{position}"));
         }
@@ -354,7 +369,10 @@ mod journal_step {
                 assert!(entry.value.get(repeated).is_none(), "{repeated} repeated");
             }
         }
-        assert!(storage.streams().streams(V1).await.unwrap().is_empty(), "v1 streams are gone");
+        assert!(
+            storage.streams().streams(V1).await.unwrap().is_empty(),
+            "v1 streams are gone"
+        );
     }
 
     #[tokio::test]
@@ -375,11 +393,17 @@ mod journal_step {
             .unwrap()
             .unwrap();
         assert!(info.sealed_ms.is_some());
-        assert_eq!(journal(&storage).read_from("run.done", 0).await.unwrap(), written);
+        assert_eq!(
+            journal(&storage).read_from("run.done", 0).await.unwrap(),
+            written
+        );
 
         let again = migrate(&storage).await;
         assert!(again.ran.iter().all(|step| step.step != "run_journal_v2"));
-        assert_eq!(journal(&storage).read_from("run.done", 0).await.unwrap(), written);
+        assert_eq!(
+            journal(&storage).read_from("run.done", 0).await.unwrap(),
+            written
+        );
     }
 
     #[tokio::test]
@@ -388,7 +412,10 @@ mod journal_step {
         let good = seed_v1(&storage, "run.odd", 1, "run.odd").await;
         storage
             .streams()
-            .append(&format!("{V1}run.odd"), serde_json::json!({"note": "from another build"}))
+            .append(
+                &format!("{V1}run.odd"),
+                serde_json::json!({"note": "from another build"}),
+            )
             .await
             .unwrap();
         migrate(&storage).await;
@@ -398,7 +425,16 @@ mod journal_step {
             .await
             .unwrap();
         assert_eq!(raw.len(), 2, "no entry is dropped, so no offset moves");
-        assert_eq!(raw[1].value, serde_json::json!({"note": "from another build"}));
-        assert_eq!(journal(&storage).read_window("run.odd", 0, 1).await.unwrap(), good);
+        assert_eq!(
+            raw[1].value,
+            serde_json::json!({"note": "from another build"})
+        );
+        assert_eq!(
+            journal(&storage)
+                .read_window("run.odd", 0, 1)
+                .await
+                .unwrap(),
+            good
+        );
     }
 }

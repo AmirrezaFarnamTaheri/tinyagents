@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 use tinystoragedrivers_core::{Key, Result, SourceRecord, Step, TargetRecord};
 
-use super::{ATTACHMENT_STASH, EMBEDDING_CACHE, RUN_STATUS, SCHEMA_VERSION};
-use crate::observability::status_record;
+use super::{ATTACHMENT_STASH, EMBEDDING_CACHE, JOURNAL, RUN_STATUS, SCHEMA_VERSION};
+use crate::observability::{self, status_record};
 
 /// The blob prefixes that move under `harness/`: `(v1 prefix, v2 prefix)`.
 pub(super) const BLOB_PREFIXES: [(&str, &str); 5] = [
@@ -106,4 +106,34 @@ pub(super) fn blobs(id: &'static str, from: &'static str, to: &'static str) -> S
         },
     )
     .source_prefix(from)
+}
+
+/// The v1 journal stream family: the session crate's `session_journal/` prefix
+/// behind the length prefix `DriverAppendStore` used to write.
+const V1_JOURNAL_PREFIX: &str = "16:session_journal/";
+
+/// `16:session_journal/<run>` -> `harness.journal/<run>`: each entry loses the
+/// run id, root run id and event id the stream name and counter repeat.
+///
+/// Every entry keeps its place, so offsets, and with them the event ids
+/// `{run}-evt-{offset}`, are unchanged. An entry that is not an observation
+/// of this run is copied as it is: dropping it would shift every later offset.
+pub(super) fn run_journal() -> Step {
+    Step::stream(
+        "run_journal_v2",
+        JOURNAL,
+        1,
+        SCHEMA_VERSION,
+        |source, entries| {
+            let Some(run) = source.strip_prefix(V1_JOURNAL_PREFIX) else {
+                return Ok(None);
+            };
+            let entries = entries
+                .into_iter()
+                .map(|entry| observability::journal_entry_from_v1(run, entry))
+                .collect();
+            Ok(Some((format!("{JOURNAL}/{run}"), entries)))
+        },
+    )
+    .source_prefix(V1_JOURNAL_PREFIX)
 }

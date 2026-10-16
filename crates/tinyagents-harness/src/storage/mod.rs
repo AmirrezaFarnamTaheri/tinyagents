@@ -6,7 +6,9 @@ mod kv;
 mod kv_import;
 mod steps;
 
-use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
+use tinystoragedrivers_core::{
+    CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, SealPolicy, SealWhen,
+};
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
 pub use kv_import::{LegacyKv, import_legacy_kv};
@@ -19,6 +21,13 @@ pub(crate) const RUN_STATUS: &str = "harness.run_status";
 
 /// Cached tool-catalogue embedding vectors.
 pub(crate) const EMBEDDING_CACHE: &str = "harness.embedding_cache";
+
+/// The run journal's stream family: `harness.journal/<run id>`.
+pub(crate) const JOURNAL: &str = "harness.journal";
+
+/// How long a sealed run journal is kept before the host's maintenance deletes
+/// it: 30 days.
+const JOURNAL_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
 /// The attachment stash's index: one row per stashed attachment.
 pub(crate) const ATTACHMENT_STASH: &str = "harness.attachment_stash";
@@ -38,12 +47,16 @@ pub(crate) fn attachment_stash_spec() -> CollectionSpec {
 /// | `harness_run_status` | `harness.run_status` |
 /// | `harness_embedding_cache` | `harness.embedding_cache` |
 /// | `attachment_stash_index` | `harness.attachment_stash` |
+/// | stream `16:session_journal/<run>` | stream `harness.journal/<run>`, sealed when the run finishes, kept 30 days after |
 /// | blobs `attachments/`, `tool-results/`, `outputs/`, `workspace/`, `generated-media/` | `harness/attachments/`, `harness/tool_results/`, `harness/outputs/`, `harness/workspace/`, `harness/generated_media/` |
 ///
 /// The key-value stores (`harness_store`, `harness_namespaced_store`,
 /// `harness_response_cache`) live in `tsd.kv`, which `tsd` owns, so a document
-/// step cannot write them: the host calls [`import_legacy_kv`] for each. The run
-/// journal's stream belongs to a later change.
+/// step cannot write them: the host calls [`import_legacy_kv`] for each.
+///
+/// The journal entries drop the run id, root run id and event id (see
+/// `HarnessEventJournal::seal_run` for sealing). The host seals a run's journal
+/// when it ends; `reap_orphaned_runs_and_seal` does it for orphans.
 ///
 /// Blob prefixes are declared one per directory (`harness/<dir>/`): a bare
 /// `harness/` is not a valid prefix, which needs at least one path segment.
@@ -61,14 +74,20 @@ pub fn storage_schema() -> Schema {
             crate::tool::discover::DriverEmbeddingCache::collection_spec(),
             ScopeClass::Agent,
         )
-        .collection_with(SCHEMA_VERSION, attachment_stash_spec(), ScopeClass::Agent);
+        .collection_with(SCHEMA_VERSION, attachment_stash_spec(), ScopeClass::Agent)
+        .stream_with(
+            JOURNAL,
+            ScopeClass::Agent,
+            SealPolicy::new(SealWhen::OnFinish).retaining_ms(JOURNAL_RETENTION_MS),
+        );
     for (_, to) in steps::BLOB_PREFIXES {
         schema = schema.blobs(to, ScopeClass::Agent);
     }
     schema = schema
         .step(steps::run_status())
         .step(steps::embedding_cache())
-        .step(steps::attachment_stash());
+        .step(steps::attachment_stash())
+        .step(steps::run_journal());
     for (index, (from, to)) in steps::BLOB_PREFIXES.into_iter().enumerate() {
         schema = schema.step(steps::blobs(BLOB_STEP_IDS[index], from, to));
     }
