@@ -11,7 +11,9 @@ pub trait SessionHookTypes: Send + Sync + 'static {
     /// Turn options.
     type Options: Send;
     /// Borrowed state view supplied at a lifecycle boundary.
-    type StateView<'a>: Send where Self: 'a;
+    type StateView<'a>: Send
+    where
+        Self: 'a;
     /// Preparation returned before resume.
     type ResumePreparation: Send;
     /// Preparation returned before driving a turn.
@@ -29,22 +31,27 @@ pub trait SessionHookTypes: Send + Sync + 'static {
 }
 
 /// Boxed callback future used by [`FnSessionHooks`].
-pub type SessionHookFuture<'a, T, E> =
-    Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+pub type SessionHookFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 type BeforeResume<T> = dyn for<'a> Fn(
         &'a mut <T as SessionHookTypes>::Request,
         &'a mut <T as SessionHookTypes>::Options,
         <T as SessionHookTypes>::StateView<'a>,
-    ) -> SessionHookFuture<'a, <T as SessionHookTypes>::ResumePreparation, <T as SessionHookTypes>::Error>
-    + Send
+    ) -> SessionHookFuture<
+        'a,
+        <T as SessionHookTypes>::ResumePreparation,
+        <T as SessionHookTypes>::Error,
+    > + Send
     + Sync;
 type BeforeTurn<T> = dyn for<'a> Fn(
         &'a mut <T as SessionHookTypes>::Request,
         &'a mut <T as SessionHookTypes>::Options,
         <T as SessionHookTypes>::StateView<'a>,
-    ) -> SessionHookFuture<'a, <T as SessionHookTypes>::TurnPreparation, <T as SessionHookTypes>::Error>
-    + Send
+    ) -> SessionHookFuture<
+        'a,
+        <T as SessionHookTypes>::TurnPreparation,
+        <T as SessionHookTypes>::Error,
+    > + Send
     + Sync;
 type BeforeCommit<T> = dyn for<'a> Fn(
         &'a <T as SessionHookTypes>::Outcome,
@@ -77,36 +84,36 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
     #[allow(clippy::type_complexity)]
     pub fn new(
         before_resume: impl for<'a> Fn(
-                &'a mut T::Request,
-                &'a mut T::Options,
-                T::StateView<'a>,
-            ) -> SessionHookFuture<'a, T::ResumePreparation, T::Error>
-            + Send
-            + Sync
-            + 'static,
+            &'a mut T::Request,
+            &'a mut T::Options,
+            T::StateView<'a>,
+        ) -> SessionHookFuture<'a, T::ResumePreparation, T::Error>
+        + Send
+        + Sync
+        + 'static,
         before_turn: impl for<'a> Fn(
-                &'a mut T::Request,
-                &'a mut T::Options,
-                T::StateView<'a>,
-            ) -> SessionHookFuture<'a, T::TurnPreparation, T::Error>
-            + Send
-            + Sync
-            + 'static,
+            &'a mut T::Request,
+            &'a mut T::Options,
+            T::StateView<'a>,
+        ) -> SessionHookFuture<'a, T::TurnPreparation, T::Error>
+        + Send
+        + Sync
+        + 'static,
         before_commit: impl for<'a> Fn(
-                &'a T::Outcome,
-                &'a T::TranscriptOptions,
-            ) -> SessionHookFuture<'a, (), T::Error>
-            + Send
-            + Sync
-            + 'static,
+            &'a T::Outcome,
+            &'a T::TranscriptOptions,
+        ) -> SessionHookFuture<'a, (), T::Error>
+        + Send
+        + Sync
+        + 'static,
         after_commit: impl Fn(T::CommitReceipt) -> SessionHookFuture<'static, (), T::Error>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         on_terminal: impl Fn(T::Terminal) -> SessionHookFuture<'static, (), T::Error>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             before_resume: Arc::new(before_resume),
