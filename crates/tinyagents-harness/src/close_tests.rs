@@ -103,3 +103,26 @@ async fn unclear_verification_and_failed_repair_use_the_deterministic_fallback()
     assert_eq!(output.text, "deterministic fallback");
     assert_eq!(model.requests.lock().unwrap().len(), 4);
 }
+
+#[tokio::test]
+async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid() {
+    let contract = crate::config::RequiredOutput::new("summary");
+    let model = scripted_model(&["{\"summary\":\"repaired\"}"]);
+    let repaired = repair_required_output(
+        &model, &(), &NativeDialect, &[], "old reply", &contract, "repair", false,
+    )
+    .await
+    .expect("missing output triggers repair");
+    assert_eq!(repaired.text, "{\"summary\":\"repaired\"}");
+    assert!(repaired.model_repaired);
+
+    let invalid = scripted_model(&["still no JSON"]);
+    let appended = repair_required_output(
+        &invalid, &(), &NativeDialect, &[], "already streamed", &contract, "repair", true,
+    )
+    .await
+    .expect("missing output triggers repair");
+    assert_eq!(appended.text, "already streamed\n\n{\"summary\":\"\"}");
+    assert!(!appended.model_repaired);
+    assert_eq!(invalid.requests.lock().unwrap()[0].tool_choice, ToolChoice::None);
+}
