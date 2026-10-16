@@ -4,7 +4,7 @@
 //! workspace/project layer convention. The host supplies the path validation
 //! callback so filesystem policy stays with the host.
 
-use std::io::{Read, Take};
+use std::io::Read;
 use std::path::Path;
 
 /// Instruction file name used by both context layers.
@@ -40,7 +40,8 @@ pub fn load_agents_md(dir: &Path, validate_path: impl Fn(&Path, &Path) -> bool) 
         return None;
     }
     let mut bytes = Vec::new();
-    if Take::take(file, MAX_AGENTS_MD_READ_BYTES)
+    if file
+        .take(MAX_AGENTS_MD_READ_BYTES)
         .read_to_end(&mut bytes)
         .is_err()
     {

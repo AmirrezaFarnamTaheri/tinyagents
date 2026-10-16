@@ -1969,6 +1969,7 @@ dependencies = [
  "dirs",
  "flate2",
  "futures",
+ "libc",
  "oxipng",
  "png",
  "regex",
