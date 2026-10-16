@@ -2,39 +2,75 @@
 //!
 //! No host paths/backend lookup, FullText shortcut, or persistent process cache.
 //! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
+//!
+//! Threads are `conversations.threads` documents (schema v2, see [`super::dto`]).
+//! A change to one thread document is one [`Repo::update`] loop. The loops that
+//! stay hand-written coordinate more than that one document: an append
+//! reconciles an intent, a stream row and the thread together, and a rewrite
+//! copies a whole log before it swaps the thread onto it.
 
+use super::dto::{MessageDto, ThreadDto, ThreadState, to_ms};
 use super::persistence::*;
+use super::schema::{SCHEMA_VERSION, THREADS as COLLECTION, append_spec, stream_name, thread_spec};
 use super::*;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use tinystoragedrivers_core::primitives::Repo;
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, Filter, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned,
+    CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
+    StorageError, StreamStore, Versioned, WriteOptions,
 };
 mod append;
 mod pending;
 mod reader;
 mod rewrite;
 
-const COLLECTION: &str = "conversation_threads_v1";
 const PAGE_SIZE: usize = 64;
+/// Attempts of the loops that reconcile more than one document or stream.
 const RETRIES: usize = 32;
 
-#[derive(Clone, Serialize, Deserialize)]
+/// A thread document decoded: the wire thread beside its stream state.
+#[derive(Clone)]
 struct ThreadDoc {
-    schema: u32,
     incarnation: String,
     deleted: bool,
     visible_end: u64,
+    /// The thread segment of the stream's name when it is not the thread id
+    /// (a migrated v1 stream; see [`super::schema`]).
+    messages_key: Option<String>,
     thread: ConversationThread,
 }
-#[derive(Serialize, Deserialize)]
-struct MessageRecord {
-    schema: u32,
-    incarnation: String,
-    message: ThreadMessage,
+impl ThreadDoc {
+    /// The stored body. Times must be RFC 3339; the count is `visible_end`.
+    fn to_dto(&self) -> Result<ThreadDto, StorageError> {
+        ThreadDto::from_wire(
+            &self.thread,
+            ThreadState {
+                incarnation: self.incarnation.clone(),
+                deleted: self.deleted,
+                visible_end: self.visible_end,
+                messages_key: self.messages_key.clone(),
+            },
+            to_ms,
+        )
+    }
+    fn from_dto(dto: ThreadDto) -> Result<Self, StorageError> {
+        let (thread, state) = dto.into_wire()?;
+        Ok(Self {
+            incarnation: state.incarnation,
+            deleted: state.deleted,
+            visible_end: state.visible_end,
+            messages_key: state.messages_key,
+            thread,
+        })
+    }
+    /// The name of the stream holding this incarnation's committed messages.
+    fn stream(&self) -> Result<String, StorageError> {
+        stream_name(
+            self.messages_key.as_deref().unwrap_or(&self.thread.id),
+            &self.incarnation,
+        )
+    }
 }
 
 /// Conversation handle whose scope/native admission has already been bound.
@@ -95,12 +131,12 @@ impl DriverConversationStore {
         Self::new(scoped)
     }
 
-    /// Existing metadata declaration; streams retain their schema1 layout.
+    /// The `conversations.threads` declaration.
     ///
     /// There are no required secondary indexes, TTL or full-text fields.
     /// Native validation accepts compatible supersets, not exact equality.
     pub fn collection_specs() -> Vec<CollectionSpec> {
-        vec![CollectionSpec::new(COLLECTION)]
+        vec![thread_spec()]
     }
 
     /// Declare application metadata under explicitly trusted bootstrap authority.
@@ -135,34 +171,35 @@ impl DriverConversationStore {
             )
             .into());
         }
-        Ok(hex::encode(Sha256::digest(id.as_bytes())))
+        Ok(Key::of([id])?.as_str().to_owned())
     }
-    fn stream(key: &str, incarnation: &str) -> String {
-        format!("conversation_messages_v1:{key}:{incarnation}")
-    }
-    fn decode(row: Versioned<serde_json::Value>) -> ConversationResult<Versioned<ThreadDoc>> {
-        let doc: ThreadDoc = serde_json::from_value(row.doc).map_err(|e| {
-            StorageError::serialization("invalid conversation metadata").with_source(e)
-        })?;
-        let stored_key = Self::key(&doc.thread.id).map_err(|error| {
+    /// A thread document of schema v2 at `id`, checked against its own identity.
+    fn thread_doc(id: &str, dto: ThreadDto) -> Result<ThreadDoc, StorageError> {
+        let stored_key = Self::key(&dto.id).map_err(|error| {
             StorageError::serialization("invalid stored conversation identity").with_source(error)
         })?;
-        if doc.schema != 1
-            || uuid::Uuid::parse_str(&doc.incarnation).is_err()
-            || stored_key != row.id
-            || u64::try_from(doc.thread.message_count).ok() != Some(doc.visible_end)
-        {
+        if uuid::Uuid::parse_str(&dto.incarnation).is_err() || stored_key != id {
             return Err(StorageError::serialization(
-                "conversation metadata identity/schema/prefix mismatch",
-            )
-            .into());
+                "conversation metadata identity/incarnation mismatch",
+            ));
         }
+        ThreadDoc::from_dto(dto)
+    }
+    fn decode(row: Versioned<serde_json::Value>) -> ConversationResult<Versioned<ThreadDoc>> {
+        let dto: ThreadDto = serde_json::from_value(row.doc).map_err(|e| {
+            StorageError::serialization("invalid conversation metadata").with_source(e)
+        })?;
         Ok(Versioned {
+            doc: Self::thread_doc(&row.id, dto)?,
             id: row.id,
             version: row.version,
-            doc,
             meta: row.meta,
         })
+    }
+    /// Thread documents as a typed handle whose writes declare the v2 body version.
+    fn threads(&self) -> Result<Repo<ThreadDto>, StorageError> {
+        Ok(Repo::new(&self.docs, COLLECTION)?
+            .with_options(WriteOptions::new().schema(SCHEMA_VERSION)))
     }
     async fn load(&self, id: &str) -> ConversationResult<Option<Versioned<ThreadDoc>>> {
         self.admit().await?;
@@ -173,30 +210,30 @@ impl DriverConversationStore {
             .map(Self::decode)
             .transpose()
     }
+    /// Replace the thread `id` with what `operation` makes of the current one
+    /// (`None` when absent), as one [`Repo::update`] loop: `operation` runs
+    /// again after a lost swap, so it must be free of side effects.
     async fn change(
         &self,
         id: &str,
-        operation: impl Fn(Option<&ThreadDoc>) -> ConversationResult<ThreadDoc>,
+        operation: impl Fn(Option<&ThreadDoc>) -> Result<ThreadDoc, StorageError> + Send + Sync,
     ) -> ConversationResult<ConversationThread> {
+        self.admit().await?;
         let key = Self::key(id)?;
-        for _ in 0..RETRIES {
-            let current = self.load(id).await?;
-            let replacement = operation(current.as_ref().map(|row| &row.doc))?;
-            let body = serde_json::to_value(&replacement).map_err(|e| {
-                StorageError::serialization("encode conversation metadata").with_source(e)
-            })?;
-            let precondition = current
-                .as_ref()
-                .map_or(Precondition::Absent, Versioned::unchanged);
-            match self.docs.put(COLLECTION, &key, body, precondition).await {
-                Ok(_) => return Ok(replacement.thread),
-                Err(error) if error.kind() == ErrorKind::Conflict => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Err(StorageError::conflict("conversation metadata retry bound exhausted").into())
+        let stored = self
+            .threads()?
+            .update(&key, |current| {
+                let current = current
+                    .map(|dto| Self::thread_doc(&key, dto))
+                    .transpose()?;
+                Ok(Some(operation(current.as_ref())?.to_dto()?))
+            })
+            .await?;
+        let (dto, _) =
+            stored.ok_or_else(|| StorageError::backend("conversation update wrote nothing"))?;
+        Ok(ThreadDoc::from_dto(dto)?.thread)
     }
-    fn live(current: Option<&ThreadDoc>) -> ConversationResult<ThreadDoc> {
+    fn live(current: Option<&ThreadDoc>) -> Result<ThreadDoc, StorageError> {
         current
             .filter(|doc| !doc.deleted)
             .cloned()
@@ -221,10 +258,10 @@ impl DriverConversationStore {
             next
         } else {
             ThreadDoc {
-                schema: 1,
                 incarnation: uuid::Uuid::new_v4().to_string(),
                 deleted: false,
                 visible_end: 0,
+                messages_key: None,
                 thread: ConversationThread {
                     id: request.id.clone(),
                     title: request.title.clone(),
@@ -332,23 +369,23 @@ impl ConversationPersistence for DriverConversationStore {
     async fn delete_thread(&self, thread_id: &str, _deleted_at: &str) -> ConversationResult<bool> {
         self.admit().await?;
         let key = Self::key(thread_id)?;
-        for _ in 0..RETRIES {
-            let Some(mut row) = self.load(thread_id).await? else {
-                return Ok(false);
-            };
-            if row.doc.deleted {
-                return Ok(false);
-            }
-            row.doc.deleted = true;
-            let body = serde_json::to_value(&row.doc)
-                .map_err(|e| StorageError::serialization("encode tombstone").with_source(e))?;
-            match self.docs.put(COLLECTION, &key, body, row.unchanged()).await {
-                Ok(_) => return Ok(true),
-                Err(error) if error.kind() == ErrorKind::Conflict => continue,
-                Err(error) => return Err(error.into()),
-            }
-        }
-        Err(StorageError::conflict("conversation deletion retry bound exhausted").into())
+        let mut deleted = false;
+        self.threads()?
+            .update(&key, |current| {
+                deleted = false;
+                let Some(current) = current else {
+                    return Ok(None);
+                };
+                let mut doc = Self::thread_doc(&key, current)?;
+                if doc.deleted {
+                    return Ok(None);
+                }
+                doc.deleted = true;
+                deleted = true;
+                Ok(Some(doc.to_dto()?))
+            })
+            .await?;
+        Ok(deleted)
     }
     async fn search_cross_thread_messages(
         &self,
