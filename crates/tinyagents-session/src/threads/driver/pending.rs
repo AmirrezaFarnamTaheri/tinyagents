@@ -8,7 +8,7 @@ pub(super) use super::super::dto::AppendIntent;
 pub(super) use super::super::schema::APPENDS;
 
 impl AppendIntent {
-    pub fn new(thread: &ThreadDoc, message: &ThreadMessage) -> ConversationResult<Self> {
+    pub(super) fn new(thread: &ThreadDoc, message: &ThreadMessage) -> ConversationResult<Self> {
         let record = MessageDto::from_message(message, to_ms)?;
         Ok(Self {
             token: uuid::Uuid::new_v4().to_string(),
@@ -21,33 +21,33 @@ impl AppendIntent {
         })
     }
     /// The document id of the intent for `thread_id`'s `incarnation`.
-    pub fn key(thread_id: &str, incarnation: &str) -> Result<String, StorageError> {
+    pub(super) fn key(thread_id: &str, incarnation: &str) -> Result<String, StorageError> {
         Ok(Key::of([thread_id, incarnation])?.as_str().to_owned())
     }
-    pub fn offset(&self) -> u64 {
+    pub(super) fn offset(&self) -> u64 {
         self.offset
     }
-    pub fn record(&self) -> ConversationResult<MessageDto> {
+    pub(super) fn record(&self) -> ConversationResult<MessageDto> {
         serde_json::from_value(self.record.clone()).map_err(|error| {
             StorageError::serialization("invalid conversation append record")
                 .with_source(error)
                 .into()
         })
     }
-    pub fn message(&self) -> ConversationResult<ThreadMessage> {
+    pub(super) fn message(&self) -> ConversationResult<ThreadMessage> {
         Ok(self.record()?.into_message()?)
     }
-    pub fn value(&self) -> ConversationResult<serde_json::Value> {
+    pub(super) fn value(&self) -> ConversationResult<serde_json::Value> {
         serde_json::to_value(self).map_err(|error| {
             StorageError::serialization("encode conversation append envelope")
                 .with_source(error)
                 .into()
         })
     }
-    pub fn record_value(&self) -> &serde_json::Value {
+    pub(super) fn record_value(&self) -> &serde_json::Value {
         &self.record
     }
-    pub fn decode(
+    pub(super) fn decode(
         row: Versioned<serde_json::Value>,
         thread_id: &str,
         incarnation: &str,
