@@ -325,44 +325,30 @@ impl TranscriptLocator for LiveTranscriptLocator {
 /// atomically when the owning provider rebinds.
 impl SessionStoreProvider for RebindableSessionStores {
     fn for_agent(&self, agent_id: &str) -> AgentStores {
-        if let Some(binding) = self
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(agent_id)
-            .and_then(Weak::upgrade)
-        {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.retain(|_, weak| weak.strong_count() > 0);
+        if let Some(binding) = live.get(agent_id).and_then(Weak::upgrade) {
             return binding.handles();
         }
         let stores = self.current().for_agent(agent_id);
         let binding = Arc::new(LiveAgentStores {
             current: RwLock::new(stores),
         });
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(agent_id.to_owned(), Arc::downgrade(&binding));
+        live.insert(agent_id.to_owned(), Arc::downgrade(&binding));
         binding.handles()
     }
 
     fn try_for_agent(&self, agent_id: &str) -> std::result::Result<AgentStores, StorageError> {
-        if let Some(binding) = self
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(agent_id)
-            .and_then(Weak::upgrade)
-        {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.retain(|_, weak| weak.strong_count() > 0);
+        if let Some(binding) = live.get(agent_id).and_then(Weak::upgrade) {
             return Ok(binding.handles());
         }
         let stores = self.current().try_for_agent(agent_id)?;
         let binding = Arc::new(LiveAgentStores {
             current: RwLock::new(stores),
         });
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(agent_id.to_owned(), Arc::downgrade(&binding));
+        live.insert(agent_id.to_owned(), Arc::downgrade(&binding));
         Ok(binding.handles())
     }
 
@@ -397,3 +383,7 @@ impl SessionStoreProvider for RebindableSessionStores {
         self.current().recover()
     }
 }
+
+#[cfg(test)]
+#[path = "rebound_tests.rs"]
+mod tests;
