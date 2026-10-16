@@ -78,7 +78,7 @@ async fn repeated_failures_nudge_before_halt_and_cleanup_is_run_scoped() {
     assert!(halt_summary.lock().unwrap().is_none());
     fail_once(&middleware, "three").await;
 
-    assert!(halt_summary.lock().unwrap().is_some());
+    assert!(halt_summary.lock().unwrap().is_some(), "summary: {:?}", *halt_summary.lock().unwrap());
     assert!(
         handle
             .drain()
