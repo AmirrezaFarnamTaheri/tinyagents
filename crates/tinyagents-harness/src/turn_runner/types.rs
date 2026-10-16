@@ -299,15 +299,13 @@ where
             .get(&key)
             .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
         {
+            turn.queue.clear().await;
             turn.cancel.cancel();
             true
         } else {
             false
         };
         drop(active);
-        if cancelled_primary {
-            self.clear_queue(scope, thread_id).await;
-        }
         let mut parallel = self.parallel_active.lock().await;
         let keys: Vec<_> = parallel
             .keys()
@@ -754,12 +752,12 @@ where
         }
     }
 
-    async fn clear_tracking(&self, request: &TurnRequest<P>) {
+    async fn clear_tracking(&self, request: &TurnRequest<P>, generation: u64) {
         let key = (request.scope.clone(), request.thread_id.clone());
         let mut active = self.active.lock().await;
         if active
             .get(&key)
-            .is_some_and(|turn| turn.request_id == request.request_id)
+            .is_some_and(|turn| turn.generation == generation)
         {
             active.remove(&key);
         }
