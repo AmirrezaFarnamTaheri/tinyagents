@@ -166,4 +166,5 @@ pub use steering::{
     SteeringOutcome, SteeringPolicy,
 };
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
+pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};
 pub use tool::ToolRegistry;
