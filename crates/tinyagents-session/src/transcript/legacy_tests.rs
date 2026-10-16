@@ -53,14 +53,14 @@ fn writes_only_legacy_role_and_content_fields() {
     };
 
     let wire = serde_json::to_value(holder).unwrap();
-    assert_eq!(
-        wire["rows"][0],
-        serde_json::json!({
-            "role": "tool",
-            "content": "{\"tool_call_id\":\"call-7\",\"content\":\"finished\"}"
-        })
-    );
+    assert_eq!(wire["rows"][0]["role"], "tool");
     assert_eq!(wire["rows"][0].as_object().unwrap().len(), 2);
+    let envelope: serde_json::Value =
+        serde_json::from_str(wire["rows"][0]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        envelope,
+        serde_json::json!({"tool_call_id": "call-7", "content": "finished"})
+    );
     assert!(wire["optional_rows"].is_null());
 }
 
