@@ -721,6 +721,9 @@ where
         generation: Option<u64>,
     ) -> Result<TurnResult, TurnRunnerError> {
         let queued = self.retire_generation(request, generation).await;
+        if request.disposition == QueueDisposition::Parallel {
+            self.clear_parallel_tracking(request).await;
+        }
         for queued_request in queued {
             self.events
                 .terminal(
@@ -750,6 +753,9 @@ where
     ) -> Result<T, TurnRunnerError> {
         let (class, message) = self.failures.classify(&error);
         let queued = self.retire_generation(request, generation).await;
+        if request.disposition == QueueDisposition::Parallel {
+            self.clear_parallel_tracking(request).await;
+        }
         for queued_request in queued {
             self.events
                 .terminal(
