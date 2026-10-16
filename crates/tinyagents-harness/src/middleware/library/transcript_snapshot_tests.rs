@@ -49,9 +49,31 @@ fn unanswered_steps_are_plain_text_bounded_and_skip_custom_records() {
     ];
     let rendered = render_unanswered_steps(&messages, 4).expect("rendered steps");
     assert!(rendered.contains("called `search` with"));
-    assert!(rendered.contains("{\"q\"…"));
+    assert!(rendered.contains("{\"q\"..."));
     assert!(!rendered.contains("opaque"));
     assert_eq!(render_unanswered_steps(&[], 4), None);
+}
+
+#[test]
+fn unanswered_step_800_character_clip_matches_host_unicode_and_whitespace_output() {
+    let path = "🧪".repeat(900);
+    let assistant = AssistantMessage {
+        id: None,
+        content: vec![],
+        tool_calls: vec![ToolCall::new("call-1", "read_file", serde_json::json!({"path": path}))],
+        usage: None,
+        origin: None,
+    };
+    let user = format!("{}   tail", "a".repeat(797));
+    let rendered = render_unanswered_steps(
+        &[Message::Assistant(assistant), Message::user(user)],
+        800,
+    )
+    .expect("rendered failure steps");
+
+    let expected_args = format!("{{\"path\":\"{}...", "🧪".repeat(791));
+    assert!(rendered.contains(&format!("- called `read_file` with {expected_args}\n")));
+    assert!(rendered.contains(&format!("- message: {}...\n", "a".repeat(797))));
 }
 
 #[tokio::test]
