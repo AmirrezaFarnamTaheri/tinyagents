@@ -23,11 +23,7 @@ fn managed_names_reconcile_revocation_deferred_and_permanent_sets() {
         deferred: names(&["old", "hidden", "permanent"]),
         permanent: names(&["permanent"]),
     };
-    managed.refresh_synthesized(
-        &names(&["old", "kept"]),
-        &names(&["kept", "new"]),
-        false,
-    );
+    managed.refresh_synthesized(&names(&["old", "kept"]), &names(&["kept", "new"]), false);
     assert!(!managed.visible.contains("old"));
     assert!(!managed.deferred.contains("old"));
     assert!(!managed.visible.contains("new"));

@@ -3,15 +3,62 @@ use super::*;
 #[test]
 fn agent_error_kind_is_stable_and_content_free() {
     let cases = [
-        (AgentError::ProviderError { message: "secret".into(), retryable: true }, "provider_error"),
-        (AgentError::ContextLimitExceeded { utilization_pct: 95 }, "context_limit_exceeded"),
-        (AgentError::ToolExecutionError { tool_name: "shell".into(), message: "secret".into() }, "tool_execution_error"),
-        (AgentError::CostBudgetExceeded { spent_microdollars: 3, budget_microdollars: 4 }, "cost_budget_exceeded"),
-        (AgentError::MaxIterationsExceeded { max: 2 }, "max_iterations_exceeded"),
-        (AgentError::EmptyProviderResponse { iteration: 1 }, "empty_provider_response"),
-        (AgentError::CompactionFailed { message: "secret".into(), consecutive_failures: 1 }, "compaction_failed"),
-        (AgentError::PermissionDenied { tool_name: "shell".into(), required_level: "write".into(), channel_max_level: "read".into() }, "permission_denied"),
-        (AgentError::RegistryValidationFailed { diagnostics: vec!["secret".into()] }, "registry_validation_failed"),
+        (
+            AgentError::ProviderError {
+                message: "secret".into(),
+                retryable: true,
+            },
+            "provider_error",
+        ),
+        (
+            AgentError::ContextLimitExceeded {
+                utilization_pct: 95,
+            },
+            "context_limit_exceeded",
+        ),
+        (
+            AgentError::ToolExecutionError {
+                tool_name: "shell".into(),
+                message: "secret".into(),
+            },
+            "tool_execution_error",
+        ),
+        (
+            AgentError::CostBudgetExceeded {
+                spent_microdollars: 3,
+                budget_microdollars: 4,
+            },
+            "cost_budget_exceeded",
+        ),
+        (
+            AgentError::MaxIterationsExceeded { max: 2 },
+            "max_iterations_exceeded",
+        ),
+        (
+            AgentError::EmptyProviderResponse { iteration: 1 },
+            "empty_provider_response",
+        ),
+        (
+            AgentError::CompactionFailed {
+                message: "secret".into(),
+                consecutive_failures: 1,
+            },
+            "compaction_failed",
+        ),
+        (
+            AgentError::PermissionDenied {
+                tool_name: "shell".into(),
+                required_level: "write".into(),
+                channel_max_level: "read".into(),
+            },
+            "permission_denied",
+        ),
+        (
+            AgentError::RegistryValidationFailed {
+                diagnostics: vec!["secret".into()],
+            },
+            "registry_validation_failed",
+        ),
         (AgentError::Other(anyhow::anyhow!("secret")), "other"),
     ];
     for (error, expected) in cases {

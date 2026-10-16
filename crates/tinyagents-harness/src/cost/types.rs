@@ -3,8 +3,8 @@
 //! [`CostTotals`] is the additive value that lets cost roll up across a
 //! recursive run tree (model call → run → parent run).
 
-use serde::{Deserialize, Serialize};
 use super::CostTally;
+use serde::{Deserialize, Serialize};
 
 /// Per-token pricing for a model.
 ///

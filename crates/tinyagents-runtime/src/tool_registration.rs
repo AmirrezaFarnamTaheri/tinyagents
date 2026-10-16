@@ -60,10 +60,7 @@ pub struct ToolSurfaceDiff {
 }
 
 /// Computes a stable visibility diff for a synthesized tool refresh.
-pub fn tool_surface_diff(
-    previous: &HashSet<String>,
-    next: &HashSet<String>,
-) -> ToolSurfaceDiff {
+pub fn tool_surface_diff(previous: &HashSet<String>, next: &HashSet<String>) -> ToolSurfaceDiff {
     let mut diff = ToolSurfaceDiff {
         added: next.difference(previous).cloned().collect(),
         removed: previous.difference(next).cloned().collect(),

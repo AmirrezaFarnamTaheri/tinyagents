@@ -73,19 +73,19 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
         let mut rows = next
             .iter()
             .filter_map(|message| {
-                crate::transcript::message_to_native_transcript(message)
-                    .map(|row| (row, message))
+                crate::transcript::message_to_native_transcript(message).map(|row| (row, message))
             })
             .collect::<Vec<_>>();
         let mut consumed = vec![false; previous.len().min(prior.len())];
         for (row, message) in &mut rows {
-            let matched = previous
-                .iter()
-                .enumerate()
-                .take(consumed.len())
-                .find_map(|(index, candidate)| {
-                    (!consumed[index] && candidate == message).then_some(index)
-                });
+            let matched =
+                previous
+                    .iter()
+                    .enumerate()
+                    .take(consumed.len())
+                    .find_map(|(index, candidate)| {
+                        (!consumed[index] && candidate == message).then_some(index)
+                    });
             if let Some(index) = matched {
                 *row = prior[index].clone();
                 consumed[index] = true;
@@ -114,10 +114,10 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 }
 
 #[cfg(test)]
-#[path = "lib_tests.rs"]
-mod test;
-#[cfg(test)]
 #[path = "codec_tests.rs"]
 mod codec_tests;
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod test;
 #[cfg(test)]
 mod test_store;
