@@ -593,7 +593,10 @@ async fn historical_marker_budget_selects_only_the_newest_references_in_a_text_b
         .unwrap();
 
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(resolver.resolved_sources.lock().unwrap().as_slice(), ["newer"]);
+    assert_eq!(
+        resolver.resolved_sources.lock().unwrap().as_slice(),
+        ["newer"]
+    );
     let captured = model.requests.lock().unwrap();
     let Message::User(old_user) = &captured[0].messages[0] else {
         panic!("historical message retained")
@@ -602,10 +605,12 @@ async fn historical_marker_budget_selects_only_the_newest_references_in_a_text_b
         &old_user.content[0],
         ContentBlock::Text(text) if text.contains("omitted by history budget")
     ));
-    assert!(old_user
-        .content
-        .iter()
-        .any(|block| matches!(block, ContentBlock::Image(_))));
+    assert!(
+        old_user
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image(_)))
+    );
 }
 
 #[tokio::test]
@@ -670,10 +675,12 @@ async fn trusted_preparer_consumes_carrier_when_request_has_no_user_message() {
 
     wrapped.invoke(&"tenant-a".into(), original).await.unwrap();
 
-    assert!(model.requests.lock().unwrap()[0]
-        .metadata
-        .get("trusted_scope")
-        .is_none());
+    assert!(
+        model.requests.lock().unwrap()[0]
+            .metadata
+            .get("trusted_scope")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -926,8 +933,7 @@ async fn image_and_archive_fallback_context_is_unicode_safe_and_bounded() {
             let name = format!("entries/{index:02}-{}.txt", "long-name".repeat(12));
             zip.start_file(name, zip::write::SimpleFileOptions::default())
                 .unwrap();
-            zip.write_all(b"entry bytes are not extracted")
-                .unwrap();
+            zip.write_all(b"entry bytes are not extracted").unwrap();
         }
         zip.finish().unwrap();
     }
@@ -986,10 +992,20 @@ async fn image_and_archive_fallback_context_is_unicode_safe_and_bounded() {
         })
         .collect::<Vec<_>>();
     assert_eq!(contexts.len(), 2);
-    assert!(contexts.iter().all(|text| text.contains("Attachment context truncated")));
-    assert!(contexts.iter().all(|text| text.chars().count() <= 1_000 + 31));
+    assert!(
+        contexts
+            .iter()
+            .all(|text| text.contains("Attachment context truncated"))
+    );
+    assert!(
+        contexts
+            .iter()
+            .all(|text| text.chars().count() <= 1_000 + 31)
+    );
     assert!(contexts.iter().any(|text| text.contains("🧪")));
-    assert!(contexts
-        .iter()
-        .any(|text| text.contains("Archive listing (names are untrusted")));
+    assert!(
+        contexts
+            .iter()
+            .any(|text| text.contains("Archive listing (names are untrusted"))
+    );
 }
