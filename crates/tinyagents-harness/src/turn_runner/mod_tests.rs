@@ -491,6 +491,170 @@ async fn cancelling_a_followup_discards_later_followups_still_in_the_queue() {
 }
 
 #[tokio::test]
+async fn parallel_turn_gets_a_private_queue_and_cannot_steal_primary_work() {
+    let host = Arc::new(QueueOwnershipHost::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut primary_request = request(QueueDisposition::Interrupt, false);
+    primary_request.request_id = "primary-owner".into();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    host.primary_started.notified().await;
+
+    let mut collect = request(QueueDisposition::Collect, false);
+    collect.request_id = "primary-collect".into();
+    assert!(matches!(
+        runner.run(collect).await,
+        Err(TurnRunnerError::Queued)
+    ));
+
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "parallel-private".into();
+    runner.run(parallel_request).await.unwrap();
+
+    let (primary_queue, parallel_queue) = {
+        let queues = host.queues.lock().unwrap();
+        (
+            queues.get("primary-owner").unwrap().clone(),
+            queues.get("parallel-private").unwrap().clone(),
+        )
+    };
+    assert_eq!(primary_queue.status().await.collects, 1);
+    assert_eq!(parallel_queue.status().await.total, 0);
+
+    host.release_primary.notify_one();
+    primary.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn simultaneous_idle_steer_and_followup_admission_has_one_owner() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(SubmitBarrierIngress(tokio::sync::Barrier::new(2))),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut steer = request(QueueDisposition::Steer, false);
+    steer.request_id = "simultaneous-steer".into();
+    let mut followup = request(QueueDisposition::Followup, false);
+    followup.request_id = "simultaneous-followup".into();
+    let a = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(steer).await })
+    };
+    let b = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(followup).await })
+    };
+    started.notified().await;
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        runner
+            .queue_status(
+                &request(QueueDisposition::Interrupt, false).scope,
+                "thread-a"
+            )
+            .await
+            .total,
+        1
+    );
+    release.notify_one();
+    started.notified().await;
+    release.notify_one();
+    let results = [a.await.unwrap(), b.await.unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(TurnRunnerError::Queued)))
+            .count(),
+        1
+    );
+}
+
+struct SubmitBarrierIngress(tokio::sync::Barrier);
+
+#[async_trait::async_trait]
+impl IngressPolicy for SubmitBarrierIngress {
+    async fn apply(
+        &self,
+        stage: IngressStage,
+        _request: &mut TurnRequest,
+    ) -> Result<IngressDecision, String> {
+        if stage == IngressStage::BeforeSubmit {
+            self.0.wait().await;
+        }
+        Ok(IngressDecision::Continue)
+    }
+}
+
+#[derive(Default)]
+struct QueueOwnershipHost {
+    primary_started: tokio::sync::Notify,
+    release_primary: tokio::sync::Notify,
+    queues: Mutex<std::collections::HashMap<String, Arc<RunQueue<TurnRequest>>>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for QueueOwnershipHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.request_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        _cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        self.queues
+            .lock()
+            .unwrap()
+            .insert(request.request_id.clone(), queue);
+        if request.request_id == "primary-owner" {
+            self.primary_started.notify_one();
+            self.release_primary.notified().await;
+        }
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
 async fn closed_progress_stream_does_not_starve_the_completed_run() {
     let runner = runner(
         Arc::new(Host::default()),
