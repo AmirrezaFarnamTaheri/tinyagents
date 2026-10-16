@@ -345,7 +345,11 @@ where
             let mut owner = request.clone();
             loop {
                 let followup = self
-                    .take_next_followup_or_release(&owner.scope, &owner.thread_id, &owner.request_id)
+                    .take_next_followup_or_release(
+                        &owner.scope,
+                        &owner.thread_id,
+                        &owner.request_id,
+                    )
                     .await;
                 let Some(followup) = followup else { break };
                 owner = followup.clone();
@@ -408,13 +412,18 @@ where
                 );
                 drop(active);
                 if let Some(previous) = previous {
-                previous.cancel.cancel();
-                self.clear_queue(&request.scope, &request.thread_id).await;
+                    previous.cancel.cancel();
+                    self.clear_queue(&request.scope, &request.thread_id).await;
                 }
             }
         }
         let run_queue = if request.disposition == QueueDisposition::Parallel {
-            self.parallel_queue_for((request.scope.clone(), request.thread_id.clone(), request.request_id.clone())).await
+            self.parallel_queue_for((
+                request.scope.clone(),
+                request.thread_id.clone(),
+                request.request_id.clone(),
+            ))
+            .await
         } else {
             self.queue_for(key.clone()).await
         };
@@ -532,7 +541,11 @@ where
 
     async fn parallel_queue_for(&self, key: ParallelQueueKey) -> Arc<RunQueue<TurnRequest<P>>> {
         let mut queues = self.parallel_queues.lock().await;
-        Arc::clone(queues.entry(key).or_insert_with(|| Arc::new(RunQueue::new())))
+        Arc::clone(
+            queues
+                .entry(key)
+                .or_insert_with(|| Arc::new(RunQueue::new())),
+        )
     }
 
     async fn take_next_followup_or_release(
@@ -543,12 +556,19 @@ where
     ) -> Option<TurnRequest<P>> {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
-        if active.get(&key).is_none_or(|turn| turn.request_id != owner_request_id) {
+        if active
+            .get(&key)
+            .is_none_or(|turn| turn.request_id != owner_request_id)
+        {
             return None;
         }
         let queue = self.queues.lock().await.get(&key).cloned();
         let next = match queue {
-            Some(queue) => queue.take(QueueLane::Followup, QueueMode::OneAtATime).await.into_iter().next(),
+            Some(queue) => queue
+                .take(QueueLane::Followup, QueueMode::OneAtATime)
+                .await
+                .into_iter()
+                .next(),
             None => None,
         };
         if next.is_none() {
