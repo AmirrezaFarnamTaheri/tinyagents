@@ -38,10 +38,12 @@ them. `SubagentPersistence` owns a host's durable resume and lifecycle records.
 root run, immediate parent run, optional thread, and host-local task id.
 Fresh-task callers use `SubagentRequest::fresh_from_parent`, which derives the
 key from an actual parent and validates the owned child context. Continuations
-use `continue_with_key`: hosts must authorize and recover the original key,
-then retain it even with a fresh owned execution context. Request fields are
-private, so callers cannot bypass these identity checks. The key is the sole
-durable thread identity; a request carries no duplicate thread field.
+use async `continue_with_key`: pass the original key directly, or pass a
+durable session id and its `SubagentSessionStore` to resolve the original key.
+Hosts remain responsible for authorizing the session id before calling it.
+Request fields are private, so callers cannot bypass identity checks. The key
+is the sole durable thread identity; a request carries no duplicate thread
+field.
 
 Hosts must assign unique durable `RunConfig` ids to parent and child runs. The
 constructors reject an equal parent/child id but cannot prove global uniqueness.

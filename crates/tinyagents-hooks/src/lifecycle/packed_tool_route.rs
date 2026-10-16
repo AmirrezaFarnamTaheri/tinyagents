@@ -6,9 +6,9 @@ use std::marker::PhantomData;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::context::RunContext;
-use crate::error::Result as TaResult;
-use crate::middleware::Middleware;
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::Result as TaResult;
+use tinyagents_harness::middleware::Middleware;
 use tinyinference_llm::tool::ToolCall;
 
 use super::PackedToolRouter;

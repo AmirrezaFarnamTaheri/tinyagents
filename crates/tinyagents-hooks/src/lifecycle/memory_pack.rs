@@ -4,13 +4,13 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 
-use crate::context::RunContext;
-use crate::error::Result as TaResult;
-use crate::middleware::Middleware;
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::Result as TaResult;
+use tinyagents_harness::middleware::Middleware;
 use tinyinference_llm::model::ModelRequest;
 
 use super::MemoryPackSource;
-use crate::middleware::library::push_ephemeral_instruction;
+use tinyagents_harness::middleware::library::push_ephemeral_instruction;
 
 /// Adds the turn's memory pack to every model request of the turn.
 ///

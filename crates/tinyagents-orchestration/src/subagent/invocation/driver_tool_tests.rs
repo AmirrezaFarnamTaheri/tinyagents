@@ -1,0 +1,280 @@
+use super::*;
+use crate::subagent::*;
+use async_trait::async_trait;
+use serde_json::json;
+use std::sync::Arc;
+use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::ids::CallId;
+use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::tool::ToolDispatch;
+use tinyagents_runtime::ToolSnapshot;
+use tinyinference_llm::message::Message;
+use tinyinference_llm::providers::MockModel;
+
+struct Planner;
+
+#[async_trait]
+impl SubagentPlanner<(), ()> for Planner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<(), ()>,
+    ) -> std::result::Result<PreparedSubagent<()>, SubagentError> {
+        let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        ))
+    }
+}
+
+struct Executor;
+
+#[async_trait]
+impl SubagentExecutor<()> for Executor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<()>,
+    ) -> std::result::Result<SubagentOutcome, SubagentError> {
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "driver result",
+        ))
+    }
+}
+
+struct Persistence;
+
+#[async_trait]
+impl SubagentPersistence for Persistence {
+    async fn load_terminal(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(None)
+    }
+    async fn load(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentResume>, SubagentError> {
+        Ok(None)
+    }
+    async fn load_pause(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(None)
+    }
+    async fn save_pause(
+        &self,
+        _: PersistedSubagentPause,
+    ) -> std::result::Result<SubagentPausePersistenceDisposition, SubagentError> {
+        Ok(SubagentPausePersistenceDisposition::Inserted)
+    }
+    async fn record_terminal(
+        &self,
+        _: &SubagentTaskKey,
+        _: &SubagentOutcome,
+        _: Option<&SubagentResume>,
+    ) -> std::result::Result<SubagentTerminalPersistenceDisposition, SubagentError> {
+        Ok(SubagentTerminalPersistenceDisposition::Inserted)
+    }
+}
+
+#[tokio::test]
+async fn background_request_without_delivery_target_runs_inline() {
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "worker-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_request| None,
+    );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("call-1"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.is_error);
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["output"], "driver result");
+}
+
+#[tokio::test]
+async fn background_request_with_delivery_target_returns_task_reference() {
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "worker-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("parent-thread".into()),
+    );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("call-2"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.is_error);
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(value["status"], "running");
+    assert_eq!(value["delivery_target"], "parent-thread");
+    assert_eq!(value["task_id"], "worker-task");
+}
+
+#[tokio::test]
+async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
+    let mut harness = AgentHarness::new();
+    harness.register_model(
+        "child",
+        Arc::new(MockModel::constant("legacy harness result")),
+    );
+    let legacy = Arc::new(crate::subagent::SubAgent::new(
+        "worker",
+        "worker description",
+        Arc::new(harness),
+    ));
+    let tool =
+        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+            .with_driver(
+                driver(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("worker-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "driver-task",
+                        (),
+                        args["input"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                },
+                |_| None,
+            );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("driver-route"),
+        json!({"input":"do work", "mode":"inline"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.output()).unwrap()["output"],
+        "driver result"
+    );
+}
+
+#[tokio::test]
+async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
+    let mut harness = AgentHarness::new();
+    harness.register_model("child", Arc::new(MockModel::constant("legacy result")));
+    let legacy = Arc::new(crate::subagent::SubAgent::new(
+        "worker",
+        "worker description",
+        Arc::new(harness),
+    ));
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    let callback_tx = tx.clone();
+    let tool =
+        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+            .with_driver_and_completion(
+                driver(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("worker-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "driver-task",
+                        (),
+                        args["input"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                },
+                |_| Some("parent-session".into()),
+                move |target, result| {
+                    if let Some(tx) = callback_tx.lock().unwrap().take() {
+                        let output = result.map(|outcome| (target.to_owned(), outcome.output));
+                        let _ = tx.send(output);
+                    }
+                },
+            );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let response = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("driver-background"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.output()).unwrap()["status"],
+        "running"
+    );
+    let delivered = rx.await.unwrap().unwrap();
+    assert_eq!(delivered, ("parent-session".into(), "driver result".into()));
+}
+
+fn driver() -> Arc<SubagentDriver<(), ()>> {
+    Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(Planner)),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(Persistence)),
+        })
+        .unwrap(),
+    )
+}

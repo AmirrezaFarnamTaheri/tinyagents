@@ -158,7 +158,7 @@ pub struct TurnCost {
     pub cached_input_tokens: u64,
     pub cost: CostTally,
     pub call_count: u32,
-    /// Pricing the stop-hook accounting ([`StopHookMetrics`](crate::middleware::StopHookMetrics)) resolves each
+    /// Pricing the stop-hook accounting (`tinyagents_hooks::stop::StopHookMetrics`) resolves each
     /// recorded response's model against. `None` prices nothing, so a call
     /// without a provider charge is `Unknown`.
     pub pricing: Option<PricingLookup>,
@@ -212,24 +212,6 @@ impl TurnCost {
     /// The turn's cost so far, or `None` when any call's cost is unknown.
     pub fn total_usd(&self) -> Option<f64> {
         self.cost.usd()
-    }
-}
-
-/// Folds every completed model response into the tally: the provider's
-/// reported charge when the response carries one, else the list-rate estimate
-/// from the installed [`PricingLookup`], else unknown.
-impl crate::middleware::StopHookMetrics for TurnCost {
-    fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {
-        let Some(recovered) = tinyinference_llm::usage::recover_usage(response) else {
-            return;
-        };
-        let usage = CallUsage {
-            usage: recovered.usage,
-            charged_amount_usd: recovered.charged_amount_usd.unwrap_or(0.0),
-            cost_is_estimate: false,
-            charge_reported: recovered.charged_amount_usd.is_some(),
-        };
-        self.add_priced_call(model, &usage);
     }
 }
 

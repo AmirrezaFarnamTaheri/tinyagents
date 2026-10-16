@@ -20,6 +20,46 @@ use super::ArtifactReference;
 
 const LOG_PREFIX: &str = "[subagent-result-policy]";
 
+/// Whether `task_id` can be used as a single filename component.
+///
+/// The allow-list intentionally accepts only ids minted by this harness or
+/// short test labels, so path separators, dots and encoded traversal forms are
+/// rejected before a host joins the id to a storage directory.
+pub fn is_safe_task_id(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id.len() <= 128
+        && task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+/// Renders a truthful failure envelope around delegated work that did not
+/// execute. The parent must not interpret partial text as a completed result.
+pub fn frame_unexecuted_outcome(tool_name: &str, error: &str) -> String {
+    format!(
+        "{tool_name} failed and did not complete — no work was performed and no results were produced. Do NOT treat this as success or fabricate an output; report the failure to the user. Error: {error}"
+    )
+}
+
+/// Detects a model response that consists of an unexecuted tool-call payload
+/// without usable prose. Such a stub is not a result that a parent can report.
+pub fn is_unexecuted_tool_call_stub(output: &str) -> bool {
+    use tinyagents_harness::tinytools_agent::dialect::{
+        contains_tool_call_payload, strip_tool_calls_from_response,
+    };
+    if !contains_tool_call_payload(output) {
+        return false;
+    }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(output.trim())
+        && map.contains_key("tool_calls")
+    {
+        return true;
+    }
+    !strip_tool_calls_from_response(output)
+        .chars()
+        .any(char::is_alphanumeric)
+}
+
 /// What to do with output longer than [`ResultPolicy::max_chars`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

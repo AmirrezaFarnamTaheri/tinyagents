@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::{TaskId, next_seq};
+use tinyagents_harness::ids::{RunId, TaskId, next_seq};
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
@@ -15,15 +15,23 @@ use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyinference_llm::message::Message;
 use tinytools::{Tool, ToolResult};
 
-use crate::subagent::{AppliedResult, IncompleteKind};
+use crate::subagent::{
+    AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
+};
 
-use tinyagents_tasks::DetachedTaskRegistryError;
+use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tokio::sync::watch;
 
 use super::types::{JobControl, JobMeta};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
+
+type SessionOverlay = (
+    Arc<dyn SubagentSessionStore>,
+    Arc<dyn Fn(u64) -> String + Send + Sync>,
+);
+type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
 
@@ -351,6 +359,28 @@ impl SubAgentJobRegistry {
         Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
     }
 
+    async fn wait_owned(&self, job_id: &str, owner: u64) -> Result<SubAgentJob, SubAgentJobError> {
+        self.get_owned(job_id, owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+        let mut status = {
+            let controls = self.controls();
+            controls
+                .get(&SubAgentJobId(job_id.to_owned()))
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?
+                .status
+                .subscribe()
+        };
+        loop {
+            let snapshot = status.borrow().clone();
+            if snapshot.status.is_terminal() {
+                return Ok(snapshot);
+            }
+            if status.changed().await.is_err() {
+                return Ok(status.borrow().clone());
+            }
+        }
+    }
+
     /// Returns every job for trusted host-side supervision.
     ///
     /// Model-visible tools must use the run-scoped dispatch path instead.
@@ -458,12 +488,39 @@ impl SubAgentJobRegistry {
 #[derive(Clone)]
 pub struct SubAgentJobsTool {
     jobs: SubAgentJobRegistry,
+    sessions: Option<SessionOverlay>,
+    tasks: Option<TaskOverlay>,
 }
 
 impl SubAgentJobsTool {
     /// Creates the query tool over `jobs`.
     pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs }
+        Self {
+            jobs,
+            sessions: None,
+            tasks: None,
+        }
+    }
+
+    /// Overlays durable sessions in list/query and enables durable close.
+    /// `parent_key` maps the live run owner to the host's durable parent scope.
+    pub fn with_sessions(
+        mut self,
+        sessions: Arc<dyn SubagentSessionStore>,
+        parent_key: impl Fn(u64) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.sessions = Some((sessions, Arc::new(parent_key)));
+        self
+    }
+
+    /// Overlays host-managed task records owned by the requesting parent run.
+    pub fn with_task_store(
+        mut self,
+        tasks: Arc<dyn TaskStore>,
+        parent_run_id: impl Fn(u64) -> RunId + Send + Sync + 'static,
+    ) -> Self {
+        self.tasks = Some((tasks, Arc::new(parent_run_id)));
+        self
     }
 }
 
@@ -484,8 +541,8 @@ impl Tool for SubAgentJobsTool {
                 "job_id": { "type": "string" },
                 "action": {
                     "type": "string",
-                    "enum": ["query", "cancel"],
-                    "description": "`query` (default) reads a job or lists jobs; `cancel` stops the job named by job_id."
+                    "enum": ["query", "cancel", "close", "await"],
+                    "description": "`query` reads a job/session or lists work; `cancel` stops a live job; `close` prevents a durable session from being reused; `await` waits for the named live job."
                 }
             }
         })
@@ -530,21 +587,159 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 let job = self.jobs.cancel_owned(job_id, parent.instance_id())?;
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
-            Some(_) => anyhow::bail!("action must be `query` or `cancel`"),
+            Some(Some("close")) => {
+                let id = object
+                    .get("job_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
+                let (sessions, key) = self
+                    .sessions
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
+                let Some(session) = sessions.get(id).await? else {
+                    anyhow::bail!("durable subagent session not found");
+                };
+                if session.parent_session != key(parent.instance_id()) {
+                    anyhow::bail!("durable subagent session not found");
+                }
+                return Ok(ToolResult::json(
+                    json!({"closed": sessions.close(id).await?}),
+                ));
+            }
+            Some(Some("await")) => {
+                let Some(id) = object.get("job_id").and_then(Value::as_str) else {
+                    let mut tombstones = Vec::new();
+                    for job in self.jobs.list_owned(parent.instance_id()) {
+                        let job = self
+                            .jobs
+                            .wait_owned(job.id.as_str(), parent.instance_id())
+                            .await?;
+                        if job.status.is_terminal() {
+                            tombstones.push(serde_json::to_value(job)?);
+                        }
+                    }
+                    let awaiting_user = if let Some((sessions, key)) = &self.sessions {
+                        sessions.list_for_parent(&key(parent.instance_id()), None).await?.into_iter()
+                            .filter(|session| session.status == crate::subagent::DurableSubagentStatus::AwaitingUser)
+                        .map(|session| {
+                            let question = session.latest_history.as_ref()
+                                .and_then(|history| history.last())
+                                .map(tinyinference_llm::message::Message::text)
+                                .unwrap_or_default();
+                            let envelope = crate::subagent::SubagentAwaitingUser {
+                                task_id: session.current_task_id.clone().unwrap_or_default(),
+                                agent_id: session.agent_id.clone(),
+                                worker_thread_id: session.worker_thread_id.clone(),
+                                question,
+                                checkpointed: true,
+                            };
+                            json!({"session_id":session.subagent_session_id,"task_id":session.current_task_id,"status":"awaiting_user","history":session.latest_history,"awaiting_user_envelope":envelope.render()})
+                        })
+                            .collect()
+                    } else {
+                        Vec::<Value>::new()
+                    };
+                    return Ok(ToolResult::json(
+                        json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user}),
+                    ));
+                };
+                if self.jobs.get_owned(id, parent.instance_id()).is_some() {
+                    let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
+                    return Ok(ToolResult::json(serde_json::to_value(job)?));
+                }
+                if let Some((sessions, key)) = &self.sessions
+                    && let Some(session) = sessions
+                        .get(id)
+                        .await?
+                        .filter(|session| session.parent_session == key(parent.instance_id()))
+                {
+                    let awaiting_user =
+                        session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
+                    let question = session
+                        .latest_history
+                        .as_ref()
+                        .and_then(|history| history.last())
+                        .map(tinyinference_llm::message::Message::text)
+                        .unwrap_or_default();
+                    let envelope = crate::subagent::SubagentAwaitingUser {
+                        task_id: session.current_task_id.clone().unwrap_or_default(),
+                        agent_id: session.agent_id.clone(),
+                        worker_thread_id: session.worker_thread_id.clone(),
+                        question,
+                        checkpointed: true,
+                    };
+                    return Ok(ToolResult::json(json!({
+                        "session_id": session.subagent_session_id,
+                        "task_id": session.current_task_id,
+                        "status": session.status,
+                        "awaiting_user_envelope": awaiting_user.then_some(envelope.render()),
+                        "latest_error": session.latest_error,
+                    })));
+                }
+                return Err(SubAgentJobError::NotFound(id.to_owned()).into());
+            }
+            Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
         if let Some(value) = object.get("job_id") {
             let job_id = value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
-            let job = self
-                .jobs
-                .get_owned(job_id, parent.instance_id())
+            let job = self.jobs.get_owned(job_id, parent.instance_id());
+            if let Some(job) = job {
+                return Ok(ToolResult::json(serde_json::to_value(job)?));
+            }
+            let (sessions, key) = self
+                .sessions
+                .as_ref()
                 .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-            Ok(ToolResult::json(serde_json::to_value(job)?))
-        } else {
+            let session = sessions
+                .get(job_id)
+                .await?
+                .filter(|session| session.parent_session == key(parent.instance_id()))
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
             Ok(ToolResult::json(serde_json::to_value(
-                self.jobs.list_owned(parent.instance_id()),
+                DurableSubagentSessionSummary::from(&session),
             )?))
+        } else {
+            let mut rows = self
+                .jobs
+                .list_owned(parent.instance_id())
+                .into_iter()
+                .map(|job| {
+                    serde_json::to_value(job).map(|mut v| {
+                        v["kind"] = Value::String("job".into());
+                        v
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some((sessions, key)) = &self.sessions {
+                let parent_key = key(parent.instance_id());
+                rows.extend(
+                    sessions
+                        .list_for_parent(&parent_key, None)
+                        .await?
+                        .iter()
+                        .map(|session| {
+                            let mut value =
+                                serde_json::to_value(DurableSubagentSessionSummary::from(session))
+                                    .unwrap_or(Value::Null);
+                            value["kind"] = Value::String("session".into());
+                            value
+                        }),
+                );
+            }
+            if let Some((tasks, parent_run_id)) = &self.tasks {
+                let filter = OrchestrationTaskFilter {
+                    parent_run_id: Some(parent_run_id(parent.instance_id())),
+                    ..OrchestrationTaskFilter::default()
+                };
+                rows.extend(tasks.list(filter).into_iter().map(|task| {
+                    let mut value = serde_json::to_value(task).unwrap_or(Value::Null);
+                    value["kind"] = Value::String("task".into());
+                    value
+                }));
+            }
+            Ok(ToolResult::json(Value::Array(rows)))
         }
     }
 }
@@ -553,12 +748,26 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
 #[derive(Clone)]
 pub struct SubAgentMessageTool {
     jobs: SubAgentJobRegistry,
+    sessions: Option<SessionOverlay>,
 }
 
 impl SubAgentMessageTool {
     /// Creates the message tool over `jobs`.
     pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs }
+        Self {
+            jobs,
+            sessions: None,
+        }
+    }
+
+    /// Enables steering a live durable session by its session id.
+    pub fn with_sessions(
+        mut self,
+        sessions: Arc<dyn SubagentSessionStore>,
+        parent_key: impl Fn(u64) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.sessions = Some((sessions, Arc::new(parent_key)));
+        self
     }
 }
 
@@ -576,14 +785,16 @@ impl Tool for SubAgentMessageTool {
         json!({
             "type": "object",
             "properties": {
-                "job_id": { "type": "string" },
+                "job_id": { "type": "string", "description": "Live job id. Use session_id for a durable reusable session." },
+                "session_id": { "type": "string", "description": "Durable reusable session id." },
                 "message": { "type": "string" },
                 "request_id": {
                     "type": "string",
                     "description": "Optional idempotency key: resending the same request_id to the same job does not queue the message again while it is among the most recent 64 request ids remembered for that job (older ids are evicted); ids over 128 bytes are rejected."
                 }
             },
-            "required": ["job_id", "message"]
+            "required": ["message"],
+            "oneOf": [{"required":["job_id"]},{"required":["session_id"]}]
         })
     }
 
@@ -607,10 +818,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
-        let job_id = args
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("job_id must be a string"))?;
+        let job_id = if let Some(session_id) = args.get("session_id").and_then(Value::as_str) {
+            let (sessions, key) = self
+                .sessions
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
+            let session = sessions
+                .get(session_id)
+                .await?
+                .filter(|session| session.parent_session == key(parent.instance_id()))
+                .ok_or_else(|| anyhow::anyhow!("durable subagent session not found"))?;
+            session
+                .current_task_id
+                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?
+        } else {
+            args.get("job_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("job_id or session_id must be a string"))?
+                .to_owned()
+        };
         let message = args
             .get("message")
             .and_then(Value::as_str)
@@ -625,7 +851,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
         };
         let duplicate = self.jobs.send_message_with_request_id(
-            job_id,
+            &job_id,
             parent.instance_id(),
             message,
             request_id,

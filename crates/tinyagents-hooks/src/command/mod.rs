@@ -38,9 +38,11 @@ pub mod environment;
 pub mod exec;
 pub mod followup;
 pub mod matcher;
+pub mod ops;
 pub mod types;
 
 #[cfg(test)]
+#[path = "command_tests.rs"]
 mod tests;
 
 pub use config::{HookConfig, HookDefinition, HookKind, HookLayer, HooksFile};
@@ -48,4 +50,4 @@ pub use engine::{HookEngine, HookOutcome};
 pub use environment::{
     CommandOutput, CommandRequest, CommandSpawner, HookEnvironment, PromptEvaluator, ShellFactory,
 };
-pub use types::{HookEvent, HookInput, HookOutput, HookPayload, HookPermission};
+pub use types::{HookEvent, HookInput, HookOutput, HookPayload, HookPermission, ToolPayload};

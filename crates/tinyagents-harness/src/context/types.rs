@@ -51,6 +51,8 @@ pub(crate) struct TerminalRunSummary {
     /// Names of calls that reached a tool executor, in execution order.
     /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
     pub(crate) executed_tools: Vec<String>,
+    /// Per-tool outcome records forwarded to the learning sink.
+    pub(crate) tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
 }
 
 impl TerminalRunSummary {
@@ -60,6 +62,7 @@ impl TerminalRunSummary {
             text: run.text(),
             usage: run.usage,
             executed_tools: run.executed_tools.clone(),
+            tool_outcomes: run.tool_outcomes.clone(),
         }
     }
 }

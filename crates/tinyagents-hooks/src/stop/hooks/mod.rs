@@ -5,13 +5,15 @@
 mod types;
 pub use types::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 
-use crate::context::RunContext;
-use crate::error::{Result, TinyAgentsError};
-use crate::middleware::{AgentRun, Middleware};
-use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::middleware::{AgentRun, Middleware};
+use tinyagents_harness::steering::{
+    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget,
+};
 use tinyinference_llm::model::ModelResponse;
 use types::HookRunState;
 
@@ -30,6 +32,7 @@ pub struct StopHookMiddleware<Metrics = ()> {
     runs: Mutex<HashMap<u64, HookRunState<Metrics>>>,
     seed: Option<Metrics>,
     observer: Option<StopObserver>,
+    halt_summary: Option<tinyagents_harness::middleware::library::HaltSummarySlot>,
 }
 
 impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
@@ -43,13 +46,14 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
             runs: Mutex::new(HashMap::new()),
             seed: None,
             observer: None,
+            halt_summary: None,
         }
     }
 
     /// Start every run's tally from `seed` instead of `Metrics::default()`.
     ///
     /// For metrics that carry host configuration the harness cannot default,
-    /// such as a [`TurnCost`](crate::cost::TurnCost) with a pricing lookup.
+    /// such as a [`TurnCost`](tinyagents_harness::cost::TurnCost) with a pricing lookup.
     pub fn with_metrics_seed(mut self, seed: Metrics) -> Self {
         self.seed = Some(seed);
         self
@@ -68,6 +72,15 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
         F: Fn(&StopReport) + Send + Sync + 'static,
     {
         self.observer = Some(Arc::new(observer));
+        self
+    }
+
+    /// Record the first stop reason in the shared halt-summary slot.
+    pub fn with_halt_summary(
+        mut self,
+        slot: tinyagents_harness::middleware::library::HaltSummarySlot,
+    ) -> Self {
+        self.halt_summary = Some(slot);
         self
     }
 
@@ -117,7 +130,7 @@ where
             runs.insert(
                 context.instance_id(),
                 HookRunState {
-                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    lifecycle: context.lifecycle_token(),
                     metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 },
@@ -153,7 +166,7 @@ where
             let run = runs
                 .entry(context.instance_id())
                 .or_insert_with(|| HookRunState {
-                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    lifecycle: context.lifecycle_token(),
                     metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 });
@@ -197,6 +210,14 @@ where
                 .expect("active stop-hook run");
             run.stopped = true;
             drop(runs);
+            if let Some(slot) = &self.halt_summary {
+                *slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+                    "Stopping after {} model call(s): {}",
+                    report.iteration, report.reason
+                ));
+            }
             if let Some(observer) = &self.observer {
                 observer(&report);
             }
@@ -233,3 +254,7 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;

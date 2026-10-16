@@ -10,6 +10,81 @@
 
 use tinyagents_runtime::ToolSnapshot;
 
+/// Fleet-control tools whose visibility shapes orchestration prompts and
+/// decisions. The names are stable tool identifiers supplied by the host.
+pub const FLEET_TOOLS: &[&str] = &[
+    "steer_subagent",
+    "wait_subagent",
+    "wait",
+    "wait_loop",
+    "close_subagent",
+    "continue_subagent",
+    "list_subagents",
+];
+
+/// The fleet-control subset visible to one parent agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetToolSet {
+    available: Vec<&'static str>,
+}
+
+impl FleetToolSet {
+    /// Treats an unavailable parent definition as having the full fleet
+    /// vocabulary, allowing host prompts to retain their prior fallback.
+    pub fn all() -> Self {
+        Self {
+            available: FLEET_TOOLS.to_vec(),
+        }
+    }
+
+    /// Resolves fleet visibility from a definition's tool scope and denylist.
+    /// A trailing `*` denies every fleet name with that prefix.
+    pub fn from_scope(scope: &tinyagents_definition::ToolScope, disallowed: &[String]) -> Self {
+        let denied = |name: &str| {
+            disallowed
+                .iter()
+                .any(|entry| match entry.strip_suffix('*') {
+                    Some(prefix) => name.starts_with(prefix),
+                    None => entry == name,
+                })
+        };
+        let available = FLEET_TOOLS
+            .iter()
+            .copied()
+            .filter(|name| match scope {
+                tinyagents_definition::ToolScope::Wildcard => true,
+                tinyagents_definition::ToolScope::Named(names) => {
+                    names.iter().any(|candidate| candidate == name)
+                }
+            })
+            .filter(|name| !denied(name))
+            .collect();
+        Self { available }
+    }
+
+    /// Resolves fleet visibility from the effective, already-filtered tool
+    /// names for the current turn.
+    pub fn from_visible_tool_names(names: &std::collections::HashSet<String>) -> Self {
+        Self {
+            available: FLEET_TOOLS
+                .iter()
+                .copied()
+                .filter(|name| names.contains(*name))
+                .collect(),
+        }
+    }
+
+    /// Whether the parent can call `tool`.
+    pub fn has(&self, tool: &str) -> bool {
+        self.available.contains(&tool)
+    }
+
+    /// Whether the parent can block on or poll a worker.
+    pub fn can_wait(&self) -> bool {
+        self.has("wait_subagent")
+    }
+}
+
 /// Name of the job query tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
 pub const SUBAGENT_JOBS_TOOL: &str = "subagent_jobs";
 /// Name of the job message tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
@@ -68,6 +143,22 @@ pub fn restrict_tools(
     ceiling: Option<&ToolSnapshot>,
     host_delegation_tools: &[String],
 ) -> ToolSnapshot {
+    restrict_tools_with_scope(tools, role, ceiling, host_delegation_tools, None, None)
+}
+
+/// Restricts a child's declarations by inherited ceiling, role, authored
+/// [`ToolScope`](tinyagents_definition::ToolScope), and optional `{skill}__`
+/// prefix. Every restriction is an intersection; no policy can widen the
+/// supplied snapshot.
+pub fn restrict_tools_with_scope(
+    tools: &ToolSnapshot,
+    role: SubagentRole,
+    ceiling: Option<&ToolSnapshot>,
+    host_delegation_tools: &[String],
+    scope: Option<&tinyagents_definition::ToolScope>,
+    skill_filter: Option<&str>,
+) -> ToolSnapshot {
+    let skill_prefix = skill_filter.map(|skill| format!("{skill}__"));
     tools.retaining(|spec| {
         let inherited = ceiling.is_none_or(|ceiling| {
             ceiling
@@ -76,7 +167,16 @@ pub fn restrict_tools(
                 .any(|inherited| inherited.name == spec.name)
         });
         let allowed = role.can_delegate() || !is_delegation_tool(&spec.name, host_delegation_tools);
-        inherited && allowed
+        let in_scope = scope.is_none_or(|scope| match scope {
+            tinyagents_definition::ToolScope::Wildcard => true,
+            tinyagents_definition::ToolScope::Named(names) => {
+                names.iter().any(|name| name == &spec.name)
+            }
+        });
+        let matches_skill = skill_prefix
+            .as_deref()
+            .is_none_or(|prefix| spec.name.starts_with(prefix));
+        inherited && allowed && in_scope && matches_skill
     })
 }
 
@@ -100,6 +200,7 @@ pub fn subagent_framing(role: SubagentRole, depth: usize, task: &str) -> String 
          Report your result concisely to your parent; do not address the end user directly.\n\
          Any inherited conversation or context is background, not your assignment; only the assignment above is.\n\
          Work to completion in the background of the parent's turn and finish with a final report.\n\
+         Return a compact result under these headings: Answer, Evidence used, Actions taken, Open uncertainties, Failed tool calls, Recommended next step. Do not state unsupported facts; disclose truncated or partial tool results.\n\
          {delegation}"
     )
 }

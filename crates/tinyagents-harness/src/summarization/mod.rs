@@ -23,6 +23,7 @@
 //! All policy decisions are explicit data types, never hidden behaviour. Callers
 //! choose when to call, what to pass, and how to handle the result.
 
+pub mod cap_summary;
 mod checkpoint;
 pub mod compaction;
 mod compaction_carry;
@@ -39,6 +40,7 @@ pub mod task_state;
 mod trim;
 mod types;
 
+pub use cap_summary::{CapToolResult, build_cap_digest, cap_summary_fallback};
 pub use checkpoint::{CHECKPOINT_PREFIX, checkpoint_body, checkpoint_message, is_checkpoint};
 pub use compaction::{
     CompactionContext, CompactionDecision, CutPoint, OverflowClassifier, OverflowInfo,

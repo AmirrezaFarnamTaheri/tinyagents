@@ -69,7 +69,6 @@ mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
 mod image_trim;
-mod lifecycle_hooks;
 mod loop_guards;
 mod memory_protocol;
 mod memory_protocol_middleware;
@@ -84,8 +83,6 @@ mod research_budget;
 mod resilience;
 mod response_shape;
 mod shell_turn_budget;
-mod stop_hooks;
-mod stop_latch;
 mod tool_exposure_shadow;
 mod tool_policy;
 mod turn_clock;
@@ -117,10 +114,6 @@ pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
-};
-pub use lifecycle_hooks::{
-    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
-    PackedToolRouter,
 };
 pub use loop_guards::{
     LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
@@ -161,10 +154,6 @@ pub use shell_turn_budget::{
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget, clamp_shell_timeout,
     install_time_notes,
 };
-pub use stop_hooks::{
-    StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
-};
-pub use stop_latch::StopLatch;
 pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
@@ -229,6 +218,3 @@ mod wrap_up_test;
 
 mod ephemeral_instructions;
 pub use ephemeral_instructions::{EphemeralInstructionMiddleware, EphemeralInstructionQueue};
-#[cfg(test)]
-#[path = "stop_hooks_tests.rs"]
-mod stop_hooks_test;

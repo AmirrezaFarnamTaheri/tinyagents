@@ -32,6 +32,11 @@ pub use completions::{
     DriverCompletionStore, InMemoryCompletionStore, NeutralCompletionFormatter, NotifyMode,
     RecordOutcome, TombstoneOutcome,
 };
+pub use completions::{
+    CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
+    DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate, ParentBusyLease,
+    ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+};
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{
     ReconcileOutcome, ReconcileReport, ReconciledTask, reconcile_orphaned_tasks, task_status_label,
@@ -40,14 +45,16 @@ pub use recovery::{
     MAX_RECOVERY_CHILDREN, MAX_RECOVERY_LABEL_CHARS, RESTART_RECOVERY_INSTRUCTION, RecoveryChild,
     build_restart_recovery_note, recovery_children,
 };
-pub use runtime::DetachedTaskRegistry;
+pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
 };
 pub use tool::{
-    OrchestrationTool, SteeringRegistry, orchestration_tool_schema, orchestration_tool_schemas,
-    orchestration_tools, orchestration_tools_with_steering, register_orchestration_tools,
+    OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema,
+    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_status_overlay,
+    orchestration_tools_with_steering, register_orchestration_tools,
+    register_orchestration_tools_with_status_overlay,
 };
 pub use types::*;
 

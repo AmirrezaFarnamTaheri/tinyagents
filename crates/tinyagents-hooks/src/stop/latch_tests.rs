@@ -1,6 +1,6 @@
 use super::*;
-use crate::steering::SteeringHandle;
 use std::sync::Arc;
+use tinyagents_harness::steering::SteeringHandle;
 
 fn latch() -> (StopLatch, HaltSummarySlot) {
     let slot: HaltSummarySlot = Arc::default();

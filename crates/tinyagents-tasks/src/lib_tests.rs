@@ -44,6 +44,46 @@ fn raw(result: &ToolResult) -> &serde_json::Value {
         .expect("orchestration tool returns a JSON payload")
 }
 
+struct DurableOverlay;
+
+impl OrchestrationStatusOverlay for DurableOverlay {
+    fn sessions(&self, _filter: &OrchestrationTaskFilter) -> Vec<serde_json::Value> {
+        vec![json!({"session_id":"session-1","status":"running"})]
+    }
+
+    fn collected_tombstones(&self, _task_ids: &[TaskId]) -> Vec<serde_json::Value> {
+        vec![json!({"task_id":"task-1","status":"completed","result":"done"})]
+    }
+
+    fn awaiting_user(&self, _task_ids: &[TaskId]) -> Vec<serde_json::Value> {
+        vec![json!({"session_id":"session-2","status":"awaiting_user","question":"Continue?"})]
+    }
+}
+
+#[tokio::test]
+async fn orchestration_list_and_await_include_host_durable_overlays() {
+    let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+    store.insert(graph_spec("task-live")).unwrap();
+    let overlay = Arc::new(DurableOverlay);
+    let list = OrchestrationTool::new(OrchestrationToolKind::List, store.clone())
+        .with_status_overlay(overlay.clone());
+    let listed = run(&list, json!({})).await.unwrap();
+    let listed = raw(&listed);
+    assert_eq!(listed["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["sessions"][0]["session_id"], "session-1");
+    assert_eq!(listed["collected_tombstones"][0]["task_id"], "task-1");
+
+    let await_tool =
+        OrchestrationTool::new(OrchestrationToolKind::Await, store).with_status_overlay(overlay);
+    let awaited = run(&await_tool, json!({"task_ids":["task-live"]}))
+        .await
+        .unwrap();
+    let awaited = raw(&awaited);
+    assert_eq!(awaited["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(awaited["collected_tombstones"][0]["status"], "completed");
+    assert_eq!(awaited["awaiting_user"][0]["status"], "awaiting_user");
+}
+
 #[test]
 fn in_memory_store_tracks_task_lifecycle() {
     let store = InMemoryTaskStore::new();
