@@ -618,7 +618,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     let awaiting_user = if let Some((sessions, key)) = &self.sessions {
                         sessions.list_for_parent(&key(parent.instance_id()), None).await?.into_iter()
                             .filter(|session| session.status == crate::subagent::DurableSubagentStatus::AwaitingUser)
-                            .map(|session| json!({"session_id":session.subagent_session_id,"task_id":session.current_task_id,"status":"awaiting_user","history":session.latest_history}))
+                        .map(|session| {
+                            let question = session.latest_history.as_ref()
+                                .and_then(|history| history.last())
+                                .map(tinyinference_llm::message::Message::text)
+                                .unwrap_or_default();
+                            let envelope = crate::subagent::SubagentAwaitingUser {
+                                task_id: session.current_task_id.clone().unwrap_or_default(),
+                                agent_id: session.agent_id.clone(),
+                                worker_thread_id: session.worker_thread_id.clone(),
+                                question,
+                                checkpointed: true,
+                            };
+                            json!({"session_id":session.subagent_session_id,"task_id":session.current_task_id,"status":"awaiting_user","history":session.latest_history,"awaiting_user_envelope":envelope.render()})
+                        })
                             .collect()
                     } else {
                         Vec::<Value>::new()
@@ -639,11 +652,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     {
                         let awaiting_user =
                             session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
+                        let question = session
+                            .latest_history
+                            .as_ref()
+                            .and_then(|history| history.last())
+                            .map(tinyinference_llm::message::Message::text)
+                            .unwrap_or_default();
+                        let envelope = crate::subagent::SubagentAwaitingUser {
+                            task_id: session.current_task_id.clone().unwrap_or_default(),
+                            agent_id: session.agent_id.clone(),
+                            worker_thread_id: session.worker_thread_id.clone(),
+                            question,
+                            checkpointed: true,
+                        };
                         return Ok(ToolResult::json(json!({
                             "session_id": session.subagent_session_id,
                             "task_id": session.current_task_id,
                             "status": session.status,
-                            "awaiting_user_envelope": awaiting_user.then_some(json!({"status":"awaiting_user","history":session.latest_history})),
+                            "awaiting_user_envelope": awaiting_user.then_some(envelope.render()),
                             "latest_error": session.latest_error,
                         })));
                     }

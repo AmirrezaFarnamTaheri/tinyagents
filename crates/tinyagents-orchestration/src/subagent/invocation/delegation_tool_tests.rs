@@ -95,13 +95,11 @@ async fn graph_delegation_runs_stage_worker_with_original_task_and_approval_pars
         move |args, stage, _| {
             let seen = worker_seen.clone();
             async move {
-                seen.lock()
-                    .unwrap()
-                    .push((
-                        args["task"].as_str().unwrap().to_owned(),
-                        stage,
-                        args["stage_prompt"].as_str().unwrap().to_owned(),
-                    ));
+                seen.lock().unwrap().push((
+                    args["task"].as_str().unwrap().to_owned(),
+                    stage,
+                    args["stage_prompt"].as_str().unwrap().to_owned(),
+                ));
                 Ok(match stage {
                     DelegationStage::Plan => DelegationStageOutput::done("plan"),
                     DelegationStage::Execute => DelegationStageOutput::done("result"),

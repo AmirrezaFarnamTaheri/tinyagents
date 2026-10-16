@@ -73,9 +73,11 @@ async fn orchestration_list_and_await_include_host_durable_overlays() {
     assert_eq!(listed["sessions"][0]["session_id"], "session-1");
     assert_eq!(listed["collected_tombstones"][0]["task_id"], "task-1");
 
-    let await_tool = OrchestrationTool::new(OrchestrationToolKind::Await, store)
-        .with_status_overlay(overlay);
-    let awaited = run(&await_tool, json!({"task_ids":["task-live"]})).await.unwrap();
+    let await_tool =
+        OrchestrationTool::new(OrchestrationToolKind::Await, store).with_status_overlay(overlay);
+    let awaited = run(&await_tool, json!({"task_ids":["task-live"]}))
+        .await
+        .unwrap();
     let awaited = raw(&awaited);
     assert_eq!(awaited["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(awaited["collected_tombstones"][0]["status"], "completed");

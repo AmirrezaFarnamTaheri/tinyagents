@@ -28,8 +28,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::broadcast;
-
 use crate::Result;
 use tinyinference_llm::model::ModelResponse;
 
@@ -127,21 +125,12 @@ impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
     }
 }
 
-/// What a leader broadcasts to its followers when it finishes.
-#[derive(Clone, Debug)]
-enum Outcome {
-    /// The leader succeeded; followers take this response.
-    Ready(Box<ModelResponse>),
-    /// The leader failed; followers must run the call themselves.
-    Failed,
-}
-
 /// Collapses concurrent duplicate model calls that share a cache key.
 ///
 /// Cheap to clone; clones share the same in-flight map.
 #[derive(Clone, Default)]
 pub struct SingleFlight {
-    inflight: Arc<Mutex<HashMap<String, broadcast::Sender<Outcome>>>>,
+    inflight: SharedFlightMap<String, ModelResponse, ()>,
 }
 
 /// Removes a leader's entry even when its future is cancelled mid-call.
@@ -149,19 +138,22 @@ pub struct SingleFlight {
 /// Dropping the sender closes every follower receiver, which makes followers
 /// retry their own call instead of waiting forever behind an abandoned leader.
 struct LeaderGuard {
-    inflight: Arc<Mutex<HashMap<String, broadcast::Sender<Outcome>>>>,
+    inflight: SharedFlightMap<String, ModelResponse, ()>,
     key: String,
+    entry: SharedFlightEntry<ModelResponse, ()>,
 }
 
 impl LeaderGuard {
-    fn retire(&mut self) -> Option<broadcast::Sender<Outcome>> {
-        self.inflight.lock().ok()?.remove(&self.key)
+    fn finish(&mut self, result: &Result<ModelResponse>) {
+        self.entry.complete(result.clone().map_err(|_| ()));
+        self.inflight.retire(&self.key, &self.entry);
     }
 }
 
 impl Drop for LeaderGuard {
     fn drop(&mut self) {
-        let _ = self.retire();
+        self.entry.complete(Err(()));
+        self.inflight.retire(&self.key, &self.entry);
     }
 }
 
@@ -182,25 +174,7 @@ impl SingleFlight {
 
     /// Number of keys currently in flight. Intended for tests and diagnostics.
     pub fn inflight_len(&self) -> usize {
-        self.inflight.lock().map(|m| m.len()).unwrap_or(0)
-    }
-
-    /// Claims leadership of `key`, or subscribes to the current leader.
-    ///
-    /// Returns `None` when the map is poisoned, `Some(None)` when this caller
-    /// is the leader, and `Some(Some(receiver))` when it is a follower. The
-    /// lock never escapes this function, so no guard is held across an await.
-    #[allow(clippy::option_option)]
-    fn claim(&self, key: &str) -> Option<Option<broadcast::Receiver<Outcome>>> {
-        let mut inflight = self.inflight.lock().ok()?;
-        Some(match inflight.get(key) {
-            Some(sender) => Some(sender.subscribe()),
-            None => {
-                let (sender, _) = broadcast::channel(1);
-                inflight.insert(key.to_string(), sender);
-                None
-            }
-        })
+        self.inflight.entries.lock().map(|m| m.len()).unwrap_or(0)
     }
 
     /// Runs `call` for `key`, or waits for an already in-flight call with the
@@ -216,23 +190,16 @@ impl SingleFlight {
         // The lock is acquired and released inside this helper so no
         // `MutexGuard` is ever alive across an `await` — which would make the
         // whole future `!Send` and unusable from `tokio::spawn`.
-        let claim = self.claim(key);
-        let Some(claim) = claim else {
-            // A poisoned map must never take the run down: fall back to simply
-            // making the call, which is the un-collapsed behaviour.
-            tracing::warn!("[cache] single-flight map poisoned; issuing the model call directly");
-            return call().await.map(|response| (response, false));
-        };
-        let mut receiver = claim;
+        let (entry, is_leader) = self.inflight.claim(key.to_owned());
 
         // Follower: wait for the leader rather than duplicating the call.
-        if let Some(receiver) = receiver.as_mut() {
+        if !is_leader {
             tracing::debug!(key = %key, "[cache] joining an in-flight identical model call");
-            match receiver.recv().await {
-                Ok(Outcome::Ready(response)) => return Ok((*response, true)),
+            match entry.wait().await {
+                Ok(response) => return Ok((response, true)),
                 // Leader failed, or dropped the channel without sending (a
                 // cancelled or panicking leader). Either way, run it ourselves.
-                Ok(Outcome::Failed) | Err(_) => {
+                Err(()) => {
                     tracing::debug!(
                         key = %key,
                         "[cache] in-flight leader did not produce a response; issuing our own call"
@@ -246,20 +213,12 @@ impl SingleFlight {
         // the guard retires the sender and wakes followers through channel
         // closure; without it, a cancelled leader wedges this key forever.
         let mut leader = LeaderGuard {
-            inflight: Arc::clone(&self.inflight),
+            inflight: self.inflight.clone(),
             key: key.to_string(),
+            entry,
         };
         let result = call().await;
-        let sender = leader.retire();
-        if let Some(sender) = sender {
-            let outcome = match &result {
-                Ok(response) => Outcome::Ready(Box::new(response.clone())),
-                Err(_) => Outcome::Failed,
-            };
-            // `send` fails only when no follower is subscribed, which is the
-            // common (uncontended) case — not an error.
-            let _ = sender.send(outcome);
-        }
+        leader.finish(&result);
         result.map(|response| (response, false))
     }
 }
