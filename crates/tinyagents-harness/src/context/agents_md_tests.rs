@@ -21,7 +21,7 @@ fn loads_two_layers_once_in_global_then_local_order_and_honors_gate() {
     #[cfg(windows)]
     std::os::windows::fs::symlink_dir(&global, &alias).unwrap();
     let deduped = load_agents_md_layers(&global, &alias, true, |candidate, allowed| {
-        candidate.starts_with(allowed) || candidate == &alias.join(AGENTS_MD_FILENAME)
+        candidate.starts_with(allowed) || candidate == alias.join(AGENTS_MD_FILENAME)
     });
     assert_eq!(deduped.global.as_deref(), Some("global rules"));
     assert_eq!(deduped.local, None);
