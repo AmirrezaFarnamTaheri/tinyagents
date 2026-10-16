@@ -954,7 +954,32 @@ where
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
                 }
-                result = &mut run => return result,
+                result = &mut run => {
+                    // A host can emit progress and finish in the same poll. Close
+                    // the channel before draining so retained child senders
+                    // cannot extend completion indefinitely, then deliver every
+                    // event already accepted by the bounded queue.
+                    progress_rx.close();
+                    while let Ok(signal) = progress_rx.try_recv() {
+                        if let TurnSignal::Progress(event) = signal {
+                            tokio::select! {
+                                biased;
+                                _ = cancellation.cancelled() => {
+                                    task_cancellation.cancel();
+                                    self.host.cancel_children(request).await;
+                                    return Err("turn cancelled".into());
+                                }
+                                _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {
+                                    task_cancellation.cancel();
+                                    self.host.cancel_children(request).await;
+                                    return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
+                                }
+                                _ = self.events.progress(request, *event) => {}
+                            }
+                        }
+                    }
+                    return result;
+                }
                 signal = progress_rx.recv(), if progress_open => match signal {
                     Some(signal) => match signal {
                         TurnSignal::Progress(event) => {

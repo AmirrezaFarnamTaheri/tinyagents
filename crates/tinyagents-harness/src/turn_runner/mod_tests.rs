@@ -1230,12 +1230,17 @@ struct FastProgressHost;
 #[async_trait::async_trait]
 impl TurnHost for FastProgressHost {
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
-        Ok(TurnSession { session_id: request.thread_id.clone(), fingerprint: None })
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
     }
     async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
         self.checkout(request).await
     }
-    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value { serde_json::Value::Null }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     async fn run(
         &self,
         _request: &TurnRequest,
@@ -1245,8 +1250,16 @@ impl TurnHost for FastProgressHost {
         _queue: Arc<RunQueue<TurnRequest>>,
         progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
-        progress.send(TurnSignal::Progress(Box::new(crate::progress::AgentProgress::TurnStarted))).await.unwrap();
-        Ok(TurnResult { reply: "fast".into(), data: serde_json::Value::Null })
+        progress
+            .send(TurnSignal::Progress(Box::new(
+                crate::progress::AgentProgress::TurnStarted,
+            )))
+            .await
+            .unwrap();
+        Ok(TurnResult {
+            reply: "fast".into(),
+            data: serde_json::Value::Null,
+        })
     }
     async fn checkin(&self, _request: &TurnRequest) {}
     async fn cancel_children(&self, _request: &TurnRequest) {}
@@ -1265,7 +1278,10 @@ async fn accepted_progress_is_delivered_before_terminal_when_run_finishes_immedi
         TurnRunnerConfig::default(),
     );
 
-    runner.run(request(QueueDisposition::Interrupt, false)).await.unwrap();
+    runner
+        .run(request(QueueDisposition::Interrupt, false))
+        .await
+        .unwrap();
 
     assert_eq!(*events.0.lock().unwrap(), ["progress", "terminal"]);
 }
