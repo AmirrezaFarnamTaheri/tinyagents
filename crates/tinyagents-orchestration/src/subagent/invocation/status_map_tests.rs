@@ -66,6 +66,8 @@ fn job_with(status: Job, kind: Option<IncompleteKind>) -> SubAgentJob {
         output: None,
         error: None,
         subagent_run_id: None,
+        worker_thread_id: None,
+        extensions: Default::default(),
         parent_tool_call_id: None,
         incomplete_kind: kind,
         artifacts: Vec::new(),

@@ -97,6 +97,83 @@ struct PausePersistence {
     terminal: std::sync::Mutex<Option<SubagentOutcome>>,
 }
 
+#[derive(Clone)]
+struct SingleSessionStore(Arc<std::sync::Mutex<DurableSubagentSession>>);
+
+#[async_trait]
+impl SubagentSessionStore for SingleSessionStore {
+    async fn list_for_parent(
+        &self,
+        parent_session: &str,
+        _: Option<&str>,
+    ) -> std::result::Result<Vec<DurableSubagentSession>, SubagentError> {
+        let session = self.0.lock().unwrap().clone();
+        Ok((session.parent_session == parent_session)
+            .then_some(session)
+            .into_iter()
+            .collect())
+    }
+
+    async fn get(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<DurableSubagentSession>, SubagentError> {
+        let session = self.0.lock().unwrap().clone();
+        Ok((session.subagent_session_id == id).then_some(session))
+    }
+
+    async fn upsert_running(
+        &self,
+        _: SubagentSessionUpsert,
+    ) -> std::result::Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        Ok((self.0.lock().unwrap().clone(), ReuseDecision::ReusedRunning))
+    }
+
+    async fn close(&self, id: &str) -> std::result::Result<bool, SubagentError> {
+        let mut session = self.0.lock().unwrap();
+        if session.subagent_session_id != id {
+            return Ok(false);
+        }
+        session.status = DurableSubagentStatus::Closed;
+        session.reusable = false;
+        Ok(true)
+    }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> std::result::Result<bool, SubagentError> {
+        let mut session = self.0.lock().unwrap();
+        if session.subagent_session_id != id {
+            return Ok(false);
+        }
+        session.current_task_id = Some(task_id.to_owned());
+        session.status = status;
+        session.reusable = status.reusable();
+        session.latest_history = Some(history);
+        Ok(true)
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> std::result::Result<bool, SubagentError> {
+        let mut session = self.0.lock().unwrap();
+        if session.subagent_session_id != id {
+            return Ok(false);
+        }
+        session.current_task_id = Some(task_id.to_owned());
+        session.status = DurableSubagentStatus::Failed;
+        session.latest_error = Some(error);
+        Ok(true)
+    }
+}
+
 #[async_trait]
 impl SubagentPersistence for PausePersistence {
     async fn load_terminal(
@@ -721,13 +798,43 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
 async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     let jobs = SubAgentJobRegistry::new();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let persistence = Arc::new(PausePersistence::default());
+    let parent = RunContext::new(RunConfig::new("pause-parent"), ());
+    let next_turn = RunContext::new(RunConfig::new("pause-parent-next-turn"), ());
+    let lifecycle_key = SubagentTaskKey::from_context(&parent, "pause-then-continue", None);
+    let sessions = Arc::new(SingleSessionStore(Arc::new(std::sync::Mutex::new(
+        DurableSubagentSession {
+            subagent_session_id: "session-123".into(),
+            parent_session: "durable-parent-session".into(),
+            parent_thread_id: Some("parent-thread".into()),
+            worker_thread_id: Some("worker-thread".into()),
+            agent_id: "worker".into(),
+            display_name: Some("Worker".into()),
+            model: None,
+            sandbox_mode: "none".into(),
+            action_root: None,
+            task_key: "pause-then-continue".into(),
+            lifecycle_key: lifecycle_key.clone(),
+            task_title: "Pause test".into(),
+            current_task_id: Some("pause-then-continue".into()),
+            status: DurableSubagentStatus::Running,
+            reusable: true,
+            latest_history: None,
+            latest_error: None,
+            created_at: "created".into(),
+            updated_at: "updated".into(),
+            last_used_at: "used".into(),
+        },
+    ))));
+    let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> =
+        Arc::new(|_| "durable-parent-session".into());
     let driver = Arc::new(
         SubagentDriver::new(SubagentCapabilities {
             planner: Some(Arc::new(Planner)),
             executor: Some(Arc::new(PauseThenCompleteExecutor {
                 calls: calls.clone(),
             })),
-            persistence: Some(Arc::new(PausePersistence::default())),
+            persistence: Some(persistence.clone()),
         })
         .unwrap(),
     );
@@ -745,6 +852,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         ChildDataPolicy::new(|_: &()| ()),
     )
     .with_job_registry(jobs.clone())
+    .with_job_owner_scope(owner_scope.clone())
     .with_tool_name("spawn_async_subagent")
     .with_parameters(schema)
     .with_driver(
@@ -753,24 +861,30 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-            let mut request = SubagentRequest::fresh_from_parent(
-                parent,
-                child,
-                "pause-then-continue",
-                (),
-                args["prompt"].as_str().unwrap_or_default(),
-                None,
-            )
+            let request = if args["continue"] == true {
+                SubagentRequest::continue_with_task_key(
+                    lifecycle_key.clone(),
+                    child,
+                    (),
+                    args["prompt"].as_str().unwrap_or_default(),
+                    Some(SubagentResume::default()),
+                )
+            } else {
+                SubagentRequest::fresh_from_parent(
+                    parent,
+                    child,
+                    "pause-then-continue",
+                    (),
+                    args["prompt"].as_str().unwrap_or_default(),
+                    None,
+                )
+            }
             .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?
             .with_target("worker");
-            if args["continue"] == true {
-                request.set_resume(Some(SubagentResume::default()));
-            }
             Ok(request)
         },
         |_| Some("parent-thread".into()),
     );
-    let parent = RunContext::new(RunConfig::new("pause-parent"), ());
 
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -784,25 +898,50 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     .unwrap();
     let spawned_value = serde_json::from_str::<Value>(&spawned.output()).unwrap();
     let task_id = spawned_value["task_id"].as_str().unwrap().to_owned();
+    assert_ne!(task_id, "pause-then-continue");
+    assert!(persistence.pause.lock().unwrap().is_some());
 
     let wait = SubAgentJobsTool::new(jobs.clone())
         .with_fixed_action(SubAgentJobAction::Await)
-        .with_identifier_field("task_id")
-        .with_required_identifier();
+        .with_identifier_fields("task_id", "subagent_session_id")
+        .with_required_identifier()
+        .with_sessions(sessions.clone(), |_| "durable-parent-session".into())
+        .with_owner_scope(owner_scope.clone());
     let paused = ToolDispatch::<(), ()>::execute(
         &wait,
         &(),
         CallId::new("wait-for-pause"),
-        json!({"task_id":task_id}),
+        json!({"task_id":"", "subagent_session_id":"session-123"}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();
     let paused_value = serde_json::from_str::<Value>(&paused.output()).unwrap();
     assert_eq!(paused_value["status"], "awaiting_input");
-    assert!(!jobs.get(&task_id).unwrap().status.is_terminal());
+    let public_id = jobs.driver_job_for_task("pause-then-continue", "durable-parent-session").unwrap();
+    assert!(!jobs.get(public_id.as_str()).unwrap().status.is_terminal());
     assert!(jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
+
+    let steer = SubAgentMessageTool::new(jobs.clone())
+        .with_argument_fields("task_id", "subagent_session_id", "message", "request_id")
+        .with_sessions(sessions.clone(), |_| "durable-parent-session".into())
+        .with_owner_scope(owner_scope.clone());
+    ToolDispatch::<(), ()>::execute(
+        &steer,
+        &(),
+        CallId::new("steer-paused-session"),
+        json!({"subagent_session_id":"session-123","message":"resume with this"}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        jobs.drain_lane_for_test(&public_id, tinyagents_harness::run_queue::QueueLane::Steer).len(),
+        0,
+        "the default message path uses the steering channel, not the run queue"
+    );
 
     let continued = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -810,7 +949,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         CallId::new("continue-child"),
         json!({"agent_id":"worker","prompt":"answer","continue":true,"mode":"background"}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();
@@ -821,9 +960,9 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         &wait,
         &(),
         CallId::new("wait-for-completion"),
-        json!({"task_id":task_id}),
+        json!({"task_id":"", "subagent_session_id":"session-123"}),
         tinytools::ToolCallOptions::default(),
-        &parent,
+        &next_turn,
     )
     .await
     .unwrap();

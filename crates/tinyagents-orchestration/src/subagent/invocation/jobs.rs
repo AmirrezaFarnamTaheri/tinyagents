@@ -264,6 +264,8 @@ impl SubAgentJobRegistry {
             output: None,
             error: None,
             subagent_run_id: link.subagent_run_id,
+            worker_thread_id: None,
+            extensions: std::collections::BTreeMap::new(),
             parent_tool_call_id: link.parent_tool_call_id,
             incomplete_kind: None,
             artifacts: Vec::new(),
@@ -530,6 +532,8 @@ impl SubAgentJobRegistry {
                 } else if let Ok(outcome) = result {
                     control.status.send_modify(|job| {
                         job.output = Some(outcome.output);
+                        job.worker_thread_id = outcome.worker_thread_id;
+                        job.extensions = outcome.extensions;
                         job.artifacts = outcome.artifacts;
                         job.schema_error = outcome.schema_error;
                         job.artifact_error = outcome.artifact_error;
@@ -549,6 +553,8 @@ impl SubAgentJobRegistry {
             match result {
                 Ok(outcome) => {
                     job.output = Some(outcome.output);
+                    job.worker_thread_id = outcome.worker_thread_id;
+                    job.extensions = outcome.extensions;
                     job.artifacts = outcome.artifacts;
                     job.schema_error = outcome.schema_error;
                     job.artifact_error = outcome.artifact_error;
@@ -576,6 +582,26 @@ impl SubAgentJobRegistry {
                 }
             }
         });
+    }
+
+    /// Finds a driver-backed public job by its host-stable task id, while
+    /// enforcing the same owner scope as direct job-id lookups.
+    pub(crate) fn driver_job_for_task(
+        &self,
+        task_id: &str,
+        owner: &str,
+    ) -> Option<SubAgentJobId> {
+        let candidates = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(key, _)| key.task_id == task_id)
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>();
+        candidates
+            .into_iter()
+            .find(|id| self.get_owned(id.as_str(), owner).is_some())
     }
 
     /// Points the job link at the attempt that is now running.
@@ -1121,20 +1147,45 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user}),
                     ));
                 };
-                if self.jobs.get_owned(id, &owner).is_some() {
+                let bridged_id = if self.jobs.get_owned(id, &owner).is_some() {
+                    Some(id.to_owned())
+                } else if let Some((sessions, key)) = &self.sessions {
+                    sessions
+                        .get(id)
+                        .await?
+                        .filter(|session| session.parent_session == key(parent.instance_id()))
+                        .and_then(|session| session.current_task_id)
+                        .and_then(|task_id| {
+                            self.jobs
+                                .driver_job_for_task(&task_id, &owner)
+                                .map(|job_id| job_id.as_str().to_owned())
+                                .or_else(|| {
+                                    self.jobs
+                                        .get_owned(&task_id, &owner)
+                                        .map(|_| task_id)
+                                })
+                        })
+                } else {
+                    None
+                };
+                if let Some(job_id) = bridged_id {
                     let job = if let Some(timeout) = &self.await_timeout {
                         let duration =
                             std::time::Duration::from_secs(timeout.requested_secs(object));
-                        match tokio::time::timeout(duration, self.jobs.wait_owned(id, &owner)).await
+                        match tokio::time::timeout(
+                            duration,
+                            self.jobs.wait_owned(&job_id, &owner),
+                        )
+                        .await
                         {
                             Ok(result) => result?,
                             Err(_) => self
                                 .jobs
-                                .get_owned(id, &owner)
-                                .ok_or_else(|| SubAgentJobError::NotFound(id.to_owned()))?,
+                                .get_owned(&job_id, &owner)
+                                .ok_or_else(|| SubAgentJobError::NotFound(job_id.clone()))?,
                         }
                     } else {
-                        self.jobs.wait_owned(id, &owner).await?
+                        self.jobs.wait_owned(&job_id, &owner).await?
                     };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
@@ -1382,6 +1433,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
+        let owner = (self.owner_scope)(parent.instance_id());
         let job_id = if let Some(session_id) = args
             .get(&self.argument_names.session_id)
             .and_then(Value::as_str)
@@ -1395,9 +1447,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .await?
                 .filter(|session| session.parent_session == key(parent.instance_id()))
                 .ok_or_else(|| anyhow::anyhow!("durable subagent session not found"))?;
-            session
+            let task_id = session
                 .current_task_id
-                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?
+                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?;
+            self.jobs
+                .driver_job_for_task(&task_id, &owner)
+                .map(|job_id| job_id.as_str().to_owned())
+                .or_else(|| self.jobs.get_owned(&task_id, &owner).map(|_| task_id.clone()))
+                .unwrap_or(task_id)
         } else {
             args.get(&self.argument_names.job_id)
                 .and_then(Value::as_str)
@@ -1426,7 +1483,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 }
             })
         });
-        let owner = (self.owner_scope)(parent.instance_id());
         let duplicate = self
             .jobs
             .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)?;

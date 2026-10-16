@@ -271,6 +271,14 @@ pub struct SubAgentJob {
     /// existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_run_id: Option<String>,
+    /// Durable worker conversation id supplied by the host executor, when
+    /// available for projecting a product-facing result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    /// Host-owned result metadata carried through the neutral outcome
+    /// extension map (for example, iteration count or durable session id).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
     /// Id of the parent tool call that spawned this job, when the dispatcher
     /// supplied one.
     #[serde(default, skip_serializing_if = "Option::is_none")]

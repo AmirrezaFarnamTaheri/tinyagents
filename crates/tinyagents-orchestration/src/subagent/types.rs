@@ -186,6 +186,31 @@ impl<C, H> SubagentRequest<C, H> {
         })
     }
 
+    /// Continues a host-authorized lifecycle when the durable task key has
+    /// already been resolved by the host adapter.
+    ///
+    /// This synchronous constructor is suitable for request factories. Hosts
+    /// must authorize the key before calling it; it never derives a replacement
+    /// identity from the fresh execution context.
+    pub fn continue_with_task_key(
+        task_key: SubagentTaskKey,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::validate_key(&task_key)?;
+        Self::validate_thread(&task_key, &fresh_owned_context)?;
+        Ok(Self {
+            target: None,
+            task_key,
+            run_context: fresh_owned_context,
+            host_request,
+            input: input.into(),
+            resume,
+        })
+    }
+
     /// Continues an authorized durable session by its public session id.
     ///
     /// The store resolves the id to the original lifecycle key; the request
