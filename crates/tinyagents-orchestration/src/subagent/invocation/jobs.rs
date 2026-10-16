@@ -15,7 +15,9 @@ use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyinference_llm::message::Message;
 use tinytools::{Tool, ToolResult};
 
-use crate::subagent::{AppliedResult, IncompleteKind};
+use crate::subagent::{
+    AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
+};
 
 use tinyagents_tasks::DetachedTaskRegistryError;
 use tokio::sync::watch;
@@ -459,7 +461,7 @@ impl SubAgentJobRegistry {
 pub struct SubAgentJobsTool {
     jobs: SubAgentJobRegistry,
     sessions: Option<(
-        Arc<dyn super::SubagentSessionStore>,
+        Arc<dyn SubagentSessionStore>,
         Arc<dyn Fn(u64) -> String + Send + Sync>,
     )>,
 }
@@ -477,7 +479,7 @@ impl SubAgentJobsTool {
     /// `parent_key` maps the live run owner to the host's durable parent scope.
     pub fn with_sessions(
         mut self,
-        sessions: Arc<dyn super::SubagentSessionStore>,
+        sessions: Arc<dyn SubagentSessionStore>,
         parent_key: impl Fn(u64) -> String + Send + Sync + 'static,
     ) -> Self {
         self.sessions = Some((sessions, Arc::new(parent_key)));
@@ -587,7 +589,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .filter(|session| session.parent_session == key(parent.instance_id()))
                 .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
             Ok(ToolResult::json(serde_json::to_value(
-                super::DurableSubagentSessionSummary::from(&session),
+                DurableSubagentSessionSummary::from(&session),
             )?))
         } else {
             let mut rows = self
@@ -609,10 +611,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .await?
                         .iter()
                         .map(|session| {
-                            let mut value = serde_json::to_value(
-                                super::DurableSubagentSessionSummary::from(session),
-                            )
-                            .unwrap_or(Value::Null);
+                            let mut value =
+                                serde_json::to_value(DurableSubagentSessionSummary::from(session))
+                                    .unwrap_or(Value::Null);
                             value["kind"] = Value::String("session".into());
                             value
                         }),
@@ -627,12 +628,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
 #[derive(Clone)]
 pub struct SubAgentMessageTool {
     jobs: SubAgentJobRegistry,
+    sessions: Option<(Arc<dyn SubagentSessionStore>, Arc<dyn Fn(u64) -> String + Send + Sync>)>,
 }
 
 impl SubAgentMessageTool {
     /// Creates the message tool over `jobs`.
     pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs }
+        Self { jobs, sessions: None }
+    }
+
+    /// Enables steering a live durable session by its session id.
+    pub fn with_sessions(
+        mut self,
+        sessions: Arc<dyn SubagentSessionStore>,
+        parent_key: impl Fn(u64) -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.sessions = Some((sessions, Arc::new(parent_key)));
+        self
     }
 }
 
@@ -650,14 +662,16 @@ impl Tool for SubAgentMessageTool {
         json!({
             "type": "object",
             "properties": {
-                "job_id": { "type": "string" },
+                "job_id": { "type": "string", "description": "Live job id. Use session_id for a durable reusable session." },
+                "session_id": { "type": "string", "description": "Durable reusable session id." },
                 "message": { "type": "string" },
                 "request_id": {
                     "type": "string",
                     "description": "Optional idempotency key: resending the same request_id to the same job does not queue the message again while it is among the most recent 64 request ids remembered for that job (older ids are evicted); ids over 128 bytes are rejected."
                 }
             },
-            "required": ["job_id", "message"]
+            "required": ["message"],
+            "oneOf": [{"required":["job_id"]},{"required":["session_id"]}]
         })
     }
 
@@ -681,10 +695,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
-        let job_id = args
-            .get("job_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("job_id must be a string"))?;
+        let job_id = if let Some(session_id) = args.get("session_id").and_then(Value::as_str) {
+            let (sessions, key) = self.sessions.as_ref().ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
+            let session = sessions.get(session_id).await?.filter(|session| session.parent_session == key(parent.instance_id()))
+                .ok_or_else(|| anyhow::anyhow!("durable subagent session not found"))?;
+            session.current_task_id.ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?
+        } else {
+            args.get("job_id").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("job_id or session_id must be a string"))?.to_owned()
+        };
         let message = args
             .get("message")
             .and_then(Value::as_str)
@@ -699,7 +717,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
         };
         let duplicate = self.jobs.send_message_with_request_id(
-            job_id,
+            &job_id,
             parent.instance_id(),
             message,
             request_id,
