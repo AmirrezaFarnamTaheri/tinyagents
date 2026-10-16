@@ -343,3 +343,7 @@ impl SpanCollector {
 fn nonempty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     if value.trim().is_empty() { fallback } else { value }
 }
+
+#[cfg(test)]
+#[path = "collector_tests.rs"]
+mod tests;
