@@ -21,17 +21,21 @@ fn pricing() -> ModelPricing {
 }
 
 #[test]
-fn subagent_usage_rollup_counts_each_task_once_and_keeps_cost_certainty() {
-    let child = SubagentUsage {
-        task_id: "child-1".into(),
-        input_tokens: 12,
+fn subagent_usage_rollup_deduplicates_replayed_runs_but_keeps_distinct_runs() {
+    let usage = |run_id: &str, task_id: &str, input_tokens, cost| SubagentUsage {
+        run_id: run_id.into(),
+        task_id: task_id.into(),
+        input_tokens,
         output_tokens: 7,
         cached_input_tokens: 5,
         cost: CostTally {
-            known_usd: 0.25,
+            known_usd: cost,
             source: CostSource::Estimated,
         },
+        children: Vec::new(),
     };
+    let first_run = usage("run-1", "task", 12, 0.25);
+    let second_run = usage("run-2", "task", 8, 0.5);
     let rollup = roll_up_subagent_usage(
         100,
         20,
@@ -40,14 +44,48 @@ fn subagent_usage_rollup_counts_each_task_once_and_keeps_cost_certainty() {
             known_usd: 1.0,
             source: CostSource::Charged,
         },
-        [child.clone(), child],
+        [first_run.clone(), first_run, second_run],
     );
-    assert_eq!(rollup.input_tokens, 112);
-    assert_eq!(rollup.output_tokens, 27);
-    assert_eq!(rollup.cached_input_tokens, 45);
-    assert_eq!(rollup.cost.known_usd, 1.25);
+    assert_eq!(rollup.input_tokens, 120);
+    assert_eq!(rollup.output_tokens, 41);
+    assert_eq!(rollup.cached_input_tokens, 50);
+    assert_eq!(rollup.cost.known_usd, 1.75);
     assert_eq!(rollup.cost.source, CostSource::Estimated);
-    assert_eq!(rollup.subagents.len(), 1);
+    assert_eq!(rollup.subagents.len(), 2);
+}
+
+#[test]
+fn nested_usage_rollup_counts_root_child_and_grandchild_once() {
+    let grandchild = SubagentUsage {
+        run_id: "grandchild-run".into(),
+        task_id: "grandchild".into(),
+        input_tokens: 3,
+        output_tokens: 2,
+        cached_input_tokens: 1,
+        cost: CostTally { known_usd: 0.3, source: CostSource::Charged },
+        children: Vec::new(),
+    };
+    let child = SubagentUsage {
+        run_id: "child-run".into(),
+        task_id: "child".into(),
+        input_tokens: 5,
+        output_tokens: 4,
+        cached_input_tokens: 2,
+        cost: CostTally { known_usd: 0.5, source: CostSource::Charged },
+        children: vec![grandchild.clone()],
+    };
+    let rollup = roll_up_subagent_usage(
+        10,
+        8,
+        4,
+        CostTally { known_usd: 1.0, source: CostSource::Charged },
+        [child, grandchild],
+    );
+    assert_eq!(rollup.input_tokens, 18);
+    assert_eq!(rollup.output_tokens, 14);
+    assert_eq!(rollup.cached_input_tokens, 7);
+    assert_eq!(rollup.cost.known_usd, 1.8);
+    assert_eq!(rollup.subagents.len(), 2);
 }
 
 #[test]

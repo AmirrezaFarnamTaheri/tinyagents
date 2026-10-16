@@ -94,19 +94,23 @@ pub struct CostTotals {
 /// Token and cost usage attributed to a completed delegated run.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SubagentUsage {
-    /// Stable task identity used to ignore replayed ledger entries.
+    /// Stable run identity used to ignore replayed completion entries.
+    pub run_id: String,
+    /// Task identity. A task may have multiple distinct runs.
     pub task_id: String,
-    /// Input tokens consumed by this child and its own descendants.
+    /// Input tokens consumed by this run itself.
     pub input_tokens: u64,
-    /// Output tokens consumed by this child and its own descendants.
+    /// Output tokens consumed by this run itself.
     pub output_tokens: u64,
-    /// Cached input tokens, a subset of `input_tokens`.
+    /// Cached input tokens, a subset of this run's `input_tokens`.
     pub cached_input_tokens: u64,
-    /// Child cost with its certainty source retained.
+    /// This run's cost with its certainty source retained.
     pub cost: CostTally,
+    /// Descendant runs, each carrying only its own spend.
+    pub children: Vec<SubagentUsage>,
 }
 
-/// Aggregate usage for a root run and the unique delegated runs it completed.
+/// Aggregate usage for a root run and its unique delegated run tree.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UsageRollup {
     /// Input tokens including child runs.
@@ -117,14 +121,15 @@ pub struct UsageRollup {
     pub cached_input_tokens: u64,
     /// Cost including child runs; unknown source is preserved.
     pub cost: CostTally,
-    /// Child details in first-seen order, with duplicate task ids omitted.
+    /// Flattened child details in first-seen order, with replayed run ids omitted.
     pub subagents: Vec<SubagentUsage>,
 }
 
-/// Rolls child usage into one run while ignoring duplicate/replayed task rows.
-/// Each child entry must describe only that child's run tree; callers should
-/// pass each descendant once. Token counts keep their original units, and
-/// cached tokens remain a subset rather than being added twice.
+/// Rolls child usage into one run while ignoring duplicate/replayed completion
+/// rows by run identity. Each child carries only its own spend; descendants
+/// stay nested so an aggregate child plus a separate grandchild row cannot be
+/// double-counted. Distinct runs of the same task remain distinct. Cached
+/// tokens remain a subset and are not added twice.
 pub fn roll_up_subagent_usage(
     input_tokens: u64,
     output_tokens: u64,
@@ -141,10 +146,13 @@ pub fn roll_up_subagent_usage(
         cost,
         subagents: Vec::new(),
     };
-    let mut seen = HashSet::new();
-    for child in children {
-        if !seen.insert(child.task_id.clone()) {
-            continue;
+    fn visit(
+        result: &mut UsageRollup,
+        seen: &mut HashSet<String>,
+        child: SubagentUsage,
+    ) {
+        if !seen.insert(child.run_id.clone()) {
+            return;
         }
         result.input_tokens = result.input_tokens.saturating_add(child.input_tokens);
         result.output_tokens = result.output_tokens.saturating_add(child.output_tokens);
@@ -152,7 +160,18 @@ pub fn roll_up_subagent_usage(
             .cached_input_tokens
             .saturating_add(child.cached_input_tokens);
         result.cost.merge(child.cost);
-        result.subagents.push(child);
+        let descendants = child.children.clone();
+        result.subagents.push(SubagentUsage {
+            children: Vec::new(),
+            ..child
+        });
+        for descendant in descendants {
+            visit(result, seen, descendant);
+        }
+    }
+    let mut seen = HashSet::new();
+    for child in children {
+        visit(&mut result, &mut seen, child);
     }
     result
 }
