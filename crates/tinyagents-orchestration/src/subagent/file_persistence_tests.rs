@@ -110,6 +110,28 @@ async fn file_store_reads_legacy_terminal_outcome_records() {
 }
 
 #[tokio::test]
+async fn terminal_record_host_metadata_survives_neutral_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileSubagentPersistence::new(dir.path());
+    let key = key("parent", "host-metadata");
+    let path = store.terminal_path(&key).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let record = serde_json::json!({
+        "key": key,
+        "outcome": SubagentOutcome::completed("host-metadata", "done"),
+        "agent_id": "worker",
+        "elapsed_ms": 25,
+        "skill_filter_override": "docs"
+    });
+    std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let outcome = store.load_terminal(&key("parent", "host-metadata")).await.unwrap().unwrap();
+    assert_eq!(outcome.extensions["agent_id"], "worker");
+    assert_eq!(outcome.extensions["elapsed_ms"], 25);
+    assert_eq!(outcome.extensions["skill_filter_override"], "docs");
+}
+
+#[tokio::test]
 async fn independent_file_store_handles_commit_only_one_pause_for_a_key() {
     let dir = tempfile::tempdir().unwrap();
     let first_store = FileSubagentPersistence::new(dir.path());

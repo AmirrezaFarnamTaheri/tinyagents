@@ -108,6 +108,13 @@ impl DriverCompletionStore {
             .index(IndexSpec::new("by_state_updated", ["state", "updatedAtMs"]))
     }
 
+    /// Declares the backing collection eagerly so a host can decide whether to
+    /// keep this durable store or fall back to memory before accepting work.
+    pub fn declare_collections(&self) -> Result<()> {
+        let this = self.clone();
+        self.run(async move { this.declare().await })
+    }
+
     fn run<T: Send + 'static>(
         &self,
         work: impl std::future::Future<Output = Result<T>> + Send + 'static,

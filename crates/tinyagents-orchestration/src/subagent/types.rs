@@ -644,6 +644,18 @@ pub struct SubagentOutcome {
 }
 
 impl SubagentOutcome {
+    /// Adds a host-owned JSON field that must survive durable lifecycle
+    /// persistence without adding a parallel host outcome type.
+    pub fn with_extension(mut self, name: impl Into<String>, value: serde_json::Value) -> Self {
+        self.extensions.insert(name.into(), value);
+        self
+    }
+
+    /// Reads a host-owned extension by name.
+    pub fn extension(&self, name: &str) -> Option<&serde_json::Value> {
+        self.extensions.get(name)
+    }
+
     /// A completed result with `output` and no history, usage or artifacts.
     pub fn completed(task_id: impl Into<String>, output: impl Into<String>) -> Self {
         Self {

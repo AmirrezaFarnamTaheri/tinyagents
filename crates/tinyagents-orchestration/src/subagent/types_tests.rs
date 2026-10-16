@@ -21,6 +21,10 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
         serde_json::from_value::<SubagentOutcome>(value).unwrap(),
         outcome
     );
+    assert_eq!(
+        outcome.extension("host_checkpoint").unwrap()["skill_filter_override"],
+        "docs"
+    );
 
     let legacy = serde_json::json!({
         "task_id": "legacy",

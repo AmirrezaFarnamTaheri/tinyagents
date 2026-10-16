@@ -33,6 +33,8 @@ struct TerminalRecord {
     agent_id: String,
     #[serde(default)]
     elapsed_ms: u64,
+    #[serde(flatten)]
+    extensions: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -172,15 +174,32 @@ impl FileSubagentPersistence {
             return Ok(None);
         };
         let record = serde_json::from_slice(&bytes).map_err(persistence_error)?;
-        Ok(Some(match record {
+        let mut record = match record {
             CompatibleTerminalRecord::Current(record) => record,
             CompatibleTerminalRecord::Legacy(outcome) => TerminalRecord {
                 key: Some(key.clone()),
                 outcome,
                 agent_id: String::new(),
                 elapsed_ms: 0,
+                extensions: Default::default(),
             },
-        }))
+        };
+        if !record.agent_id.is_empty() {
+            record
+                .outcome
+                .extensions
+                .entry("agent_id".into())
+                .or_insert_with(|| serde_json::Value::String(record.agent_id.clone()));
+        }
+        if record.elapsed_ms != 0 {
+            record
+                .outcome
+                .extensions
+                .entry("elapsed_ms".into())
+                .or_insert_with(|| serde_json::json!(record.elapsed_ms));
+        }
+        record.outcome.extensions.extend(record.extensions.clone());
+        Ok(Some(record))
     }
 
     fn read_index(&self, task_id: &str) -> Result<Vec<SubagentTaskKey>, SubagentError> {
@@ -362,6 +381,7 @@ impl SubagentPersistence for FileSubagentPersistence {
             outcome: outcome.clone(),
             agent_id: String::new(),
             elapsed_ms: 0,
+            extensions: outcome.extensions.clone(),
         };
         let inserted = self.insert_file(
             &self.terminal_path(key)?,
