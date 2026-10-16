@@ -148,6 +148,20 @@ impl TurnStop {
         hit_cap.then(Self::iteration_cap)
     }
 
+    /// Classify a turn using its typed breaker cause when one is available.
+    pub fn classify_with_cause(
+        breaker_halt: Option<&str>,
+        failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
+        wind_down: bool,
+        hit_cap: bool,
+        fallback_class: impl FnOnce(&str) -> &'static str,
+    ) -> Option<Self> {
+        if let Some(cause) = failure_cause {
+            return Some(Self::from_classified_cause(cause));
+        }
+        Self::classify(breaker_halt, wind_down, hit_cap, fallback_class)
+    }
+
     /// The stop behind a sub-agent's `Incomplete { reason }`: the runner's
     /// cap reason, else the breaker note it carries verbatim.
     pub fn from_incomplete_reason(

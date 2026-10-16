@@ -26,6 +26,8 @@ pub struct TurnEndInputs<'a> {
     pub early_exit: bool,
     /// The repeated-failure breaker's root-cause summary, when it tripped.
     pub breaker_halt: Option<&'a str>,
+    /// Typed classified-failure cause from the breaker, when available.
+    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
     /// An in-loop final-call wrap-up concluded the capped turn.
     pub wrap_up_injected: bool,
 }
@@ -78,6 +80,19 @@ pub fn turn_stop_for(
     fallback_class: impl FnOnce(&str) -> &'static str,
 ) -> Option<TurnStop> {
     TurnStop::classify(breaker_halt, wind_down, hit_cap, fallback_class)
+}
+
+/// Content-free stop for a turn, preferring the classifier-owned cause over
+/// any human-readable breaker note.
+#[must_use]
+pub fn turn_stop_for_with_cause(
+    breaker_halt: Option<&str>,
+    failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
+    wind_down: bool,
+    hit_cap: bool,
+    fallback_class: impl FnOnce(&str) -> &'static str,
+) -> Option<TurnStop> {
+    TurnStop::classify_with_cause(breaker_halt, failure_cause, wind_down, hit_cap, fallback_class)
 }
 
 /// The turn's final text. An early-exit tool's captured question stands in for
