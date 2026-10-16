@@ -50,9 +50,16 @@ impl<K, V, E> Default for SharedFlightMap<K, V, E> {
 }
 
 /// A claim on one typed in-flight entry.
-#[derive(Clone)]
 pub struct SharedFlightEntry<V, E> {
     state: Arc<SharedFlightState<V, E>>,
+}
+
+impl<V, E> Clone for SharedFlightEntry<V, E> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+        }
+    }
 }
 
 struct SharedFlightState<V, E> {
@@ -164,7 +171,12 @@ impl Drop for LeaderGuard {
 
 impl std::fmt::Debug for SingleFlight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inflight = self.inflight.lock().map(|m| m.len()).unwrap_or(0);
+        let inflight = self
+            .inflight
+            .entries
+            .lock()
+            .map(|m| m.len())
+            .unwrap_or(0);
         f.debug_struct("SingleFlight")
             .field("inflight", &inflight)
             .finish()
