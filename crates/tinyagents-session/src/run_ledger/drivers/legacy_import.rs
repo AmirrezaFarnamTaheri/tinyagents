@@ -10,19 +10,16 @@
 //! [`reindex_fts`](crate::run_ledger::RunLedgerStore::reindex_fts), because the
 //! classic index lived in a SQLite virtual table that cannot be copied.
 use super::events::EventHead;
-use super::history::{
-    Counter, MESSAGE_COUNTER, TOOL_CALL_COUNTER, message_doc, message_id, session_doc,
-    tool_call_doc, tool_call_id,
-};
+use super::history::{MESSAGE_COUNTER, TOOL_CALL_COUNTER, message_id, tool_call_id};
 use super::storage::{
-    AGENTS, EFFECTS, EVENT_HEADS, EVENTS, HIST_COUNTERS, HIST_MESSAGES, HIST_SESSIONS,
-    HIST_TOOL_CALLS, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, encode, key,
+    AGENTS, EFFECTS, EVENT_HEADS, EVENTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS,
+    HISTORY_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, encode, key,
 };
 use super::*;
 use crate::legacy::{QuiescentSource, rows, source};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tinystoragedrivers_core::{ErrorKind, Precondition};
+use tinystoragedrivers_core::{Counters, ErrorKind, Precondition, primitives::LEASES};
 
 const LOG_PREFIX: &str = "[session_db:import]";
 
@@ -97,18 +94,28 @@ impl DriverRunLedger {
         }
     }
 
-    /// Raise a dense-id counter so the next allocation is at least `next`.
-    async fn raise_counter(&self, name: &str, next: u64) -> Result<()> {
-        self.change(
-            HIST_COUNTERS,
-            name,
-            |previous: Option<Counter>| match previous {
-                Some(counter) if counter.next >= next => Ok((None, ())),
-                _ => Ok((Some(Counter { next }), ())),
-            },
-        )
-        .await
-        .map_err(Into::into)
+    /// Raise a dense-id counter so the next allocation is above `last_used`.
+    async fn raise_counter(&self, name: &str, last_used: u64) -> Result<()> {
+        Counters::new(self.scoped.documents())
+            .set_at_least(HISTORY_OWNER, name, last_used)
+            .await?;
+        Ok(())
+    }
+
+    /// Keep a workflow run's classic driver lease as its `tsd.leases` record
+    /// (epoch 1), unless a lease for the run already exists.
+    async fn import_workflow_lease(&self, run: &WorkflowRun) -> Result<()> {
+        let (Some(holder), Some(expires)) = (&run.lease_owner, run.lease_expires_at) else {
+            return Ok(());
+        };
+        let id = key(&[LEDGER_OWNER, &super::storage::workflow_lease_key(&run.id)?])?;
+        let body = serde_json::json!({
+            "holder": holder,
+            "epoch": 1,
+            "expires_ms": expires.timestamp_millis(),
+        });
+        self.put_if_absent(LEASES, &id, body).await?;
+        Ok(())
     }
 
     /// Raise a run's event head so the next sequence is at least `next`.
@@ -181,7 +188,7 @@ impl DriverRunLedger {
         let mut imported = 0;
         for session in &loaded.sessions {
             imported += usize::from(
-                self.put_if_absent(HIST_SESSIONS, &key(&[&session.id]), session_doc(session)?)
+                self.put_if_absent(HIST_SESSIONS, &key(&[&session.id])??, encode(session)?)
                     .await?,
             );
         }
@@ -192,15 +199,11 @@ impl DriverRunLedger {
         for message in &loaded.messages {
             highest = highest.max(u64::try_from(message.id).unwrap_or(0));
             imported += usize::from(
-                self.put_if_absent(
-                    HIST_MESSAGES,
-                    &message_id(message.id),
-                    message_doc(message)?,
-                )
+                self.put_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
                 .await?,
             );
         }
-        self.raise_counter(MESSAGE_COUNTER, highest + 1).await?;
+        self.raise_counter(MESSAGE_COUNTER, highest).await?;
         report.messages = ImportCounts::tally(loaded.messages.len(), imported);
 
         let mut imported = 0;
@@ -208,21 +211,17 @@ impl DriverRunLedger {
         for call in &loaded.tool_calls {
             highest = highest.max(u64::try_from(call.id).unwrap_or(0));
             imported += usize::from(
-                self.put_if_absent(
-                    HIST_TOOL_CALLS,
-                    &tool_call_id(call.id),
-                    tool_call_doc(call)?,
-                )
+                self.put_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
                 .await?,
             );
         }
-        self.raise_counter(TOOL_CALL_COUNTER, highest + 1).await?;
+        self.raise_counter(TOOL_CALL_COUNTER, highest).await?;
         report.tool_calls = ImportCounts::tally(loaded.tool_calls.len(), imported);
 
         let mut imported = 0;
         for run in &loaded.agent_runs {
             imported += usize::from(
-                self.put_if_absent(AGENTS, &key(&[&run.id]), encode(run)?)
+                self.put_if_absent(AGENTS, &key(&[&run.id])?, encode(run)?)
                     .await?,
             );
         }
@@ -231,7 +230,7 @@ impl DriverRunLedger {
         let mut imported = 0;
         for row in &loaded.telemetry {
             imported += usize::from(
-                self.put_if_absent(TELEMETRY, &key(&[&row.run_id]), encode(row)?)
+                self.put_if_absent(TELEMETRY, &key(&[&row.run_id])?, encode(row)?)
                     .await?,
             );
         }
@@ -245,7 +244,7 @@ impl DriverRunLedger {
             imported += usize::from(
                 self.put_if_absent(
                     EVENTS,
-                    &key(&[&event.run_id, &event.sequence.to_string()]),
+                    &key(&[&event.run_id, &event.sequence.to_string()])?,
                     encode(event)?,
                 )
                 .await?,
@@ -259,16 +258,17 @@ impl DriverRunLedger {
         let mut imported = 0;
         for run in &loaded.workflows {
             imported += usize::from(
-                self.put_if_absent(WORKFLOWS, &key(&[&run.id]), encode(run)?)
+                self.put_if_absent(WORKFLOWS, &key(&[&run.id])?, encode(run)?)
                     .await?,
             );
+            self.import_workflow_lease(run).await?;
         }
         report.workflow_runs = ImportCounts::tally(loaded.workflows.len(), imported);
 
         let mut imported = 0;
         for team in &loaded.teams {
             imported += usize::from(
-                self.put_if_absent(TEAMS, &key(&[&team.id]), encode(team)?)
+                self.put_if_absent(TEAMS, &key(&[&team.id])?, encode(team)?)
                     .await?,
             );
         }
@@ -277,7 +277,7 @@ impl DriverRunLedger {
         let mut imported = 0;
         for member in &loaded.members {
             imported += usize::from(
-                self.put_if_absent(MEMBERS, &key(&[&member.id]), encode(member)?)
+                self.put_if_absent(MEMBERS, &key(&[&member.id])?, encode(member)?)
                     .await?,
             );
         }
@@ -286,7 +286,7 @@ impl DriverRunLedger {
         let mut imported = 0;
         for task in &loaded.tasks {
             imported += usize::from(
-                self.put_if_absent(TASKS, &key(&[&task.id]), encode(task)?)
+                self.put_if_absent(TASKS, &key(&[&task.id])?, encode(task)?)
                     .await?,
             );
         }
@@ -297,8 +297,8 @@ impl DriverRunLedger {
             imported += usize::from(
                 self.put_if_absent(
                     EFFECTS,
-                    &key(&[&row.run_id, &row.call_id]),
-                    encode(&super::effects::EffectRecord::from_row(row))?,
+                    &key(&[&row.run_id, &row.call_id])?,
+                    encode(row)?,
                 )
                 .await?,
             );

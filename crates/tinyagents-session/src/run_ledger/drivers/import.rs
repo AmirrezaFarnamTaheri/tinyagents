@@ -8,7 +8,19 @@
 //! [`DriverRunLedger::import_legacy_database`].
 use super::*;
 use crate::legacy::{LegacySourceSnapshot, QuiescentSource, rows, source};
-use tinystoragedrivers_core::ErrorKind;
+use tinystoragedrivers_core::{ErrorKind, MIGRATIONS_COLLECTION, Progress};
+
+/// The `tsd.migrations` step (owner `ledger`) that records the agent-family
+/// import `operation_id`.
+pub(super) fn import_step(operation_id: &str) -> String {
+    format!("agent_import/{operation_id}")
+}
+
+/// The id of an import's receipt in `tsd.migrations`: `Key::of([owner, step])`,
+/// the id [`tinystoragedrivers_core::Migrations::mark_done`] gives an importer.
+pub(super) fn import_receipt_id(operation_id: &str) -> std::result::Result<String, StorageError> {
+    super::storage::key(&[LEDGER_OWNER, &import_step(operation_id)])
+}
 
 impl DriverRunLedger {
     /// Inspect an admitted source without creating, migrating or modifying any source file.
@@ -22,6 +34,13 @@ impl DriverRunLedger {
 mod tests;
 
 /// Counts committed together with an agent-family import receipt.
+///
+/// The receipt is the importer's `tsd.migrations` record
+/// (`Migrations::done("ledger", "agent_import/<operation id>")`), written in the
+/// same atomic batch as the rows. Its `cursor` carries the source fingerprint,
+/// so an operation id cannot be reused for a changed source, and its `written`
+/// the total row count; the per-family counts of a replayed operation are
+/// recomputed from the (unchanged) source.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentImportReport {
     /// Agent run rows committed by this operation.
@@ -43,8 +62,8 @@ impl DriverRunLedger {
         operation_id: &str,
     ) -> Result<AgentImportReport> {
         tinystoragedrivers_core::ReadCheck {
-            collection: super::storage::IMPORTS.into(),
-            id: operation_id.into(),
+            collection: MIGRATIONS_COLLECTION.into(),
+            id: import_receipt_id(operation_id)?,
             expected: tinystoragedrivers_core::ExpectedDocument::Absent,
         }
         .validate()?;
@@ -53,11 +72,6 @@ impl DriverRunLedger {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct ImportReceipt {
-    fingerprint: String,
-    report: AgentImportReport,
-}
 struct LoadedAgentImport {
     fingerprint: String,
     runs: Vec<AgentRun>,
@@ -114,42 +128,55 @@ impl DriverRunLedger {
         })
     }
 
+    /// The recorded fingerprint of a committed import, if `operation_id` has one.
+    pub(super) async fn import_receipt(&self, operation_id: &str) -> Result<Option<Progress>> {
+        let found = self
+            .scoped
+            .documents()
+            .get(MIGRATIONS_COLLECTION, &import_receipt_id(operation_id)?)
+            .await?;
+        found
+            .map(|found| serde_json::from_value(found.doc).map_err(StorageError::from))
+            .transpose()
+            .map_err(Into::into)
+    }
+
     async fn commit_agent_import(
         &self,
         loaded: LoadedAgentImport,
         operation_id: &str,
     ) -> Result<AgentImportReport> {
-        use super::storage::{AGENTS, EVENT_HEADS, EVENTS, IMPORTS, TELEMETRY, encode, key};
+        use super::storage::{AGENTS, EVENT_HEADS, EVENTS, TELEMETRY, key, put_op};
         use tinystoragedrivers_core::{Precondition, WriteOp};
         self.declare().await?;
-        if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await? {
-            if receipt.doc.fingerprint != loaded.fingerprint {
-                return Err(StorageError::conflict("import operation source changed").into());
-            }
-            return Ok(receipt.doc.report);
-        }
         let report = AgentImportReport {
             agent_runs: loaded.runs.len(),
             events: loaded.events.len(),
             telemetry: loaded.telemetry.len(),
         };
-        let put = |collection: &str, id: String, doc| WriteOp::Put {
-            collection: collection.into(),
-            id,
-            doc,
-            precondition: Precondition::Absent,
-        };
+        if let Some(receipt) = self.import_receipt(operation_id).await? {
+            if receipt.cursor.as_deref() != Some(loaded.fingerprint.as_str()) {
+                return Err(StorageError::conflict("import operation source changed").into());
+            }
+            return Ok(report);
+        }
         let mut writes = Vec::new();
         for mut run in loaded.runs {
             run.telemetry = None;
-            writes.push(put(AGENTS, key(&[&run.id]), encode(&run)?));
+            writes.push(put_op(
+                AGENTS,
+                key(&[&run.id])?,
+                &run,
+                Precondition::Absent,
+            )?);
         }
         for telemetry in loaded.telemetry {
-            writes.push(put(
+            writes.push(put_op(
                 TELEMETRY,
-                key(&[&telemetry.run_id]),
-                encode(&telemetry)?,
-            ));
+                key(&[&telemetry.run_id])?,
+                &telemetry,
+                Precondition::Absent,
+            )?);
         }
         let mut heads = std::collections::BTreeMap::<String, u64>::new();
         for event in loaded.events {
@@ -164,29 +191,38 @@ impl DriverRunLedger {
                 .entry(event.run_id.clone())
                 .and_modify(|current| *current = (*current).max(next))
                 .or_insert(next);
-            writes.push(put(
+            writes.push(put_op(
                 EVENTS,
-                key(&[&event.run_id, &event.sequence.to_string()]),
-                encode(&event)?,
-            ));
+                key(&[&event.run_id, &event.sequence.to_string()])?,
+                &event,
+                Precondition::Absent,
+            )?);
         }
         for (run_id, next) in heads {
-            writes.push(put(
+            writes.push(put_op(
                 EVENT_HEADS,
-                key(&[&run_id]),
-                encode(&super::events::EventHead {
+                key(&[&run_id])?,
+                &super::events::EventHead {
                     next: (next <= i64::MAX as u64).then_some(next),
-                })?,
-            ));
+                },
+                Precondition::Absent,
+            )?);
         }
-        writes.push(put(
-            IMPORTS,
-            key(&[operation_id]),
-            encode(&ImportReceipt {
-                fingerprint: loaded.fingerprint.clone(),
-                report: report.clone(),
-            })?,
-        ));
+        let receipt = Progress {
+            owner: LEDGER_OWNER.into(),
+            step: import_step(operation_id),
+            from: 0,
+            to: 0,
+            cursor: Some(loaded.fingerprint.clone()),
+            written: (report.agent_runs + report.events + report.telemetry) as u64,
+            done: true,
+        };
+        writes.push(WriteOp::Put {
+            collection: MIGRATIONS_COLLECTION.into(),
+            id: import_receipt_id(operation_id)?,
+            doc: serde_json::to_value(&receipt).map_err(StorageError::from)?,
+            precondition: Precondition::Absent,
+        });
         match self
             .scoped
             .documents()
@@ -195,10 +231,10 @@ impl DriverRunLedger {
         {
             Ok(_) => Ok(report),
             Err(error) if error.kind() == ErrorKind::Conflict => {
-                if let Some(receipt) = self.read::<ImportReceipt>(IMPORTS, operation_id).await?
-                    && receipt.doc.fingerprint == loaded.fingerprint
+                if let Some(receipt) = self.import_receipt(operation_id).await?
+                    && receipt.cursor.as_deref() == Some(loaded.fingerprint.as_str())
                 {
-                    return Ok(receipt.doc.report);
+                    return Ok(report);
                 }
                 Err(error.into())
             }
