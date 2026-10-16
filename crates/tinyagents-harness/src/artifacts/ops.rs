@@ -380,6 +380,7 @@ impl ArtifactOffload {
         let parent = target
             .parent()
             .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
+        #[cfg(not(unix))]
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| OffloadError::Materialization(error.to_string()))?;
@@ -507,13 +508,13 @@ async fn canonicalize_existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf
 }
 
 #[cfg(unix)]
-fn atomic_write_under_dir(
+pub(super) fn atomic_write_under_dir(
     root: &Path,
     relative_parent: &Path,
     target_name: &std::ffi::OsStr,
     body: &[u8],
 ) -> std::io::Result<()> {
-    use rustix::fs::{AtFlags, Mode, OFlags, open, openat, renameat, unlinkat};
+    use rustix::fs::{AtFlags, Mode, OFlags, mkdirat, open, openat, renameat, unlinkat};
     use std::{
         io::Write,
         os::fd::OwnedFd,
@@ -531,12 +532,32 @@ fn atomic_write_under_dir(
         };
         // Each segment is opened relative to the already pinned parent and
         // with NOFOLLOW. A replaced symlink therefore fails closed.
-        directory = openat(
+        let opened = openat(
             &directory,
             name,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             Mode::empty(),
-        )?;
+        );
+        directory = match opened {
+            Ok(directory) => directory,
+            Err(error) if error == rustix::io::Errno::NOENT => {
+                match mkdirat(
+                    &directory,
+                    name,
+                    Mode::RUSR | Mode::WUSR | Mode::XUSR,
+                ) {
+                    Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                    Err(error) => return Err(error.into()),
+                }
+                openat(
+                    &directory,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )?
+            }
+            Err(error) => return Err(error.into()),
+        };
     }
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);

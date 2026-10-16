@@ -166,6 +166,27 @@ async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("create root");
+    std::fs::create_dir_all(&outside).expect("create outside");
+    std::os::unix::fs::symlink(&outside, root.join("outputs")).expect("symlink outputs");
+
+    let result = super::ops::atomic_write_under_dir(
+        &root,
+        Path::new("outputs/worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    );
+
+    assert!(result.is_err(), "symlinked parent must fail closed");
+    assert!(!outside.join("worker").exists(), "no directory is created outside the root");
+}
+
 // ── Kinds and directories ─────────────────────────────────────────────────────
 
 #[test]
