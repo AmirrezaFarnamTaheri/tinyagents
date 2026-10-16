@@ -44,7 +44,8 @@ pub use invocation::{
     ChildDataPolicy, DriverSubAgentTool, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
     SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentJobsTool,
     SubAgentMessageTool, SubAgentMode, SubAgentSession, SubAgentTool,
-    SubagentDriverToolHost, register_subagent_job_tools,
+    SubagentDriverToolHost, register_subagent_job_tools, DelegationEnvelope,
+    DelegationRequest, MultiTargetDelegationTool, DELEGATION_MODE_FIELD, parse_approval,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;

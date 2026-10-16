@@ -76,6 +76,7 @@
 mod jobs;
 mod policy_run;
 mod driver_tool;
+mod delegation_tool;
 mod status_map;
 mod types;
 
@@ -84,6 +85,11 @@ const LOG_PREFIX: &str = "[subagent-tool]";
 pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
 pub use types::*;
 pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
+pub use delegation_tool::{DELEGATION_MODE_FIELD, DelegationEnvelope, DelegationRequest, DelegationTool, MultiTargetDelegationTool, parse_approval};
+
+#[cfg(test)]
+#[path = "delegation_tool_tests.rs"]
+mod delegation_tool_tests;
 
 #[cfg(test)]
 #[path = "driver_tool_tests.rs"]

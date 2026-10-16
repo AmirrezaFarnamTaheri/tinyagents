@@ -1,4 +1,5 @@
 use super::*;
+use crate::subagent::SubagentRequest;
 use std::sync::Arc;
 use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 use tinyagents_harness::context::{RunConfig, RunContext};
@@ -90,7 +91,7 @@ async fn closing_a_session_removes_it_from_reuse_and_preserves_it_in_listing() {
 async fn continuation_by_session_id_keeps_the_original_lifecycle_key() {
     let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
     let (session, _) = store.upsert_running(upsert(false, "task-1")).await.unwrap();
-    let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread_id("thread"), ());
+    let fresh = RunContext::new(RunConfig::new("fresh-parent").with_thread("thread"), ());
 
     let request = SubagentRequest::continue_with_session_id(
         &store,

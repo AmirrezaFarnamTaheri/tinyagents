@@ -121,6 +121,47 @@ async fn background_request_without_delivery_target_runs_inline() {
     assert_eq!(value["output"], "driver result");
 }
 
+#[tokio::test]
+async fn background_request_with_delivery_target_returns_task_reference() {
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "worker-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("parent-thread".into()),
+    );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("call-2"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.is_error);
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(value["status"], "running");
+    assert_eq!(value["delivery_target"], "parent-thread");
+    assert_eq!(value["task_id"], "worker-task");
+}
+
 fn driver() -> Arc<SubagentDriver<(), ()>> {
     Arc::new(
         SubagentDriver::new(SubagentCapabilities {
