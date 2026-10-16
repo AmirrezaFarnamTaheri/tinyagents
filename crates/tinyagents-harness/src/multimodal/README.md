@@ -7,8 +7,9 @@ message text.
 
 A user attaches a picture or a document; somewhere between the text box and
 the provider that attachment has to become bytes the model can read —
-validated, size-capped, MIME-checked, and rendered into the message. This
-module is that pipeline, minus every decision that belongs to a host.
+validated, size-capped, MIME-checked, and rendered into the message. The
+multimodal module provides that generic pipeline while leaving source access,
+scope, selected-model facts, and other host policy behind explicit seams.
 Attachments travel as markers inside message text rather than a parallel
 structured field, so they survive every hop a host already has (persistence,
 summarisation, delegation) without each of those learning about attachments.
@@ -45,6 +46,18 @@ format contributes a header naming it plus a content hash.
   [`compose_multimodal_message`] (renders the final provider-bound message),
   and supporting helpers (`truncate_chars`, `sha256_prefix`, `format_size`,
   `escape_attr`).
+- [`request`] — [`MediaRequestModel`], a `ChatModel` decorator that prepares a
+  disposable request, checks counts before reads, preserves per-call scope,
+  applies a bounded historical-media-item budget, dispatches native media only
+  when both model and transport support it, and renders character-bounded
+  text/archive/image fallbacks. The host supplies [`MediaSourceResolver`] for
+  authorized source access, [`MediaHistoryFallback`] for its safe history
+  behavior, and may supply [`MediaImageReadout`] plus selected-model
+  [`ModelProfile`] facts. A resolver returns [`ResolvedMedia`] so host-authored
+  safe path or recovery annotations stay beside native media and in fallbacks.
+  Its synchronous trusted-request callback may consume request metadata or
+  normalize host markers on the disposable copy before counting; it must not
+  resolve sources or perform other I/O.
 - [`error`] — [`MultimodalError`] and its [`Result`] alias; every variant
   carries the offending `input` verbatim so a multi-attachment turn's failure
   is attributable.
@@ -66,23 +79,26 @@ format contributes a header naming it plus a content hash.
 | `archive/zip_admission.rs` | Allocation-free ZIP preflight and admitted reader. |
 | `png.rs` | Optional lossless PNG optimization. |
 | `payload.rs`  | `FilePayload`, message composition, truncation, hashing.           |
+| `request.rs` | `MediaRequestModel` and host scope/resolver/fallback seams.         |
 | `error.rs`    | `MultimodalError`, `Result`.                                       |
-| `mod_tests.rs`, `resolve_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, archive, PNG and stash behavior. |
+| `mod_tests.rs`, `resolve_tests.rs`, `request_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, request preparation, archive, PNG and stash behavior. |
 
 ## Operational constraints
 
 - **Count before resolving.** `FileLimits::files_disabled` and the per-turn
   count caps must be checked against the raw markers, before any read
   happens — a cap enforced after the fetch is not a cap.
-- **Check the sentinel before the clamp.** `max_files == 0` means *none*;
-  `FileLimits::effective` clamps it up to `1`. Consulting only the clamped
-  value would admit one attachment from a source that asked for zero.
-- What stays with the host, deliberately: the `TextExtractor` implementation (which parser, if any, and its
-  timeout), the attachment stash (where bytes live between ingress and
-  dispatch), and message-level marker counting (only the host knows its
-  message type). This module never decides which local paths may be read —
-  that is `FileLimits::files_disabled`'s lever, not a filesystem allowlist
-  here.
+- **Preserve the hard disable.** `max_files == 0` means *none* and remains
+  zero in `FileLimits::effective`. `MediaRequestModel` checks it before asking
+  the host source resolver to read anything.
+- Final image readout and archive fallback context is capped using
+  `max_extracted_text_chars` and Unicode scalar values, then marked when
+  truncated.
+- What stays with the host, deliberately: the `TextExtractor` implementation
+  (which parser, if any, and its timeout), the attachment stash (where bytes
+  live between ingress and dispatch), image-readout model choice, source
+  authorization, access scope, selected-model profile, and safe historical
+  placeholders. `MediaRequestModel` never decides which local paths may be read.
 - Opt-in remote image and file URLs pass TinyTools' URL and DNS guard. The
   resolver pins the vetted addresses in its own direct HTTP client and refuses
   redirects. It uses 30-second request and 10-second connection timeouts.
