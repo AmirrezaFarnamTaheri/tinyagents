@@ -128,7 +128,11 @@ where
         let (images, files) = count_user_media(&request.messages[latest_user]);
         let (max_images, _) = self.config.images.effective();
         let (max_files, _, _) = self.config.files.effective();
-        if self.config.files.files_disabled() && images + files > 0 {
+        let request_has_media = request.messages.iter().any(|message| {
+            let (images, files) = count_user_media(message);
+            images + files > 0
+        });
+        if self.config.files.files_disabled() && request_has_media {
             return Err(model_error("attachments are disabled for this request"));
         }
         if images > max_images {

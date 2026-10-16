@@ -65,6 +65,25 @@ struct Resolver {
     scopes: Mutex<Vec<String>>,
 }
 
+#[derive(Default)]
+struct PendingResolver {
+    entered: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl MediaSourceResolver<String> for PendingResolver {
+    async fn resolve(
+        &self,
+        _scope: &String,
+        _modality: InputModality,
+        _source: &str,
+        _max_bytes: usize,
+    ) -> std::result::Result<ResolvedAttachment, String> {
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
 #[async_trait]
 impl MediaSourceResolver<String> for Resolver {
     async fn resolve(
@@ -177,6 +196,35 @@ async fn hard_zero_rejects_before_any_source_read() {
 }
 
 #[tokio::test]
+async fn hard_zero_also_blocks_media_only_present_in_history() {
+    let model = Arc::new(CaptureModel::new(false));
+    let resolver = Arc::new(Resolver::default());
+    let disabled = MediaRequestConfig {
+        files: FileLimits {
+            max_files: 0,
+            ..FileLimits::default()
+        },
+        ..MediaRequestConfig::default()
+    };
+    let wrapped = wrapper(model, disabled, resolver.clone(), Arc::default());
+    let mut request = request("latest text only");
+    request.messages.insert(
+        0,
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("earlier [IMAGE:secret]".into())],
+        }),
+    );
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), request)
+        .await
+        .expect_err("hard-zero disables historical media too");
+
+    assert!(error.to_string().contains("attachments are disabled"));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn ordinary_count_limit_is_checked_before_resolving_any_marker() {
     let model = Arc::new(CaptureModel::new(true));
     let resolver = Arc::new(Resolver::default());
@@ -252,6 +300,48 @@ async fn invoke_and_stream_prepare_disposable_requests_without_changing_history(
     }
     assert_eq!(wrapped.cache_identity().as_deref(), Some("capture-model"));
     assert!(wrapped.profile().is_some());
+}
+
+#[tokio::test]
+async fn resolution_error_and_cancellation_leave_the_canonical_request_unchanged() {
+    let model = Arc::new(CaptureModel::new(true));
+    let missing_resolver = Arc::new(Resolver::default());
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        missing_resolver,
+        Arc::default(),
+    );
+    let original = request("[IMAGE:unavailable]");
+    let canonical = serde_json::to_value(&original).unwrap();
+    assert!(
+        wrapped
+            .invoke(&"tenant-a".into(), original.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(serde_json::to_value(&original).unwrap(), canonical);
+    assert!(model.requests.lock().unwrap().is_empty());
+
+    let pending = Arc::new(PendingResolver::default());
+    let cancel_model = Arc::new(CaptureModel::new(true));
+    let canceled_wrapper = MediaRequestModel::new(
+        cancel_model,
+        MediaRequestConfig::default(),
+        |state: &String| Ok(state.clone()),
+        pending.clone(),
+        Arc::default(),
+    );
+    let canonical_after_cancel = serde_json::to_value(&original).unwrap();
+    let call = {
+        let wrapped = canceled_wrapper;
+        let request = original.clone();
+        tokio::spawn(async move { wrapped.invoke(&"tenant-a".into(), request).await })
+    };
+    pending.entered.notified().await;
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert_eq!(serde_json::to_value(&original).unwrap(), canonical_after_cancel);
 }
 
 #[tokio::test]
