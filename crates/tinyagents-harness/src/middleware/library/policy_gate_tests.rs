@@ -81,7 +81,7 @@ impl ToolCallPolicy<Host> for SessionCeiling {
     }
 
     async fn check(&self, ctx: &RunContext<Host>, call: &ToolCall) -> PolicyDecision {
-        if call.name == "web_only" && ctx.data.channel != "web" {
+        if call.name == "ceiling_only" && ctx.data.channel != "web" {
             PolicyDecision::deny("session ceiling")
         } else {
             PolicyDecision::Allow
@@ -532,7 +532,7 @@ async fn session_ceiling_runs_before_builder_policy() {
     stack.push_tool_middleware(middleware);
     let ctx = RunContext::new(RunConfig::new("cli-session"), Host { channel: "cli" });
     let result = stack
-        .run_wrapped_tool(&ctx, &(), call("web_only"), &base)
+        .run_wrapped_tool(&ctx, &(), call("ceiling_only"), &base)
         .await
         .unwrap()
         .into_result();
