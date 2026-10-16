@@ -235,7 +235,7 @@ impl DriverConversationStore {
         current
             .filter(|doc| !doc.deleted)
             .cloned()
-            .ok_or_else(|| StorageError::not_found("conversation thread not found").into())
+            .ok_or_else(|| StorageError::not_found("conversation thread not found"))
     }
     fn ensure(current: Option<&ThreadDoc>, request: &CreateConversationThread) -> ThreadDoc {
         if let Some(current) = current.filter(|doc| !doc.deleted) {
