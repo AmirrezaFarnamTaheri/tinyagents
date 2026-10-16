@@ -10,6 +10,7 @@ mod child_step;
 mod engine;
 mod graph;
 mod persistence;
+mod supervisor;
 mod state;
 mod types;
 mod validate;
@@ -23,6 +24,7 @@ pub use persistence::{
     AsyncWorkflowChildRegistration, AsyncWorkflowExecutor, AsyncWorkflowStore, LedgerWorkflowStore,
     LegacyWorkflowRegistration, WorkflowPersistenceError, WorkflowPersistenceResult,
 };
+pub use supervisor::{WorkflowRunHandle, WorkflowRunSupervisor};
 pub use state::{
     PhaseStatus, all_phases_completed, init_phase_states, next_runnable_phase, phase_prompt,
     phase_status, reset_running_phases, synthesize_summary, upstream_outputs,
