@@ -563,6 +563,16 @@ impl SubAgentJobRegistry {
             .tasks
             .steering_handle(&task_id, &owner)
             .map_err(|_| not_found())?;
+        let lane_queue = if lane.is_some() {
+            Some(
+                control
+                    .run_queue
+                    .clone()
+                    .ok_or_else(|| SubAgentJobError::LaneUnavailable(job_id.to_owned()))?,
+            )
+        } else {
+            None
+        };
         if let Some(request_id) = request_id {
             match self.tasks.claim_steer_request(&task_id, request_id) {
                 Ok(false) => {
@@ -578,11 +588,10 @@ impl SubAgentJobRegistry {
         }
         let message = message.into();
         if let Some(lane) = lane {
-            let run_queue = control
-                .run_queue
-                .as_ref()
-                .ok_or_else(|| SubAgentJobError::LaneUnavailable(job_id.to_owned()))?;
-            run_queue.push_now(lane, Message::user(message));
+            lane_queue.expect("lane queue was validated before claiming the request id").push_now(
+                lane,
+                Message::user(message),
+            );
         } else {
             handle.send(SteeringCommand::InjectMessage(Message::user(message)));
         }
