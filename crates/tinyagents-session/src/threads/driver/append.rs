@@ -226,14 +226,6 @@ impl DriverConversationStore {
             current.doc.visible_end = offset
                 .checked_add(1)
                 .ok_or_else(|| StorageError::invalid_input("conversation prefix overflow"))?;
-            current.doc.thread.message_count = current
-                .doc
-                .thread
-                .message_count
-                .checked_add(1)
-                .ok_or_else(|| {
-                    StorageError::invalid_input("conversation message count overflow")
-                })?;
             current.doc.thread.last_message_at = intent.message()?.created_at;
             let body = serde_json::to_value(current.doc.to_dto()?).map_err(|error| {
                 StorageError::serialization("encode committed conversation metadata")
