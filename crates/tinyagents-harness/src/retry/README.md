@@ -47,6 +47,9 @@ taxonomy and `Retry-After` parsing are consumed directly from
 - [`FailoverReason`], [`decide`], [`FailoverDecision`], [`FailoverState`] —
   reason-aware failover (`failover.rs`): classify *why* a call failed and
   choose retry-same / fallback / surface. See the table below.
+- [`PersistentFailoverBreaker`] — shared per-key outage state across run
+  contexts, with explicit-clock admission, an RAII attempt guard, exponential
+  backoff, a configurable failure limit, and success/reset support.
 - [`RateLimiter`] — `new(capacity, refill_per_sec)`, `try_acquire(tokens,
   now)`, `available(now)`, `capacity`, `refill_per_sec`, `can_ever_acquire`.
 - [`JITTER_FRACTION`] — the ± band jitter spreads backoff over.
@@ -58,6 +61,8 @@ taxonomy and `Retry-After` parsing are consumed directly from
 | `mod.rs` | Method implementations for all three policies, `is_retryable`, `retry_after_hint`. |
 | `types.rs` | The declarative structs/type aliases (`RetryPolicy`, `FallbackPolicy`, `RateLimiter`, `RetryPredicate`) plus hand-written `Debug`/`PartialEq` where a boxed closure blocks the derive. |
 | `failover.rs` | `FailoverReason` classification (the types themselves live in `types.rs`) (reusing `classify_provider_failure` and the provider-body matchers), the pure `decide` table, `FailoverState`. |
+| `circuit_breaker.rs` | Shared per-key persistent failure state and RAII in-flight attempt guard; time is supplied by the caller. |
+| `circuit_breaker_tests.rs` | Shared-state, backoff/cap, key isolation, reset, and guard-drop tests driven by a fake clock. |
 | `failover_tests.rs` | Classification and decision-table tests. |
 | `jitter.rs` | A minimal, dependency-free `xorshift64*` RNG used only for backoff jitter spread — never security-relevant, and always bypassable in tests via an explicit `rand01`. |
 | `mod_tests.rs` | Backoff growth/capping, jitter scaling/clamping, `should_retry` boundaries, `is_retryable` classification, `FallbackPolicy` traversal, and token-bucket behavior. |
@@ -101,6 +106,11 @@ fallback remains. A hosted resolver's single decision is never failed over.
   (`RetryPolicy::backoff_for_error` takes the `max` of computed backoff and the
   hint), and is clamped by `max_retry_after_ms` so a hostile or buggy header
   cannot park a run indefinitely.
+- `PersistentFailoverBreaker` stores the key verbatim. Hosts should pass a
+  structured or otherwise collision-safe tenant/provider/model identity and
+  share breaker clones across run contexts. `try_acquire` and completion
+  methods accept monotonic milliseconds, so tests can advance time without
+  sleeping. Dropping an unfinished attempt releases only its own generation.
 - Callers holding a `RetryPolicy` should always go through
   `RetryPolicy::is_retryable_error` / `should_retry_error` rather than calling
   the free `is_retryable` directly, so a caller-supplied `retry_on` predicate

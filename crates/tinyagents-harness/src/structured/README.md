@@ -56,6 +56,9 @@ it, each owned by its own submodule:
 - `JsonRepair` (`repair.rs`) — which rung of the repair ladder produced a
   value (`Strict`/`CodeFence`/`Slice`/`Relaxed`/`Closed`); `as_str()` for
   logging, `is_repaired()` to tell a clean parse from a recovered one.
+- `parse_lenient` and `parse_lenient_last_object` (`repair.rs`) — parse the
+  first recoverable value or explicitly select the last complete object,
+  preferring a fenced block and repairing trailing commas.
 - `validate::validate_value` — standalone entry point for schema validation,
   used internally by every `extract` call and available for a caller that
   wants to validate independently.
@@ -66,7 +69,7 @@ it, each owned by its own submodule:
 | --- | --- |
 | `mod.rs` | Strategy selection, `StructuredExtractor`/`StructuredOutput` impls, `response_format_for_strategy`. |
 | `types.rs` | `StructuredStrategy`, `StructuredOutput`, `StructuredOutcome`, `StructuredExtractor` struct definitions. |
-| `repair.rs` | `JsonRepair`, `parse_lenient` and the repair-ladder rungs. |
+| `repair.rs` | `JsonRepair`, the default and last-object parse entry points, and the repair-ladder rungs. |
 | `validate.rs` | Local, non-`$ref` JSON Schema subset validator. |
 | `mod_tests.rs` | Extraction, strategy-selection, and empty-response tests. `repair.rs` and `validate.rs` have their own `repair_test_tests.rs` and `validate_test_tests.rs`. |
 
