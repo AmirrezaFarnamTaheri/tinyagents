@@ -45,7 +45,10 @@ impl<K> Clone for PersistentFailoverBreaker<K> {
     }
 }
 
-impl<K> Default for PersistentFailoverBreaker<K> {
+impl<K> Default for PersistentFailoverBreaker<K>
+where
+    K: Eq + Hash + Clone,
+{
     fn default() -> Self {
         Self::new(PersistentFailoverBreakerConfig::default())
     }
@@ -158,7 +161,7 @@ pub struct PersistentFailoverFailure {
 
 /// RAII ownership of one in-flight attempt. Dropping it releases the slot
 /// without recording a failure, including when a future is cancelled.
-pub struct PersistentFailoverAttempt<K> {
+pub struct PersistentFailoverAttempt<K: Eq + Hash> {
     key: K,
     generation: u64,
     entries: Arc<Mutex<HashMap<K, Entry>>>,
