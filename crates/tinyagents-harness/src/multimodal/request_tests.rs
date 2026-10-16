@@ -1,5 +1,10 @@
 use super::*;
-use std::{collections::HashMap, io::Write, sync::atomic::{AtomicUsize, Ordering}, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io::Write,
+    sync::Mutex,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use futures::StreamExt;
 use tinyinference_llm::{
@@ -214,8 +219,14 @@ async fn invoke_and_stream_prepare_disposable_requests_without_changing_history(
     let original = request("caption [IMAGE:image]");
     let canonical = original.clone();
 
-    wrapped.invoke(&"tenant-a".into(), original.clone()).await.unwrap();
-    let stream = wrapped.stream(&"tenant-a".into(), original.clone()).await.unwrap();
+    wrapped
+        .invoke(&"tenant-a".into(), original.clone())
+        .await
+        .unwrap();
+    let stream = wrapped
+        .stream(&"tenant-a".into(), original.clone())
+        .await
+        .unwrap();
     let items: Vec<ModelStreamItem> = stream.collect().await;
 
     assert!(matches!(items.first(), Some(ModelStreamItem::Started)));
@@ -230,7 +241,11 @@ async fn invoke_and_stream_prepare_disposable_requests_without_changing_history(
         let Message::User(user) = &prepared.messages[0] else {
             panic!("user request retained")
         };
-        assert!(user.content.iter().any(|block| matches!(block, ContentBlock::Image(_))));
+        assert!(
+            user.content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image(_)))
+        );
         assert!(!user.content.iter().any(|block| {
             matches!(block, ContentBlock::Text(text) if text.contains("[IMAGE:"))
         }));
@@ -243,9 +258,20 @@ async fn invoke_and_stream_prepare_disposable_requests_without_changing_history(
 async fn concurrent_calls_keep_their_immutable_scope_separate() {
     let model = Arc::new(CaptureModel::new(true));
     let mut sources = HashMap::new();
-    sources.insert("image".into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
-    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
-    let wrapped = wrapper(model, MediaRequestConfig::default(), resolver.clone(), Arc::default());
+    sources.insert(
+        "image".into(),
+        attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model,
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    );
 
     let scope_a = "scope-a".to_string();
     let scope_b = "scope-b".to_string();
@@ -266,12 +292,26 @@ async fn nonvision_fallback_reads_images_and_uses_the_pdf_extractor() {
     let model = Arc::new(CaptureModel::new(false));
     let pdf = b"%PDF-1.7 a meaningful fake PDF body";
     let mut sources = HashMap::new();
-    sources.insert("image".into(), attachment("red.png", "image/png", b"\x89PNG\r\n\x1a\n"));
-    sources.insert("pdf".into(), attachment("brief.pdf", "application/pdf", pdf));
-    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    sources.insert(
+        "image".into(),
+        attachment("red.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    sources.insert(
+        "pdf".into(),
+        attachment("brief.pdf", "application/pdf", pdf),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
     let extractor = Arc::new(Extractor::default());
-    let wrapped = wrapper(model.clone(), MediaRequestConfig::default(), resolver, extractor.clone())
-        .with_image_readout(Arc::new(Readout));
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        extractor.clone(),
+    )
+    .with_image_readout(Arc::new(Readout));
 
     wrapped
         .invoke(&"tenant-a".into(), request("[IMAGE:image] [FILE:pdf]"))
@@ -315,7 +355,10 @@ async fn nonvision_archive_fallback_lists_entries_without_extracting_them() {
         "archive".into(),
         attachment("bundle.zip", "application/zip", bytes.get_ref()),
     );
-    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
     let wrapped = wrapper(
         model.clone(),
         MediaRequestConfig::default(),

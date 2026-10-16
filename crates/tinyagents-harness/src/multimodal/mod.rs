@@ -77,8 +77,8 @@ pub mod error;
 pub mod markers;
 pub mod mime;
 pub mod payload;
-pub mod request;
 pub mod png;
+pub mod request;
 pub use png::optimize_png_lossless;
 pub mod blob_stash;
 pub mod resolve;
@@ -102,9 +102,7 @@ pub use markers::{
     text_has_image_placeholders,
 };
 pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, truncate_chars};
-pub use request::{
-    MediaImageReadout, MediaRequestConfig, MediaRequestModel, MediaSourceResolver,
-};
+pub use request::{MediaImageReadout, MediaRequestConfig, MediaRequestModel, MediaSourceResolver};
 pub use resolve::{
     NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
 };

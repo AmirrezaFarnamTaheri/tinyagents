@@ -20,8 +20,7 @@ use tinyinference_llm::{
 };
 
 use super::{
-    ArchiveFormat, FileLimits, FilePayload, ImageLimits, ResolvedAttachment,
-    TextExtractor,
+    ArchiveFormat, FileLimits, FilePayload, ImageLimits, ResolvedAttachment, TextExtractor,
     archive::{ArchiveLimits, inspect_archive},
     data_uri::encode_data_uri,
     markers::{parse_file_markers, parse_image_markers},
@@ -91,10 +90,7 @@ where
     pub fn new(
         inner: Arc<dyn ChatModel<State>>,
         config: MediaRequestConfig,
-        scope_for_state: impl Fn(&State) -> std::result::Result<Scope, String>
-            + Send
-            + Sync
-            + 'static,
+        scope_for_state: impl Fn(&State) -> std::result::Result<Scope, String> + Send + Sync + 'static,
         resolver: Arc<dyn MediaSourceResolver<Scope>>,
         extractor: Arc<dyn TextExtractor>,
     ) -> Self {
@@ -114,7 +110,11 @@ where
         self
     }
 
-    async fn prepare(&self, state: &State, mut request: ModelRequest) -> tinyinference_llm::Result<ModelRequest> {
+    async fn prepare(
+        &self,
+        state: &State,
+        mut request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelRequest> {
         let Some(latest_user) = request
             .messages
             .iter()
@@ -182,7 +182,12 @@ where
         let mut image_fallback = Vec::new();
         for source in images {
             let attachment = self
-                .resolve(scope, InputModality::Image, &source, self.config.images.max_image_bytes())
+                .resolve(
+                    scope,
+                    InputModality::Image,
+                    &source,
+                    self.config.images.max_image_bytes(),
+                )
                 .await?;
             if self.native(InputModality::Image, &attachment.mime) {
                 let mime = validated_image_mime(&attachment)?;
@@ -199,7 +204,12 @@ where
         let mut file_fallback_text = Vec::new();
         for source in files {
             let attachment = self
-                .resolve(scope, InputModality::Document, &source, self.config.files.max_file_bytes())
+                .resolve(
+                    scope,
+                    InputModality::Document,
+                    &source,
+                    self.config.files.max_file_bytes(),
+                )
                 .await?;
             if self.native(InputModality::Document, &attachment.mime) {
                 native_images.push(ContentBlock::Document(MediaRef::base64(
@@ -299,7 +309,10 @@ where
             InputModality::Video => profile.modalities.video_in,
             InputModality::Document => profile.modalities.document_in,
         });
-        advertised && self.inner.supports_input(modality, mime, InputSource::Base64)
+        advertised
+            && self
+                .inner
+                .supports_input(modality, mime, InputSource::Base64)
     }
 
     async fn image_fallback(
@@ -325,7 +338,9 @@ where
         &self,
         attachment: &ResolvedAttachment,
     ) -> (FilePayload, Option<String>) {
-        if let Some(format) = ArchiveFormat::detect(&attachment.name, &attachment.mime, &attachment.bytes) {
+        if let Some(format) =
+            ArchiveFormat::detect(&attachment.name, &attachment.mime, &attachment.bytes)
+        {
             let text = match inspect_archive(&attachment.bytes, format, &ArchiveLimits::default()) {
                 Ok(listing) => {
                     let mut output = String::from(
@@ -404,7 +419,9 @@ where
         state: &State,
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        self.inner.invoke(state, self.prepare(state, request).await?).await
+        self.inner
+            .invoke(state, self.prepare(state, request).await?)
+            .await
     }
 
     async fn stream(
@@ -412,7 +429,9 @@ where
         state: &State,
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
-        self.inner.stream(state, self.prepare(state, request).await?).await
+        self.inner
+            .stream(state, self.prepare(state, request).await?)
+            .await
     }
 }
 
