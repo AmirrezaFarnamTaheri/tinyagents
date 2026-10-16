@@ -64,6 +64,7 @@ struct Resolver {
     sources: HashMap<String, ResolvedAttachment>,
     calls: AtomicUsize,
     scopes: Mutex<Vec<String>>,
+    resolved_sources: Mutex<Vec<String>>,
 }
 
 #[derive(Default)]
@@ -96,6 +97,10 @@ impl MediaSourceResolver<String> for Resolver {
     ) -> std::result::Result<ResolvedAttachment, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.scopes.lock().unwrap().push(scope.clone());
+        self.resolved_sources
+            .lock()
+            .unwrap()
+            .push(source.to_string());
         let attachment = self
             .sources
             .get(source)
@@ -534,6 +539,128 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
         &calls[0].messages[1],
         Message::User(user) if matches!(&user.content[0], ContentBlock::Image(_))
     ));
+}
+
+#[tokio::test]
+async fn historical_marker_budget_selects_only_the_newest_references_in_a_text_block() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    for source in ["older", "newer"] {
+        sources.insert(
+            source.into(),
+            attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+        );
+    }
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig {
+            max_historical_media_blocks: 1,
+            ..MediaRequestConfig::default()
+        },
+        resolver.clone(),
+        Arc::default(),
+    );
+    let mut historical_request = ModelRequest::default();
+    historical_request.messages = vec![
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("[IMAGE:older] [IMAGE:newer]".into())],
+        }),
+        Message::User(UserMessage {
+            content: vec![ContentBlock::Text("latest".into())],
+        }),
+    ];
+
+    wrapped
+        .invoke(&"tenant-a".into(), historical_request)
+        .await
+        .unwrap();
+
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resolver.resolved_sources.lock().unwrap().as_slice(), ["newer"]);
+    let captured = model.requests.lock().unwrap();
+    let Message::User(old_user) = &captured[0].messages[0] else {
+        panic!("historical message retained")
+    };
+    assert!(matches!(
+        &old_user.content[0],
+        ContentBlock::Text(text) if text.contains("omitted by history budget")
+    ));
+    assert!(old_user
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image(_))));
+}
+
+#[tokio::test]
+async fn trusted_preparer_normalization_is_counted_before_resolution() {
+    let model = Arc::new(CaptureModel::new(true));
+    let resolver = Arc::new(Resolver::default());
+    let config = MediaRequestConfig {
+        images: ImageLimits {
+            max_images: 1,
+            ..ImageLimits::default()
+        },
+        ..MediaRequestConfig::default()
+    };
+    let wrapped = MediaRequestModel::new(
+        model,
+        config,
+        |_state: &String, request: &mut ModelRequest| {
+            if let Some(metadata) = request.metadata.as_object_mut() {
+                metadata.remove("trusted_scope");
+            }
+            if let Some(Message::User(user)) = request.messages.last_mut() {
+                user.content
+                    .push(ContentBlock::Text("[IMAGE:one] [IMAGE:two]".into()));
+            }
+            Ok("trusted-workspace".to_string())
+        },
+        resolver.clone(),
+        Arc::new(NoTextExtractor),
+    );
+    let mut original = request("caption");
+    original.metadata = serde_json::json!({"trusted_scope":"workspace-a"});
+    let canonical = original.clone();
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), original.clone())
+        .await
+        .expect_err("normalized markers count toward the current-turn limit");
+
+    assert!(error.to_string().contains("max=1, found=2"));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(original, canonical);
+}
+
+#[tokio::test]
+async fn trusted_preparer_consumes_carrier_when_request_has_no_user_message() {
+    let model = Arc::new(CaptureModel::new(false));
+    let resolver = Arc::new(Resolver::default());
+    let wrapped = MediaRequestModel::new(
+        model.clone(),
+        MediaRequestConfig::default(),
+        |_state: &String, request: &mut ModelRequest| {
+            if let Some(metadata) = request.metadata.as_object_mut() {
+                metadata.remove("trusted_scope");
+            }
+            Ok("trusted-workspace".to_string())
+        },
+        resolver,
+        Arc::new(NoTextExtractor),
+    );
+    let mut original = ModelRequest::default();
+    original.metadata = serde_json::json!({"trusted_scope":"workspace-a"});
+
+    wrapped.invoke(&"tenant-a".into(), original).await.unwrap();
+
+    assert!(model.requests.lock().unwrap()[0]
+        .metadata
+        .get("trusted_scope")
+        .is_none());
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@
 //! apply. Scope comes from model state or trusted host request metadata and is
 //! never inferred from message text or a media reference.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -169,6 +169,12 @@ where
         state: &State,
         mut request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelRequest> {
+        // This trusted, synchronous callback may consume per-request metadata
+        // or normalize host markers on the disposable copy. Run it before
+        // deriving limits and history positions so those checks see the exact
+        // request that will reach the transport. It must not perform reads.
+        let scope =
+            (self.scope_for_request)(state, &mut request).map_err(|error| model_error(&error))?;
         let Some(latest_user) = request
             .messages
             .iter()
@@ -196,9 +202,7 @@ where
             )));
         }
 
-        let scope =
-            (self.scope_for_request)(state, &mut request).map_err(|error| model_error(&error))?;
-        let selected_history = selected_history_blocks(
+        let selected_history = select_history_media(
             &request.messages,
             latest_user,
             self.config.max_historical_media_blocks,
@@ -210,18 +214,41 @@ where
             let mut prepared = Vec::with_capacity(user.content.len());
             for (block_index, block) in std::mem::take(&mut user.content).into_iter().enumerate() {
                 let historical = message_index != latest_user && is_media_block(&block);
+                let selection = selected_history.get(&(message_index, block_index));
                 if historical && self.config.files.files_disabled() {
                     prepared.extend(self.omitted_history(&scope, block));
                     continue;
                 }
-                if historical && !selected_history.contains(&(message_index, block_index)) {
+                if historical
+                    && matches!(block, ContentBlock::Text(_))
+                    && selection.is_none_or(|selection| {
+                        selection.images.iter().all(|selected| !selected)
+                            && selection.files.iter().all(|selected| !selected)
+                    })
+                {
+                    prepared.extend(self.omitted_history(&scope, block));
+                    continue;
+                }
+                if historical
+                    && !matches!(block, ContentBlock::Text(_))
+                    && !selection.is_some_and(|selection| selection.typed)
+                {
                     prepared.extend(self.omitted_history(&scope, block));
                     continue;
                 }
                 let recovery = historical.then(|| media_source_hint(&block)).flatten();
                 match block {
                     ContentBlock::Text(text) => {
-                        prepared.extend(self.prepare_text(&scope, &text, historical).await?);
+                        prepared.extend(
+                            self.prepare_text(
+                                &scope,
+                                &text,
+                                historical,
+                                selection.map(|selection| selection.images.as_slice()),
+                                selection.map(|selection| selection.files.as_slice()),
+                            )
+                            .await?,
+                        );
                     }
                     block @ (ContentBlock::Image(_)
                     | ContentBlock::Audio(_)
@@ -254,6 +281,8 @@ where
         scope: &Scope,
         text: &str,
         historical: bool,
+        selected_images: Option<&[bool]>,
+        selected_files: Option<&[bool]>,
     ) -> tinyinference_llm::Result<Vec<ContentBlock>> {
         let (without_images, images) = parse_image_markers(text);
         let (clean_text, files) = parse_file_markers(&without_images);
@@ -263,7 +292,11 @@ where
 
         let mut native_images = Vec::new();
         let mut image_fallback = Vec::new();
-        for source in images {
+        for (index, source) in images.into_iter().enumerate() {
+            if historical && !selected_images.is_some_and(|selected| selected[index]) {
+                image_fallback.push(self.omission(scope, InputModality::Image, &source));
+                continue;
+            }
             let attachment = match self
                 .resolve(
                     scope,
@@ -299,7 +332,11 @@ where
 
         let mut file_payloads = Vec::new();
         let mut file_fallback_text = Vec::new();
-        for source in files {
+        for (index, source) in files.into_iter().enumerate() {
+            if historical && !selected_files.is_some_and(|selected| selected[index]) {
+                file_fallback_text.push(self.omission(scope, InputModality::Document, &source));
+                continue;
+            }
             let attachment = match self
                 .resolve(
                     scope,
@@ -635,12 +672,19 @@ fn is_media_block(block: &ContentBlock) -> bool {
     }
 }
 
-fn selected_history_blocks(
+#[derive(Default)]
+struct HistorySelection {
+    images: Vec<bool>,
+    files: Vec<bool>,
+    typed: bool,
+}
+
+fn select_history_media(
     messages: &[Message],
     latest_user: usize,
     budget: usize,
-) -> HashSet<(usize, usize)> {
-    let mut selected = HashSet::new();
+) -> HashMap<(usize, usize), HistorySelection> {
+    let mut selected = HashMap::new();
     let mut remaining = budget;
     for (message_index, message) in messages.iter().enumerate().rev() {
         if message_index == latest_user {
@@ -653,17 +697,41 @@ fn selected_history_blocks(
             if !is_media_block(block) {
                 continue;
             }
-            let count = match block {
+            let selection = match block {
                 ContentBlock::Text(text) => {
                     let (_, images) = parse_image_markers(text);
                     let (_, files) = parse_file_markers(text);
-                    images.len() + files.len()
+                    let mut selection = HistorySelection {
+                        images: vec![false; images.len()],
+                        files: vec![false; files.len()],
+                        typed: false,
+                    };
+                    for selected in selection.files.iter_mut().rev() {
+                        if remaining == 0 {
+                            break;
+                        }
+                        *selected = true;
+                        remaining -= 1;
+                    }
+                    for selected in selection.images.iter_mut().rev() {
+                        if remaining == 0 {
+                            break;
+                        }
+                        *selected = true;
+                        remaining -= 1;
+                    }
+                    selection
                 }
-                _ => 1,
+                _ => HistorySelection {
+                    typed: remaining > 0,
+                    ..HistorySelection::default()
+                },
             };
-            if count <= remaining {
-                selected.insert((message_index, block_index));
-                remaining -= count;
+            if selection.typed || !selection.images.is_empty() || !selection.files.is_empty() {
+                if selection.typed {
+                    remaining -= 1;
+                }
+                selected.insert((message_index, block_index), selection);
             }
         }
     }
