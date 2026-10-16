@@ -10,6 +10,82 @@
 
 use tinyagents_runtime::ToolSnapshot;
 
+/// Fleet-control tools whose visibility shapes orchestration prompts and
+/// decisions. The names are stable tool identifiers supplied by the host.
+pub const FLEET_TOOLS: &[&str] = &[
+    "steer_subagent",
+    "wait_subagent",
+    "wait",
+    "wait_loop",
+    "close_subagent",
+    "continue_subagent",
+    "list_subagents",
+];
+
+/// The fleet-control subset visible to one parent agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FleetToolSet {
+    available: Vec<&'static str>,
+}
+
+impl FleetToolSet {
+    /// Treats an unavailable parent definition as having the full fleet
+    /// vocabulary, allowing host prompts to retain their prior fallback.
+    pub fn all() -> Self {
+        Self {
+            available: FLEET_TOOLS.to_vec(),
+        }
+    }
+
+    /// Resolves fleet visibility from a definition's tool scope and denylist.
+    /// A trailing `*` denies every fleet name with that prefix.
+    pub fn from_scope(
+        scope: &tinyagents_definition::ToolScope,
+        disallowed: &[String],
+    ) -> Self {
+        let denied = |name: &str| {
+            disallowed.iter().any(|entry| match entry.strip_suffix('*') {
+                Some(prefix) => name.starts_with(prefix),
+                None => entry == name,
+            })
+        };
+        let available = FLEET_TOOLS
+            .iter()
+            .copied()
+            .filter(|name| match scope {
+                tinyagents_definition::ToolScope::Wildcard => true,
+                tinyagents_definition::ToolScope::Named(names) => {
+                    names.iter().any(|candidate| candidate == name)
+                }
+            })
+            .filter(|name| !denied(name))
+            .collect();
+        Self { available }
+    }
+
+    /// Resolves fleet visibility from the effective, already-filtered tool
+    /// names for the current turn.
+    pub fn from_visible_tool_names(names: &std::collections::HashSet<String>) -> Self {
+        Self {
+            available: FLEET_TOOLS
+                .iter()
+                .copied()
+                .filter(|name| names.contains(*name))
+                .collect(),
+        }
+    }
+
+    /// Whether the parent can call `tool`.
+    pub fn has(&self, tool: &str) -> bool {
+        self.available.contains(&tool)
+    }
+
+    /// Whether the parent can block on or poll a worker.
+    pub fn can_wait(&self) -> bool {
+        self.has("wait_subagent")
+    }
+}
+
 /// Name of the job query tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
 pub const SUBAGENT_JOBS_TOOL: &str = "subagent_jobs";
 /// Name of the job message tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.

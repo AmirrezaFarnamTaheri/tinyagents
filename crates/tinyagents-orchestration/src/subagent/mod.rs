@@ -51,8 +51,8 @@ pub use result_policy::{
     AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, truncate_head_tail,
 };
 pub use role::{
-    SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole, is_delegation_tool, restrict_tools,
-    subagent_framing,
+    FLEET_TOOLS, FleetToolSet, SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole,
+    is_delegation_tool, restrict_tools, subagent_framing,
 };
 pub use step::{
     AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,

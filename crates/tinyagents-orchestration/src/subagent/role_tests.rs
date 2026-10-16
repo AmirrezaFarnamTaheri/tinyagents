@@ -88,3 +88,30 @@ fn authored_tiers_map_to_runtime_delegation_roles() {
     );
     assert_eq!(SubagentRole::from(AgentTier::Worker), SubagentRole::Leaf);
 }
+
+#[test]
+fn fleet_tools_follow_named_scope_and_deny_patterns() {
+    let fleet = FleetToolSet::from_scope(
+        &tinyagents_definition::ToolScope::Named(vec![
+            "wait_subagent".into(),
+            "list_subagents".into(),
+            "read".into(),
+        ]),
+        &["list_*".into()],
+    );
+    assert!(fleet.has("wait_subagent"));
+    assert!(!fleet.has("list_subagents"));
+    assert!(!fleet.has("read"));
+    assert!(fleet.can_wait());
+}
+
+#[test]
+fn wildcard_fleet_visibility_can_use_effective_visible_names() {
+    let names = ["wait_subagent".to_owned(), "close_subagent".to_owned()]
+        .into_iter()
+        .collect();
+    let fleet = FleetToolSet::from_visible_tool_names(&names);
+    assert!(fleet.has("wait_subagent"));
+    assert!(!fleet.has("close_subagent"));
+    assert!(!fleet.has("continue_subagent"));
+}
