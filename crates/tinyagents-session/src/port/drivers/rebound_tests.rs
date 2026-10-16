@@ -82,6 +82,28 @@ struct BlockingStore {
     release: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
+#[derive(Debug)]
+struct GateBackend {
+    inner: MemoryStorage,
+    gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+}
+
+#[async_trait::async_trait]
+impl StorageBackend for GateBackend {
+    fn driver(&self) -> &'static str { self.inner.driver() }
+    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities { self.inner.capabilities() }
+    fn for_scope(&self, scope: &tinystoragedrivers_core::Scope) -> std::result::Result<tinystoragedrivers_core::ScopedStorage, StorageError> {
+        if let Some((entered, release)) = self.gate.lock().unwrap().take() {
+            let _ = entered.send(());
+            let _ = release.recv();
+        }
+        self.inner.for_scope(scope)
+    }
+    fn database(&self, name: &str) -> std::result::Result<Arc<dyn StorageBackend>, StorageError> {
+        self.inner.database(name)
+    }
+}
+
 #[async_trait::async_trait]
 impl Store for BlockingStore {
     async fn get(&self, _: &str, _: &str) -> HarnessResult<Option<Value>> {
@@ -123,6 +145,46 @@ async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_n
 
     assert_eq!(operation.await.unwrap(), Some(serde_json::json!("old-operation")));
     assert_eq!(LiveStore(binding).get("n", "k").await.unwrap(), Some(serde_json::json!("new-operation")));
+}
+
+#[test]
+fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
+    let registry = SessionStoreRegistry::default();
+    let provider = RebindableSessionStores::new_in(
+        &registry,
+        Arc::new(MemoryStorage::new()),
+        false,
+    )
+    .unwrap();
+    let _already_live = provider.for_agent("already-live");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let new_backend = Arc::new(GateBackend {
+        inner: MemoryStorage::new(),
+        gate: Mutex::new(Some((entered_tx, release_rx))),
+    });
+    let rebind_provider = Arc::clone(&provider);
+    let rebind_backend: Arc<dyn StorageBackend> = new_backend.clone();
+    let rebind = std::thread::spawn(move || rebind_provider.rebind(rebind_backend).unwrap());
+
+    // The gate is reached while rebinding the already-live agent, after the
+    // provider has captured its live registry. A registration at this point
+    // must not be able to slip onto the old provider.
+    entered_rx.recv().unwrap();
+    assert!(provider.live.try_lock().is_err());
+    release_tx.send(()).unwrap();
+    rebind.join().unwrap();
+
+    let late = provider.for_agent("late-agent");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        late.kv.put("n", "k", serde_json::json!("new")).await.unwrap();
+        let direct = DriverSessionStores::new(new_backend).unwrap();
+        assert_eq!(
+            direct.for_agent("late-agent").kv.get("n", "k").await.unwrap(),
+            Some(serde_json::json!("new"))
+        );
+    });
 }
 
 #[test]
