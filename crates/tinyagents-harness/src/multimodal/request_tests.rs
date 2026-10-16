@@ -1,0 +1,318 @@
+use super::*;
+use std::{collections::HashMap, io::Write, sync::atomic::{AtomicUsize, Ordering}, sync::Mutex};
+
+use futures::StreamExt;
+use tinyinference_llm::{
+    message::{AssistantMessage, UserMessage},
+    model::{Modalities, ModelStreamItem},
+};
+
+#[derive(Default)]
+struct CaptureModel {
+    requests: Mutex<Vec<ModelRequest>>,
+    profile: ModelProfile,
+    native_images: bool,
+}
+
+#[async_trait]
+impl ChatModel<String> for CaptureModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+
+    fn supports_input(&self, modality: InputModality, _mime: &str, source: InputSource) -> bool {
+        modality == InputModality::Image && self.native_images && source == InputSource::Base64
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        Some("capture-model".into())
+    }
+
+    async fn invoke(
+        &self,
+        _state: &String,
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.requests.lock().unwrap().push(request);
+        Ok(ModelResponse {
+            message: AssistantMessage::default(),
+            ..ModelResponse::default()
+        })
+    }
+}
+
+impl CaptureModel {
+    fn new(native_images: bool) -> Self {
+        let mut profile = ModelProfile::default();
+        profile.modalities = Modalities {
+            image_in: native_images,
+            ..Modalities::default()
+        };
+        Self {
+            requests: Mutex::default(),
+            profile,
+            native_images,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Resolver {
+    sources: HashMap<String, ResolvedAttachment>,
+    calls: AtomicUsize,
+    scopes: Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl MediaSourceResolver<String> for Resolver {
+    async fn resolve(
+        &self,
+        scope: &String,
+        _modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+    ) -> std::result::Result<ResolvedAttachment, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.scopes.lock().unwrap().push(scope.clone());
+        let attachment = self
+            .sources
+            .get(source)
+            .cloned()
+            .ok_or_else(|| format!("missing test source {source}"))?;
+        if attachment.bytes.len() > max_bytes {
+            return Err("source exceeds test limit".into());
+        }
+        Ok(attachment)
+    }
+}
+
+#[derive(Default)]
+struct Extractor {
+    inputs: Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+#[async_trait]
+impl TextExtractor for Extractor {
+    fn handles(&self, mime: &str) -> bool {
+        mime == "application/pdf"
+    }
+
+    async fn extract(&self, mime: &str, bytes: &[u8]) -> std::result::Result<String, String> {
+        self.inputs
+            .lock()
+            .unwrap()
+            .push((mime.to_string(), bytes.to_vec()));
+        Ok("PDF text layer from fake parser".into())
+    }
+}
+
+struct Readout;
+
+#[async_trait]
+impl MediaImageReadout<String> for Readout {
+    async fn readout(
+        &self,
+        _scope: &String,
+        _image: &ResolvedAttachment,
+    ) -> std::result::Result<String, String> {
+        Ok("a small red square".into())
+    }
+}
+
+fn attachment(name: &str, mime: &str, bytes: &[u8]) -> ResolvedAttachment {
+    ResolvedAttachment {
+        bytes: bytes.to_vec(),
+        name: name.into(),
+        mime: mime.into(),
+        size_bytes: bytes.len(),
+    }
+}
+
+fn request(text: &str) -> ModelRequest {
+    ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Text(text.into())],
+    })])
+}
+
+fn wrapper(
+    model: Arc<CaptureModel>,
+    config: MediaRequestConfig,
+    resolver: Arc<Resolver>,
+    extractor: Arc<Extractor>,
+) -> MediaRequestModel<String, String> {
+    MediaRequestModel::new(
+        model,
+        config,
+        |state: &String| Ok(state.clone()),
+        resolver,
+        extractor,
+    )
+}
+
+#[tokio::test]
+async fn hard_zero_rejects_before_any_source_read() {
+    let model = Arc::new(CaptureModel::new(false));
+    let resolver = Arc::new(Resolver::default());
+    let disabled = MediaRequestConfig {
+        files: FileLimits {
+            max_files: 0,
+            ..FileLimits::default()
+        },
+        ..MediaRequestConfig::default()
+    };
+    let wrapped = wrapper(model, disabled, resolver.clone(), Arc::default());
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), request("see [IMAGE:secret]"))
+        .await
+        .expect_err("hard-zero disables all media reads");
+
+    assert!(error.to_string().contains("attachments are disabled"));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn ordinary_count_limit_is_checked_before_resolving_any_marker() {
+    let model = Arc::new(CaptureModel::new(true));
+    let resolver = Arc::new(Resolver::default());
+    let config = MediaRequestConfig {
+        images: ImageLimits {
+            max_images: 1,
+            ..ImageLimits::default()
+        },
+        ..MediaRequestConfig::default()
+    };
+    let wrapped = wrapper(model, config, resolver.clone(), Arc::default());
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), request("[IMAGE:first] [IMAGE:second]"))
+        .await
+        .expect_err("two images exceed the configured cap");
+
+    assert!(error.to_string().contains("max=1, found=2"));
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn invoke_and_stream_prepare_disposable_requests_without_changing_history() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    sources.insert(
+        "image".into(),
+        attachment("tiny.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        Arc::default(),
+    );
+    let original = request("caption [IMAGE:image]");
+    let canonical = original.clone();
+
+    wrapped.invoke(&"tenant-a".into(), original.clone()).await.unwrap();
+    let stream = wrapped.stream(&"tenant-a".into(), original.clone()).await.unwrap();
+    let items: Vec<ModelStreamItem> = stream.collect().await;
+
+    assert!(matches!(items.first(), Some(ModelStreamItem::Started)));
+    assert_eq!(original, canonical, "the caller's request remains canonical");
+    let calls = model.requests.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    for prepared in calls.iter() {
+        let Message::User(user) = &prepared.messages[0] else {
+            panic!("user request retained")
+        };
+        assert!(user.content.iter().any(|block| matches!(block, ContentBlock::Image(_))));
+        assert!(!user.content.iter().any(|block| {
+            matches!(block, ContentBlock::Text(text) if text.contains("[IMAGE:"))
+        }));
+    }
+    assert_eq!(wrapped.cache_identity().as_deref(), Some("capture-model"));
+    assert!(wrapped.profile().is_some());
+}
+
+#[tokio::test]
+async fn concurrent_calls_keep_their_immutable_scope_separate() {
+    let model = Arc::new(CaptureModel::new(true));
+    let mut sources = HashMap::new();
+    sources.insert("image".into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
+    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let wrapped = wrapper(model, MediaRequestConfig::default(), resolver.clone(), Arc::default());
+
+    let (a, b) = tokio::join!(
+        wrapped.invoke(&"scope-a".into(), request("[IMAGE:image]")),
+        wrapped.invoke(&"scope-b".into(), request("[IMAGE:image]")),
+    );
+
+    a.unwrap();
+    b.unwrap();
+    let mut scopes = resolver.scopes.lock().unwrap().clone();
+    scopes.sort();
+    assert_eq!(scopes, vec!["scope-a", "scope-b"]);
+}
+
+#[tokio::test]
+async fn nonvision_fallback_reads_images_and_uses_the_pdf_extractor() {
+    let model = Arc::new(CaptureModel::new(false));
+    let pdf = b"%PDF-1.7 a meaningful fake PDF body";
+    let mut sources = HashMap::new();
+    sources.insert("image".into(), attachment("red.png", "image/png", b"\x89PNG\r\n\x1a\n"));
+    sources.insert("pdf".into(), attachment("brief.pdf", "application/pdf", pdf));
+    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let extractor = Arc::new(Extractor::default());
+    let wrapped = wrapper(model.clone(), MediaRequestConfig::default(), resolver, extractor.clone())
+        .with_image_readout(Arc::new(Readout));
+
+    wrapped
+        .invoke(&"tenant-a".into(), request("[IMAGE:image] [FILE:pdf]"))
+        .await
+        .unwrap();
+
+    let calls = model.requests.lock().unwrap();
+    let rendered = calls[0].messages[0].text();
+    assert!(rendered.contains("a small red square"));
+    assert!(rendered.contains("PDF text layer from fake parser"));
+    assert_eq!(
+        extractor.inputs.lock().unwrap().as_slice(),
+        &[("application/pdf".into(), pdf.to_vec())]
+    );
+}
+
+#[tokio::test]
+async fn nonvision_archive_fallback_lists_entries_without_extracting_them() {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        zip.start_file("notes/readme.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"do not extract this archive").unwrap();
+        zip.finish().unwrap();
+    }
+    let model = Arc::new(CaptureModel::new(false));
+    let mut sources = HashMap::new();
+    sources.insert(
+        "archive".into(),
+        attachment("bundle.zip", "application/zip", bytes.get_ref()),
+    );
+    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        Arc::default(),
+    );
+
+    wrapped
+        .invoke(&"tenant-a".into(), request("[FILE:archive]"))
+        .await
+        .unwrap();
+
+    let rendered = model.requests.lock().unwrap()[0].messages[0].text();
+    assert!(rendered.contains("Archive listing"));
+    assert!(rendered.contains("notes/readme.txt"));
+    assert!(rendered.contains("original was not extracted"));
+}
