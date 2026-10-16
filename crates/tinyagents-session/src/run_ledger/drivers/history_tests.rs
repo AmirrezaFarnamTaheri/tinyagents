@@ -250,7 +250,7 @@ async fn age_session(ledger: &DriverRunLedger, id: &str, ended: Option<chrono::D
         .put(
             HIST_SESSIONS,
             &found.id,
-            history::session_doc(&session).unwrap(),
+            storage::encode(&session).unwrap(),
             Precondition::Version(found.version),
         )
         .await
@@ -489,13 +489,9 @@ async fn reindex_restores_missing_rows_and_drops_stale_ones() {
         .put(
             HIST_FTS,
             "stale-row",
-            history::fts_doc(&history::FtsRow {
-                session_id: "ghost".into(),
-                agent_name: String::new(),
-                content: "phantom".into(),
-                tool_name: String::new(),
-            })
-            .unwrap(),
+            serde_json::json!({
+                "session_id": "ghost", "agent_name": "", "content": "phantom", "tool_name": ""
+            }),
             Precondition::None,
         )
         .await

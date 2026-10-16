@@ -224,7 +224,7 @@ async fn later_event_collision_rolls_back_runs_and_import_receipt_together() {
     assert!(ledger.get_agent_run("run").await.unwrap().is_none());
     assert!(
         ledger
-            .read::<ImportReceipt>(super::super::storage::IMPORTS, "import")
+            .import_receipt("import")
             .await
             .unwrap()
             .is_none()

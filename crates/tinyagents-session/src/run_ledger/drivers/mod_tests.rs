@@ -334,7 +334,7 @@ async fn scoped_workflow_documents_survive_sqlite_reopen() {
 
 /// Unknown schema bodies are reported as typed corruption and never replaced with default rows.
 #[tokio::test]
-async fn scoped_workflow_rejects_malformed_document_schema() {
+async fn scoped_workflow_rejects_malformed_document_body() {
     let (ledger, _) = ledgers();
     ledger.declare().await.unwrap();
     ledger
@@ -343,7 +343,7 @@ async fn scoped_workflow_rejects_malformed_document_schema() {
         .put(
             WORKFLOWS,
             &storage::key(&["workflow"]).unwrap(),
-            json!({"schemaVersion":999, "record":{}}),
+            json!({"unexpected": "shape"}),
             tinystoragedrivers_core::Precondition::Absent,
         )
         .await
