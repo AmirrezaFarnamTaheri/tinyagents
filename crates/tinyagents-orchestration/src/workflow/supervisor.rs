@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::sync::{Arc, Mutex};
 
 use tinyagents_harness::CancellationToken;
@@ -23,6 +25,28 @@ pub struct WorkflowRunHandle {
     run_id: Arc<str>,
     generation: u64,
     token: CancellationToken,
+}
+
+/// A scheduled workflow future that releases its cancellation generation when
+/// it completes or is dropped.
+pub struct WorkflowDriveFuture<F: Future<Output = ()>> {
+    future: Pin<Box<F>>,
+    supervisor: WorkflowRunSupervisor,
+    handle: WorkflowRunHandle,
+}
+
+impl<F: Future<Output = ()>> Future for WorkflowDriveFuture<F> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
+    }
+}
+
+impl<F: Future<Output = ()>> Drop for WorkflowDriveFuture<F> {
+    fn drop(&mut self) {
+        self.supervisor.finish(&self.handle);
+    }
 }
 
 impl WorkflowRunHandle {
@@ -58,8 +82,8 @@ impl WorkflowRunSupervisor {
     /// `spawn` is a host seam: pass a closure backed by the host's task context.
     /// The future factory receives the generation's cancellation token so the
     /// caller can pass it directly to `WorkflowEngine::drive` or
-    /// `drive_async`. Callers may wrap the future with their root-parent and
-    /// origin scopes before handing it to the spawner.
+    /// `drive_async`. The scheduled future clears its generation when it
+    /// completes or is dropped.
     pub fn start<F, MakeFuture, Spawn>(
         &self,
         run_id: impl Into<String>,
@@ -69,7 +93,7 @@ impl WorkflowRunSupervisor {
     where
         F: Future<Output = ()> + Send + 'static,
         MakeFuture: FnOnce(CancellationToken) -> F,
-        Spawn: FnOnce(F),
+        Spawn: FnOnce(WorkflowDriveFuture<F>),
     {
         self.start_scoped(run_id, make_future, |future| future, |future| future, spawn)
     }
@@ -102,7 +126,7 @@ impl WorkflowRunSupervisor {
         RootFuture: Future<Output = ()> + Send + 'static,
         OriginScope: FnOnce(RootFuture) -> OriginFuture,
         OriginFuture: Future<Output = ()> + Send + 'static,
-        Spawn: FnOnce(OriginFuture),
+        Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
         let run_id = run_id.into();
         let generation = {
@@ -123,7 +147,12 @@ impl WorkflowRunSupervisor {
             generation: generation.id,
             token: generation.token.clone(),
         };
-        spawn(origin(root_parent(make_future(generation.token))));
+        let future = WorkflowDriveFuture {
+            future: Box::pin(origin(root_parent(make_future(generation.token)))),
+            supervisor: self.clone(),
+            handle: handle.clone(),
+        };
+        spawn(future);
         handle
     }
 
@@ -137,7 +166,7 @@ impl WorkflowRunSupervisor {
     where
         F: Future<Output = ()> + Send + 'static,
         MakeFuture: FnOnce(CancellationToken) -> F,
-        Spawn: FnOnce(F),
+        Spawn: FnOnce(WorkflowDriveFuture<F>),
     {
         self.start(run_id, make_future, spawn)
     }
@@ -166,7 +195,7 @@ impl WorkflowRunSupervisor {
         RootFuture: Future<Output = ()> + Send + 'static,
         OriginScope: FnOnce(RootFuture) -> OriginFuture,
         OriginFuture: Future<Output = ()> + Send + 'static,
-        Spawn: FnOnce(OriginFuture),
+        Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
         self.start_scoped(run_id, make_future, root_parent, origin, spawn)
     }
