@@ -346,7 +346,9 @@ where
             let mut owner = request.clone();
             let mut current = state.clone();
             loop {
-                let Some(owner_state) = current.as_ref() else { break };
+                let Some(owner_state) = current.as_ref() else {
+                    break;
+                };
                 let followup = self
                     .take_next_followup_or_release(
                         &owner.scope,
@@ -354,12 +356,23 @@ where
                         owner_state.generation,
                     )
                     .await;
-                let Some((followup, reserved)) = followup else { break };
+                let Some((followup, reserved)) = followup else {
+                    break;
+                };
                 owner = followup.clone();
                 current = Some(reserved.clone());
-                if self.run_one(followup, Some(reserved), &mut current).await.is_err() {
-                    self.clear_queue(&owner.scope, &owner.thread_id).await;
+                if self
+                    .run_one(followup, Some(reserved), &mut current)
+                    .await
+                    .is_err()
+                {
                     if let Some(state) = current.as_ref() {
+                        self.clear_generation_queue(
+                            &owner.scope,
+                            &owner.thread_id,
+                            state.generation,
+                        )
+                        .await;
                         self.clear_tracking(&owner, state.generation).await;
                     }
                     break;
@@ -367,6 +380,14 @@ where
             }
         } else {
             if let Some(state) = state.as_ref() {
+                if result.is_err() {
+                    self.clear_generation_queue(
+                        &request.scope,
+                        &request.thread_id,
+                        state.generation,
+                    )
+                    .await;
+                }
                 self.clear_tracking(&request, state.generation).await;
             } else if request.disposition == QueueDisposition::Parallel {
                 self.clear_parallel_tracking(&request).await;
@@ -415,10 +436,18 @@ where
                 );
             } else if let Some(reserved) = reservation.as_ref() {
                 let mut active = self.active.lock().await;
-                if active.get(&key).is_none_or(|current| current.generation != reserved.generation) {
-                    self.events.terminal(&request, TerminalEvent::Cancelled {
-                        request_id: request.request_id.clone(),
-                    }).await;
+                if active
+                    .get(&key)
+                    .is_none_or(|current| current.generation != reserved.generation)
+                {
+                    self.events
+                        .terminal(
+                            &request,
+                            TerminalEvent::Cancelled {
+                                request_id: request.request_id.clone(),
+                            },
+                        )
+                        .await;
                     return Err(TurnRunnerError::Cancelled);
                 }
                 let mut state = reserved.clone();
@@ -438,7 +467,9 @@ where
                 let state = ActiveTurn {
                     request_id: request.request_id.clone(),
                     cancel: cancellation.clone(),
-                    generation: self.next_generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    generation: self
+                        .next_generation
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     queue: queue.clone(),
                 };
                 let previous = active.insert(key.clone(), state.clone());
@@ -621,7 +652,12 @@ where
         mode: QueueMode,
     ) -> Vec<TurnRequest<P>> {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.take(lane, mode).await,
             None => Vec::new(),
@@ -630,7 +666,12 @@ where
 
     pub async fn queue_status(&self, scope: &ScopeKey, thread_id: &str) -> QueueStatus {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.status().await,
             None => QueueStatus {
@@ -644,9 +685,31 @@ where
 
     pub async fn clear_queue(&self, scope: &ScopeKey, thread_id: &str) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => queue.clear().await,
+            None => 0,
+        }
+    }
+
+    async fn clear_generation_queue(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        generation: u64,
+    ) -> usize {
+        let key = (scope.clone(), thread_id.to_owned());
+        let active = self.active.lock().await;
+        match active
+            .get(&key)
+            .filter(|turn| turn.generation == generation)
+        {
+            Some(turn) => turn.queue.clear().await,
             None => 0,
         }
     }
@@ -658,7 +721,12 @@ where
         request_id: &str,
     ) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self.active.lock().await.get(&key).map(|turn| turn.queue.clone());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| turn.queue.clone());
         match queue {
             Some(queue) => {
                 queue
@@ -760,14 +828,6 @@ where
         {
             active.remove(&key);
         }
-        drop(active);
-        let parallel_key = (
-            request.scope.clone(),
-            request.thread_id.clone(),
-            request.request_id.clone(),
-        );
-        self.parallel_active.lock().await.remove(&parallel_key);
-        self.parallel_queues.lock().await.remove(&parallel_key);
     }
 
     async fn clear_parallel_tracking(&self, request: &TurnRequest<P>) {
