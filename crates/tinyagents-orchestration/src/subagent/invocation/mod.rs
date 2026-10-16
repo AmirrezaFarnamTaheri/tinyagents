@@ -628,6 +628,49 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         }
     }
 
+    /// Converts this tool declaration to a host-planned driver invocation.
+    ///
+    /// The host request factory must construct a validated request with an
+    /// owned child context. Agent selection, authorization, prompts, tools,
+    /// workspace policy, execution and persistence remain in the driver's
+    /// planner/executor/persistence seams. A requested background call runs
+    /// detached only when `delivery_target` returns a destination; otherwise
+    /// the request is executed inline and its result is returned.
+    pub fn with_driver<H>(
+        self,
+        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
+        request_factory: impl Fn(
+                &State,
+                &RunContext<Ctx>,
+                &Value,
+                &tinyagents_harness::ids::CallId,
+            ) -> std::result::Result<
+                crate::subagent::SubagentRequest<Ctx, H>,
+                crate::subagent::SubagentError,
+            >
+            + Send
+            + Sync
+            + 'static,
+        delivery_target: impl Fn(
+                &crate::subagent::SubagentRequest<Ctx, H>,
+            ) -> Option<String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> DriverSubAgentTool<State, Ctx, H>
+    where
+        H: Send + Sync + 'static,
+    {
+        DriverSubAgentTool::new(
+            self.tool_name,
+            self.subagent.description().to_owned(),
+            driver,
+            request_factory,
+            delivery_target,
+        )
+        .with_parameters(self.parameters)
+    }
+
     /// Applies a timeout/retry/budget policy to every spawned child.
     ///
     /// Call caps tighten the child's run limits; token caps are checked when it

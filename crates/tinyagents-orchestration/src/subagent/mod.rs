@@ -21,6 +21,7 @@ mod planner;
 mod policy;
 mod result_policy;
 mod role;
+mod sessions;
 mod step;
 mod types;
 
@@ -40,9 +41,10 @@ pub use detached::{
 pub use driver::{SubagentCapabilities, SubagentDriver};
 pub use executor::SubagentExecutor;
 pub use invocation::{
-    ChildDataPolicy, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError, SubAgentJobId,
-    SubAgentJobRegistry, SubAgentJobStatus, SubAgentJobsTool, SubAgentMessageTool, SubAgentMode,
-    SubAgentSession, SubAgentTool, register_subagent_job_tools,
+    ChildDataPolicy, DriverSubAgentTool, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
+    SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentJobsTool,
+    SubAgentMessageTool, SubAgentMode, SubAgentSession, SubAgentTool,
+    SubagentDriverToolHost, register_subagent_job_tools,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
@@ -53,6 +55,12 @@ pub use result_policy::{
 pub use role::{
     FLEET_TOOLS, FleetToolSet, SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole,
     is_delegation_tool, restrict_tools, subagent_framing,
+};
+pub use sessions::{
+    DriverSubagentSessionStore, DurableSubagentSession, DurableSubagentSessionSummary,
+    DurableSubagentStatus, ReuseDecision, SubagentSessionSelector, SubagentSessionStore,
+    SubagentSessionUpsert, find_reusable_session, normalize_task_key, reuse_decision,
+    task_title_from_prompt,
 };
 pub use step::{
     AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,
