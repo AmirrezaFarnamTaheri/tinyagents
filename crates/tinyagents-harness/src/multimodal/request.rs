@@ -372,11 +372,10 @@ where
             }
         }
 
-        let mut file_payloads = Vec::new();
-        let mut file_fallback_text = Vec::new();
+        let mut file_contexts = Vec::new();
         for (index, source) in files.into_iter().enumerate() {
             if historical && !selected_files.is_some_and(|selected| selected[index]) {
-                file_fallback_text.push(self.omission(scope, InputModality::Document, &source));
+                file_contexts.push(self.omission(scope, InputModality::Document, &source));
                 continue;
             }
             let resolved = match self
@@ -394,7 +393,7 @@ where
                     if let Some(placeholder) =
                         self.recover_history(scope, InputModality::Document, &source, &error)
                     {
-                        file_fallback_text.push(placeholder);
+                        file_contexts.push(placeholder);
                         continue;
                     }
                     return Err(error);
@@ -413,28 +412,24 @@ where
                 )));
             } else {
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
-                file_payloads.push(payload);
-                file_fallback_text.extend(annotations);
-                if let Some(text) = archive_text {
-                    file_fallback_text.push(self.limit_context(text));
+                let mut context = compose_multimodal_message("", &[], &[payload]);
+                if let Some(archive) = archive_text {
+                    if !context.is_empty() {
+                        context.push_str("\n\n");
+                    }
+                    context.push_str(&archive);
                 }
+                file_contexts.push(self.limit_context(join_annotations(&annotations, &context)));
             }
         }
 
         let mut output = Vec::new();
         let mut text_output = compose_multimodal_message(&clean_text, &[], &[]);
-        let mut file_context = compose_multimodal_message("", &[], &file_payloads);
-        for fallback in file_fallback_text {
-            if !file_context.is_empty() {
-                file_context.push_str("\n\n");
-            }
-            file_context.push_str(&fallback);
-        }
-        if !file_context.is_empty() {
+        for file_context in file_contexts {
             if !text_output.is_empty() {
                 text_output.push_str("\n\n");
             }
-            text_output.push_str(&self.limit_context(file_context));
+            text_output.push_str(&file_context);
         }
         for fallback in image_fallback {
             if !text_output.is_empty() {
