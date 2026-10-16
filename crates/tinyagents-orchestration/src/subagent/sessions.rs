@@ -69,7 +69,11 @@ pub struct DurableSubagentSession {
     pub sandbox_mode: String,
     pub action_root: Option<String>,
     pub task_key: String,
-    pub lifecycle_key: SubagentTaskKey,
+    /// Older product-owned rows can be listed before a lifecycle identity is
+    /// recoverable. Hosts may populate this from a validated checkpoint; a
+    /// missing key never authorizes continuation by task id alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle_key: Option<SubagentTaskKey>,
     pub task_title: String,
     pub current_task_id: Option<String>,
     pub status: DurableSubagentStatus,
@@ -398,7 +402,7 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                 sandbox_mode: upsert.selector.sandbox_mode.clone(),
                 action_root: upsert.selector.action_root.clone(),
                 task_key: upsert.selector.task_key.clone(),
-                lifecycle_key: upsert.lifecycle_key.clone(),
+                lifecycle_key: Some(upsert.lifecycle_key.clone()),
                 task_title: upsert.task_title.clone(),
                 current_task_id: None,
                 status: DurableSubagentStatus::Running,
@@ -409,7 +413,7 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                 updated_at: now.clone(),
                 last_used_at: now.clone(),
             });
-            session.lifecycle_key = upsert.lifecycle_key;
+            session.lifecycle_key = Some(upsert.lifecycle_key);
             session.worker_thread_id = upsert.worker_thread_id.or(session.worker_thread_id);
             session.display_name = upsert.display_name.or(session.display_name);
             session.task_title = upsert.task_title;

@@ -440,6 +440,63 @@ async fn fixed_job_alias_rejects_missing_identifiers_and_defaults_stay_compatibl
     );
 }
 
+#[test]
+fn await_alias_timeout_policy_matches_its_validated_deadline() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_await_timeout_field("timeout_secs", 120, 3600);
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": 1})),
+        tinytools::ToolTimeout::Millis(1_000)
+    );
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": 5000})),
+        tinytools::ToolTimeout::Millis(3_600_000)
+    );
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": "invalid"})),
+        tinytools::ToolTimeout::Millis(120_000)
+    );
+    assert_eq!(
+        SubAgentJobsTool::new(SubAgentJobRegistry::new()).timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Inherit
+    );
+}
+
+#[test]
+fn named_aliases_preserve_configured_execution_metadata() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new()).with_metadata(
+        tinytools::PermissionLevel::Execute,
+        tinytools::ToolScope::AgentOnly,
+        tinytools::ToolCategory::System,
+        tinytools::ToolTimeout::Unbounded,
+    );
+    assert_eq!(jobs.permission_level(), tinytools::PermissionLevel::Execute);
+    assert_eq!(jobs.scope(), tinytools::ToolScope::AgentOnly);
+    assert_eq!(jobs.category(), tinytools::ToolCategory::System);
+    assert_eq!(
+        jobs.timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Unbounded
+    );
+
+    let message = SubAgentMessageTool::new(SubAgentJobRegistry::new()).with_metadata(
+        tinytools::PermissionLevel::Execute,
+        tinytools::ToolScope::CliRpcOnly,
+        tinytools::ToolCategory::Workflow,
+        tinytools::ToolTimeout::Millis(5_000),
+    );
+    assert_eq!(
+        message.permission_level(),
+        tinytools::PermissionLevel::Execute
+    );
+    assert_eq!(message.scope(), tinytools::ToolScope::CliRpcOnly);
+    assert_eq!(message.category(), tinytools::ToolCategory::Workflow);
+    assert_eq!(
+        message.timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Millis(5_000)
+    );
+}
+
 #[tokio::test]
 async fn job_alias_falls_back_to_durable_session_identifier() {
     let jobs = SubAgentJobRegistry::new();

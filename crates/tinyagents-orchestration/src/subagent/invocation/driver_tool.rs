@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
-use tinytools::{Tool, ToolResult};
+use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
 use super::jobs::InlineJobGuard;
 use super::types::DriverJobRegistration;
@@ -65,6 +65,10 @@ pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     completion: Option<Arc<CompletionCallback>>,
     jobs: Option<SubAgentJobRegistry>,
     owner_scope: Arc<OwnerScope>,
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
     _state: PhantomData<fn(&State)>,
 }
 
@@ -107,6 +111,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             completion: None,
             jobs: None,
             owner_scope: Arc::new(|owner| owner.to_string()),
+            permission: PermissionLevel::ReadOnly,
+            scope: ToolScope::All,
+            category: ToolCategory::System,
+            timeout: ToolTimeout::Inherit,
             _state: PhantomData,
         }
     }
@@ -155,6 +163,22 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// Message aliases when a host recreates run contexts between turns.
     pub fn with_owner_scope(mut self, resolve: Arc<OwnerScope>) -> Self {
         self.owner_scope = resolve;
+        self
+    }
+
+    /// Preserves the host-facing authorization and execution metadata exposed
+    /// by this dispatcher's declaration tool.
+    pub fn with_metadata(
+        mut self,
+        permission: PermissionLevel,
+        scope: ToolScope,
+        category: ToolCategory,
+        timeout: ToolTimeout,
+    ) -> Self {
+        self.permission = permission;
+        self.scope = scope;
+        self.category = category;
+        self.timeout = timeout;
         self
     }
 
@@ -340,6 +364,10 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             parameters: self.parameters.clone(),
+            permission: self.permission,
+            scope: self.scope,
+            category: self.category,
+            timeout: self.timeout,
         })
     }
 
@@ -377,6 +405,10 @@ struct DriverSubAgentToolDeclaration {
     name: String,
     description: String,
     parameters: Value,
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
 }
 
 #[async_trait]
@@ -389,6 +421,18 @@ impl Tool for DriverSubAgentToolDeclaration {
     }
     fn parameters_schema(&self) -> Value {
         self.parameters.clone()
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        self.permission
+    }
+    fn scope(&self) -> ToolScope {
+        self.scope
+    }
+    fn category(&self) -> ToolCategory {
+        self.category
+    }
+    fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
+        self.timeout
     }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         anyhow::bail!("driver-backed subagent tools require typed-parent dispatch")

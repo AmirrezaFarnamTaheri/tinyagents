@@ -673,6 +673,43 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         "running"
     );
 
+    let list = SubAgentJobsTool::new(jobs.clone()).with_owner_scope(owner_scope.clone());
+    let visible = ToolDispatch::<(), ()>::execute(
+        &list,
+        &(),
+        CallId::new("list-stable-owner"),
+        json!({}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .unwrap();
+    let visible: Value = serde_json::from_str(&visible.output()).unwrap();
+    assert!(
+        visible
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| { row.get("id").and_then(Value::as_str) == Some(task_id.as_str()) })
+    );
+    let hidden = ToolDispatch::<(), ()>::execute(
+        &list,
+        &(),
+        CallId::new("list-foreign-owner"),
+        json!({}),
+        tinytools::ToolCallOptions::default(),
+        &foreign,
+    )
+    .await
+    .unwrap();
+    assert!(
+        serde_json::from_str::<Value>(&hidden.output())
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
     let steer = SubAgentMessageTool::new(jobs.clone())
         .with_tool_name("steer_subagent")
         .with_argument_fields("task_id", "session_id", "message", "request_id")
@@ -815,7 +852,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
             sandbox_mode: "none".into(),
             action_root: None,
             task_key: "pause-then-continue".into(),
-            lifecycle_key: lifecycle_key.clone(),
+            lifecycle_key: Some(lifecycle_key.clone()),
             task_title: "Pause test".into(),
             current_task_id: Some("pause-then-continue".into()),
             status: DurableSubagentStatus::Running,

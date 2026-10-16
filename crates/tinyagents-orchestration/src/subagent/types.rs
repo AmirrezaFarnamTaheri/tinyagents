@@ -172,6 +172,11 @@ impl<C, H> SubagentRequest<C, H> {
                         ))
                     })?
                     .lifecycle_key
+                    .ok_or_else(|| {
+                        SubagentError::InvalidRequest(format!(
+                            "subagent session `{session_id}` has no validated lifecycle key"
+                        ))
+                    })?
             }
         };
         Self::validate_key(&original_key)?;
