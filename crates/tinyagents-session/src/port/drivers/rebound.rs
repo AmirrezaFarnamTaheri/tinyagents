@@ -117,7 +117,6 @@ impl RebindableSessionStores {
                 weak.upgrade().map(|binding| (agent_id.clone(), binding))
             })
             .collect::<Vec<_>>();
-        drop(live_registry);
 
         // Prepare every replacement before publishing any, so a failed scope
         // bind cannot strand some live handles on each side of the rebind.
