@@ -11,9 +11,9 @@ use super::dto::Stored;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tinystoragedrivers_core::primitives::{self, Repo};
-use tinystoragedrivers_core::schema::MIGRATIONS_COLLECTION;
+
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, Query, Sort, StorageError, Versioned,
+    CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort, StorageError, Versioned,
     WriteOp, WriteOptions,
 };
 

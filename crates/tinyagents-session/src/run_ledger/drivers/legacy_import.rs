@@ -188,7 +188,7 @@ impl DriverRunLedger {
         let mut imported = 0;
         for session in &loaded.sessions {
             imported += usize::from(
-                self.put_if_absent(HIST_SESSIONS, &key(&[&session.id])??, encode(session)?)
+                self.put_if_absent(HIST_SESSIONS, &key(&[&session.id])?, encode(session)?)
                     .await?,
             );
         }
