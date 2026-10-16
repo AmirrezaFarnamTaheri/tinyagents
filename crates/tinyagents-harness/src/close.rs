@@ -223,20 +223,18 @@ pub struct RequiredOutputRepairConfig<'a> {
 /// Ask, screen, separately verify, and repair at most once. Every call uses a
 /// request with no tool schemas and `ToolChoice::None`; `ToolDialect` rejects
 /// textual tool syntax even if a provider ignores that constraint.
-pub async fn grounded_close<State, M>(
+pub async fn grounded_close<State, M, V, R, F>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
-    config: GroundedCloseConfig<
-        '_,
-        impl Fn(&str) -> String,
-        impl Fn(CloseViolation) -> String,
-        impl FnOnce() -> String,
-    >,
+    config: GroundedCloseConfig<'_, V, R, F>,
 ) -> CloseOutput
 where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
+    V: for<reply> Fn(&reply str) -> String,
+    R: Fn(CloseViolation) -> String,
+    F: FnOnce() -> String,
 {
     let mut usage = Vec::new();
     let mut prompt = config.initial_prompt.to_owned();
