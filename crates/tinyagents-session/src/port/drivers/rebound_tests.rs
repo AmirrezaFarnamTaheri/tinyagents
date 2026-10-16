@@ -4,8 +4,9 @@ use tinystoragedrivers_core::MemoryStorage;
 #[tokio::test]
 async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes() {
     let registry = SessionStoreRegistry::default();
+    let old_backend = Arc::new(MemoryStorage::new());
     let provider =
-        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
+        RebindableSessionStores::new_in(&registry, old_backend.clone(), false).unwrap();
     let first = provider.for_agent("agent-one");
     let first_clone = first.clone();
     let second = provider.for_agent("agent-two");
@@ -20,7 +21,8 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         .await
         .unwrap();
 
-    assert_eq!(registry.rebind(Arc::new(MemoryStorage::new())).unwrap(), 1);
+    let new_backend = Arc::new(MemoryStorage::new());
+    assert_eq!(registry.rebind(new_backend.clone()).unwrap(), 1);
     assert_eq!(first_clone.kv.get("prefs", "key").await.unwrap(), None);
     first_clone
         .kv
@@ -40,6 +42,16 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
     assert_eq!(
         second.kv.get("prefs", "key").await.unwrap(),
         Some(serde_json::json!("new-two"))
+    );
+    let fresh_driver = DriverSessionStores::new(new_backend).unwrap();
+    assert_eq!(
+        fresh_driver.for_agent("agent-one").kv.get("prefs", "key").await.unwrap(),
+        Some(serde_json::json!("new-one"))
+    );
+    let old_driver = DriverSessionStores::new(old_backend).unwrap();
+    assert_eq!(
+        old_driver.for_agent("agent-one").kv.get("prefs", "key").await.unwrap(),
+        Some(serde_json::json!("old-one"))
     );
 }
 
@@ -78,11 +90,11 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
     });
     let rebind_provider = Arc::clone(&provider);
     let rebind_barrier = Arc::clone(&barrier);
+    let new_backend = Arc::new(MemoryStorage::new());
+    let expected_backend = Arc::clone(&new_backend);
     let rebind = std::thread::spawn(move || {
         rebind_barrier.wait();
-        rebind_provider
-            .rebind(Arc::new(MemoryStorage::new()))
-            .unwrap();
+        rebind_provider.rebind(new_backend).unwrap();
     });
     barrier.wait();
     let registered = registration.join().unwrap();
@@ -96,6 +108,13 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .put("n", "k", serde_json::json!("retained"))
             .await
             .unwrap();
+        let independent = DriverSessionStores::new(expected_backend)
+            .unwrap()
+            .for_agent("racing-agent");
+        assert_eq!(
+            independent.kv.get("n", "k").await.unwrap(),
+            Some(serde_json::json!("retained"))
+        );
         assert_eq!(
             fresh.kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("retained"))
@@ -110,13 +129,14 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
         RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
     let retained = provider.for_agent("agent");
     let barrier = Arc::new(std::sync::Barrier::new(3));
+    let backends = [Arc::new(MemoryStorage::new()), Arc::new(MemoryStorage::new())];
     let mut workers = Vec::new();
-    for _ in 0..2 {
+    for backend in backends {
         let provider = Arc::clone(&provider);
         let barrier = Arc::clone(&barrier);
         workers.push(std::thread::spawn(move || {
             barrier.wait();
-            provider.rebind(Arc::new(MemoryStorage::new())).unwrap();
+            provider.rebind(backend).unwrap();
         }));
     }
     barrier.wait();

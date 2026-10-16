@@ -12,6 +12,59 @@ use tinyinference_llm::message::{
 };
 use tinyinference_llm::tool::ToolCall as TaToolCall;
 
+/// The result of merging inference history with its lossless native rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReconciledTranscript {
+    /// Complete next logical durable rows, preserving matched prior rows.
+    pub rows: Vec<TranscriptMessage>,
+    /// Parallel to `rows`; `true` only for a newly projected model message.
+    pub fresh: Vec<bool>,
+}
+
+/// Reconciles a native transcript projection with the prior model history.
+///
+/// Each next message matches at most one equal prior position. The original
+/// durable row is retained verbatim for a match; only fresh rows receive
+/// `request_id`. Custom messages have no native row and are skipped. Hosts
+/// with additional metadata can call this helper, mutate only `fresh` rows,
+/// and return the resulting `rows` from their codec override.
+pub fn reconcile_native_transcript(
+    prior: &[TranscriptMessage],
+    previous: &[Message],
+    next: &[Message],
+    request_id: Option<&str>,
+) -> ReconciledTranscript {
+    let mut rows = next
+        .iter()
+        .filter_map(|message| {
+            message_to_native_transcript(message).map(|row| (row, message))
+        })
+        .collect::<Vec<_>>();
+    let mut consumed = vec![false; previous.len().min(prior.len())];
+    let mut fresh = Vec::with_capacity(rows.len());
+    for (row, message) in &mut rows {
+        let matched = previous
+            .iter()
+            .enumerate()
+            .take(consumed.len())
+            .find_map(|(index, candidate)| {
+                (!consumed[index] && candidate == *message).then_some(index)
+            });
+        if let Some(index) = matched {
+            *row = prior[index].clone();
+            consumed[index] = true;
+            fresh.push(false);
+        } else {
+            row.request_id = request_id.map(str::to_owned);
+            fresh.push(true);
+        }
+    }
+    ReconciledTranscript {
+        rows: rows.into_iter().map(|(row, _)| row).collect(),
+        fresh,
+    }
+}
+
 /// Conventional provider reasoning field carried by durable assistant rows.
 pub const REASONING_EXT_KEY: &str = "reasoning_content";
 const REASONING_BLOCKS_EXT_KEY: &str = "reasoning_blocks";
