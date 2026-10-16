@@ -478,6 +478,11 @@ impl<C> PreparedSubagent<C> {
 pub struct SubagentExecution<C = ()> {
     /// The planner's complete, host-resolved execution description.
     pub prepared: PreparedSubagent<C>,
+    /// The authenticated durable identity selected by the validated request.
+    /// This is carried separately from `prepared.task_id`: task ids are only
+    /// unique inside a root/parent/thread scope and must not key host adapter
+    /// state by themselves.
+    pub task_key: SubagentTaskKey,
     /// Cooperative cancellation shared with the lifecycle owner.
     pub cancellation: CancellationToken,
 }

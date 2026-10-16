@@ -365,6 +365,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let mut attempt = 0usize;
         let mut execution = SubagentExecution {
             prepared,
+            task_key: task_key.clone(),
             cancellation: child_token,
         };
         let mut timed_out = false;
@@ -415,6 +416,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 Ok(next) => {
                     execution = SubagentExecution {
                         prepared: next,
+                        task_key: task_key.clone(),
                         cancellation: next_token,
                     };
                 }
