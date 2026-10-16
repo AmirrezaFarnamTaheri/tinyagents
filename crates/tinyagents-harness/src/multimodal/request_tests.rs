@@ -365,7 +365,10 @@ async fn resolution_error_and_cancellation_leave_the_canonical_request_unchanged
     pending.entered.notified().await;
     call.abort();
     assert!(call.await.unwrap_err().is_cancelled());
-    assert_eq!(serde_json::to_value(&original).unwrap(), canonical_after_cancel);
+    assert_eq!(
+        serde_json::to_value(&original).unwrap(),
+        canonical_after_cancel
+    );
 }
 
 #[tokio::test]
@@ -405,8 +408,14 @@ async fn concurrent_calls_keep_their_immutable_scope_separate() {
 async fn request_metadata_scope_is_consumed_per_concurrent_call() {
     let model = Arc::new(CaptureModel::new(true));
     let mut sources = HashMap::new();
-    sources.insert("image".into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
-    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    sources.insert(
+        "image".into(),
+        attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
     let wrapped = MediaRequestModel::new(
         model.clone(),
         MediaRequestConfig::default(),
@@ -427,7 +436,10 @@ async fn request_metadata_scope_is_consumed_per_concurrent_call() {
     let mut second = request("[IMAGE:image]");
     second.metadata = serde_json::json!({"trusted_scope":"workspace-b"});
 
-    let (a, b) = tokio::join!(wrapped.invoke(&operator, first), wrapped.invoke(&operator, second));
+    let (a, b) = tokio::join!(
+        wrapped.invoke(&operator, first),
+        wrapped.invoke(&operator, second)
+    );
 
     a.unwrap();
     b.unwrap();
@@ -444,9 +456,15 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
     let model = Arc::new(CaptureModel::new(true));
     let mut sources = HashMap::new();
     for source in ["oldest", "newest"] {
-        sources.insert(source.into(), attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"));
+        sources.insert(
+            source.into(),
+            attachment("img.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+        );
     }
-    let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
     let config = MediaRequestConfig {
         max_historical_media_blocks: 1,
         ..MediaRequestConfig::default()
@@ -490,8 +508,13 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
 async fn missing_history_media_degrades_safely_but_missing_latest_media_fails() {
     let model = Arc::new(CaptureModel::new(true));
     let resolver = Arc::new(Resolver::default());
-    let wrapped = wrapper(model.clone(), MediaRequestConfig::default(), resolver, Arc::default())
-        .with_history_fallback(Arc::new(SafeHistory));
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        Arc::default(),
+    )
+    .with_history_fallback(Arc::new(SafeHistory));
     let mut history = ModelRequest::default();
     history.messages = vec![
         Message::User(UserMessage {
@@ -521,7 +544,11 @@ async fn missing_history_media_degrades_safely_but_missing_latest_media_fails() 
         .invoke(&"tenant-a".into(), request("[IMAGE:latest-missing]"))
         .await
         .expect_err("latest attachment failures remain fatal");
-    assert!(error.to_string().contains("missing test source latest-missing"));
+    assert!(
+        error
+            .to_string()
+            .contains("missing test source latest-missing")
+    );
 }
 
 #[tokio::test]

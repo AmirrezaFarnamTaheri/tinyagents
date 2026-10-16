@@ -101,7 +101,10 @@ pub use markers::{
     text_has_image_placeholders,
 };
 pub use payload::{FilePayload, compose_multimodal_message, sha256_prefix, truncate_chars};
-pub use request::{MediaImageReadout, MediaRequestConfig, MediaRequestModel, MediaSourceResolver};
+pub use request::{
+    MediaHistoryFallback, MediaImageReadout, MediaRequestConfig, MediaRequestModel,
+    MediaSourceResolver,
+};
 pub use resolve::{
     NoTextExtractor, TextExtractor, resolve_attachment, resolve_file, resolve_image,
 };

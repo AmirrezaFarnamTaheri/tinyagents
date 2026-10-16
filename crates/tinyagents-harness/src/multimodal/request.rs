@@ -1,11 +1,11 @@
 //! Prepare a disposable model request by resolving its user media references.
 //!
-//! The wrapper owns generic marker counting, capability checks, payload
-//! rendering, document extraction hooks, and non-vision text fallbacks. Hosts
-//! provide the scope and source resolver because only a host can authorize a
-//! path, fetch a remote source, or decide which credentials apply. Scope is
-//! obtained from the immutable `ChatModel` state for each call; it is never
-//! inferred from message text or a media reference.
+//! The wrapper owns generic marker counting, bounded history, capability
+//! checks, payload rendering, document extraction hooks, and non-vision text
+//! fallbacks. Hosts provide the scope and source resolver because only a host
+//! can authorize a path, fetch a remote source, or decide which credentials
+//! apply. Scope comes from model state or trusted host request metadata and is
+//! never inferred from message text or a media reference.
 
 use std::{collections::HashSet, sync::Arc};
 
@@ -127,9 +127,9 @@ where
         inner: Arc<dyn ChatModel<State>>,
         config: MediaRequestConfig,
         scope_for_request: impl Fn(&State, &mut ModelRequest) -> std::result::Result<Scope, String>
-            + Send
-            + Sync
-            + 'static,
+        + Send
+        + Sync
+        + 'static,
         resolver: Arc<dyn MediaSourceResolver<Scope>>,
         extractor: Arc<dyn TextExtractor>,
     ) -> Self {
@@ -159,10 +159,7 @@ where
     }
 
     /// Install host policy for bounded historical-media omission and recovery.
-    pub fn with_history_fallback(
-        mut self,
-        fallback: Arc<dyn MediaHistoryFallback<Scope>>,
-    ) -> Self {
+    pub fn with_history_fallback(mut self, fallback: Arc<dyn MediaHistoryFallback<Scope>>) -> Self {
         self.history_fallback = Some(fallback);
         self
     }
@@ -199,8 +196,8 @@ where
             )));
         }
 
-        let scope = (self.scope_for_request)(state, &mut request)
-            .map_err(|error| model_error(&error))?;
+        let scope =
+            (self.scope_for_request)(state, &mut request).map_err(|error| model_error(&error))?;
         let selected_history = selected_history_blocks(
             &request.messages,
             latest_user,
@@ -223,25 +220,19 @@ where
                 }
                 let recovery = historical.then(|| media_source_hint(&block)).flatten();
                 match block {
-                    ContentBlock::Text(text) => {
-                        match self.prepare_text(&scope, &text).await {
-                            Ok(blocks) => prepared.extend(blocks),
-                            Err(error) => {
-                                if let Some((modality, source)) = recovery.as_ref()
-                                    && let Some(placeholder) = self.recover_history(
-                                        &scope,
-                                        *modality,
-                                        source,
-                                        &error,
-                                    )
-                                {
-                                    prepared.push(ContentBlock::Text(placeholder));
-                                } else {
-                                    return Err(error);
-                                }
+                    ContentBlock::Text(text) => match self.prepare_text(&scope, &text).await {
+                        Ok(blocks) => prepared.extend(blocks),
+                        Err(error) => {
+                            if let Some((modality, source)) = recovery.as_ref()
+                                && let Some(placeholder) =
+                                    self.recover_history(&scope, *modality, source, &error)
+                            {
+                                prepared.push(ContentBlock::Text(placeholder));
+                            } else {
+                                return Err(error);
                             }
                         }
-                    }
+                    },
                     block @ (ContentBlock::Image(_)
                     | ContentBlock::Audio(_)
                     | ContentBlock::Video(_)
@@ -250,12 +241,8 @@ where
                             Ok(blocks) => prepared.extend(blocks),
                             Err(error) => {
                                 if let Some((modality, source)) = recovery.as_ref()
-                                    && let Some(placeholder) = self.recover_history(
-                                        &scope,
-                                        *modality,
-                                        source,
-                                        &error,
-                                    )
+                                    && let Some(placeholder) =
+                                        self.recover_history(&scope, *modality, source, &error)
                                 {
                                     prepared.push(ContentBlock::Text(placeholder));
                                 } else {
@@ -564,12 +551,9 @@ where
         source: &str,
         error: &tinyinference_llm::Error,
     ) -> Option<String> {
-        self.history_fallback.as_ref()?.unavailable(
-            scope,
-            modality,
-            source,
-            &error.to_string(),
-        )
+        self.history_fallback
+            .as_ref()?
+            .unavailable(scope, modality, source, &error.to_string())
     }
 }
 
@@ -690,7 +674,10 @@ fn media_source_hint(block: &ContentBlock) -> Option<(InputModality, String)> {
     }
 }
 
-fn media_source_hint_ref(modality: InputModality, media: &MediaRef) -> Option<(InputModality, String)> {
+fn media_source_hint_ref(
+    modality: InputModality,
+    media: &MediaRef,
+) -> Option<(InputModality, String)> {
     let source = match media {
         MediaRef::Path { path, .. } => path,
         MediaRef::Url { url, .. } => url,
