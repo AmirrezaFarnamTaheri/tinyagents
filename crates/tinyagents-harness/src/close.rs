@@ -232,7 +232,7 @@ pub async fn grounded_close<State, M, V, R, F>(
 where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
-    V: for<reply> Fn(&reply str) -> String,
+    V: for<'reply> Fn(&'reply str) -> String,
     R: Fn(CloseViolation) -> String,
     F: FnOnce() -> String,
 {
