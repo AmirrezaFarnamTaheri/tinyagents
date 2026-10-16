@@ -124,6 +124,7 @@ fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
             ..
         })
     ));
+    assert!(breaker.try_acquire(key, third.next_attempt_ms).is_ok());
 }
 
 #[test]
