@@ -34,9 +34,9 @@ fn truncate_marks_elision() {
 
 mod spawner {
     use super::*;
-    use crate::command_hooks::config::{HookLayer, LoopLimit};
-    use crate::command_hooks::environment::{CommandOutput, CommandRequest, CommandSpawner};
-    use crate::command_hooks::types::{HookEvent, HookPayload, ShellPayload};
+    use crate::command::config::{HookLayer, LoopLimit};
+    use crate::command::environment::{CommandOutput, CommandRequest, CommandSpawner};
+    use crate::command::types::{HookEvent, HookPayload, ShellPayload};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
