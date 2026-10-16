@@ -606,21 +606,24 @@ where
         )
     }
 
-    async fn take_next_followup_or_release(
+    async fn finalize_generation(
         &self,
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
-    ) -> Option<(TurnRequest<P>, ActiveTurn<P>)> {
+    ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<P>)>) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
         if active
             .get(&key)
             .is_none_or(|turn| turn.generation != owner_generation)
         {
-            return None;
+            return (Vec::new(), None);
         }
-        let current = active.get(&key)?.clone();
+        let Some(current) = active.get(&key).cloned() else {
+            return (Vec::new(), None);
+        };
+        let collected = current.queue.take(QueueLane::Collect, QueueMode::All).await;
         let next = current
             .queue
             .take(QueueLane::Followup, QueueMode::OneAtATime)
@@ -647,10 +650,10 @@ where
                 queue: current.queue,
             };
             active.insert(key, reserved.clone());
-            Some((request, reserved))
+            (collected, Some((request, reserved)))
         } else {
             active.remove(&key);
-            None
+            (collected, None)
         }
     }
 
