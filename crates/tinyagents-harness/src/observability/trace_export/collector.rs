@@ -4,7 +4,7 @@
 //! generic event-to-span projection; product identity and content policy are
 //! supplied in [`TraceContext`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Value, json};
 
@@ -79,6 +79,7 @@ pub struct SpanCollector {
     root: Option<usize>,
     open_models: HashMap<String, CallStart>,
     generation_by_call: HashMap<String, usize>,
+    cached_calls: HashSet<String>,
     open_tools: HashMap<String, usize>,
     open_subagents: HashMap<String, usize>,
     run_roots: HashMap<String, usize>,
@@ -104,6 +105,7 @@ impl SpanCollector {
             root: None,
             open_models: HashMap::new(),
             generation_by_call: HashMap::new(),
+            cached_calls: HashSet::new(),
             open_tools: HashMap::new(),
             open_subagents: HashMap::new(),
             run_roots: HashMap::new(),
@@ -237,9 +239,11 @@ impl SpanCollector {
                 input,
                 output,
             } => {
+                let call_key = self.scoped_id(call_id.as_str());
+                let cache_hit = self.cached_calls.remove(&call_key);
                 let call = self
                     .open_models
-                    .remove(&self.scoped_id(call_id.as_str()))
+                    .remove(&call_key)
                     .unwrap_or_else(|| {
                         let parent = self.active_parent(timestamp_ms);
                         let mut attrs = BTreeMap::new();
@@ -259,15 +263,35 @@ impl SpanCollector {
                             first_text_ms: None,
                         }
                     });
+                self.generation_by_call
+                    .entry(call_key)
+                    .or_insert(call.index);
                 let completed_index = call.index;
+                let cached_usage = usage.as_ref().filter(|_| cache_hit).map(|usage| {
+                    let mut usage = usage.clone();
+                    usage.charged_amount = None;
+                    usage
+                });
                 self.finish_model(
                     call,
                     *started_at_ms,
-                    usage.as_ref(),
+                    if cache_hit {
+                        cached_usage.as_ref()
+                    } else {
+                        usage.as_ref()
+                    },
                     input.as_ref(),
                     output.as_ref(),
                     timestamp_ms,
                 );
+                if cache_hit {
+                    self.spans[completed_index]
+                        .attributes
+                        .insert("gen_ai.cache.hit".into(), Value::Bool(true));
+                    self.spans[completed_index]
+                        .attributes
+                        .insert("gen_ai.cost.source".into(), json_str("cached"));
+                }
                 self.last_generation
                     .insert(self.active_run_id(), completed_index);
             }
@@ -560,10 +584,18 @@ impl SpanCollector {
                         .get("gen_ai.cost.source")
                         .and_then(Value::as_str)
                         == Some("provider_reported");
-                    if !provider_reported {
+                    let cached = self.spans[generation]
+                        .attributes
+                        .get("gen_ai.cache.hit")
+                        .and_then(Value::as_bool)
+                        == Some(true);
+                    if !provider_reported && !cached {
                         self.set_generation_cost(generation, amount, "estimated");
                     }
                 }
+            }
+            AgentEvent::CacheHit { call_id, .. } => {
+                self.cached_calls.insert(self.scoped_id(call_id.as_str()));
             }
             AgentEvent::RunCompleted { outcome, .. } => {
                 self.close_completed_run(outcome.as_ref(), timestamp_ms)
@@ -634,7 +666,12 @@ impl SpanCollector {
                     .insert(key.into(), json_f64(value));
             }
         }
-        if let Some(estimate) = enrichment.estimated_cost_usd {
+        let cached = self.spans[index]
+            .attributes
+            .get("gen_ai.cache.hit")
+            .and_then(Value::as_bool)
+            == Some(true);
+        if let Some(estimate) = enrichment.estimated_cost_usd.filter(|_| !cached) {
             let has_authoritative_cost = self.spans[index]
                 .attributes
                 .contains_key("gen_ai.usage.cost_usd");
