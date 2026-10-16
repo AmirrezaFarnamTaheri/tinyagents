@@ -36,6 +36,7 @@ pub mod orchestration;
 pub mod parallel;
 pub mod recursion;
 pub mod reducer;
+pub mod storage;
 pub mod status;
 pub mod stream;
 pub mod subagent_node;
