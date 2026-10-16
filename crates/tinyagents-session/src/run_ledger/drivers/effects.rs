@@ -49,7 +49,8 @@ impl DriverRunLedger {
                 record.settled_at = Some(now);
                 record
             })
-            .await?)
+            .await?,
+        ))
     }
 
     pub(super) async fn effect_unresolved(&self, run_id: &str) -> Result<Vec<ToolEffectRow>> {
