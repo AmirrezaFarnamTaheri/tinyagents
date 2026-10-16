@@ -439,7 +439,7 @@ pub fn normalize_task_key(input: &str) -> String {
         return if input.trim().is_empty() {
             "untitled-task".into()
         } else {
-            format!("task-{:016x}", tinyagents_harness::driver_ids::hashed_id(&[input]))
+            format!("task-{}", tinyagents_harness::driver_ids::hashed_id(&[input]))
         };
     }
     if output.len() > 96 {
@@ -448,7 +448,7 @@ pub fn normalize_task_key(input: &str) -> String {
             output.pop();
         }
         output.push('-');
-        output.push_str(&tinyagents_harness::driver_ids::hashed_id(&[input]));
+        output.push_str(&tinyagents_harness::driver_ids::hashed_id(&[input])[..16]);
     }
     output
 }
