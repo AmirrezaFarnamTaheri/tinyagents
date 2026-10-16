@@ -155,6 +155,34 @@ pub fn deterministic_checkpoint(
         .replace("{results}", &render_tool_results(results, total_budget))
 }
 
+/// Build the deterministic summary used when a normal close is rejected or
+/// unavailable. Hosts configure the prose and may insert the stop label;
+/// captured outputs are rendered under the supplied total budget.
+pub fn deterministic_final_summary(
+    template: &str,
+    results: &[CloseToolResult],
+    stop_reason: Option<&str>,
+    total_budget: usize,
+) -> String {
+    template
+        .replace("{stop_reason}", stop_reason.unwrap_or(""))
+        .replace("{results}", &render_tool_results(results, total_budget))
+}
+
+/// Build the deterministic summary used when a normal close is rejected or
+/// unavailable. Hosts configure the prose and may insert the stop label;
+/// captured outputs are rendered under the supplied total budget.
+pub fn deterministic_final_summary(
+    template: &str,
+    results: &[CloseToolResult],
+    stop_reason: Option<&str>,
+    total_budget: usize,
+) -> String {
+    template
+        .replace("{stop_reason}", stop_reason.unwrap_or(""))
+        .replace("{results}", &render_tool_results(results, total_budget))
+}
+
 /// Whether a candidate repeats any harness-only phrase supplied by the host.
 /// Matching normalizes case and whitespace and requires at least 24 chars, so
 /// short common phrases do not spuriously reject a reply.
