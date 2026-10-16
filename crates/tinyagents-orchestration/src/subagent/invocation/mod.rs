@@ -344,7 +344,9 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
             name: self.name.clone(),
             depth,
         });
-        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
+        });
 
         Ok(run)
     }
@@ -422,7 +424,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             name: self.name.clone(),
             depth,
         });
-        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
+        });
         Ok(run)
     }
 }
@@ -604,7 +608,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
             name: self.subagent.name.clone(),
             depth,
         });
-        events.emit(AgentEvent::SubAgentRunCompleted { run_id: child_run_id });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
+        });
 
         // Carry the produced assistant/tool messages forward. `run.messages` is
         // the working transcript the loop ended with (everything we passed plus
