@@ -353,6 +353,22 @@ impl SubAgentJobRegistry {
         Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
     }
 
+    async fn wait_owned(&self, job_id: &str, owner: u64) -> Result<SubAgentJob, SubAgentJobError> {
+        self.get_owned(job_id, owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+        let mut status = {
+            let controls = self.controls();
+            controls.get(&SubAgentJobId(job_id.to_owned()))
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?
+                .status.subscribe()
+        };
+        loop {
+            let snapshot = status.borrow().clone();
+            if snapshot.status.is_terminal() { return Ok(snapshot); }
+            if status.changed().await.is_err() { return Ok(status.borrow().clone()); }
+        }
+    }
+
     /// Returns every job for trusted host-side supervision.
     ///
     /// Model-visible tools must use the run-scoped dispatch path instead.
@@ -516,8 +532,8 @@ impl Tool for SubAgentJobsTool {
                 "job_id": { "type": "string" },
                 "action": {
                     "type": "string",
-                    "enum": ["query", "cancel", "close"],
-                    "description": "`query` (default) reads a job/session or lists jobs and durable sessions; `cancel` stops a live job; `close` prevents a durable session from being reused."
+                    "enum": ["query", "cancel", "close", "await"],
+                    "description": "`query` reads a job/session or lists work; `cancel` stops a live job; `close` prevents a durable session from being reused; `await` waits for the named live job."
                 }
             }
         })
@@ -581,7 +597,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     json!({"closed": sessions.close(id).await?}),
                 ));
             }
-            Some(_) => anyhow::bail!("action must be `query`, `cancel`, or `close`"),
+            Some(Some("await")) => {
+                let id = object.get("job_id").and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `await`"))?;
+                if self.jobs.get_owned(id, parent.instance_id()).is_some() {
+                    let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
+                    return Ok(ToolResult::json(serde_json::to_value(job)?));
+                }
+                if let Some((sessions, key)) = &self.sessions {
+                    if let Some(session) = sessions.get(id).await?.filter(|session| session.parent_session == key(parent.instance_id())) {
+                        let awaiting_user = session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
+                        return Ok(ToolResult::json(json!({
+                            "session_id": session.subagent_session_id,
+                            "task_id": session.current_task_id,
+                            "status": session.status,
+                            "awaiting_user_envelope": awaiting_user.then_some(json!({"status":"awaiting_user","history":session.latest_history})),
+                            "latest_error": session.latest_error,
+                        })));
+                    }
+                }
+                return Err(SubAgentJobError::NotFound(id.to_owned()).into());
+            }
+            Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
         if let Some(value) = object.get("job_id") {
             let job_id = value
