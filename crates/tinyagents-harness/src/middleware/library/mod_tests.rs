@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::context::{MiddlewareControl, RunConfig, RunContext};
+use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
+use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 use crate::retry::{RateLimiter, RetryPolicy};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
@@ -80,6 +81,27 @@ impl ModelBaseCall<(), ()> for FakeModelBase {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         let result = (self.behavior)(n, &request);
         Box::pin(async move { result })
+    }
+}
+
+struct CommandModelMiddleware;
+
+#[async_trait::async_trait]
+impl ModelMiddleware<(), ()> for CommandModelMiddleware {
+    fn name(&self) -> &str {
+        "test.command"
+    }
+
+    async fn wrap_model(
+        &self,
+        _ctx: &mut RunContext,
+        _state: &(),
+        _request: ModelRequest,
+        _next: ModelHandler<'_, (), ()>,
+    ) -> Result<MiddlewareModelOutcome> {
+        Ok(MiddlewareModelOutcome::Command {
+            control: MiddlewareControl::JumpTo(LoopTarget::End),
+        })
     }
 }
 
