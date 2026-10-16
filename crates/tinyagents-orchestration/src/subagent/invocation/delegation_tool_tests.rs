@@ -97,11 +97,15 @@ async fn graph_delegation_runs_stage_worker_with_original_task_and_approval_pars
             async move {
                 seen.lock()
                     .unwrap()
-                    .push((args["task"].as_str().unwrap().to_owned(), stage));
+                    .push((
+                        args["task"].as_str().unwrap().to_owned(),
+                        stage,
+                        args["stage_prompt"].as_str().unwrap().to_owned(),
+                    ));
                 Ok(match stage {
                     DelegationStage::Plan => DelegationStageOutput::done("plan"),
                     DelegationStage::Execute => DelegationStageOutput::done("result"),
-                    DelegationStage::Review => review_stage_output("APPROVE"),
+                    DelegationStage::Review => DelegationStageOutput::done("APPROVE, looks good"),
                 })
             }
         },
@@ -120,7 +124,11 @@ async fn graph_delegation_runs_stage_worker_with_original_task_and_approval_pars
     assert!(!result.is_error);
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 3);
-    assert!(seen.iter().all(|(task, _)| task == "ship a safe fix"));
+    assert!(seen.iter().all(|(task, _, _)| task == "ship a safe fix"));
     assert_eq!(seen[0].1, DelegationStage::Plan);
+    assert_eq!(seen[0].2, DELEGATION_PLAN_PROMPT);
+    assert_eq!(seen[1].2, DELEGATION_EXECUTE_PROMPT);
     assert_eq!(seen[2].1, DelegationStage::Review);
+    assert_eq!(seen[2].2, DELEGATION_REVIEW_PROMPT);
+    assert!(!parse_approval(&seen[2].2));
 }
