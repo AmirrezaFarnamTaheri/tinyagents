@@ -26,11 +26,11 @@ impl ChatModel<()> for ChargedModel {
 async fn wrapped_model_settles_the_reported_charge_once_into_shared_ledger() {
     let budget = ModelBudget::new(
         Budget::new(SpendLimits {
-            tokens: Some(20),
+            tokens: Some(10_000),
             cost_micros: Some(20),
         }),
         CallBudget {
-            input_tokens: 1_000,
+            input_tokens: 5_000,
             output_tokens: 10,
             cost_micros: 10,
         },
