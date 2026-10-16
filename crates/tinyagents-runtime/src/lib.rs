@@ -84,7 +84,7 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
                     .enumerate()
                     .take(consumed.len())
                     .find_map(|(index, candidate)| {
-                        (!consumed[index] && candidate == message).then_some(index)
+                        (!consumed[index] && candidate == *message).then_some(index)
                     });
             if let Some(index) = matched {
                 *row = prior[index].clone();
