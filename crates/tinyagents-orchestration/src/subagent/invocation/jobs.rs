@@ -458,13 +458,19 @@ impl SubAgentJobRegistry {
 #[derive(Clone)]
 pub struct SubAgentJobsTool {
     jobs: SubAgentJobRegistry,
-    sessions: Option<(Arc<dyn super::SubagentSessionStore>, Arc<dyn Fn(u64) -> String + Send + Sync>)>,
+    sessions: Option<(
+        Arc<dyn super::SubagentSessionStore>,
+        Arc<dyn Fn(u64) -> String + Send + Sync>,
+    )>,
 }
 
 impl SubAgentJobsTool {
     /// Creates the query tool over `jobs`.
     pub fn new(jobs: SubAgentJobRegistry) -> Self {
-        Self { jobs, sessions: None }
+        Self {
+            jobs,
+            sessions: None,
+        }
     }
 
     /// Overlays durable sessions in list/query and enables durable close.
@@ -543,12 +549,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
             Some(Some("close")) => {
-                let id = object.get("job_id").and_then(Value::as_str)
+                let id = object
+                    .get("job_id")
+                    .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
-                let (sessions, key) = self.sessions.as_ref().ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
-                let Some(session) = sessions.get(id).await? else { anyhow::bail!("durable subagent session not found"); };
-                if session.parent_session != key(parent.instance_id()) { anyhow::bail!("durable subagent session not found"); }
-                return Ok(ToolResult::json(json!({"closed": sessions.close(id).await?})));
+                let (sessions, key) = self
+                    .sessions
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
+                let Some(session) = sessions.get(id).await? else {
+                    anyhow::bail!("durable subagent session not found");
+                };
+                if session.parent_session != key(parent.instance_id()) {
+                    anyhow::bail!("durable subagent session not found");
+                }
+                return Ok(ToolResult::json(
+                    json!({"closed": sessions.close(id).await?}),
+                ));
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, or `close`"),
         }
@@ -556,25 +573,50 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             let job_id = value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
-            let job = self
-                .jobs
-                .get_owned(job_id, parent.instance_id())
-                ;
-            if let Some(job) = job { return Ok(ToolResult::json(serde_json::to_value(job)?)); }
-            let (sessions, key) = self.sessions.as_ref().ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-            let session = sessions.get(job_id).await?.filter(|session| session.parent_session == key(parent.instance_id()))
+            let job = self.jobs.get_owned(job_id, parent.instance_id());
+            if let Some(job) = job {
+                return Ok(ToolResult::json(serde_json::to_value(job)?));
+            }
+            let (sessions, key) = self
+                .sessions
+                .as_ref()
                 .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-            Ok(ToolResult::json(serde_json::to_value(super::DurableSubagentSessionSummary::from(&session))?))
+            let session = sessions
+                .get(job_id)
+                .await?
+                .filter(|session| session.parent_session == key(parent.instance_id()))
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+            Ok(ToolResult::json(serde_json::to_value(
+                super::DurableSubagentSessionSummary::from(&session),
+            )?))
         } else {
-            let mut rows = self.jobs.list_owned(parent.instance_id()).into_iter()
-                .map(|job| serde_json::to_value(job).map(|mut v| { v["kind"] = Value::String("job".into()); v }))
+            let mut rows = self
+                .jobs
+                .list_owned(parent.instance_id())
+                .into_iter()
+                .map(|job| {
+                    serde_json::to_value(job).map(|mut v| {
+                        v["kind"] = Value::String("job".into());
+                        v
+                    })
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             if let Some((sessions, key)) = &self.sessions {
                 let parent_key = key(parent.instance_id());
-                rows.extend(sessions.list_for_parent(&parent_key, None).await?.iter().map(|session| {
-                    let mut value = serde_json::to_value(super::DurableSubagentSessionSummary::from(session)).unwrap_or(Value::Null);
-                    value["kind"] = Value::String("session".into()); value
-                }));
+                rows.extend(
+                    sessions
+                        .list_for_parent(&parent_key, None)
+                        .await?
+                        .iter()
+                        .map(|session| {
+                            let mut value = serde_json::to_value(
+                                super::DurableSubagentSessionSummary::from(session),
+                            )
+                            .unwrap_or(Value::Null);
+                            value["kind"] = Value::String("session".into());
+                            value
+                        }),
+                );
             }
             Ok(ToolResult::json(Value::Array(rows)))
         }
