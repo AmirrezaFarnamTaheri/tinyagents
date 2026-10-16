@@ -17,19 +17,33 @@ pub struct HookScope<Ctx = (), Metrics = TurnCost> {
 
 impl<Ctx, Metrics> HookScope<Ctx, Metrics> {
     /// Append a tool hook, preserving registration order.
-    pub fn push_tool(&mut self, hook: Arc<dyn ToolHook<Ctx>>) { self.tools.push(hook); }
+    pub fn push_tool(&mut self, hook: Arc<dyn ToolHook<Ctx>>) {
+        self.tools.push(hook);
+    }
     /// Append a learning sink, preserving registration order.
-    pub fn push_learning(&mut self, hook: Arc<dyn LearningSink>) { self.learning.push(hook); }
+    pub fn push_learning(&mut self, hook: Arc<dyn LearningSink>) {
+        self.learning.push(hook);
+    }
     /// Append a stop policy, preserving registration order.
-    pub fn push_stop(&mut self, hook: Arc<dyn StopHook<Metrics>>) { self.stop.push(hook); }
+    pub fn push_stop(&mut self, hook: Arc<dyn StopHook<Metrics>>) {
+        self.stop.push(hook);
+    }
     /// Tool hooks in registration order.
-    pub fn tool_hooks(&self) -> &[Arc<dyn ToolHook<Ctx>>] { &self.tools }
+    pub fn tool_hooks(&self) -> &[Arc<dyn ToolHook<Ctx>>] {
+        &self.tools
+    }
     /// Learning sinks in registration order.
-    pub fn learning_hooks(&self) -> &[Arc<dyn LearningSink>] { &self.learning }
+    pub fn learning_hooks(&self) -> &[Arc<dyn LearningSink>] {
+        &self.learning
+    }
     /// Stop policies in registration order.
-    pub fn stop_hooks(&self) -> &[Arc<dyn StopHook<Metrics>>] { &self.stop }
+    pub fn stop_hooks(&self) -> &[Arc<dyn StopHook<Metrics>>] {
+        &self.stop
+    }
     /// Whether this scope has no callbacks.
-    pub fn is_empty(&self) -> bool { self.tools.is_empty() && self.learning.is_empty() && self.stop.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty() && self.learning.is_empty() && self.stop.is_empty()
+    }
 }
 
 #[cfg(test)]

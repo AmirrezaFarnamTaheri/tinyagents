@@ -181,13 +181,21 @@ pub struct ToolOutcomeRecord {
 /// Classify a failure message without retaining its text.
 pub fn classify_tool_failure(output: &str) -> &'static str {
     let lower = output.to_lowercase();
-    if lower.contains("timeout") { "timeout" }
-    else if lower.contains("not found") || lower.contains("no such file") { "not_found" }
-    else if lower.contains("permission") || lower.contains("denied") { "permission_denied" }
-    else if lower.contains("connection") || lower.contains("network") { "connection_error" }
-    else if lower.contains("parse") || lower.contains("invalid") || lower.contains("syntax") { "parse_error" }
-    else if lower.contains("unknown tool") { "unknown_tool" }
-    else { "error" }
+    if lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("not found") || lower.contains("no such file") {
+        "not_found"
+    } else if lower.contains("permission") || lower.contains("denied") {
+        "permission_denied"
+    } else if lower.contains("connection") || lower.contains("network") {
+        "connection_error"
+    } else if lower.contains("parse") || lower.contains("invalid") || lower.contains("syntax") {
+        "parse_error"
+    } else if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else {
+        "error"
+    }
 }
 
 // ── LearningSink ──────────────────────────────────────────────────────────────

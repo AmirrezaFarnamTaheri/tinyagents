@@ -1615,7 +1615,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // `is_error` is a reported tool failure, distinct from execution Err.
         let duration_ms = crate::ids::now_ms().saturating_sub(prepared.started_at_ms);
         let argument_bytes = serde_json::to_vec(&prepared.call.arguments).unwrap_or_default();
-        let args_digest = sha2::Sha256::digest(argument_bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let args_digest = sha2::Sha256::digest(argument_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         run.tool_outcomes.push(crate::host::ToolOutcomeRecord {
             name: prepared.tool_name.clone(),
             args_digest,
