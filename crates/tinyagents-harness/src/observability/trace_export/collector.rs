@@ -42,12 +42,14 @@ pub struct SpanCollector {
     open_models: HashMap<String, CallStart>,
     open_tools: HashMap<String, usize>,
     open_subagents: HashMap<String, usize>,
-    last_generation: Option<usize>,
+    run_roots: HashMap<String, usize>,
+    current_run_id: Option<String>,
+    root_run_id: Option<String>,
+    last_generation: HashMap<String, usize>,
     last_activity_ms: u64,
     first_input_recorded: bool,
     finished: bool,
-    last_offset: Option<u64>,
-    stream_run_id: Option<String>,
+    last_offsets: HashMap<String, u64>,
 }
 
 impl SpanCollector {
@@ -60,33 +62,40 @@ impl SpanCollector {
             open_models: HashMap::new(),
             open_tools: HashMap::new(),
             open_subagents: HashMap::new(),
-            last_generation: None,
+            run_roots: HashMap::new(),
+            current_run_id: None,
+            root_run_id: context.root_run_id.clone().or_else(|| context.run_id.clone()),
+            last_generation: HashMap::new(),
             last_activity_ms: 0,
             first_input_recorded: false,
             finished: false,
-            last_offset: None,
-            stream_run_id: None,
+            last_offsets: HashMap::new(),
         }
     }
 
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
         let run_id = observation.run_id.as_str();
-        if self
-            .stream_run_id
-            .as_deref()
-            .is_some_and(|current| current != run_id)
-        {
+        if self.root_run_id.as_deref().is_some_and(|root| root != observation.root_run_id.as_str()) {
             return;
         }
-        self.stream_run_id.get_or_insert_with(|| run_id.to_owned());
-        if self
-            .last_offset
-            .is_some_and(|offset| observation.offset <= offset)
-        {
+        self.root_run_id.get_or_insert_with(|| observation.root_run_id.as_str().to_owned());
+        if self.last_offsets.get(run_id).is_some_and(|offset| observation.offset <= *offset) {
             return;
         }
-        self.last_offset = Some(observation.offset);
+        self.last_offsets.insert(run_id.to_owned(), observation.offset);
+        self.current_run_id = Some(run_id.to_owned());
+        if !self.run_roots.contains_key(run_id) {
+            let index = if observation.parent_run_id.is_some() {
+                let parent_id = observation.parent_run_id.as_ref().map(|id| id.as_str().to_owned());
+                let parent = parent_id.as_deref().and_then(|id| self.run_roots.get(id)).copied()
+                    .unwrap_or_else(|| self.ensure_root(observation.ts_ms));
+                self.open_subagent_span("child", 1, observation.ts_ms, parent)
+            } else {
+                self.ensure_root(observation.ts_ms)
+            };
+            self.run_roots.insert(run_id.to_owned(), index);
+        }
         self.record_event(&observation.event, observation.ts_ms);
     }
 
@@ -98,7 +107,7 @@ impl SpanCollector {
         self.last_activity_ms = self.last_activity_ms.max(timestamp_ms);
         match event {
             AgentEvent::RunStarted { .. } => {
-                self.ensure_root(timestamp_ms);
+                self.ensure_run_root(timestamp_ms);
             }
             AgentEvent::ModelStarted { call_id, model } => {
                 let parent = self.active_parent(timestamp_ms);
@@ -112,7 +121,7 @@ impl SpanCollector {
                     attrs,
                 );
                 if let Some(previous) = self.open_models.insert(
-                    call_id.as_str().to_owned(),
+                    self.scoped_id(call_id.as_str()),
                     CallStart {
                         index,
                         parent_index: parent,
@@ -128,7 +137,7 @@ impl SpanCollector {
                 let has_content = !delta.text.is_empty()
                     || !delta.reasoning.is_empty()
                     || delta.tool_call.is_some();
-                if has_content && let Some(call) = self.open_models.get_mut(call_id.as_str()) {
+                if has_content && let Some(call) = self.open_models.get_mut(&self.scoped_id(call_id.as_str())) {
                     call.first_delta_ms.get_or_insert(timestamp_ms);
                     if !delta.text.is_empty() {
                         call.first_text_ms.get_or_insert(timestamp_ms);
@@ -144,7 +153,7 @@ impl SpanCollector {
             } => {
                 let call = self
                     .open_models
-                    .remove(call_id.as_str())
+                    .remove(&self.scoped_id(call_id.as_str()))
                     .unwrap_or_else(|| {
                         let parent = self.active_parent(timestamp_ms);
                         let mut attrs = BTreeMap::new();
@@ -164,6 +173,7 @@ impl SpanCollector {
                             first_text_ms: None,
                         }
                     });
+                let completed_index = call.index;
                 self.finish_model(
                     call,
                     *started_at_ms,
@@ -172,7 +182,7 @@ impl SpanCollector {
                     output.as_ref(),
                     timestamp_ms,
                 );
-                self.last_generation = Some(self.spans.len() - 1);
+                self.last_generation.insert(self.active_run_id(), completed_index);
             }
             AgentEvent::ModelFailed {
                 call_id,
@@ -183,7 +193,7 @@ impl SpanCollector {
             } => {
                 let call = self
                     .open_models
-                    .remove(call_id.as_str())
+                    .remove(&self.scoped_id(call_id.as_str()))
                     .unwrap_or_else(|| {
                         let parent = self.active_parent(timestamp_ms);
                         let mut attrs = BTreeMap::new();
@@ -218,7 +228,7 @@ impl SpanCollector {
             } => {
                 let parent = parent_call_id
                     .as_ref()
-                    .and_then(|id| self.open_tools.get(id.as_str()).copied())
+                    .and_then(|id| self.open_tools.get(&self.scoped_id(id.as_str())).copied())
                     .unwrap_or_else(|| self.active_parent(timestamp_ms));
                 let mut attrs = BTreeMap::new();
                 attrs.insert("tool.name".into(), json_str(tool_name));
@@ -236,7 +246,7 @@ impl SpanCollector {
                     self.spans[index].input =
                         Some(Value::String(truncate_capture_text(&input.to_string())));
                 }
-                if let Some(previous) = self.open_tools.insert(call_id.as_str().to_owned(), index) {
+                if let Some(previous) = self.open_tools.insert(self.scoped_id(call_id.as_str()), index) {
                     self.force_close_span(previous, timestamp_ms);
                 }
             }
@@ -250,7 +260,7 @@ impl SpanCollector {
                 error,
                 ..
             } => {
-                let index = self.open_tools.remove(call_id.as_str()).unwrap_or_else(|| {
+                let index = self.open_tools.remove(&self.scoped_id(call_id.as_str())).unwrap_or_else(|| {
                     let parent = self.active_parent(timestamp_ms);
                     let mut attrs = BTreeMap::new();
                     attrs.insert("tool.name".into(), json_str(tool_name));
@@ -312,7 +322,7 @@ impl SpanCollector {
                 error,
                 ..
             } => {
-                let index = self.open_tools.remove(call_id.as_str()).unwrap_or_else(|| {
+                let index = self.open_tools.remove(&self.scoped_id(call_id.as_str())).unwrap_or_else(|| {
                     let parent = self.active_parent(timestamp_ms);
                     let mut attrs = BTreeMap::new();
                     attrs.insert("tool.name".into(), json_str(tool_name));
@@ -338,6 +348,15 @@ impl SpanCollector {
             AgentEvent::SubAgentStarted { name, depth } => {
                 let index = self.open_subagent(name, *depth, timestamp_ms);
                 self.open_subagents.insert(name.clone(), index);
+            }
+            AgentEvent::SubAgentRunStarted { name, depth, run_id } => {
+                let index = self.open_subagents.get(name).copied().unwrap_or_else(|| self.open_subagent(name, *depth, timestamp_ms));
+                self.run_roots.insert(run_id.as_str().to_owned(), index);
+            }
+            AgentEvent::SubAgentRunCompleted { run_id } => {
+                if let Some(index) = self.run_roots.get(run_id.as_str()).copied() {
+                    self.close_span(index, timestamp_ms, SpanStatus::Ok);
+                }
             }
             AgentEvent::SubAgentCompleted { name, .. } => {
                 let index = self
@@ -369,7 +388,7 @@ impl SpanCollector {
                 }
             }
             AgentEvent::UsageRecorded { usage } => {
-                let root = self.ensure_root(timestamp_ms);
+                let root = self.ensure_run_root(timestamp_ms);
                 let cached = usage
                     .cache_read_tokens
                     .saturating_add(usage.cache_creation_tokens);
@@ -421,7 +440,7 @@ impl SpanCollector {
             }
             AgentEvent::CostRecorded { cost } => {
                 let amount = cost.total_cost;
-                if let Some(generation) = self.last_generation {
+                if let Some(generation) = self.last_generation.get(&self.active_run_id()).copied() {
                     let provider_reported = self.spans[generation]
                         .attributes
                         .get("gen_ai.cost.source")
@@ -713,6 +732,10 @@ impl SpanCollector {
 
     fn open_subagent(&mut self, name: &str, depth: usize, at: u64) -> usize {
         let parent = self.active_parent(at);
+        self.open_subagent_span(name, depth, at, parent)
+    }
+
+    fn open_subagent_span(&mut self, name: &str, depth: usize, at: u64, parent: usize) -> usize {
         let mut attrs = BTreeMap::new();
         attrs.insert("subagent.name".into(), json_str(name));
         attrs.insert("subagent.depth".into(), json!(depth));
@@ -727,11 +750,25 @@ impl SpanCollector {
     }
 
     fn active_parent(&mut self, at: u64) -> usize {
-        self.open_subagents
-            .values()
-            .next()
-            .copied()
-            .unwrap_or_else(|| self.ensure_root(at))
+        self.ensure_run_root(at)
+    }
+
+    fn active_run_id(&self) -> String {
+        self.current_run_id.clone().unwrap_or_else(|| "root".into())
+    }
+
+    fn scoped_id(&self, id: &str) -> String {
+        format!("{}\0{id}", self.active_run_id())
+    }
+
+    fn ensure_run_root(&mut self, at: u64) -> usize {
+        let run_id = self.active_run_id();
+        if let Some(index) = self.run_roots.get(&run_id).copied() {
+            return index;
+        }
+        let index = self.ensure_root(at);
+        self.run_roots.insert(run_id, index);
+        index
     }
 
     fn open_span(
