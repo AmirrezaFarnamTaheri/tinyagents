@@ -53,6 +53,11 @@ Grouped by extension shape:
 - `HumanApprovalMiddleware` — raises `TinyAgentsError::Interrupted` from
   `before_tool` for flagged tools unless an `ApprovalFn` admits the call; the
   harness-native half of a human-in-the-loop gate.
+- `ToolPolicyGateMiddleware` — combines a builder policy with an optional
+  session ceiling. A denial from either policy wins before approval; a shared
+  resolver handles one or both approval requirements. `with_session_listing`
+  and `visible_tool_names` let a host scope a session-specific skill listing
+  to the tools already available to the run.
 
 ### Budget (`Middleware` lifecycle hooks)
 
@@ -89,6 +94,15 @@ Grouped by extension shape:
 - `TracingMiddleware` — implements every lifecycle hook, recording a bounded
   ring buffer of `PhaseTrace` begin/end records plus per-phase `TraceCounts`,
   independent of the event stream.
+- `TranscriptSnapshotMiddleware` — mirrors provider-dispatched messages,
+  accepted response boundaries, usage and final tool outcomes into a shared
+  snapshot so callers can persist completed rounds after a later error.
+- `ToolOutcomeCaptureMiddleware` — writes concrete call arguments, success,
+  final visible result text and elapsed time to `ToolOutcomeSink`; register it
+  before result-transforming middleware so its reverse-order result hook sees
+  the transformed output.
+- `run_output_ladder` — the shared compact, persist-or-cap, disclose sequence
+  for tool results. The host supplies `OutputProcessor` and `OutputCapPolicy`.
 
 ## Files
 
@@ -99,6 +113,9 @@ Grouped by extension shape:
 | `resilience.rs` | Constructors and `ModelMiddleware` impls for `RetryMiddleware`, `TimeoutMiddleware`, `ModelFallbackMiddleware`, `RateLimitMiddleware`. |
 | `budget.rs` | Constructors and `Middleware` impl for `BudgetMiddleware`, plus `BudgetTracker`/`BudgetLimits` helper methods and the shared input-token estimator. |
 | `tool_policy.rs` | Constructors and `Middleware` impls for `ToolAllowlistMiddleware`, `ToolPolicyMiddleware`, `DynamicToolSelectionMiddleware`, `ContextualToolSelectionMiddleware`, `HumanApprovalMiddleware`. |
+| `tool_outcome_capture.rs` | Shared call-identity/timing recorder and standalone `ToolOutcomeCaptureMiddleware`. |
+| `transcript_snapshot.rs` | Shared transcript snapshot sink, live snapshot middleware, and bounded unanswered-step renderer. |
+| `output_cap.rs`, `output_ladder.rs` | Generic output-stage plan and the shared compaction/cap/disclosure runner. |
 | `context.rs` | Constructors and `Middleware` impls for `MessageTrimMiddleware`, `ContextCompressionMiddleware`, `MicrocompactMiddleware`, `PromptCacheGuardMiddleware` — note these structs are *defined* in `middleware/types.rs`, not here; this file only holds their behavior. See `middleware/README.md`. |
 | `context/overflow.rs`, `context/summary.rs` | Child modules of `context.rs`: overflow-recovery attempts (compact, route, truncate) and how a compaction batch becomes a summary (split-turn prefix, file lists). Behaviour documented in `docs/modules/harness/compaction.md`. |
 | `observe.rs` | Constructors and `Middleware` impls for `StructuredOutputValidatorMiddleware`, `DynamicPromptMiddleware`, `RedactionMiddleware`, `TracingMiddleware`, and (also structs defined in `middleware/types.rs`) `LoggingMiddleware`/`UsageAccountingMiddleware`. |
