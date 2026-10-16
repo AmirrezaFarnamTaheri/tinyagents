@@ -200,6 +200,22 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
         envelope["awaiting_user_envelope"]["status"],
         "awaiting_user"
     );
+    let collected = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"action":"await"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let collected: serde_json::Value = serde_json::from_str(&collected.output()).unwrap();
+    assert_eq!(collected["collected_tombstones"], serde_json::json!([]));
+    assert_eq!(
+        collected["awaiting_user"][0]["session_id"],
+        session.subagent_session_id
+    );
     let closed = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),
