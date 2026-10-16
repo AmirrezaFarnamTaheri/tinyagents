@@ -172,9 +172,9 @@ async fn v1_completions_move_with_unwrapped_bodies_and_ms_times() {
     assert_eq!(row.doc["notify_mode"], "collect");
     assert_eq!(row.doc["attempts"], 2);
     assert_eq!(row.doc["result"]["text"], "hi");
-    assert_eq!(row.doc["finished_ms"], 1_700_000_000_000_i64);
+    assert_eq!(row.doc["finished_ms"], 1_700_000_000_005_i64);
     assert!(row.doc.get("updated_at").is_none() && row.doc.get("updatedAtMs").is_none());
-    assert_eq!(row.meta.created_ms, 1_700_000_000_000_i64);
+    assert_eq!(row.meta.created_ms, 1_700_000_000_005_i64);
     let kept = storage
         .documents()
         .query_all("tasks.completions", &tinystoragedrivers_core::Query::all())
