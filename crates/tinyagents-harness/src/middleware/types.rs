@@ -107,6 +107,8 @@ pub struct AgentRun {
     /// Recovery messages for denied, unknown, or invalid calls intentionally do
     /// not appear here: they produced a transcript response but never acted.
     pub executed_tools: Vec<String>,
+    /// Content-free outcome summaries for completed calls.
+    pub tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather

@@ -53,7 +53,7 @@ pub use budget_gate::{
 };
 pub use context_composer::{ContextComposer, StaticContextComposer, TurnContextRequest};
 pub use experience_store::{Experience, ExperienceStore, InMemoryExperienceStore};
-pub use learning_sink::{LearningSink, NoopLearningSink, ToolOutcomeRecord, TurnSummary};
+pub use learning_sink::{LearningSink, NoopLearningSink, ToolOutcomeRecord, TurnSummary, classify_tool_failure};
 pub use model_resolver::{FixedModelResolver, ModelResolveRequest, ModelResolver};
 pub use progress_sink::{NoopProgressSink, ProgressEvent, ProgressSink, RecordingProgressSink};
 pub use security_gate::{
