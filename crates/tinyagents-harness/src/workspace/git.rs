@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,17 @@ use crate::workspace::WorkspaceIsolation;
 use crate::{Result, TinyAgentsError};
 use tinytools::SandboxMode;
 use tinytools::WorkspaceDescriptor;
+
+/// Host callbacks for observing a git-worktree isolation lifecycle.
+#[async_trait]
+pub trait GitWorktreeLifecycleHook: Send + Sync + std::fmt::Debug {
+    /// Called after the worktree descriptor has been prepared.
+    async fn prepared(&self, descriptor: &WorkspaceDescriptor) -> Result<()>;
+
+    /// Called after cleanup is attempted. `error` is the cleanup error text,
+    /// when the worktree could not be removed.
+    async fn cleaned(&self, descriptor: &WorkspaceDescriptor, error: Option<&str>) -> Result<()>;
+}
 
 /// Directory, relative to the repository root, where isolated worktrees are
 /// created.
@@ -71,6 +83,8 @@ pub struct GitWorktreeIsolation {
     base_ref: GitWorktreeBaseRef,
     sandbox: SandboxMode,
     trusted_roots: Vec<PathBuf>,
+    policy_id_prefix: String,
+    lifecycle_hook: Option<Arc<dyn GitWorktreeLifecycleHook>>,
 }
 
 impl GitWorktreeIsolation {
@@ -81,6 +95,8 @@ impl GitWorktreeIsolation {
             base_ref: GitWorktreeBaseRef::Head,
             sandbox: SandboxMode::Inherit,
             trusted_roots: Vec::new(),
+            policy_id_prefix: "git.worktree".into(),
+            lifecycle_hook: None,
         }
     }
 
@@ -101,6 +117,18 @@ impl GitWorktreeIsolation {
         self.trusted_roots.push(root.into());
         self
     }
+
+    /// Select the prefix used when creating a workspace policy id.
+    pub fn with_policy_id_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.policy_id_prefix = prefix.into().trim_end_matches(':').to_owned();
+        self
+    }
+
+    /// Install callbacks that observe prepared and cleaned worktrees.
+    pub fn with_lifecycle_hook(mut self, hook: Arc<dyn GitWorktreeLifecycleHook>) -> Self {
+        self.lifecycle_hook = Some(hook);
+        self
+    }
 }
 
 #[async_trait]
@@ -109,8 +137,8 @@ impl WorkspaceIsolation for GitWorktreeIsolation {
         let status = create_git_worktree(&self.repo_root, run_id, self.base_ref)
             .map_err(|err| TinyAgentsError::Tool(err.to_string()))?;
         let policy_id = match agent {
-            Some(agent) if !agent.is_empty() => format!("git.worktree:{agent}:{run_id}"),
-            _ => format!("git.worktree:{run_id}"),
+            Some(agent) if !agent.is_empty() => format!("{}:{agent}:{run_id}", self.policy_id_prefix),
+            _ => format!("{}:{run_id}", self.policy_id_prefix),
         };
         let mut descriptor = WorkspaceDescriptor::new(status.path)
             .with_policy_id(policy_id)
@@ -118,12 +146,22 @@ impl WorkspaceIsolation for GitWorktreeIsolation {
         for root in &self.trusted_roots {
             descriptor = descriptor.with_trusted_root(root.clone());
         }
+        if let Some(hook) = &self.lifecycle_hook {
+            if let Err(error) = hook.prepared(&descriptor).await {
+                let _ = remove_git_worktree(&self.repo_root, &descriptor.root, true);
+                return Err(error);
+            }
+        }
         Ok(descriptor)
     }
 
     async fn cleanup(&self, descriptor: &WorkspaceDescriptor) -> Result<()> {
-        remove_git_worktree(&self.repo_root, &descriptor.root, false)
-            .map_err(|err| TinyAgentsError::Tool(err.to_string()))
+        let result = remove_git_worktree(&self.repo_root, &descriptor.root, false)
+            .map_err(|err| TinyAgentsError::Tool(err.to_string()));
+        if let Some(hook) = &self.lifecycle_hook {
+            hook.cleaned(descriptor, result.as_ref().err().map(ToString::to_string).as_deref()).await?;
+        }
+        result
     }
 }
 

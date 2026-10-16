@@ -379,6 +379,22 @@ impl TeamLedger for FakeLedger {
     ) -> anyhow::Result<CompletionOutcome> {
         unreachable!()
     }
+    fn release_task(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    fn mark_member_running(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    fn mark_member_idle(&self, _: &str, _: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
     fn shutdown_member(
         &self,
         _: &str,

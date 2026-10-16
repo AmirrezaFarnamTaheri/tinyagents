@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
@@ -472,9 +472,16 @@ impl<L: TeamLedger> TeamService<L> {
             .ok_or_else(|| anyhow!("unknown team member: {member_id}"))?;
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
         let run_id = format!("team-run-{}", Uuid::new_v4().simple());
-        if let Err(error) = self.ledger.mark_member_running(team_id, member_id, task_id, &worker_thread_id, &run_id) {
+        match self.ledger.mark_member_running(team_id, member_id, task_id, &worker_thread_id, &run_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                let _ = self.ledger.release_task(team_id, task_id);
+                return Err(anyhow!("unknown team member: {member_id}"));
+            }
+            Err(error) => {
             let _ = self.ledger.release_task(team_id, task_id);
             return Err(error.context("mark team member running"));
+            }
         }
 
         let execution = executor.execute(&member, &claimed).await;
@@ -579,6 +586,10 @@ impl<L: TeamLedger> TeamService<L> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "service_tests.rs"]
+mod tests;
 
 fn validate_dependencies(
     new_task_id: &str,
