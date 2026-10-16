@@ -24,6 +24,7 @@ struct CallStart {
     index: usize,
     started_at_ms: u64,
     model: String,
+    parent_index: usize,
     first_delta_ms: Option<u64>,
     first_text_ms: Option<u64>,
 }
@@ -45,6 +46,7 @@ pub struct SpanCollector {
     last_activity_ms: u64,
     first_input_recorded: bool,
     finished: bool,
+    last_offset: Option<u64>,
 }
 
 impl SpanCollector {
@@ -60,11 +62,16 @@ impl SpanCollector {
             last_activity_ms: 0,
             first_input_recorded: false,
             finished: false,
+            last_offset: None,
         }
     }
 
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
+        if self.last_offset.is_some_and(|offset| observation.offset <= offset) {
+            return;
+        }
+        self.last_offset = Some(observation.offset);
         self.record_event(&observation.event, observation.ts_ms);
     }
 
@@ -93,6 +100,7 @@ impl SpanCollector {
                     call_id.as_str().to_owned(),
                     CallStart {
                         index,
+                        parent_index: parent,
                         started_at_ms: timestamp_ms,
                         model: model.clone(),
                         first_delta_ms: None,
@@ -273,6 +281,24 @@ impl SpanCollector {
             ] { span.attributes.insert(key.into(), value); }
             span.attributes.insert("gen_ai.cost.source".into(), json_str(if cost.is_some() { "provider_reported" } else { "unreported" }));
             if let Some(cost) = cost { span.attributes.insert("gen_ai.usage.cost".into(), json_f64(cost)); }
+            if self.spans[call.parent_index].kind == SpanKind::Subagent {
+                let parent = &mut self.spans[call.parent_index];
+                for (key, add) in [
+                    ("gen_ai.usage.input_tokens", input_total),
+                    ("gen_ai.usage.output_tokens", usage.output_tokens),
+                    ("gen_ai.usage.cached_input_tokens", usage.cache_read_tokens),
+                    ("gen_ai.usage.cache_creation_tokens", usage.cache_creation_tokens),
+                    ("gen_ai.usage.reasoning_tokens", usage.reasoning_tokens),
+                ] {
+                    let prior = parent.attributes.get(key).and_then(Value::as_u64).unwrap_or(0);
+                    parent.attributes.insert(key.into(), json_u64(prior.saturating_add(add)));
+                }
+                if let Some(cost) = cost {
+                    let prior = parent.attributes.get("gen_ai.usage.cost").and_then(Value::as_f64).unwrap_or(0.0);
+                    parent.attributes.insert("gen_ai.usage.cost".into(), json_f64(prior + cost));
+                    parent.attributes.insert("gen_ai.cost.source".into(), json_str("provider_reported"));
+                }
+            }
         }
         if let Some(delta) = call.first_delta_ms {
             let unstreamed = now.saturating_sub(delta) <= UNSTREAMED_DELTA_WINDOW_MS && delta.saturating_sub(start) > UNSTREAMED_DELTA_WINDOW_MS;
@@ -309,7 +335,7 @@ impl SpanCollector {
     }
 
     fn active_parent(&mut self, at: u64) -> usize {
-        self.open_subagents.values().next_back().copied().unwrap_or_else(|| self.ensure_root(at))
+        self.open_subagents.values().next().copied().unwrap_or_else(|| self.ensure_root(at))
     }
 
     fn open_span(&mut self, kind: SpanKind, name: String, parent: Option<usize>, at: u64, attributes: BTreeMap<String, Value>) -> (usize, String) {
