@@ -215,7 +215,7 @@ struct ActiveTurn<P> {
 
 type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
-type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Weak<RunQueue<TurnRequest<P>>>>>;
+type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Arc<RunQueue<TurnRequest<P>>>>>;
 
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
 pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
@@ -318,14 +318,12 @@ where
         let key = (request.scope.clone(), request.thread_id.clone());
         let cancellation = crate::CancellationToken::new();
         if !request.host_authored {
-            if !matches!(
-                request.disposition,
-                QueueDisposition::Interrupt | QueueDisposition::Parallel
-            ) {
-                match self.host.queue(&request, request.disposition).await {
-                    Ok(true) => return Err(TurnRunnerError::Queued),
-                    Ok(false) => {}
-                    Err(error) => return self.fail(&request, error).await,
+            if let Some(lane) = queue_lane(request.disposition) {
+                let active = self.active.lock().await;
+                if active.contains_key(&key) {
+                    let queue = self.queue_for(key.clone()).await;
+                    queue.push(lane, request.clone()).await;
+                    return Err(TurnRunnerError::Queued);
                 }
             }
             let previous = if request.disposition == QueueDisposition::Parallel {
@@ -367,9 +365,24 @@ where
         let _session_guard = if request.disposition == QueueDisposition::Parallel {
             None
         } else {
-            Some(lock.lock_owned().await)
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    self.clear_tracking(&request).await;
+                    self.events.terminal(&request, TerminalEvent::Cancelled {
+                        request_id: request.request_id.clone(),
+                    }).await;
+                    return Err(TurnRunnerError::Cancelled);
+                }
+                guard = lock.lock_owned() => Some(guard),
+            }
         };
-        let session = match self.host.checkout(&request).await {
+        let checkout = if request.disposition == QueueDisposition::Parallel {
+            self.host.checkout_fork(&request).await
+        } else {
+            self.host.checkout(&request).await
+        };
+        let session = match checkout {
             Ok(session) => session,
             Err(error) => {
                 self.clear_tracking(&request).await;
@@ -377,6 +390,7 @@ where
             }
         };
         if let Err(error) = self.host.validate_fingerprint(&request, &session).await {
+            self.host.checkin(&request).await;
             self.clear_tracking(&request).await;
             return self.fail(&request, error).await;
         }
@@ -422,6 +436,68 @@ where
                 Err(TurnRunnerError::Cancelled)
             }
             Err(error) => self.fail(&request, error).await,
+        }
+    }
+
+    async fn queue_for(&self, key: ThreadLockKey) -> Arc<RunQueue<TurnRequest<P>>> {
+        let mut queues = self.queues.lock().await;
+        Arc::clone(
+            queues
+                .entry(key)
+                .or_insert_with(|| Arc::new(RunQueue::new())),
+        )
+    }
+
+    /// Take queued work from one lane. `OneAtATime` is useful for steering;
+    /// `All` preserves FIFO while applying every accepted item at a boundary.
+    pub async fn take_queued(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        lane: QueueLane,
+        mode: QueueMode,
+    ) -> Vec<TurnRequest<P>> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self.queues.lock().await.get(&key).cloned();
+        match queue {
+            Some(queue) => queue.take(lane, mode).await,
+            None => Vec::new(),
+        }
+    }
+
+    pub async fn queue_status(&self, scope: &ScopeKey, thread_id: &str) -> QueueStatus {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self.queues.lock().await.get(&key).cloned();
+        match queue {
+            Some(queue) => queue.status().await,
+            None => QueueStatus::default(),
+        }
+    }
+
+    pub async fn clear_queue(&self, scope: &ScopeKey, thread_id: &str) -> usize {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self.queues.lock().await.get(&key).cloned();
+        match queue {
+            Some(queue) => queue.clear().await,
+            None => 0,
+        }
+    }
+
+    pub async fn remove_queued(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        request_id: &str,
+    ) -> usize {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self.queues.lock().await.get(&key).cloned();
+        match queue {
+            Some(queue) => {
+                queue
+                    .remove_where(|turn| turn.request_id == request_id)
+                    .await
+            }
+            None => 0,
         }
     }
 
