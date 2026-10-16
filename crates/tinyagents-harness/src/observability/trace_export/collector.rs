@@ -42,6 +42,7 @@ pub struct SpanCollector {
     open_models: HashMap<String, CallStart>,
     open_tools: HashMap<String, usize>,
     open_subagents: HashMap<String, usize>,
+    last_generation: Option<usize>,
     last_activity_ms: u64,
     first_input_recorded: bool,
     finished: bool,
@@ -59,6 +60,7 @@ impl SpanCollector {
             open_models: HashMap::new(),
             open_tools: HashMap::new(),
             open_subagents: HashMap::new(),
+            last_generation: None,
             last_activity_ms: 0,
             first_input_recorded: false,
             finished: false,
@@ -161,6 +163,7 @@ impl SpanCollector {
                     output.as_ref(),
                     timestamp_ms,
                 );
+                self.last_generation = Some(self.spans.len() - 1);
             }
             AgentEvent::ModelFailed {
                 call_id,
