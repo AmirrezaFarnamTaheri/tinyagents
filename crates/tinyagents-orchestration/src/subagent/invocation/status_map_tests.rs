@@ -6,9 +6,10 @@ use tinyagents_tasks::OrchestrationTaskStatus as Task;
 
 use SubAgentJobStatus as Job;
 
-const ALL_JOBS: [Job; 6] = [
+const ALL_JOBS: [Job; 7] = [
     Job::Queued,
     Job::Running,
+    Job::AwaitingInput,
     Job::Completed,
     Job::Failed,
     Job::Incomplete,
@@ -20,6 +21,7 @@ fn job_to_task_covers_every_job_status() {
     let expected = [
         (Job::Queued, Task::Pending),
         (Job::Running, Task::Running),
+        (Job::AwaitingInput, Task::Awaiting),
         (Job::Completed, Task::Completed),
         (Job::Failed, Task::Failed),
         (Job::Incomplete, Task::Failed),
@@ -36,6 +38,7 @@ fn job_to_run_covers_every_job_status() {
     let expected = [
         (Job::Queued, Run::Pending),
         (Job::Running, Run::Running),
+        (Job::AwaitingInput, Run::AwaitingUser),
         (Job::Completed, Run::Completed),
         (Job::Failed, Run::Failed),
         (Job::Incomplete, Run::Failed),
@@ -63,6 +66,8 @@ fn job_with(status: Job, kind: Option<IncompleteKind>) -> SubAgentJob {
         output: None,
         error: None,
         subagent_run_id: None,
+        worker_thread_id: None,
+        extensions: Default::default(),
         parent_tool_call_id: None,
         incomplete_kind: kind,
         artifacts: Vec::new(),
@@ -102,7 +107,7 @@ fn task_to_job_covers_every_task_status() {
     let expected: [(Task, Result<Job, ()>); 9] = [
         (Task::Pending, Ok(Job::Queued)),
         (Task::Running, Ok(Job::Running)),
-        (Task::Awaiting, Err(())),
+        (Task::Awaiting, Ok(Job::AwaitingInput)),
         (Task::Completed, Ok(Job::Completed)),
         (Task::Failed, Ok(Job::Failed)),
         (Task::CancelRequested, Ok(Job::Running)),
@@ -118,10 +123,10 @@ fn task_to_job_covers_every_task_status() {
 
 #[test]
 fn task_to_job_error_names_the_source_status() {
-    let err = Job::try_from(Task::Awaiting).unwrap_err();
+    let err = Job::try_from(Task::Abandoned).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "status `awaiting` has no equivalent in SubAgentJobStatus"
+        "status `abandoned` has no equivalent in SubAgentJobStatus"
     );
 }
 
@@ -131,6 +136,7 @@ fn job_status_golden_wire_round_trips() {
     let golden = [
         (Job::Queued, "queued"),
         (Job::Running, "running"),
+        (Job::AwaitingInput, "awaiting_input"),
         (Job::Completed, "completed"),
         (Job::Failed, "failed"),
         (Job::Incomplete, "incomplete"),
@@ -174,7 +180,7 @@ fn run_to_job_covers_every_run_status() {
     let expected: [(Run, Option<Job>); 8] = [
         (Run::Pending, Some(Job::Queued)),
         (Run::Running, Some(Job::Running)),
-        (Run::AwaitingUser, None),
+        (Run::AwaitingUser, Some(Job::AwaitingInput)),
         (Run::Paused, None),
         (Run::Completed, Some(Job::Completed)),
         (Run::Failed, Some(Job::Failed)),

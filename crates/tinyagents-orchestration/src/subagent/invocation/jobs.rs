@@ -8,6 +8,7 @@ use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{RunId, TaskId, next_seq};
+use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
@@ -22,7 +23,7 @@ use crate::subagent::{
 use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tokio::sync::watch;
 
-use super::types::{JobControl, JobMeta};
+use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
@@ -34,6 +35,11 @@ type SessionOverlay = (
 type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
+struct JobExecutionControls {
+    cancellation: CancellationToken,
+    steering: SteeringHandle,
+    run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
 
 /// A fixed operation for a host-named alias of [`SubAgentJobsTool`].
 ///
@@ -67,6 +73,41 @@ impl SubAgentJobAction {
 struct JobArgumentNames {
     action: String,
     identifier: String,
+    fallback_identifier: Option<String>,
+}
+
+impl JobArgumentNames {
+    fn identifier<'a>(&self, object: &'a serde_json::Map<String, Value>) -> Option<&'a str> {
+        object
+            .get(&self.identifier)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                self.fallback_identifier.as_ref().and_then(|field| {
+                    object
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                })
+            })
+    }
+}
+
+#[derive(Clone)]
+struct AwaitTimeout {
+    field: String,
+    default_secs: u64,
+    max_secs: u64,
+}
+
+impl AwaitTimeout {
+    fn requested_secs(&self, object: &serde_json::Map<String, Value>) -> u64 {
+        object
+            .get(&self.field)
+            .and_then(Value::as_u64)
+            .unwrap_or(self.default_secs)
+            .clamp(1, self.max_secs)
+    }
 }
 
 impl Default for JobArgumentNames {
@@ -74,6 +115,7 @@ impl Default for JobArgumentNames {
         Self {
             action: "action".into(),
             identifier: "job_id".into(),
+            fallback_identifier: None,
         }
     }
 }
@@ -148,6 +190,15 @@ impl SubAgentJobRegistry {
             .unwrap_or(false)
     }
 
+    #[cfg(test)]
+    pub(crate) fn drain_lane_for_test(&self, id: &SubAgentJobId, lane: QueueLane) -> Vec<Message> {
+        self.controls()
+            .get(id)
+            .and_then(|control| control.run_queue.as_ref())
+            .map(|queue| queue.drain_now(lane))
+            .unwrap_or_default()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
@@ -162,10 +213,50 @@ impl SubAgentJobRegistry {
         cancellation: CancellationToken,
         link: JobLink,
     ) -> (SubAgentJobId, SteeringHandle) {
+        self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
+    }
+
+    /// Registers a job with an optional loop-consumed queue for content
+    /// messages routed to a specific lane.
+    pub(crate) fn create_with_cancellation_and_queue(
+        &self,
+        agent: &str,
+        owner: u64,
+        cancellation: CancellationToken,
+        link: JobLink,
+        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    ) -> (SubAgentJobId, SteeringHandle) {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
-        let task_id = TaskId::new(id.as_str());
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
+        if let Err(error) = self.insert_job(
+            id.clone(),
+            agent,
+            owner.to_string(),
+            link,
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue,
+            },
+        ) {
+            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
+        }
+        (id, steering)
+    }
+
+    fn insert_job(
+        &self,
+        id: SubAgentJobId,
+        agent: &str,
+        owner: String,
+        link: JobLink,
+        execution: JobExecutionControls,
+    ) -> Result<(), SubAgentJobError> {
+        if id.as_str().is_empty() {
+            return Err(SubAgentJobError::Registry("empty job id".into()));
+        }
+        let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
             agent: agent.to_owned(),
@@ -173,6 +264,8 @@ impl SubAgentJobRegistry {
             output: None,
             error: None,
             subagent_run_id: link.subagent_run_id,
+            worker_thread_id: None,
+            extensions: std::collections::BTreeMap::new(),
             parent_tool_call_id: link.parent_tool_call_id,
             incomplete_kind: None,
             artifacts: Vec::new(),
@@ -181,34 +274,146 @@ impl SubAgentJobRegistry {
         };
         let (status, watcher) = watch::channel(job);
         let mut controls = self.controls();
-        self.steering.register(task_id.clone(), steering.clone());
-        // Ids are unique, so registration can only fail on a poisoned lock;
-        // the job is then left untracked rather than aborting the spawn.
+        if controls.contains_key(&id) {
+            return Err(SubAgentJobError::AlreadyExists(id.as_str().to_owned()));
+        }
+        self.steering
+            .register(task_id.clone(), execution.steering.clone());
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
-            owner.to_string(),
+            owner,
             JobMeta,
             watcher,
-            cancellation,
+            execution.cancellation.clone(),
         ) {
-            tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
             self.steering.deregister(&task_id);
-            return (id, steering);
+            return Err(SubAgentJobError::Registry(error.to_string()));
         }
         controls.insert(
             id.clone(),
             JobControl {
                 status,
                 cancellation_requested: false,
+                run_queue: execution.run_queue,
+                steering: execution.steering,
+                cancellation: execution.cancellation,
             },
         );
-        (id, steering)
+        Ok(())
+    }
+
+    /// Registers or reuses the public job bridge for one scoped driver task.
+    /// Repeated/coalesced requests reuse the same channels; task ids in a
+    /// different root/parent/thread scope receive a distinct public job id.
+    pub(crate) fn register_driver_job(
+        &self,
+        registration: DriverJobRegistration,
+    ) -> Result<
+        (
+            SubAgentJobId,
+            SteeringHandle,
+            tinyagents_harness::run_queue::RunQueueHandle,
+            CancellationToken,
+            bool,
+        ),
+        SubAgentJobError,
+    > {
+        let DriverJobRegistration {
+            key,
+            agent,
+            owner,
+            cancellation,
+            steering,
+            run_queue,
+            continuing,
+        } = registration;
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(id) = driver_jobs.get(&key) {
+            if self.get_owned(id.as_str(), &owner).is_none() {
+                return Err(SubAgentJobError::NotFound(id.as_str().to_owned()));
+            }
+            let controls = self.controls();
+            let control = controls
+                .get(id)
+                .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            let status = control.status.borrow().status;
+            if status.is_terminal() {
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    control.run_queue.clone().unwrap_or_else(|| {
+                        Arc::new(tinyagents_harness::run_queue::RunQueue::new())
+                    }),
+                    control.cancellation.clone(),
+                    false,
+                ));
+            }
+            if control.cancellation_requested {
+                return Err(SubAgentJobError::Cancelling(id.as_str().to_owned()));
+            }
+            let queue = control
+                .run_queue
+                .clone()
+                .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
+            if status == SubAgentJobStatus::AwaitingInput && continuing {
+                control.status.send_modify(|job| {
+                    job.status = SubAgentJobStatus::Running;
+                    job.error = None;
+                });
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    queue,
+                    control.cancellation.clone(),
+                    true,
+                ));
+            }
+            return Ok((
+                id.clone(),
+                control.steering.clone(),
+                queue,
+                control.cancellation.clone(),
+                false,
+            ));
+        }
+
+        let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
+        let queue =
+            run_queue.unwrap_or_else(|| Arc::new(tinyagents_harness::run_queue::RunQueue::new()));
+        let steering = steering.unwrap_or_else(|| {
+            SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage))
+        });
+        self.insert_job(
+            id.clone(),
+            &agent,
+            owner,
+            JobLink::default(),
+            JobExecutionControls {
+                cancellation,
+                steering: steering.clone(),
+                run_queue: Some(queue.clone()),
+            },
+        )?;
+        driver_jobs.insert(key, id.clone());
+        let token = self
+            .controls()
+            .get(&id)
+            .expect("inserted control")
+            .cancellation
+            .clone();
+        Ok((id, steering, queue, token, true))
     }
 
     pub(crate) fn mark_running(&self, id: &SubAgentJobId) {
         if let Some(control) = self.controls().get(id) {
             control.status.send_if_modified(|job| {
-                if job.status == SubAgentJobStatus::Queued {
+                if matches!(
+                    job.status,
+                    SubAgentJobStatus::Queued | SubAgentJobStatus::AwaitingInput
+                ) {
                     job.status = SubAgentJobStatus::Running;
                     true
                 } else {
@@ -300,6 +505,105 @@ impl SubAgentJobRegistry {
         }
     }
 
+    /// Mirrors a host-driver completion into the same registry used by the
+    /// Jobs and Message aliases. Durable pauses remain nonterminal and resumable.
+    pub(crate) fn mark_driver_result(
+        &self,
+        id: &SubAgentJobId,
+        result: Result<crate::subagent::SubagentOutcome, String>,
+    ) {
+        let is_pause = matches!(
+            &result,
+            Ok(outcome) if matches!(outcome.status, crate::subagent::SubagentOutcomeKind::AwaitingInput(_))
+        );
+        if is_pause {
+            let controls = self.controls();
+            if let Some(control) = controls.get(id) {
+                let task_id = TaskId::new(id.as_str());
+                if control.status.borrow().status.is_terminal() {
+                    return;
+                } else if control.cancellation_requested {
+                    let _ = self.tasks.release_cancellation_trusted(&task_id);
+                    control.status.send_modify(|job| {
+                        job.status = SubAgentJobStatus::Cancelled;
+                        job.error = Some(TinyAgentsError::Cancelled.to_string());
+                    });
+                    self.steering.deregister(&task_id);
+                } else if let Ok(outcome) = result {
+                    control.status.send_modify(|job| {
+                        job.output = Some(outcome.output);
+                        job.worker_thread_id = outcome.worker_thread_id;
+                        job.extensions = outcome.extensions;
+                        job.artifacts = outcome.artifacts;
+                        job.schema_error = outcome.schema_error;
+                        job.artifact_error = outcome.artifact_error;
+                        job.status = SubAgentJobStatus::AwaitingInput;
+                        job.error = None;
+                    });
+                }
+            }
+            return;
+        }
+        self.settle(id, |job, cancellation_requested| {
+            if cancellation_requested {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+                return;
+            }
+            match result {
+                Ok(outcome) => {
+                    job.output = Some(outcome.output);
+                    job.worker_thread_id = outcome.worker_thread_id;
+                    job.extensions = outcome.extensions;
+                    job.artifacts = outcome.artifacts;
+                    job.schema_error = outcome.schema_error;
+                    job.artifact_error = outcome.artifact_error;
+                    match outcome.status {
+                        crate::subagent::SubagentOutcomeKind::Completed => {
+                            job.status = SubAgentJobStatus::Completed;
+                        }
+                        crate::subagent::SubagentOutcomeKind::AwaitingInput(_) => {
+                            unreachable!("pause handled above")
+                        }
+                        crate::subagent::SubagentOutcomeKind::Incomplete(incomplete) => {
+                            job.status = SubAgentJobStatus::Incomplete;
+                            job.incomplete_kind = Some(incomplete.kind);
+                            job.error = Some(incomplete.reason);
+                        }
+                        crate::subagent::SubagentOutcomeKind::Cancelled => {
+                            job.status = SubAgentJobStatus::Cancelled;
+                            job.error = Some(TinyAgentsError::Cancelled.to_string());
+                        }
+                    }
+                }
+                Err(error) => {
+                    job.status = SubAgentJobStatus::Failed;
+                    job.error = Some(error);
+                }
+            }
+        });
+    }
+
+    /// Finds a driver-backed public job by its host-stable task id, while
+    /// enforcing the same owner scope as direct job-id lookups.
+    pub(crate) fn driver_job_for_key(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: &str,
+    ) -> Option<SubAgentJobId> {
+        let candidates = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(candidate, _)| *candidate == key)
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>();
+        candidates
+            .into_iter()
+            .find(|id| self.get_owned(id.as_str(), owner).is_some())
+    }
+
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
@@ -360,7 +664,7 @@ impl SubAgentJobRegistry {
     pub(crate) fn cancel_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let mut controls = self.controls();
@@ -380,13 +684,22 @@ impl SubAgentJobRegistry {
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
+        if control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
+            let _ = self.tasks.release_cancellation_trusted(&task_id);
+            control.status.send_modify(|job| {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            });
+            self.steering.deregister(&task_id);
+            return Ok(control.status.borrow().clone());
+        }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
         Ok(snapshot)
     }
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
-    pub(crate) fn get_owned(&self, job_id: &str, owner: u64) -> Option<SubAgentJob> {
+    pub(crate) fn get_owned(&self, job_id: &str, owner: impl ToString) -> Option<SubAgentJob> {
         match self
             .tasks
             .snapshot(&TaskId::new(job_id), &owner.to_string())
@@ -417,11 +730,15 @@ impl SubAgentJobRegistry {
     }
 
     /// Returns this run's jobs in stable id order.
-    fn list_owned(&self, owner: u64) -> Vec<SubAgentJob> {
+    fn list_owned(&self, owner: impl ToString) -> Vec<SubAgentJob> {
         Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
     }
 
-    async fn wait_owned(&self, job_id: &str, owner: u64) -> Result<SubAgentJob, SubAgentJobError> {
+    pub(crate) async fn wait_owned(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
         self.get_owned(job_id, owner)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
         let mut status = {
@@ -434,7 +751,8 @@ impl SubAgentJobRegistry {
         };
         loop {
             let snapshot = status.borrow().clone();
-            if snapshot.status.is_terminal() {
+            if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
+            {
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {
@@ -475,7 +793,7 @@ impl SubAgentJobRegistry {
     pub(crate) fn send_message_owned(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
     ) -> Result<(), SubAgentJobError> {
         self.send_message_with_request_id(job_id, owner, message, None)
@@ -490,9 +808,20 @@ impl SubAgentJobRegistry {
     pub(crate) fn send_message_with_request_id(
         &self,
         job_id: &str,
-        owner: u64,
+        owner: impl ToString,
         message: impl Into<String>,
         request_id: Option<&str>,
+    ) -> Result<bool, SubAgentJobError> {
+        self.send_message_with_lane_and_request_id(job_id, owner, message, request_id, None)
+    }
+
+    fn send_message_with_lane_and_request_id(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+        message: impl Into<String>,
+        request_id: Option<&str>,
+        lane: Option<QueueLane>,
     ) -> Result<bool, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let controls = self.controls();
@@ -518,6 +847,16 @@ impl SubAgentJobRegistry {
             .tasks
             .steering_handle(&task_id, &owner)
             .map_err(|_| not_found())?;
+        let lane_queue = if lane.is_some() {
+            Some(
+                control
+                    .run_queue
+                    .clone()
+                    .ok_or_else(|| SubAgentJobError::LaneUnavailable(job_id.to_owned()))?,
+            )
+        } else {
+            None
+        };
         if let Some(request_id) = request_id {
             match self.tasks.claim_steer_request(&task_id, request_id) {
                 Ok(false) => {
@@ -531,9 +870,14 @@ impl SubAgentJobRegistry {
                 Err(_) => return Err(not_found()),
             }
         }
-        handle.send(SteeringCommand::InjectMessage(Message::user(
-            message.into(),
-        )));
+        let message = message.into();
+        if let Some(lane) = lane {
+            lane_queue
+                .expect("lane queue was validated before claiming the request id")
+                .push_now(lane, Message::user(message));
+        } else {
+            handle.send(SteeringCommand::InjectMessage(Message::user(message)));
+        }
         Ok(false)
     }
 
@@ -557,6 +901,9 @@ pub struct SubAgentJobsTool {
     parameters: Option<Value>,
     fixed_action: Option<SubAgentJobAction>,
     argument_names: JobArgumentNames,
+    await_timeout: Option<AwaitTimeout>,
+    require_identifier: bool,
+    owner_scope: OwnerScope,
 }
 
 impl SubAgentJobsTool {
@@ -571,6 +918,9 @@ impl SubAgentJobsTool {
             parameters: None,
             fixed_action: None,
             argument_names: JobArgumentNames::default(),
+            await_timeout: None,
+            require_identifier: false,
+            owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -602,6 +952,51 @@ impl SubAgentJobsTool {
     /// Maps a host schema identifier field to the generic job/session id.
     pub fn with_identifier_field(mut self, identifier: impl Into<String>) -> Self {
         self.argument_names.identifier = identifier.into();
+        self.argument_names.fallback_identifier = None;
+        self
+    }
+
+    /// Uses a primary job id and falls back to a durable session id when the
+    /// primary field is missing, empty, or not a string.
+    pub fn with_identifier_fields(
+        mut self,
+        primary: impl Into<String>,
+        fallback: impl Into<String>,
+    ) -> Self {
+        self.argument_names.identifier = primary.into();
+        self.argument_names.fallback_identifier = Some(fallback.into());
+        self
+    }
+
+    /// Bounds a named await alias using the supplied integer argument field.
+    /// Missing or invalid values use `default_secs`; valid values clamp to
+    /// `1..=max_secs`.
+    pub fn with_await_timeout_field(
+        mut self,
+        field: impl Into<String>,
+        default_secs: u64,
+        max_secs: u64,
+    ) -> Self {
+        let max_secs = max_secs.max(1);
+        self.await_timeout = Some(AwaitTimeout {
+            field: field.into(),
+            default_secs: default_secs.clamp(1, max_secs),
+            max_secs,
+        });
+        self
+    }
+
+    /// Resolves a per-turn run owner to a stable host-owned authorization key.
+    /// Use the same resolver for spawn, job, and message aliases when run
+    /// contexts are recreated between turns.
+    pub fn with_owner_scope(mut self, resolve: OwnerScope) -> Self {
+        self.owner_scope = resolve;
+        self
+    }
+
+    /// Requires a job/session identifier for this named alias.
+    pub fn with_required_identifier(mut self) -> Self {
+        self.require_identifier = true;
         self
     }
 
@@ -638,17 +1033,20 @@ impl Tool for SubAgentJobsTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        self.parameters.clone().unwrap_or_else(|| json!({
-            "type": "object",
-            "properties": {
-                "job_id": { "type": "string" },
+        self.parameters.clone().unwrap_or_else(|| {
+            let mut properties = json!({
+                self.argument_names.identifier.clone(): { "type": "string" },
                 "action": {
                     "type": "string",
                     "enum": ["query", "cancel", "close", "await"],
                     "description": "`query` reads a job/session or lists work; `cancel` stops a live job; `close` prevents a durable session from being reused; `await` waits for the named live job."
                 }
+            });
+            if let Some(fallback) = &self.argument_names.fallback_identifier {
+                properties[fallback] = json!({ "type": "string" });
             }
-        }))
+            json!({"type":"object","properties":properties})
+        })
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -674,6 +1072,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         let object = args
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("arguments must be an object"))?;
+        let owner = (self.owner_scope)(parent.instance_id());
+        let identifier = self.argument_names.identifier(object);
         let action = match self.fixed_action {
             Some(action) => Some(Some(action.as_str())),
             None => object
@@ -681,22 +1081,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .filter(|value| !value.is_null())
                 .map(Value::as_str),
         };
+        if self.require_identifier && identifier.is_none() {
+            anyhow::bail!("a job or session identifier is required");
+        }
         match action {
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
-                let job_id = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("job_id must be a string for action `cancel`")
-                    })?;
-                let job = self.jobs.cancel_owned(job_id, parent.instance_id())?;
+                let job_id = identifier.ok_or_else(|| {
+                    anyhow::anyhow!("job_id must be a string for action `cancel`")
+                })?;
+                let job = self.jobs.cancel_owned(job_id, &owner)?;
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
             Some(Some("close")) => {
-                let id = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
+                let id = identifier
                     .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
                 let (sessions, key) = self
                     .sessions
@@ -713,16 +1111,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 ));
             }
             Some(Some("await")) => {
-                let Some(id) = object
-                    .get(&self.argument_names.identifier)
-                    .and_then(Value::as_str)
-                else {
+                let Some(id) = identifier else {
                     let mut tombstones = Vec::new();
-                    for job in self.jobs.list_owned(parent.instance_id()) {
-                        let job = self
-                            .jobs
-                            .wait_owned(job.id.as_str(), parent.instance_id())
-                            .await?;
+                    for job in self.jobs.list_owned(&owner) {
+                        let job = self.jobs.wait_owned(job.id.as_str(), &owner).await?;
                         if job.status.is_terminal() {
                             tombstones.push(serde_json::to_value(job)?);
                         }
@@ -752,8 +1144,41 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user}),
                     ));
                 };
-                if self.jobs.get_owned(id, parent.instance_id()).is_some() {
-                    let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
+                let bridged_id = if self.jobs.get_owned(id, &owner).is_some() {
+                    Some(id.to_owned())
+                } else if let Some((sessions, key)) = &self.sessions {
+                    sessions
+                        .get(id)
+                        .await?
+                        .filter(|session| session.parent_session == key(parent.instance_id()))
+                        .and_then(|session| {
+                            self.jobs
+                                .driver_job_for_key(&session.lifecycle_key, &owner)
+                                .map(|job_id| job_id.as_str().to_owned())
+                                .or_else(|| {
+                                    let task_id = session.current_task_id?;
+                                    self.jobs.get_owned(&task_id, &owner).map(|_| task_id)
+                                })
+                        })
+                } else {
+                    None
+                };
+                if let Some(job_id) = bridged_id {
+                    let job = if let Some(timeout) = &self.await_timeout {
+                        let duration =
+                            std::time::Duration::from_secs(timeout.requested_secs(object));
+                        match tokio::time::timeout(duration, self.jobs.wait_owned(&job_id, &owner))
+                            .await
+                        {
+                            Ok(result) => result?,
+                            Err(_) => self
+                                .jobs
+                                .get_owned(&job_id, &owner)
+                                .ok_or_else(|| SubAgentJobError::NotFound(job_id.clone()))?,
+                        }
+                    } else {
+                        self.jobs.wait_owned(&job_id, &owner).await?
+                    };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
                 if let Some((sessions, key)) = &self.sessions
@@ -789,11 +1214,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
-        if let Some(value) = object.get(&self.argument_names.identifier) {
-            let job_id = value
-                .as_str()
-                .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
-            let job = self.jobs.get_owned(job_id, parent.instance_id());
+        if let Some(job_id) = identifier {
+            let job = self.jobs.get_owned(job_id, &owner);
             if let Some(job) = job {
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
@@ -862,6 +1284,9 @@ pub struct SubAgentMessageTool {
     description: String,
     parameters: Option<Value>,
     argument_names: MessageArgumentNames,
+    lane: Option<QueueLane>,
+    lane_field: Option<String>,
+    owner_scope: OwnerScope,
 }
 
 impl SubAgentMessageTool {
@@ -874,6 +1299,9 @@ impl SubAgentMessageTool {
             description: "Send a message to a queued or running asynchronous subagent job.".into(),
             parameters: None,
             argument_names: MessageArgumentNames::default(),
+            lane: None,
+            lane_field: None,
+            owner_scope: Arc::new(|owner| owner.to_string()),
         }
     }
 
@@ -886,6 +1314,13 @@ impl SubAgentMessageTool {
     /// Uses a host-facing description for a named steering alias.
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
+        self
+    }
+
+    /// Resolves a per-turn run id to the stable owner key used by the matching
+    /// spawn and Jobs aliases.
+    pub fn with_owner_scope(mut self, resolve: OwnerScope) -> Self {
+        self.owner_scope = resolve;
         self
     }
 
@@ -909,6 +1344,23 @@ impl SubAgentMessageTool {
             message: message.into(),
             request_id: request_id.into(),
         };
+        self
+    }
+
+    /// Binds a named message operation to one real job queue lane.
+    ///
+    /// The generic `subagent_message` tool leaves this unset and preserves its
+    /// historical unframed steer behavior.
+    pub fn with_lane(mut self, lane: QueueLane) -> Self {
+        self.lane = Some(lane);
+        self
+    }
+
+    /// Reads a lane field from an alias schema. `"collect"` routes to the
+    /// collect lane; missing or unknown values preserve the host's default
+    /// steer behavior.
+    pub fn with_lane_field(mut self, field: impl Into<String>) -> Self {
+        self.lane_field = Some(field.into());
         self
     }
 
@@ -970,6 +1422,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
+        let owner = (self.owner_scope)(parent.instance_id());
         let job_id = if let Some(session_id) = args
             .get(&self.argument_names.session_id)
             .and_then(Value::as_str)
@@ -983,9 +1436,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .await?
                 .filter(|session| session.parent_session == key(parent.instance_id()))
                 .ok_or_else(|| anyhow::anyhow!("durable subagent session not found"))?;
-            session
+            let task_id = session
                 .current_task_id
-                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?
+                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?;
+            self.jobs
+                .driver_job_for_key(&session.lifecycle_key, &owner)
+                .map(|job_id| job_id.as_str().to_owned())
+                .or_else(|| {
+                    self.jobs
+                        .get_owned(&task_id, &owner)
+                        .map(|_| task_id.clone())
+                })
+                .unwrap_or(task_id)
         } else {
             args.get(&self.argument_names.job_id)
                 .and_then(Value::as_str)
@@ -1005,12 +1467,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 Some(id)
             }
         };
-        let duplicate = self.jobs.send_message_with_request_id(
-            &job_id,
-            parent.instance_id(),
-            message,
-            request_id,
-        )?;
+        let lane = self.lane.or_else(|| {
+            self.lane_field.as_ref().map(|field| {
+                if args.get(field).and_then(Value::as_str) == Some("collect") {
+                    QueueLane::Collect
+                } else {
+                    QueueLane::Steer
+                }
+            })
+        });
+        let duplicate = self
+            .jobs
+            .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)?;
         let mut payload = json!({
             "job_id": job_id,
             "status": "message_queued"
@@ -1031,3 +1499,4 @@ pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
         .register_dispatch(Arc::new(SubAgentJobsTool::new(jobs.clone())))
         .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
+type OwnerScope = Arc<dyn Fn(u64) -> String + Send + Sync>;

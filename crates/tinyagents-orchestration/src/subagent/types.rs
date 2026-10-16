@@ -186,6 +186,31 @@ impl<C, H> SubagentRequest<C, H> {
         })
     }
 
+    /// Continues a host-authorized lifecycle when the durable task key has
+    /// already been resolved by the host adapter.
+    ///
+    /// This synchronous constructor is suitable for request factories. Hosts
+    /// must authorize the key before calling it; it never derives a replacement
+    /// identity from the fresh execution context.
+    pub fn continue_with_task_key(
+        task_key: SubagentTaskKey,
+        fresh_owned_context: RunContext<C>,
+        host_request: H,
+        input: impl Into<String>,
+        resume: Option<SubagentResume>,
+    ) -> Result<Self, SubagentError> {
+        Self::validate_key(&task_key)?;
+        Self::validate_thread(&task_key, &fresh_owned_context)?;
+        Ok(Self {
+            target: None,
+            task_key,
+            run_context: fresh_owned_context,
+            host_request,
+            input: input.into(),
+            resume,
+        })
+    }
+
     /// Continues an authorized durable session by its public session id.
     ///
     /// The store resolves the id to the original lifecycle key; the request
@@ -238,6 +263,22 @@ impl<C, H> SubagentRequest<C, H> {
     /// Borrows the owned execution context before the request is consumed.
     pub fn run_context(&self) -> &RunContext<C> {
         &self.run_context
+    }
+
+    /// Attaches the live control channels registered for this lifecycle.
+    /// Hosts normally construct a child context without these channels; the
+    /// driver-backed tool uses this after admission so its generic job and
+    /// message tools control the exact request being executed.
+    pub fn with_job_controls(
+        mut self,
+        steering: tinyagents_harness::steering::SteeringHandle,
+        run_queue: tinyagents_harness::run_queue::RunQueueHandle,
+        cancellation: CancellationToken,
+    ) -> Self {
+        self.run_context.steering = Some(steering);
+        self.run_context.run_queue = Some(run_queue);
+        self.run_context.cancellation = cancellation;
+        self
     }
 
     pub(crate) fn resume(&self) -> Option<&SubagentResume> {

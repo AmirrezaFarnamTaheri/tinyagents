@@ -134,3 +134,68 @@ async fn graph_delegation_runs_stage_worker_with_original_task_and_approval_pars
     assert_eq!(seen[2].2, DELEGATION_REVIEW_PROMPT);
     assert!(!parse_approval("APPROVE, looks good"));
 }
+
+#[tokio::test]
+async fn graph_alias_keeps_host_declaration_and_routes_arguments_to_stage_worker() {
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let worker_seen = seen.clone();
+    let schema = json!({
+        "type":"object",
+        "required":["agent_id","task"],
+        "properties":{
+            "agent_id":{"type":"string","enum":["planner","reviewer"]},
+            "task":{"type":"string"},
+            "revisions":{"type":"integer","minimum":0,"maximum":5,"default":2}
+        }
+    });
+    let tool = DelegationTool::<(), (), _, _>::new(
+        |_, _, _| DelegationConfig::default(),
+        move |args, stage, _| {
+            let seen = worker_seen.clone();
+            async move {
+                seen.lock().unwrap().push((
+                    args["agent_id"].as_str().unwrap().to_owned(),
+                    args["revisions"].as_u64().unwrap(),
+                    stage,
+                ));
+                Ok(DelegationStageOutput::done(
+                    if stage == DelegationStage::Review {
+                        "APPROVE"
+                    } else {
+                        "ok"
+                    },
+                ))
+            }
+        },
+    )
+    .with_tool_name("delegate_graph")
+    .with_description("Plan and review delegated work.")
+    .with_parameters(schema.clone());
+    let declaration = tool.tool();
+    assert_eq!(declaration.name(), "delegate_graph");
+    assert_eq!(declaration.description(), "Plan and review delegated work.");
+    assert_eq!(declaration.parameters_schema(), schema);
+
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"agent_id":"planner","task":"ship the fix","revisions":3}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("custom alias executes the typed graph worker");
+    let seen = seen.lock().unwrap();
+    assert!(seen.len() >= 3);
+    assert!(
+        seen.iter()
+            .all(|(agent, revisions, _)| agent == "planner" && *revisions == 3)
+    );
+}
