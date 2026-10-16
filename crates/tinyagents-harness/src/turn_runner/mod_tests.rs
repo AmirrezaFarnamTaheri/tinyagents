@@ -7,7 +7,7 @@ struct Host {
     started: Option<Arc<tokio::sync::Notify>>,
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
-    hold_after_cancel: bool,
+    hold_checkin: bool,
     checkins: std::sync::atomic::AtomicUsize,
     runs: std::sync::atomic::AtomicUsize,
 }
@@ -58,12 +58,7 @@ impl TurnHost for Host {
             started.notify_one();
             tokio::select! {
                 _ = release.notified() => {},
-                _ = cancellation.cancelled() => {
-                    if self.hold_after_cancel {
-                        release.notified().await;
-                    }
-                    return Err("cancelled".into());
-                },
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
             }
         }
         Ok(TurnResult {
@@ -72,7 +67,12 @@ impl TurnHost for Host {
         })
     }
 
-    async fn checkin(&self, _request: &TurnRequest) {
+    async fn checkin(&self, request: &TurnRequest) {
+        if self.hold_checkin && request.request_id == "first" {
+            if let Some(release) = &self.release {
+                release.notified().await;
+            }
+        }
         self.checkins
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
@@ -388,7 +388,7 @@ async fn a_superseded_turn_waiting_for_the_session_lock_never_starts() {
     let host = Arc::new(Host {
         started: Some(started.clone()),
         release: Some(release.clone()),
-        hold_after_cancel: true,
+        hold_checkin: true,
         ..Host::default()
     });
     let runner = Arc::new(runner(
