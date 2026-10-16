@@ -5,6 +5,22 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use super::*;
+
+#[test]
+fn structured_denial_renderer_preserves_host_marker_and_sections() {
+    let rendered = StructuredDenialParts::new(
+        "[policy-blocked] could not run the tool",
+        "the action violates the configured policy",
+        "choose a permitted alternative",
+        "Tell the user what was blocked and why.",
+    )
+    .render();
+
+    assert!(rendered.starts_with("Blocked: [policy-blocked]"));
+    assert!(rendered.contains("Why: the action violates the configured policy."));
+    assert!(rendered.contains("Workaround: choose a permitted alternative."));
+    assert!(rendered.ends_with("Tell the user what was blocked and why."));
+}
 use crate::context::{RunConfig, RunContext};
 use crate::middleware::{
     BoxToolFuture, MiddlewareStack, MiddlewareToolOutcome, ToolBaseCall, ToolMiddleware,
