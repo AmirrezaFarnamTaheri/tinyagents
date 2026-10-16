@@ -200,7 +200,7 @@ impl TurnTail {
                     pause_at_cap: self.controls.pause_at_cap,
                     early_exit: early_exit.is_some(),
                     breaker_halt: None,
-                    failure_cause: None,
+                    failure_cause: run.and_then(|run| run.failure_cause.clone()),
                     wrap_up_injected: false,
                 },
             )
