@@ -163,3 +163,7 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
         (self.on_terminal)(terminal).await
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
