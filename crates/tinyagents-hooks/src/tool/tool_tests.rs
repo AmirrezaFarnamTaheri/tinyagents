@@ -137,7 +137,8 @@ impl ToolHook<Host> for DenySecretHook {
 async fn nested_tool_calls_cannot_bypass_hook_denials() {
     use tinyagents_harness::{
         context::{RunConfig, RunContext},
-        runtime::AgentHarness,
+        limits::RunLimits,
+        runtime::{AgentHarness, RunPolicy},
     };
     use tinyinference_llm::{model::ModelResponse, providers::MockModel};
 
@@ -164,6 +165,10 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
         ])),
     );
     harness.set_default_model("mock");
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_nested_depth(1),
+        ..RunPolicy::default()
+    });
     harness.register_tool(Arc::new(NestedCaller {
         result: Arc::clone(&nested_result),
     }));
