@@ -11,15 +11,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition, Query,
+    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Key, Precondition, Query,
+    WriteOptions,
 };
 use tokio::sync::OnceCell;
 
 use super::HarnessStatusStore;
-use crate::driver_ids::hashed_id;
-use crate::error::{Result, TinyAgentsError};
+use super::status_record::RunStatusRecord;
+use crate::error::Result;
 use crate::events::HarnessRunStatus;
 use crate::ids::{ExecutionStatus, RunId};
 use crate::store::map_driver_error as map_error;
@@ -81,49 +81,47 @@ pub fn secrets_from_vars(vars: impl IntoIterator<Item = (String, String)>) -> Ve
 
 /// A durable [`HarnessStatusStore`] stored in a driver [`DocumentStore`].
 ///
-/// One document per run: `{ runId, rootRunId, threadId, active, record }`, where
-/// `record` is the full [`HarnessRunStatus`] and the rest are indexed
-/// projections for the queries. Each snapshot is compact (ids, phase, counters,
-/// timestamps, error), never prompts or payloads. The handle is already bound to
-/// a tenant scope, so runs of two tenants never meet.
+/// One `harness.run_status` document per run, id `Key::of([run_id])`: the
+/// status as a snake_case body with `*_ms` times, plus the indexed projections
+/// (`root_run_id`, `thread_id`, `active`) the queries filter on. Each snapshot
+/// is compact (ids, phase, counters, timestamps, error), never prompts or
+/// payloads. The handle is already bound to a tenant scope, so runs of two
+/// tenants never meet.
 #[derive(Debug, Clone)]
 pub struct DriverStatusStore {
     docs: Arc<dyn DocumentStore>,
-    collection: String,
     declared: Arc<OnceCell<()>>,
 }
 
 impl DriverStatusStore {
-    /// The collection used by [`DriverStatusStore::new`].
-    pub const DEFAULT_COLLECTION: &'static str = "harness_run_status";
+    /// The collection every store uses.
+    pub const COLLECTION: &'static str = crate::storage::RUN_STATUS;
 
-    /// Store statuses in [`Self::DEFAULT_COLLECTION`].
+    /// Store statuses in [`Self::COLLECTION`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
-        Self::with_collection(docs, Self::DEFAULT_COLLECTION)
-    }
-
-    /// Store statuses in `collection`, so independent stores can share a backend.
-    pub fn with_collection(docs: Arc<dyn DocumentStore>, collection: impl Into<String>) -> Self {
         Self {
             docs,
-            collection: collection.into(),
             declared: Arc::new(OnceCell::new()),
         }
     }
 
-    /// The declaration a store using `collection` needs.
-    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
-        CollectionSpec::new(collection)
-            .index(IndexSpec::new("by_root", ["rootRunId"]))
-            .index(IndexSpec::new("by_thread", ["threadId"]))
+    /// The declaration a store needs.
+    pub fn collection_spec() -> CollectionSpec {
+        CollectionSpec::new(Self::COLLECTION)
+            .index(IndexSpec::new("by_root", ["root_run_id"]))
+            .index(IndexSpec::new("by_thread", ["thread_id"]))
             .index(IndexSpec::new("by_active", ["active"]))
+    }
+
+    fn id(run_id: &str) -> Result<String> {
+        Ok(Key::of([run_id]).map_err(map_error)?.as_str().to_owned())
     }
 
     async fn declared(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
                 self.docs
-                    .ensure_collection(&Self::collection_spec(self.collection.clone()))
+                    .ensure_collection(&Self::collection_spec())
                     .await
                     .map_err(map_error)
             })
@@ -137,22 +135,19 @@ impl DriverStatusStore {
         self.declared().await?;
         let rows = self
             .docs
-            .query_all(&self.collection, &Query::filter(filter))
+            .query_all(Self::COLLECTION, &Query::filter(filter))
             .await
             .map_err(map_error)?;
         Ok(rows
             .into_iter()
-            .filter_map(|row| {
-                let record = row.doc.get("record").cloned()?;
-                match serde_json::from_value::<HarnessRunStatus>(record) {
-                    Ok(status) => Some(status),
-                    Err(err) => {
-                        tracing::debug!(
-                            "[journal] skipping undecodable run status id={} err={err}",
-                            row.id
-                        );
-                        None
-                    }
+            .filter_map(|row| match serde_json::from_value::<RunStatusRecord>(row.doc) {
+                Ok(record) => Some(HarnessRunStatus::from(record)),
+                Err(err) => {
+                    tracing::debug!(
+                        "[journal] skipping undecodable run status id={} err={err}",
+                        row.id
+                    );
+                    None
                 }
             })
             .collect())
@@ -163,19 +158,14 @@ impl DriverStatusStore {
 impl HarnessStatusStore for DriverStatusStore {
     async fn put_status(&self, status: HarnessRunStatus) -> Result<()> {
         self.declared().await?;
-        let doc = json!({
-            "runId": status.run_id.as_str(),
-            "rootRunId": status.root_run_id.as_str(),
-            "threadId": status.thread_id.as_ref().map(|thread| thread.as_str()),
-            "active": is_active(&status),
-            "record": serde_json::to_value(&status)?,
-        });
+        let body = serde_json::to_value(RunStatusRecord::from(&status))?;
         self.docs
-            .put(
-                &self.collection,
-                &hashed_id(&[status.run_id.as_str()]),
-                doc,
+            .put_with(
+                Self::COLLECTION,
+                &Self::id(status.run_id.as_str())?,
+                body,
                 Precondition::None,
+                WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
             )
             .await
             .map(|_| ())
@@ -186,26 +176,23 @@ impl HarnessStatusStore for DriverStatusStore {
         self.declared().await?;
         let Some(found) = self
             .docs
-            .get(&self.collection, &hashed_id(&[run_id]))
+            .get(Self::COLLECTION, &Self::id(run_id)?)
             .await
             .map_err(map_error)?
         else {
             return Ok(None);
         };
-        let record: Value = found
-            .doc
-            .get("record")
-            .cloned()
-            .ok_or_else(|| TinyAgentsError::Storage("run status has no record".into()))?;
-        Ok(serde_json::from_value(record).ok())
+        Ok(serde_json::from_value::<RunStatusRecord>(found.doc)
+            .ok()
+            .map(HarnessRunStatus::from))
     }
 
     async fn list_by_thread(&self, thread_id: &str) -> Result<Vec<HarnessRunStatus>> {
-        self.matching(Filter::eq("threadId", thread_id)).await
+        self.matching(Filter::eq("thread_id", thread_id)).await
     }
 
     async fn list_by_root(&self, root_run_id: &str) -> Result<Vec<HarnessRunStatus>> {
-        self.matching(Filter::eq("rootRunId", root_run_id)).await
+        self.matching(Filter::eq("root_run_id", root_run_id)).await
     }
 
     async fn list_active(&self) -> Result<Vec<HarnessRunStatus>> {
