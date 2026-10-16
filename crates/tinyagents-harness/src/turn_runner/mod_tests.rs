@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct Host {
     queued: Mutex<Vec<QueueDisposition>>,
+    started: Option<Arc<tokio::sync::Notify>>,
+    release: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -24,9 +26,16 @@ impl TurnHost for Host {
         _request: &TurnRequest,
         _session: &TurnSession,
         _origin: &serde_json::Value,
-        _cancellation: crate::CancellationToken,
-        _progress: tokio::sync::mpsc::Sender<crate::progress::AgentProgress>,
+        cancellation: crate::CancellationToken,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
+        if let (Some(started), Some(release)) = (&self.started, &self.release) {
+            started.notify_one();
+            tokio::select! {
+                _ = release.notified() => {},
+                _ = cancellation.cancelled() => return Err("cancelled".into()),
+            }
+        }
         Ok(TurnResult {
             reply: "done".into(),
             data: serde_json::Value::Null,
@@ -183,6 +192,75 @@ async fn host_authored_turn_persists_reply_without_an_inflight_slot() {
         replies.0.lock().unwrap()[0],
         deterministic_reply_id(&scope, &thread, &request.request_id)
     );
+}
+
+#[tokio::test]
+async fn host_authored_turn_never_enters_inflight_while_running() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let runner = Arc::new(runner(
+        Arc::new(Host {
+            queued: Mutex::default(),
+            started: Some(started.clone()),
+            release: Some(release.clone()),
+        }),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let request = request(QueueDisposition::Interrupt, true);
+    let scope = request.scope.clone();
+    let thread = request.thread_id.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request).await })
+    };
+
+    started.notified().await;
+    assert!(!runner.is_in_flight(&scope, &thread).await);
+    release.notify_one();
+    run.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let runner = Arc::new(runner(
+        Arc::new(Host {
+            queued: Mutex::default(),
+            started: Some(started.clone()),
+            release: Some(release.clone()),
+        }),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let mut request = request(QueueDisposition::Interrupt, false);
+    request.request_id = "current-request".into();
+    let scope = request.scope.clone();
+    let thread = request.thread_id.clone();
+    let run = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(request).await })
+    };
+
+    started.notified().await;
+    assert!(!runner.cancel(&scope, &thread, "stale-request").await);
+    let another_agent = ScopeKey {
+        agent_id: "agent-b".into(),
+        profile_id: None,
+    };
+    assert!(
+        !runner
+            .cancel(&another_agent, &thread, "current-request")
+            .await
+    );
+    assert!(runner.cancel(&scope, &thread, "current-request").await);
+    assert!(matches!(
+        run.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
 }
 
 #[tokio::test]

@@ -1,4 +1,9 @@
-use std::{collections::HashMap, hash::Hash, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -86,10 +91,28 @@ pub enum TerminalEvent {
     },
 }
 
+/// Activity updates sent by the host so the idle guard distinguishes silence
+/// from a model or tool call that is still running.
+#[derive(Debug, Clone)]
+pub enum TurnSignal {
+    Progress(Box<AgentProgress>),
+    WorkStarted,
+    WorkFinished,
+}
+
 #[async_trait]
 pub trait TurnHost: Send + Sync {
     /// Check out or create the session for this request and verify its fingerprint.
     async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String>;
+    /// Confirm the checked-out session still matches the request's expected
+    /// transcript/session identity before any model work begins.
+    async fn validate_fingerprint(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Build the host's origin value (channel, actor and request attribution).
     fn run_origin(&self, request: &TurnRequest) -> serde_json::Value;
     /// Run the actual harness/session turn. Progress is forwarded to the sink.
@@ -99,7 +122,7 @@ pub trait TurnHost: Send + Sync {
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
-        progress: mpsc::Sender<AgentProgress>,
+        progress: mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String>;
     /// Release the session after the run, including on cancellation or failure.
     async fn checkin(&self, request: &TurnRequest);
@@ -189,6 +212,9 @@ struct ActiveTurn {
     cancel: crate::CancellationToken,
 }
 
+type ThreadLockKey = (ScopeKey, String);
+type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
+
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
 pub struct TurnRunner<H, I, R, E, F, S> {
     host: Arc<H>,
@@ -198,8 +224,9 @@ pub struct TurnRunner<H, I, R, E, F, S> {
     failures: Arc<F>,
     summarizer: Arc<S>,
     config: TurnRunnerConfig,
-    locks: Mutex<HashMap<(ScopeKey, String), Arc<Mutex<()>>>>,
+    locks: ThreadLocks,
     active: Mutex<HashMap<(ScopeKey, String), ActiveTurn>>,
+    parallel_active: Mutex<HashMap<(ScopeKey, String, String), crate::CancellationToken>>,
 }
 
 impl<H, I, R, E, F, S> TurnRunner<H, I, R, E, F, S>
@@ -230,6 +257,7 @@ where
             config,
             locks: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
+            parallel_active: Mutex::new(HashMap::new()),
         }
     }
 
@@ -245,7 +273,15 @@ where
             turn.cancel.cancel();
             true
         } else {
-            false
+            drop(active);
+            self.parallel_active
+                .lock()
+                .await
+                .get(&(scope.clone(), thread_id.to_owned(), request_id.to_owned()))
+                .is_some_and(|token| {
+                    token.cancel();
+                    true
+                })
         }
     }
 
@@ -280,15 +316,22 @@ where
             if !matches!(
                 request.disposition,
                 QueueDisposition::Interrupt | QueueDisposition::Parallel
-            ) && self
-                .host
-                .queue(&request, request.disposition)
-                .await
-                .unwrap_or(false)
-            {
-                return Err(TurnRunnerError::Queued);
+            ) {
+                match self.host.queue(&request, request.disposition).await {
+                    Ok(true) => return Err(TurnRunnerError::Queued),
+                    Ok(false) => {}
+                    Err(error) => return self.fail(&request, error).await,
+                }
             }
             let previous = if request.disposition == QueueDisposition::Parallel {
+                self.parallel_active.lock().await.insert(
+                    (
+                        request.scope.clone(),
+                        request.thread_id.clone(),
+                        request.request_id.clone(),
+                    ),
+                    cancellation.clone(),
+                );
                 None
             } else {
                 self.active.lock().await.insert(
@@ -307,11 +350,14 @@ where
         }
         let lock = {
             let mut locks = self.locks.lock().await;
-            Arc::clone(
-                locks
-                    .entry(key.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(()))),
-            )
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(key.clone(), Arc::downgrade(&lock));
+                lock
+            }
         };
         let _session_guard = if request.disposition == QueueDisposition::Parallel {
             None
@@ -321,10 +367,14 @@ where
         let session = match self.host.checkout(&request).await {
             Ok(session) => session,
             Err(error) => {
-                self.clear_active(&request).await;
+                self.clear_tracking(&request).await;
                 return self.fail(&request, error).await;
             }
         };
+        if let Err(error) = self.host.validate_fingerprint(&request, &session).await {
+            self.clear_tracking(&request).await;
+            return self.fail(&request, error).await;
+        }
         let origin = self.host.run_origin(&request);
 
         let result = self
@@ -332,7 +382,7 @@ where
             .await;
         self.host.checkin(&request).await;
         if !request.host_authored {
-            self.clear_active(&request).await;
+            self.clear_tracking(&request).await;
         }
 
         match result {
@@ -385,6 +435,7 @@ where
         let deadline = request.deadline.or(self.config.deadline);
         let started = Instant::now();
         let mut last_progress = started;
+        let mut work_in_flight = 0usize;
         tokio::pin!(run);
         loop {
             let idle_left = idle.saturating_sub(last_progress.elapsed());
@@ -395,12 +446,18 @@ where
                     self.host.cancel_children(request).await;
                     return Err("turn cancelled".into());
                 }
-                event = progress_rx.recv() => if let Some(event) = event {
-                    last_progress = Instant::now();
-                    self.events.progress(request, event).await;
+                signal = progress_rx.recv() => if let Some(signal) = signal {
+                    match signal {
+                        TurnSignal::Progress(event) => {
+                            last_progress = Instant::now();
+                            self.events.progress(request, *event).await;
+                        }
+                        TurnSignal::WorkStarted => work_in_flight = work_in_flight.saturating_add(1),
+                        TurnSignal::WorkFinished => work_in_flight = work_in_flight.saturating_sub(1),
+                    }
                 },
                 result = &mut run => return result,
-                _ = tokio::time::sleep(idle_left), if idle_left > Duration::ZERO => {
+                _ = tokio::time::sleep(idle_left), if idle_left > Duration::ZERO && work_in_flight == 0 => {
                     cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "idle timeout").await;
@@ -430,7 +487,7 @@ where
         }
     }
 
-    async fn clear_active(&self, request: &TurnRequest) {
+    async fn clear_tracking(&self, request: &TurnRequest) {
         let key = (request.scope.clone(), request.thread_id.clone());
         let mut active = self.active.lock().await;
         if active
@@ -439,6 +496,12 @@ where
         {
             active.remove(&key);
         }
+        drop(active);
+        self.parallel_active.lock().await.remove(&(
+            request.scope.clone(),
+            request.thread_id.clone(),
+            request.request_id.clone(),
+        ));
     }
 
     async fn fail<T>(&self, request: &TurnRequest, error: String) -> Result<T, TurnRunnerError> {
@@ -461,13 +524,10 @@ where
 pub fn deterministic_reply_id(scope: &ScopeKey, thread_id: &str, request_id: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
-    hash.update(scope.agent_id.as_bytes());
-    hash.update([0]);
-    hash.update(scope.profile_id.as_deref().unwrap_or_default().as_bytes());
-    hash.update([0]);
-    hash.update(thread_id.as_bytes());
-    hash.update([0]);
-    hash.update(request_id.as_bytes());
+    hash.update(
+        serde_json::to_vec(&(&scope.agent_id, &scope.profile_id, thread_id, request_id))
+            .expect("serializing a tuple of strings cannot fail"),
+    );
     let encoded = hash
         .finalize()
         .iter()
