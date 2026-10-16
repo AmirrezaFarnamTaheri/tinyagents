@@ -1,9 +1,9 @@
 //! Tests for the memory-pack, packed-tool-route and budget-parity hooks.
 
 use super::*;
-use crate::context::{RunConfig, RunContext};
-use crate::middleware::Middleware;
-use crate::middleware::library::BudgetTracker;
+use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::middleware::Middleware;
+use tinyagents_harness::middleware::library::BudgetTracker;
 use serde_json::json;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelRequest;
@@ -102,6 +102,6 @@ async fn calls_are_left_alone_when_routing_does_not_apply() {
 #[test]
 fn parity_observer_matches_when_both_are_empty() {
     let observer = BudgetParityObserver::new(BudgetTracker::default());
-    let run = crate::middleware::AgentRun::default();
+    let run = tinyagents_harness::middleware::AgentRun::default();
     assert!(observer.matches(&run));
 }

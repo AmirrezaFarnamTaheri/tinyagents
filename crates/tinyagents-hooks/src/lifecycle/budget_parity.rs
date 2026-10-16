@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 
-use crate::context::RunContext;
-use crate::error::Result as TaResult;
-use crate::middleware::{AgentRun, Middleware};
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::Result as TaResult;
+use tinyagents_harness::middleware::{AgentRun, Middleware};
 
-use crate::middleware::library::BudgetTracker;
+use tinyagents_harness::middleware::library::BudgetTracker;
 
 /// Compares a [`BudgetTracker`]'s token accounting against the authoritative
 /// [`AgentRun::usage`] at the end of a run and logs parity or divergence.

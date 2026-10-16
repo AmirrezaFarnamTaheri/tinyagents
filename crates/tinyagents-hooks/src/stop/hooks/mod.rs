@@ -5,10 +5,10 @@
 mod types;
 pub use types::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 
-use crate::context::RunContext;
-use crate::error::{Result, TinyAgentsError};
-use crate::middleware::{AgentRun, Middleware};
-use crate::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget};
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::middleware::{AgentRun, Middleware};
+use tinyagents_harness::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -49,7 +49,7 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
     /// Start every run's tally from `seed` instead of `Metrics::default()`.
     ///
     /// For metrics that carry host configuration the harness cannot default,
-    /// such as a [`TurnCost`](crate::cost::TurnCost) with a pricing lookup.
+    /// such as a [`TurnCost`](tinyagents_harness::cost::TurnCost) with a pricing lookup.
     pub fn with_metrics_seed(mut self, seed: Metrics) -> Self {
         self.seed = Some(seed);
         self

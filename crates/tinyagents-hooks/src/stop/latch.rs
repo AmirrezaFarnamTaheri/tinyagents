@@ -13,17 +13,17 @@
 //! again, was summarised as "something this needs could not be found".
 //!
 //! The latch also relabels a classified stop that a repeat loop produced (see
-//! [`super::repeat_loop_stop`]), and takes the relabel back when the rest of
+//! [`tinyagents_harness::middleware::library`]), and takes the relabel back when the rest of
 //! the batch shows progress.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::steering::{SteeringCommand, SteeringHandle};
+use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 
-use super::repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
+use tinyagents_harness::middleware::library::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 
-use super::repeat_progress::HaltSummarySlot;
+use tinyagents_harness::middleware::library::HaltSummarySlot;
 
 /// The failure breaker's side of the shared stop-note slot.
 pub struct StopLatch {

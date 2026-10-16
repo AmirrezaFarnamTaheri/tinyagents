@@ -1,5 +1,5 @@
 use super::*;
-use crate::steering::SteeringHandle;
+use tinyagents_harness::steering::SteeringHandle;
 use std::sync::Arc;
 
 fn latch() -> (StopLatch, HaltSummarySlot) {
