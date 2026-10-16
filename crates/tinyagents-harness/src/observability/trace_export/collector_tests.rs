@@ -875,7 +875,7 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
         .iter()
         .find(|span| span.kind == SpanKind::Turn)
         .unwrap();
-    assert!(parent.attributes.get("gen_ai.usage.input_tokens").is_none());
+    assert!(!parent.attributes.contains_key("gen_ai.usage.input_tokens"));
     let child_spans: Vec<_> = collector
         .spans()
         .iter()

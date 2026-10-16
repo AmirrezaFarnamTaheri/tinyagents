@@ -306,7 +306,6 @@ impl SpanCollector {
                         .0
                     });
                 {
-                    let index = index;
                     if self.context.capture_content {
                         if self.spans[index].input.is_none()
                             && let Some(input) = input.as_ref().filter(|v| !v.is_null())
@@ -371,7 +370,6 @@ impl SpanCollector {
                         .0
                     });
                 {
-                    let index = index;
                     let end = duration_ms
                         .map(|duration| self.spans[index].start_unix_ms.saturating_add(duration))
                         .unwrap_or(timestamp_ms);
@@ -429,11 +427,11 @@ impl SpanCollector {
             }
             AgentEvent::MessageAppended { role, message, .. } if self.context.capture_content => {
                 if role == "user" && !self.first_input_recorded {
-                    if let Some(message) = message {
-                        if let Some(root) = self.root {
-                            self.spans[root].input = Some(capture_model_content(message));
-                            self.first_input_recorded = true;
-                        }
+                    if let Some(message) = message
+                        && let Some(root) = self.root
+                    {
+                        self.spans[root].input = Some(capture_model_content(message));
+                        self.first_input_recorded = true;
                     }
                 } else if role == "assistant"
                     && let (Some(root), Some(message)) = (self.root, message)
