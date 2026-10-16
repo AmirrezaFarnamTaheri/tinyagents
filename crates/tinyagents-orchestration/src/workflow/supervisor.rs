@@ -71,6 +71,39 @@ impl WorkflowRunSupervisor {
         MakeFuture: FnOnce(CancellationToken) -> F,
         Spawn: FnOnce(F),
     {
+        self.start_scoped(run_id, make_future, |future| future, |future| future, spawn)
+    }
+
+    /// Start a drive with explicit host scope wrappers.
+    ///
+    /// `root_parent` and `origin` wrap the drive future in that order before
+    /// it reaches the host-provided spawner. Hosts can bind their root parent
+    /// context and turn origin without adding either policy to TinyAgents.
+    pub fn start_scoped<
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> WorkflowRunHandle
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(OriginFuture),
+    {
         let run_id = run_id.into();
         let generation = {
             let mut registry = self.registry.lock().expect("workflow registry poisoned");
@@ -90,7 +123,7 @@ impl WorkflowRunSupervisor {
             generation: generation.id,
             token: generation.token.clone(),
         };
-        spawn(make_future(generation.token));
+        spawn(origin(root_parent(make_future(generation.token))));
         handle
     }
 
@@ -107,6 +140,35 @@ impl WorkflowRunSupervisor {
         Spawn: FnOnce(F),
     {
         self.start(run_id, make_future, spawn)
+    }
+
+    /// Resume a drive with explicit host root-parent and origin scopes.
+    pub fn resume_scoped<
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> WorkflowRunHandle
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(OriginFuture),
+    {
+        self.start_scoped(run_id, make_future, root_parent, origin, spawn)
     }
 
     /// Cancel the current generation for `run_id`, if one is scheduled.

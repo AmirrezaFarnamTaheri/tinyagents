@@ -292,6 +292,37 @@ pub struct TeamService<L> {
     ledger: L,
 }
 
+struct MemberExecutionCleanup<'a, L: TeamLedger> {
+    service: &'a TeamService<L>,
+    team_id: &'a str,
+    task_id: &'a str,
+    member_id: &'a str,
+    armed: bool,
+}
+
+impl<L: TeamLedger> MemberExecutionCleanup<'_, L> {
+    fn cleanup(&mut self) -> Result<()> {
+        self.service
+            .release_and_idle(self.team_id, self.task_id, self.member_id)?;
+        self.armed = false;
+        Ok(())
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl<L: TeamLedger> Drop for MemberExecutionCleanup<'_, L> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self
+                .service
+                .release_and_idle(self.team_id, self.task_id, self.member_id);
+        }
+    }
+}
+
 impl<L> TeamService<L> {
     /// Creates a service wrapping the provided [`TeamLedger`].
     pub fn new(ledger: L) -> Self {
@@ -488,6 +519,13 @@ impl<L: TeamLedger> TeamService<L> {
             }
             ClaimOutcome::UnknownTask => return Err(anyhow!("unknown task: {task_id}")),
         };
+        let mut cleanup = MemberExecutionCleanup {
+            service: self,
+            team_id,
+            task_id,
+            member_id,
+            armed: true,
+        };
         let member = self
             .ledger
             .list_members(team_id)?
@@ -505,11 +543,9 @@ impl<L: TeamLedger> TeamService<L> {
         ) {
             Ok(true) => {}
             Ok(false) => {
-                let _ = self.ledger.release_task(team_id, task_id);
                 return Err(anyhow!("unknown team member: {member_id}"));
             }
             Err(error) => {
-                let _ = self.ledger.release_task(team_id, task_id);
                 return Err(error.context("mark team member running"));
             }
         }
@@ -520,8 +556,7 @@ impl<L: TeamLedger> TeamService<L> {
                 self.complete_task(team_id, task_id, member_id, &evidence, require_evidence)
             }
             Err(error) => {
-                let cleanup = self.release_and_idle(team_id, task_id, member_id);
-                return match cleanup {
+                return match cleanup.cleanup() {
                     Ok(()) => Err(error.context("team member execution failed")),
                     Err(cleanup_error) => Err(anyhow!(
                         "team member execution failed: {error}; cleanup failed: {cleanup_error}"
@@ -532,21 +567,19 @@ impl<L: TeamLedger> TeamService<L> {
         match completion {
             Ok(outcome @ CompletionOutcome::Completed(_)) => {
                 self.ledger.mark_member_idle(team_id, member_id)?;
+                cleanup.disarm();
                 Ok(outcome)
             }
             Ok(outcome) => {
-                self.release_and_idle(team_id, task_id, member_id)?;
+                cleanup.cleanup()?;
                 Ok(outcome)
             }
-            Err(error) => {
-                let cleanup = self.release_and_idle(team_id, task_id, member_id);
-                match cleanup {
-                    Ok(()) => Err(error.context("complete team task")),
-                    Err(cleanup_error) => Err(anyhow!(
-                        "complete team task failed: {error}; cleanup failed: {cleanup_error}"
-                    )),
-                }
-            }
+            Err(error) => match cleanup.cleanup() {
+                Ok(()) => Err(error.context("complete team task")),
+                Err(cleanup_error) => Err(anyhow!(
+                    "complete team task failed: {error}; cleanup failed: {cleanup_error}"
+                )),
+            },
         }
     }
 

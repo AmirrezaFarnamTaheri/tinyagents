@@ -19,6 +19,16 @@ impl TeamMemberExecutor for FixedExecutor {
     }
 }
 
+struct HangingExecutor(Arc<tokio::sync::Notify>);
+
+#[async_trait]
+impl TeamMemberExecutor for HangingExecutor {
+    async fn execute(&self, _: &AgentTeamMember, _: &AgentTeamTask) -> Result<Vec<String>> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+}
+
 #[tokio::test]
 async fn start_member_runs_and_completes_claimed_task() {
     let dir = TempDir::new().unwrap();
@@ -93,6 +103,50 @@ async fn start_member_releases_task_and_idles_member_on_executor_failure() {
         .unwrap_err();
 
     assert!(format!("{error:#}").contains("worker stopped"));
+    assert_eq!(
+        service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
+        AgentTeamTaskStatus::Todo
+    );
+    assert_eq!(
+        service.ledger().list_members(&team.team.id).unwrap()[0].member_status,
+        AgentTeamMemberStatus::Idle
+    );
+}
+
+#[tokio::test]
+async fn cancelling_start_member_releases_task_and_idles_member() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let executor = Arc::new(HangingExecutor(entered.clone()));
+    let worker_service = service.clone();
+    let team_id = team.team.id.clone();
+    let task_id = task.id.clone();
+    let member_id = member.id.clone();
+    let worker = tokio::spawn(async move {
+        worker_service
+            .start_member(&team_id, &task_id, &member_id, executor.as_ref(), true)
+            .await
+    });
+    entered.notified().await;
+    worker.abort();
+    let _ = worker.await;
+
     assert_eq!(
         service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
         AgentTeamTaskStatus::Todo

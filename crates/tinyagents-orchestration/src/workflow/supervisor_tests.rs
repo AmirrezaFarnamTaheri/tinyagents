@@ -25,3 +25,27 @@ fn finish_only_removes_the_generation_that_finished() {
     assert!(supervisor.finish(&current));
     assert!(!supervisor.stop("run"));
 }
+
+#[test]
+fn scoped_start_wraps_drive_with_root_parent_then_origin_before_spawning() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let scopes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let root_scopes = scopes.clone();
+    let origin_scopes = scopes.clone();
+
+    supervisor.start_scoped(
+        "run",
+        |_| async {},
+        move |future| {
+            root_scopes.lock().unwrap().push("root-parent");
+            async move { future.await }
+        },
+        move |future| {
+            origin_scopes.lock().unwrap().push("origin");
+            async move { future.await }
+        },
+        |future| futures::executor::block_on(future),
+    );
+
+    assert_eq!(*scopes.lock().unwrap(), ["root-parent", "origin"]);
+}
