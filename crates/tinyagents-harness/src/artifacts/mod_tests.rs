@@ -95,10 +95,16 @@ async fn stored_bodies(offload: &ArtifactOffload) -> Vec<(String, String)> {
 #[tokio::test]
 async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let root = temp.path().join("private");
-    std::fs::create_dir_all(&root).expect("create root");
-    let offload = ArtifactOffload::in_memory("worker", "denied")
-        .with_path_policy(Arc::new(TestPolicy::rooted_at(root.clone())));
+    let root = temp.path().join("action");
+    let workspace = temp.path().join("private");
+    std::fs::create_dir_all(root.join("outputs")).expect("create output root");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let target = root.join("outputs").join("worker_task-1.md");
+    std::fs::write(&target, "keep the existing content").expect("seed previous output");
+    let offload = ArtifactOffload::in_memory("worker", "task-1")
+        .with_path_policy(Arc::new(
+            TestPolicy::rooted_at(workspace).with_internal_suffix("/action/outputs/"),
+        ));
 
     let output = "sensitive result".repeat(100);
     let (text, artifact) = offload_oversized_result_to_fs(
@@ -113,7 +119,7 @@ async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
     assert_eq!(text, output);
     assert!(artifact.is_none());
     assert!(stored_bodies(&offload).await.is_empty(), "denied targets must not create blob records");
-    assert_eq!(std::fs::read_dir(&root).expect("read root").count(), 0);
+    assert_eq!(std::fs::read_to_string(target).expect("read existing target"), "keep the existing content");
 }
 
 #[tokio::test]

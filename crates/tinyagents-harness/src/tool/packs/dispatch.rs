@@ -59,8 +59,19 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
             anyhow::bail!("use_skill tool is missing its pack registry extension");
         };
         let pinned = Arc::new(extension.bind_call(self.tool.clone(), arguments));
-        let selection = pinned.selection();
-        let selected = selection.and_then(|selection| (self.selector)(selection));
+        let selected = if let Some(selection) = pinned.selection() {
+            if let Some(dispatch) = (self.selector)(selection.clone()) {
+                Some(
+                    dispatch
+                        .bind_call(selection.arguments())?
+                        .unwrap_or(dispatch),
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         Ok(Some(Arc::new(BoundUseSkillDispatch {
             pinned,
             selected,
@@ -96,7 +107,10 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
     }
 
     fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
-        self.pinned.admission_target()
+        self.selected
+            .as_ref()
+            .and_then(|dispatch| dispatch.admission_target())
+            .or_else(|| self.pinned.admission_target())
     }
 
     fn output_origin(&self) -> crate::host::ContentOrigin {
