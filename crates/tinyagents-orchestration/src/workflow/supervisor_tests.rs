@@ -44,7 +44,7 @@ fn scoped_start_wraps_drive_with_root_parent_then_origin_before_spawning() {
             origin_scopes.lock().unwrap().push("origin");
             future
         },
-        |future| futures::executor::block_on(future),
+        futures::executor::block_on,
     );
 
     assert_eq!(*scopes.lock().unwrap(), ["root-parent", "origin"]);
