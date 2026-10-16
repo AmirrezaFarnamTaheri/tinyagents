@@ -41,11 +41,11 @@ pub use detached::{
 pub use driver::{SubagentCapabilities, SubagentDriver};
 pub use executor::SubagentExecutor;
 pub use invocation::{
-    ChildDataPolicy, DriverSubAgentTool, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
+    ChildDataPolicy, DELEGATION_MODE_FIELD, DelegationEnvelope, DelegationRequest, DelegationTool,
+    DriverSubAgentTool, MultiTargetDelegationTool, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
     SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentJobsTool,
-    SubAgentMessageTool, SubAgentMode, SubAgentSession, SubAgentTool,
-    SubagentDriverToolHost, register_subagent_job_tools, DelegationEnvelope,
-    DelegationRequest, MultiTargetDelegationTool, DELEGATION_MODE_FIELD, parse_approval,
+    SubAgentMessageTool, SubAgentMode, SubAgentSession, SubAgentTool, SubagentDriverToolHost,
+    parse_approval, register_subagent_job_tools,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
