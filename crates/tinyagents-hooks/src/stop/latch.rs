@@ -216,5 +216,5 @@ fn truncate_for_log(text: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
-#[path = "stop_latch_tests.rs"]
+#[path = "latch_tests.rs"]
 mod tests;
