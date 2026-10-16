@@ -68,7 +68,32 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
         previous: &[tinyinference_llm::message::Message],
         next: &[tinyinference_llm::message::Message],
         options: &TranscriptTurnOptions<C>,
-    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError>;
+    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError> {
+        let mut rows = next
+            .iter()
+            .filter_map(|message| {
+                crate::transcript::message_to_native_transcript(message)
+                    .map(|row| (row, message))
+            })
+            .collect::<Vec<_>>();
+        let mut consumed = vec![false; previous.len().min(prior.len())];
+        for (row, message) in &mut rows {
+            let matched = previous
+                .iter()
+                .enumerate()
+                .take(consumed.len())
+                .find_map(|(index, candidate)| {
+                    (!consumed[index] && candidate == message).then_some(index)
+                });
+            if let Some(index) = matched {
+                *row = prior[index].clone();
+                consumed[index] = true;
+            } else {
+                row.request_id = options.request_id.clone();
+            }
+        }
+        Ok(rows.into_iter().map(|(row, _)| row).collect())
+    }
 
     /// Returns host-derived provider usage for this transition, if available.
     ///
