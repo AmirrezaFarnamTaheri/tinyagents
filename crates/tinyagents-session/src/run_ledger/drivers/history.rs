@@ -6,6 +6,7 @@
 //! lets retention remove exactly the rows of the records it deletes and lets
 //! [`DriverRunLedger::reindex_fts`](RunLedgerStore::reindex_fts) rebuild the
 //! index idempotently.
+use super::dto::Stored;
 use super::dto_history::FtsRow;
 use super::storage::{
     CAS_ATTEMPTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, HISTORY_OWNER, decode,
@@ -94,12 +95,6 @@ fn bounded_output(output: &str) -> String {
     bounded
 }
 
-fn condition<T>(found: &Option<Versioned<T>>) -> Precondition {
-    found.as_ref().map_or(Precondition::Absent, |row| {
-        Precondition::Version(row.version)
-    })
-}
-
 impl DriverRunLedger {
     pub(super) async fn read_session(&self, id: &str) -> Result<Option<Versioned<SessionRecord>>> {
         Ok(self.read::<SessionRecord>(HIST_SESSIONS, id).await?)
@@ -121,12 +116,30 @@ impl DriverRunLedger {
 
     /// Allocate the next id of `counter` and write `build(id)` guarded by the
     /// session's version, in one atomic commit.
+    ///
+    /// The id comes from `tsd.counters` ([`Counters::next`]) before the commit,
+    /// so unlike the single-document counter it replaces it is not part of the
+    /// atomic batch: a commit that fails (or the session ending first) leaves a
+    /// gap in the dense id sequence, and a retry after a lost session-version
+    /// check keeps the id it drew rather than drawing another.
     async fn append_counted<R: Send>(
         &self,
         session_id: &str,
         counter: &str,
         build: impl Fn(i64) -> Result<(Vec<WriteOp>, R)> + Send + Sync,
     ) -> Result<R> {
+        if self.read_session(session_id).await?.is_none() {
+            return Err(
+                StorageError::invalid_input(format!("session '{session_id}' not found")).into(),
+            );
+        }
+        let id = Counters::new(self.scoped.documents())
+            .next(HISTORY_OWNER, counter)
+            .await?;
+        if id > i64::MAX as u64 {
+            return Err(StorageError::serialization("history id exhausted").into());
+        }
+        let (writes, result) = build(id as i64)?;
         for _ in 0..CAS_ATTEMPTS {
             let Some(session) = self.read_session(session_id).await? else {
                 return Err(StorageError::invalid_input(format!(
@@ -134,24 +147,12 @@ impl DriverRunLedger {
                 ))
                 .into());
             };
-            let head = self.read::<Counter>(HIST_COUNTERS, counter).await?;
-            let id = head.as_ref().map_or(1, |head| head.doc.next);
-            if id == 0 || id > i64::MAX as u64 {
-                return Err(StorageError::serialization("history id exhausted").into());
-            }
-            let (mut writes, result) = build(id as i64)?;
-            writes.push(WriteOp::Put {
-                collection: HIST_COUNTERS.into(),
-                id: key(&[counter]),
-                doc: envelope(&Counter { next: id + 1 }, json!({}))?,
-                precondition: condition(&head),
-            });
             let checks = vec![ReadCheck {
                 collection: HIST_SESSIONS.into(),
-                id: key(&[session_id]),
+                id: key(&[session_id])?,
                 expected: ExpectedDocument::Version(session.version),
             }];
-            if self.commit_history(checks, writes).await? {
+            if self.commit_history(checks, writes.clone()).await? {
                 return Ok(result);
             }
         }
@@ -159,7 +160,7 @@ impl DriverRunLedger {
     }
 
     /// Page `filter` over `collection` ordered by `sort`, returning rows and the total.
-    async fn page_sorted<T: DeserializeOwned + Send>(
+    async fn page_sorted<T: Stored + Send>(
         &self,
         collection: &str,
         filter: Filter,
