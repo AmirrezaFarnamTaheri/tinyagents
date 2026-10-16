@@ -155,7 +155,7 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
             "caller",
             serde_json::json!({}),
         ));
-    let mut harness: AgentHarness<Host> = AgentHarness::new();
+    let mut harness: AgentHarness<(), Host> = AgentHarness::new();
     harness.register_model(
         "mock",
         Arc::new(MockModel::with_responses(vec![
