@@ -305,7 +305,9 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
     let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(|selection| {
         assert_eq!(selection.tool_name(), "a_one");
         assert_eq!(selection.arguments(), &json!({"marker": "inside"}));
-        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain("a_one")))))
+        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain(
+            "a_one",
+        )))))
     });
     let dispatch = UseSkillDispatch::new(outer, selector);
     let outer_args = json!({
@@ -326,11 +328,20 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
     );
     let call_id = crate::CallId::new("admitted-call");
     let result = bound
-        .execute(&(), call_id, outer_args, tinytools::ToolCallOptions::default(), &parent)
+        .execute(
+            &(),
+            call_id,
+            outer_args,
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
         .await
         .unwrap();
 
-    assert_eq!(result.text(), "run=live-parent;call=admitted-call;args={\"marker\":\"inside\"}");
+    assert_eq!(
+        result.text(),
+        "run=live-parent;call=admitted-call;args={\"marker\":\"inside\"}"
+    );
     assert_eq!(bound.admission_target().unwrap().0.name(), "a_one");
 }
 

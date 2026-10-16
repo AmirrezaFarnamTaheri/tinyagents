@@ -66,13 +66,15 @@ impl PackRegistryHandle {
 impl PinnedPackCall {
     pub(crate) fn selection(&self) -> Option<super::types::PackSelection> {
         match &self.target {
-            PackTarget::Execute { tools, index, arguments } => {
-                Some(super::types::PackSelection {
-                    tools: Arc::clone(tools),
-                    index: *index,
-                    arguments: arguments.clone(),
-                })
-            }
+            PackTarget::Execute {
+                tools,
+                index,
+                arguments,
+            } => Some(super::types::PackSelection {
+                tools: Arc::clone(tools),
+                index: *index,
+                arguments: arguments.clone(),
+            }),
             PackTarget::Answer(_) => None,
         }
     }

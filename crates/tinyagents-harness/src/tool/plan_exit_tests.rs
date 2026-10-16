@@ -1,6 +1,10 @@
 use super::*;
 
-use crate::{context::{RunConfig, RunContext}, ids::CallId, tool::ToolExecutionContext};
+use crate::{
+    context::{RunConfig, RunContext},
+    ids::CallId,
+    tool::ToolExecutionContext,
+};
 
 #[tokio::test]
 async fn plan_exit_switches_the_host_resolved_mode_and_keeps_the_marker() {
@@ -11,7 +15,11 @@ async fn plan_exit_switches_the_host_resolved_mode_and_keeps_the_marker() {
     let context = ToolExecutionContext::from_run_context(&parent, CallId::new("call-1"));
 
     let result = tool
-        .execute_with_context(json!({"plan": "  step one  "}), ToolCallOptions::default(), Some(&context))
+        .execute_with_context(
+            json!({"plan": "  step one  "}),
+            ToolCallOptions::default(),
+            Some(&context),
+        )
         .await
         .expect("execute");
 
@@ -27,7 +35,11 @@ async fn plan_exit_leaves_mode_unchanged_when_host_withholds_the_handle() {
     let context = ToolExecutionContext::from_run_context(&parent, CallId::new("call-2"));
 
     let result = tool
-        .execute_with_context(json!({"plan": "approved later"}), ToolCallOptions::default(), Some(&context))
+        .execute_with_context(
+            json!({"plan": "approved later"}),
+            ToolCallOptions::default(),
+            Some(&context),
+        )
         .await
         .expect("execute");
 

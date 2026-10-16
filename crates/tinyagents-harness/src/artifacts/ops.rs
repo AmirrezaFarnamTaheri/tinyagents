@@ -12,8 +12,8 @@
 //! side: parsing pointers back out of a handoff payload and logging both ends
 //! of the exchange. See [`super`] for the convention this module implements.
 
-use std::sync::Arc;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
@@ -357,7 +357,10 @@ impl ArtifactOffload {
                     path: target.display().to_string(),
                 });
             }
-            if policy.internal_root().is_some_and(|root| target.starts_with(root)) {
+            if policy
+                .internal_root()
+                .is_some_and(|root| target.starts_with(root))
+            {
                 return Err(OffloadError::InternalRoot {
                     path: target.display().to_string(),
                 });
@@ -371,10 +374,9 @@ impl ArtifactOffload {
     /// replaced by rename rather than opened or followed.
     pub async fn materialize_to_fs(&self, root: &Path, key: &str) -> Result<PathBuf, OffloadError> {
         let target = self.validate_materialization_target(root, key).await?;
-        let body = self
-            .read(key)
-            .await?
-            .ok_or_else(|| OffloadError::Materialization("artifact is missing from blob store".into()))?;
+        let body = self.read(key).await?.ok_or_else(|| {
+            OffloadError::Materialization("artifact is missing from blob store".into())
+        })?;
         let parent = target
             .parent()
             .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
@@ -383,7 +385,9 @@ impl ArtifactOffload {
             .map_err(|error| OffloadError::Materialization(error.to_string()))?;
         let checked = self.validate_materialization_target(root, key).await?;
         if checked != target {
-            return Err(OffloadError::Materialization("artifact target changed during validation".into()));
+            return Err(OffloadError::Materialization(
+                "artifact target changed during validation".into(),
+            ));
         }
 
         #[cfg(unix)]
@@ -397,7 +401,9 @@ impl ArtifactOffload {
                 .to_path_buf();
             let file_name = target
                 .file_name()
-                .ok_or_else(|| OffloadError::Materialization("artifact target has no file name".into()))?
+                .ok_or_else(|| {
+                    OffloadError::Materialization("artifact target has no file name".into())
+                })?
                 .to_os_string();
             let bytes = body.into_bytes();
             tokio::task::spawn_blocking(move || {
@@ -409,20 +415,25 @@ impl ArtifactOffload {
         }
         #[cfg(not(unix))]
         {
-            static NEXT_TEMP: std::sync::atomic::AtomicU64 =
-                std::sync::atomic::AtomicU64::new(0);
+            static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let mut temp = None;
             for _ in 0..32 {
                 let id = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let path = parent.join(format!(".artifact-{}-{id}.tmp", std::process::id()));
-                match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
+                match tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .await
+                {
                     Ok(mut file) => {
                         use tokio::io::AsyncWriteExt;
                         if let Err(error) = file.write_all(body.as_bytes()).await {
                             let _ = tokio::fs::remove_file(&path).await;
                             return Err(OffloadError::Materialization(error.to_string()));
                         }
-                        file.sync_all().await
+                        file.sync_all()
+                            .await
                             .map_err(|error| OffloadError::Materialization(error.to_string()))?;
                         drop(file);
                         temp = Some(path);
@@ -432,7 +443,9 @@ impl ArtifactOffload {
                     Err(error) => return Err(OffloadError::Materialization(error.to_string())),
                 }
             }
-            let temp = temp.ok_or_else(|| OffloadError::Materialization("could not allocate temporary artifact file".into()))?;
+            let temp = temp.ok_or_else(|| {
+                OffloadError::Materialization("could not allocate temporary artifact file".into())
+            })?;
             if let Err(error) = tokio::fs::rename(&temp, &target).await {
                 let _ = tokio::fs::remove_file(&temp).await;
                 return Err(OffloadError::Materialization(error.to_string()));
@@ -500,8 +513,12 @@ fn atomic_write_under_dir(
     target_name: &std::ffi::OsStr,
     body: &[u8],
 ) -> std::io::Result<()> {
-    use std::{io::Write, os::fd::OwnedFd, sync::atomic::{AtomicU64, Ordering}};
     use rustix::fs::{AtFlags, Mode, OFlags, open, openat, renameat, unlinkat};
+    use std::{
+        io::Write,
+        os::fd::OwnedFd,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     let mut directory: OwnedFd = open(
         root,
@@ -544,7 +561,10 @@ fn atomic_write_under_dir(
         }
     }
     let temp_name = temp_name.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::AlreadyExists, "could not allocate temporary artifact file")
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate temporary artifact file",
+        )
     })?;
     let mut file = file.expect("temporary name and file are set together");
     if let Err(error) = file.write_all(body).and_then(|()| file.sync_all()) {
@@ -553,12 +573,7 @@ fn atomic_write_under_dir(
         return Err(error);
     }
     drop(file);
-    if let Err(error) = renameat(
-        &directory,
-        temp_name.as_str(),
-        &directory,
-        target_name,
-    ) {
+    if let Err(error) = renameat(&directory, temp_name.as_str(), &directory, target_name) {
         let _ = unlinkat(&directory, temp_name.as_str(), AtFlags::empty());
         return Err(error.into());
     }

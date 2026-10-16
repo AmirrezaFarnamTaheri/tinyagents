@@ -31,10 +31,7 @@ pub struct UseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 'st
 
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> UseSkillDispatch<State, Ctx> {
     /// Creates a dispatch around the registered `use_skill` declaration.
-    pub fn new(
-        tool: Arc<dyn Tool>,
-        selector: Arc<PackDispatchSelector<State, Ctx>>,
-    ) -> Self {
+    pub fn new(tool: Arc<dyn Tool>, selector: Arc<PackDispatchSelector<State, Ctx>>) -> Self {
         Self { tool, selector }
     }
 }
@@ -72,10 +69,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
         } else {
             None
         };
-        Ok(Some(Arc::new(BoundUseSkillDispatch {
-            pinned,
-            selected,
-        })))
+        Ok(Some(Arc::new(BoundUseSkillDispatch { pinned, selected })))
     }
 
     async fn execute(
@@ -89,7 +83,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
         let dispatch = self
             .bind_call(&arguments)?
             .ok_or_else(|| anyhow::anyhow!("use_skill binding produced no dispatch"))?;
-        dispatch.execute(_state, call_id, arguments, options, parent).await
+        dispatch
+            .execute(_state, call_id, arguments, options, parent)
+            .await
     }
 }
 
@@ -128,7 +124,14 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
             .map(|selection| selection.arguments().clone())
             .unwrap_or_else(|| arguments.clone());
         self.selected.as_ref().map_or_else(
-            || self.pinned.supports_markdown().then_some(ToolCallOptions { prefer_markdown: true }).unwrap_or_default(),
+            || {
+                self.pinned
+                    .supports_markdown()
+                    .then_some(ToolCallOptions {
+                        prefer_markdown: true,
+                    })
+                    .unwrap_or_default()
+            },
             |dispatch| dispatch.call_options(&inner_arguments),
         )
     }
@@ -147,7 +150,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
                 .selection()
                 .map(|selection| selection.arguments().clone())
                 .unwrap_or(Value::Null);
-            return dispatch.execute(state, call_id, arguments, options, parent).await;
+            return dispatch
+                .execute(state, call_id, arguments, options, parent)
+                .await;
         }
 
         let context = ToolExecutionContext::from_run_context(parent, call_id);
