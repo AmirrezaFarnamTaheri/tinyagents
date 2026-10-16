@@ -6,9 +6,10 @@
 //! lets retention remove exactly the rows of the records it deletes and lets
 //! [`DriverRunLedger::reindex_fts`](RunLedgerStore::reindex_fts) rebuild the
 //! index idempotently.
+use super::dto_history::FtsRow;
 use super::storage::{
-    CAS_ATTEMPTS, HIST_COUNTERS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, decode,
-    key,
+    CAS_ATTEMPTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, HISTORY_OWNER, decode,
+    key, now, put_op,
 };
 use super::*;
 use crate::fts::{fts_snippet_bytes, snippet};
@@ -20,102 +21,40 @@ use crate::types::{
     SessionMessage, SessionRecord, SessionSearchParams, SessionSearchResult, SessionStatus,
     SessionToolCall,
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use tinystoragedrivers_core::{
-    DocumentStoreExt, ErrorKind, ExpectedDocument, Precondition, ReadCheck, Versioned, WriteOp,
+    Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, Precondition, ReadCheck, Versioned,
+    WriteOp,
 };
 
 const LOG_PREFIX: &str = "[session_db]";
 
 type StoreResult<T> = std::result::Result<T, StorageError>;
 
-/// One full-text row: a session's agent name, a message snippet or a tool name.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct FtsRow {
-    pub(super) session_id: String,
-    pub(super) agent_name: String,
-    pub(super) content: String,
-    pub(super) tool_name: String,
-}
-
-/// The next dense id of a message or tool-call sequence.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct Counter {
-    pub(super) next: u64,
-}
-
+/// The `tsd.counters` names of the dense message and tool-call id sequences
+/// (owner `history`).
 pub(super) const MESSAGE_COUNTER: &str = "messages";
 pub(super) const TOOL_CALL_COUNTER: &str = "tool_calls";
 
-pub(super) fn session_fts_id(session_id: &str) -> String {
+pub(super) fn session_fts_id(session_id: &str) -> StoreResult<String> {
     key(&["s", session_id])
 }
-pub(super) fn message_fts_id(id: i64) -> String {
+pub(super) fn message_fts_id(id: i64) -> StoreResult<String> {
     key(&["m", &id.to_string()])
 }
-pub(super) fn tool_fts_id(id: i64) -> String {
+pub(super) fn tool_fts_id(id: i64) -> StoreResult<String> {
     key(&["t", &id.to_string()])
 }
-pub(super) fn message_id(id: i64) -> String {
-    key(&["message", &id.to_string()])
+pub(super) fn message_id(id: i64) -> StoreResult<String> {
+    key(&[&id.to_string()])
 }
-pub(super) fn tool_call_id(id: i64) -> String {
-    key(&["tool_call", &id.to_string()])
-}
-
-/// A record envelope with the integer sort keys history queries order by.
-pub(super) fn envelope<T: Serialize + DeserializeOwned>(
-    record: &T,
-    keys: Value,
-) -> StoreResult<Value> {
-    let body = serde_json::to_value(record)?;
-    // A nonfinite float serializes to null and would not read back.
-    let _: T = serde_json::from_value(body.clone())?;
-    let mut doc = json!({"schemaVersion": 1, "record": body});
-    if let (Some(object), Value::Object(keys)) = (doc.as_object_mut(), keys) {
-        object.extend(keys);
-    }
-    Ok(doc)
-}
-
-pub(super) fn session_doc(record: &SessionRecord) -> StoreResult<Value> {
-    envelope(
-        record,
-        json!({
-            "startedUs": record.started_at.timestamp_micros(),
-            "endedUs": record.ended_at.map(|ended| ended.timestamp_micros()),
-        }),
-    )
-}
-
-pub(super) fn message_doc(record: &SessionMessage) -> StoreResult<Value> {
-    envelope(
-        record,
-        json!({"createdUs": record.created_at.timestamp_micros()}),
-    )
-}
-
-pub(super) fn tool_call_doc(record: &SessionToolCall) -> StoreResult<Value> {
-    envelope(
-        record,
-        json!({"createdUs": record.created_at.timestamp_micros()}),
-    )
-}
-
-pub(super) fn fts_doc(row: &FtsRow) -> StoreResult<Value> {
-    envelope(row, json!({}))
+pub(super) fn tool_call_id(id: i64) -> StoreResult<String> {
+    key(&[&id.to_string()])
 }
 
 fn put_fts(id: String, row: &FtsRow) -> StoreResult<WriteOp> {
-    Ok(WriteOp::Put {
-        collection: HIST_FTS.into(),
-        id,
-        doc: fts_doc(row)?,
-        precondition: Precondition::None,
-    })
+    put_op(HIST_FTS, id, row, Precondition::None)
 }
 
 pub(super) fn session_fts_row(session: &SessionRecord) -> FtsRow {
