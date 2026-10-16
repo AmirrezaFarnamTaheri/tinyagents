@@ -17,9 +17,9 @@ use crate::no_progress::{
     NoProgressTracker, RecoverableFailureLadder, ToolAttempt, classified_step_with_cause,
     clear_recovered, fingerprint_arguments,
 };
-use tinyinference_llm::model::ModelResponse;
 use crate::steering::{SteeringCommand, SteeringHandle};
 use crate::turn_outcome::HaltSummarySlot;
+use tinyinference_llm::model::ModelResponse;
 
 use super::{EphemeralInstructionMiddleware, EphemeralInstructionQueue};
 
@@ -245,7 +245,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
             FailureAssessment::Halt { summary, cause } => {
                 run.tracker.reset();
                 run.recoverable.reset_streak();
-                let summary = self.policy.halt_copy(FailureStopKind::Terminal, summary, "");
+                let summary = self
+                    .policy
+                    .halt_copy(FailureStopKind::Terminal, summary, "");
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {
@@ -253,7 +255,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     run.recoverable
                         .record(self.policy.as_ref(), tool, &argument_key, &error)
                 {
-                    let summary = self.policy.halt_copy(FailureStopKind::Recoverable, summary, &error);
+                    let summary =
+                        self.policy
+                            .halt_copy(FailureStopKind::Recoverable, summary, &error);
                     self.halt(ctx, summary, None);
                     run.recoverable.reset_streak();
                 }
@@ -265,15 +269,30 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 nudge,
             } => {
                 run.recoverable.reset_streak();
-                match classified_step_with_cause(&run.classified, &class, tool, &scope.scope, budget, &error) {
+                match classified_step_with_cause(
+                    &run.classified,
+                    &class,
+                    tool,
+                    &scope.scope,
+                    budget,
+                    &error,
+                ) {
                     ClassifiedStepWithCause::Within => {}
                     ClassifiedStepWithCause::Nudge(instruction) => {
                         self.nudges.push(ctx, nudge.unwrap_or(instruction));
                     }
                     ClassifiedStepWithCause::Halt(cause) => {
                         run.tracker.reset();
-                        let summary = self.policy.halt_copy(FailureStopKind::Classified, cause.summary.clone(), &error);
-                        self.halt(ctx, summary.clone(), Some(crate::no_progress::ClassifiedStopCause { summary, ..cause }));
+                        let summary = self.policy.halt_copy(
+                            FailureStopKind::Classified,
+                            cause.summary.clone(),
+                            &error,
+                        );
+                        self.halt(
+                            ctx,
+                            summary.clone(),
+                            Some(crate::no_progress::ClassifiedStopCause { summary, ..cause }),
+                        );
                     }
                 }
             }
@@ -295,7 +314,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
                     NoProgress::Halt(summary) => {
                         run.tracker.reset();
-                        let summary = self.policy.halt_copy(FailureStopKind::NoProgress, summary, &error);
+                        let summary =
+                            self.policy
+                                .halt_copy(FailureStopKind::NoProgress, summary, &error);
                         self.halt(ctx, summary, None);
                     }
                 }
@@ -332,7 +353,9 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         response: &mut ModelResponse,
     ) -> Result<()> {
         if let Some((summary, cause)) = self.policy.terminal_model_halt(ctx, response) {
-            let summary = self.policy.halt_copy(FailureStopKind::Terminal, summary, "");
+            let summary = self
+                .policy
+                .halt_copy(FailureStopKind::Terminal, summary, "");
             self.halt(ctx, summary, cause);
         }
         Ok(())
