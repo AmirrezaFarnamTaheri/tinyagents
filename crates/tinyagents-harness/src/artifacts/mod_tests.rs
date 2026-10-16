@@ -474,6 +474,23 @@ async fn scratch_and_outputs_are_separate_namespaces() {
     );
 }
 
+/// A path a transcript quoted before the keys moved under `harness/` still reads
+/// the (migrated) artifact.
+#[tokio::test]
+async fn read_accepts_the_pre_v2_directory_names() {
+    let offload = offload();
+    offload
+        .write(ArtifactKind::Output, "a.md", "out")
+        .await
+        .expect("write output");
+    offload
+        .write(ArtifactKind::Scratch, "b.md", "scratch")
+        .await
+        .expect("write scratch");
+    assert_eq!(offload.read("outputs/a.md").await.unwrap().as_deref(), Some("out"));
+    assert_eq!(offload.read("workspace/b.md").await.unwrap().as_deref(), Some("scratch"));
+}
+
 #[tokio::test]
 async fn read_returns_none_for_a_missing_artifact() {
     assert_eq!(offload().read("harness/outputs/nope.md").await.expect("read"), None);
