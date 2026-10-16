@@ -298,7 +298,7 @@ where
             .contains_key(&(scope.clone(), thread_id.to_owned()))
     }
 
-    pub async fn run(&self, mut request: TurnRequest) -> Result<TurnResult, TurnRunnerError> {
+    pub async fn run(&self, mut request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
             IngressStage::Guardrail,
@@ -427,7 +427,7 @@ where
 
     async fn run_guarded(
         &self,
-        request: &TurnRequest,
+        request: &TurnRequest<P>,
         session: &TurnSession,
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
@@ -478,7 +478,7 @@ where
 
     async fn close_or_timeout(
         &self,
-        request: &TurnRequest,
+        request: &TurnRequest<P>,
         reason: &str,
     ) -> Result<TurnResult, String> {
         match tokio::time::timeout(
@@ -492,7 +492,7 @@ where
         }
     }
 
-    async fn clear_tracking(&self, request: &TurnRequest) {
+    async fn clear_tracking(&self, request: &TurnRequest<P>) {
         let key = (request.scope.clone(), request.thread_id.clone());
         let mut active = self.active.lock().await;
         if active
@@ -509,7 +509,7 @@ where
         ));
     }
 
-    async fn fail<T>(&self, request: &TurnRequest, error: String) -> Result<T, TurnRunnerError> {
+    async fn fail<T>(&self, request: &TurnRequest<P>, error: String) -> Result<T, TurnRunnerError> {
         let (class, message) = self.failures.classify(&error);
         self.events
             .terminal(
