@@ -588,10 +588,9 @@ impl SubAgentJobRegistry {
         }
         let message = message.into();
         if let Some(lane) = lane {
-            lane_queue.expect("lane queue was validated before claiming the request id").push_now(
-                lane,
-                Message::user(message),
-            );
+            lane_queue
+                .expect("lane queue was validated before claiming the request id")
+                .push_now(lane, Message::user(message));
         } else {
             handle.send(SteeringCommand::InjectMessage(Message::user(message)));
         }
