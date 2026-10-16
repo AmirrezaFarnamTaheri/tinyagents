@@ -167,6 +167,9 @@ pub struct AgentRun {
     /// string parsing. `None` only while the run is still in flight, or when a
     /// wrapping middleware replaced the loop.
     pub terminal: Option<crate::terminal::TerminalOutcome>,
+    /// Typed classified-failure cause when a repeat/no-progress guard halted
+    /// this run. Kept separate from the human-readable terminal message.
+    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
 }
 
 /// Host-only metadata one tool call returned, as recorded on

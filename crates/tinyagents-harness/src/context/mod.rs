@@ -331,6 +331,7 @@ impl<Ctx> RunContext<Ctx> {
             terminal_observer: None,
             turns: crate::agent_loop::TurnTracker::default(),
             halted_by_guard: None,
+            halted_by_guard_cause: None,
             last_limit: std::sync::Mutex::new(None),
             active_model_call: None,
             provider_started: false,
@@ -970,6 +971,21 @@ impl<Ctx> RunContext<Ctx> {
     /// Takes the repeat-progress guard's halt summary, if one was latched.
     pub fn take_halted_by_guard(&mut self) -> Option<String> {
         self.halted_by_guard.take()
+    }
+
+    /// Record a classified guard halt, preserving its typed root cause.
+    pub fn halt_with_cause(&mut self, cause: crate::no_progress::ClassifiedStopCause) {
+        if self.halted_by_guard.is_none() {
+            self.halted_by_guard = Some(cause.summary.clone());
+            self.halted_by_guard_cause = Some(cause);
+        }
+    }
+
+    /// Take the typed cause recorded with a classified guard halt.
+    pub fn take_halted_by_guard_cause(
+        &mut self,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        self.halted_by_guard_cause.take()
     }
 
     /// Resets lifecycle tracking for a run whose input already contains seed messages.
