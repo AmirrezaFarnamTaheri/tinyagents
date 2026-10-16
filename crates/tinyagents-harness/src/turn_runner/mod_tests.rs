@@ -124,9 +124,10 @@ impl EventSink for Events {
         self.terminal.lock().unwrap().push(event);
     }
     async fn collected(&self, _request: &TurnRequest, items: Vec<TurnRequest>) {
-        self.collected.lock().unwrap().push(
-            items.into_iter().map(|item| item.request_id).collect(),
-        );
+        self.collected
+            .lock()
+            .unwrap()
+            .push(items.into_iter().map(|item| item.request_id).collect());
     }
 }
 
@@ -301,7 +302,7 @@ async fn accepted_followup_is_dispatched_as_a_fresh_turn_after_primary_finishes(
     release.notify_one();
     primary.await.unwrap().unwrap();
 
-    assert_eq!(events.0.lock().unwrap().len(), 2);
+    assert_eq!(events.terminal.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -556,11 +557,12 @@ async fn parallel_turn_gets_a_private_queue_and_cannot_steal_primary_work() {
 #[tokio::test]
 async fn host_authored_turn_gets_private_queue_and_preserves_primary_collects() {
     let host = Arc::new(QueueOwnershipHost::default());
+    let events = Arc::new(Events::default());
     let runner = Arc::new(TurnRunner::new(
         host.clone(),
         Arc::new(Ingress::default()),
         Arc::new(Replies::default()),
-        Arc::new(Events::default()),
+        events.clone(),
         Arc::new(Failures),
         Arc::new(Summary),
         TurnRunnerConfig::default(),
@@ -592,19 +594,17 @@ async fn host_authored_turn_gets_private_queue_and_preserves_primary_collects() 
     let mut background = request(QueueDisposition::Interrupt, true);
     background.request_id = "host-background".into();
     runner.run(background).await.unwrap();
-    assert_eq!(
-        runner
-            .queue_status(
-                &request(QueueDisposition::Interrupt, false).scope,
-                "thread-a"
-            )
-            .await
-            .collects,
-        1
-    );
-
+    let background_task = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(background).await })
+    };
     host.release_primary.notify_one();
     primary.await.unwrap().unwrap();
+    background_task.await.unwrap().unwrap();
+    assert_eq!(
+        events.collected.lock().unwrap().as_slice(),
+        [vec!["primary-collect".to_owned()]]
+    );
 }
 
 #[tokio::test]
