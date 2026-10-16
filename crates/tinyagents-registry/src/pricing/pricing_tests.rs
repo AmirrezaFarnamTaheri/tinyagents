@@ -161,6 +161,34 @@ fn image_support_resolves_decorated_minimax_ids() {
 }
 
 #[test]
+fn free_model_pricing_is_zero_and_does_not_change_reported_charges() {
+    let pricing = lookup_pricing("vendor/model:FREE").expect("explicit free model");
+    assert_eq!(pricing.input_per_token, Some(0.0));
+    assert_eq!(pricing.output_per_token, Some(0.0));
+    assert_eq!(pricing.cache_read_input_per_token, Some(0.0));
+
+    let usage = tinyinference_llm::usage::Usage {
+        input_tokens: 100,
+        output_tokens: 20,
+        ..Default::default()
+    };
+    assert_eq!(
+        tinyagents_harness::cost::call_cost(
+            Some(&pricing),
+            &tinyagents_harness::cost::CallUsage {
+                usage,
+                charged_amount_usd: Some(0.004),
+                cost_is_estimate: false,
+                charge_reported: true,
+            },
+        )
+        .usd,
+        0.004,
+        "provider-reported billing remains authoritative for free-labeled models"
+    );
+}
+
+#[test]
 fn approximate_cached_rates_do_not_advertise_prompt_caching() {
     let mistral = flat_catalog_entry(lookup("mistral-large").unwrap(), "consumer");
     assert!(!mistral.capabilities.prompt_caching);

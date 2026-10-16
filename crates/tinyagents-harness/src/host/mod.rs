@@ -63,7 +63,9 @@ pub use progress_sink::{NoopProgressSink, ProgressEvent, ProgressSink, Recording
 pub use security_gate::{
     AllowAllSecurityGate, ContentOrigin, GateDecision, ScreenOutcome, SecurityGate, ToolCallRequest,
 };
-pub use tool_outcome_classifier::{ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier};
+pub use tool_outcome_classifier::{
+    ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier, ToolStatusClassifier,
+};
 
 use std::sync::Arc;
 

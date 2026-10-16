@@ -163,6 +163,45 @@ impl ToolOutcomeClassifier for ErrorFieldClassifier {
     }
 }
 
+/// A conservative classifier backed by `tinytools::status::classify`.
+///
+/// Service and model connection failures are safe to retry because the
+/// request did not reach the tool. Timeouts and unknown failures remain
+/// permanent: the host cannot infer whether an effect committed before the
+/// result was lost. Hosts with stronger, per-tool knowledge can provide their
+/// own [`ToolOutcomeClassifier`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToolStatusClassifier;
+
+impl ToolOutcomeClassifier for ToolStatusClassifier {
+    fn classify(&self, _name: &str, result: &ToolResult) -> OutcomeClass {
+        if !result.is_error {
+            return OutcomeClass::Success;
+        }
+
+        let text = result.output();
+        let failure = tinytools::status::classify(&text, text.contains("timed out"));
+        match failure.class {
+            tinytools::status::ToolFailureClass::ServiceUnavailable
+            | tinytools::status::ToolFailureClass::ModelConnection => {
+                OutcomeClass::RetryableFailure
+            }
+            tinytools::status::ToolFailureClass::MissingPermission
+            | tinytools::status::ToolFailureClass::MissingApp
+            | tinytools::status::ToolFailureClass::BadCredentials
+            | tinytools::status::ToolFailureClass::BlockedByPolicy
+            | tinytools::status::ToolFailureClass::Timeout
+            | tinytools::status::ToolFailureClass::Denied
+            | tinytools::status::ToolFailureClass::ApprovalExpired
+            | tinytools::status::ToolFailureClass::NotFound
+            | tinytools::status::ToolFailureClass::Unsupported
+            | tinytools::status::ToolFailureClass::InvalidArguments
+            | tinytools::status::ToolFailureClass::CommandFailed
+            | tinytools::status::ToolFailureClass::Unknown => OutcomeClass::PermanentFailure,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "tool_outcome_classifier_tests.rs"]
 mod tests;
