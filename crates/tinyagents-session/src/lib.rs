@@ -142,6 +142,9 @@ pub use port::{
 };
 pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;
+pub use run_ledger::drivers::{
+    LegacyLedgerImport, history_storage_schema, import_legacy_ledger, ledger_storage_schema,
+};
 pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};
 pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{
