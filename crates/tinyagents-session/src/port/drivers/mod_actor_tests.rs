@@ -7,7 +7,9 @@ use tinystoragedrivers_core::{Capabilities, Fence, Filter, MemoryStorage};
 fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {
     let original_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let admitted_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let original = DriverSessionStores::new(original_backend).unwrap();
+    let original =
+        DriverSessionStores::new(original_backend, tinystoragedrivers_core::Scope::local())
+            .unwrap();
     let old = original.for_agent("alice~planner");
     old.turn_states
         .put(&TurnState::started(
@@ -87,7 +89,9 @@ fn set_epoch(backend: &Arc<dyn StorageBackend>, epoch: u64) {
 fn fresh_actor_after_native_takeover_preserves_namespace_and_refuses_retained_old_handles() {
     let inner: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     set_epoch(&inner, 1);
-    let original = DriverSessionStores::new(admitted(&inner, 1)).unwrap();
+    let original =
+        DriverSessionStores::new(admitted(&inner, 1), tinystoragedrivers_core::Scope::local())
+            .unwrap();
     let old = original.for_agent("alice~planner");
     let saved = TurnState::started("persisted", "r", 1, "2026-01-01T00:00:00Z");
     old.turn_states.put(&saved).unwrap();

@@ -1,11 +1,13 @@
 //! [`TurnStates`] over a driver [`DocumentStore`].
 //!
-//! One document per turn in [`COLLECTION`], keyed by `(thread, request)`:
-//! `{ "thread_id", "request_id", "lifecycle", "turn": <TurnState> }`, with
-//! the thread indexed so a thread's turns are one query. Every conditional
-//! change (a write that must not clobber a completed turn, a settle, an
-//! interruption sweep) is a compare-and-swap on the document's version, so
-//! two processes sharing a database cannot lose each other's updates.
+//! One document per turn in [`COLLECTION`], id `Key::of([thread, request])`.
+//! The body is the turn's snake_case storage form (see
+//! `turn_states_storage.rs`: `thread_id`, `request_id`, `lifecycle`,
+//! `started_ms`, `updated_ms`, …), with the thread indexed so a thread's turns
+//! are one query. Every conditional change (a write that must not clobber a
+//! completed turn, a settle, an interruption sweep) is one [`Repo::update`]
+//! compare-and-swap, so two processes sharing a database cannot lose each
+//! other's updates.
 //!
 //! Semantics match [`InMemoryTurnStates`](crate::port::InMemoryTurnStates):
 //! "latest" is the newest `started_at`, completed turns are kept up to
@@ -17,10 +19,11 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+use tinystoragedrivers_core::primitives::Repo;
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
-    Precondition, Query, StorageError, Versioned,
+    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Key,
+    Precondition, Query, StorageError, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -28,20 +31,20 @@ use super::super::TurnStates;
 use super::super::memory::{
     COMPLETED_RETENTION, completed_newest_first, is_terminal, newest_first,
 };
-use super::transcripts::doc_key;
 use crate::turn_state::{TurnLifecycle, TurnState};
+use storage::{decode as decode_body, encode};
 use tinyagents_harness::store::SchemaAdmission;
 
 /// The collection turn snapshots live in.
-pub(super) const COLLECTION: &str = "session_turn_states";
+pub(super) const COLLECTION: &str = "session.turn_states";
+
+/// The body version the collection is written at.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// The declaration shared by bootstrap and lazy turn-state initialization.
 pub(super) fn collection_spec() -> CollectionSpec {
     CollectionSpec::new(COLLECTION).index(IndexSpec::new("by_thread", ["thread_id"]))
 }
-
-/// Compare-and-swap attempts before a contended update gives up.
-const CAS_ATTEMPTS: usize = 64;
 
 /// [`TurnStates`] stored in a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
@@ -53,6 +56,8 @@ pub struct DriverTurnStates {
 #[derive(Debug)]
 struct Inner {
     docs: Arc<dyn DocumentStore>,
+    /// Writes of [`COLLECTION`] at [`SCHEMA_VERSION`].
+    repo: Repo<Value>,
     declared: OnceCell<()>,
     schema_admission: SchemaAdmission,
 }
@@ -71,6 +76,9 @@ impl DriverTurnStates {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                repo: Repo::new(&docs, COLLECTION)
+                    .expect("the turn state collection name is valid")
+                    .with_options(WriteOptions::new().schema(SCHEMA_VERSION)),
                 docs,
                 declared: OnceCell::new(),
                 schema_admission,
@@ -126,21 +134,8 @@ impl DriverTurnStates {
     }
 }
 
-fn id(thread_id: &str, request_id: &str) -> String {
-    doc_key(&[thread_id, request_id])
-}
-
-fn encode(state: &TurnState) -> Result<Value, StorageError> {
-    let turn = serde_json::to_value(state)
-        .map_err(|error| StorageError::serialization(error.to_string()))?;
-    let lifecycle = serde_json::to_value(state.lifecycle)
-        .map_err(|error| StorageError::serialization(error.to_string()))?;
-    Ok(json!({
-        "thread_id": state.thread_id,
-        "request_id": state.request_id,
-        "lifecycle": lifecycle,
-        "turn": turn,
-    }))
+fn id(thread_id: &str, request_id: &str) -> Result<String, StorageError> {
+    Key::of([thread_id, request_id]).map(|key| key.as_str().to_owned())
 }
 
 fn decode(stored: Versioned<Value>) -> Result<Versioned<TurnState>, StorageError> {
@@ -150,11 +145,7 @@ fn decode(stored: Versioned<Value>) -> Result<Versioned<TurnState>, StorageError
         doc,
         meta,
     } = stored;
-    let turn = doc
-        .get("turn")
-        .cloned()
-        .ok_or_else(|| StorageError::serialization(format!("turn state {id} has no body")))?;
-    let turn = serde_json::from_value(turn).map_err(|error| {
+    let turn = decode_body(&doc).map_err(|error| {
         StorageError::serialization(format!("turn state {id} is unreadable: {error}"))
     })?;
     Ok(Versioned {
@@ -183,7 +174,7 @@ impl Inner {
     ) -> Result<Option<Versioned<TurnState>>, StorageError> {
         self.declared().await?;
         self.docs
-            .get(COLLECTION, &id(thread_id, request_id))
+            .get(COLLECTION, &id(thread_id, request_id)?)
             .await?
             .map(decode)
             .transpose()
@@ -210,17 +201,12 @@ impl Inner {
         Ok(turns)
     }
 
-    async fn write(&self, state: &TurnState, pre: Precondition) -> Result<(), StorageError> {
+    async fn write(&self, state: &TurnState) -> Result<(), StorageError> {
         self.declared().await?;
-        self.docs
-            .put(
-                COLLECTION,
-                &id(&state.thread_id, &state.request_id),
-                encode(state)?,
-                pre,
-            )
+        self.repo
+            .put(&id(&state.thread_id, &state.request_id)?, &encode(state)?)
             .await
-            .map(|_| ())
+            .map(drop)
     }
 
     /// Drops `thread_id`'s completed turns beyond the newest
@@ -250,40 +236,36 @@ impl Inner {
         Ok(())
     }
 
-    /// Applies `change` to one turn under compare-and-swap; returns whether
-    /// it changed anything. `change` answers `None` to leave the turn alone.
+    /// Applies `change` to one turn under compare-and-swap; returns the turn
+    /// it wrote. `change` answers `None` to leave the turn alone.
     async fn update(
         &self,
         thread_id: &str,
         request_id: &str,
-        change: impl Fn(&TurnState) -> Option<TurnState>,
+        change: impl Fn(&TurnState) -> Option<TurnState> + Send + Sync,
     ) -> Result<Option<TurnState>, StorageError> {
-        for _ in 0..CAS_ATTEMPTS {
-            let Some(stored) = self.get_turn(thread_id, request_id).await? else {
-                return Ok(None);
-            };
-            let Some(next) = change(&stored.doc) else {
-                return Ok(None);
-            };
-            match self.write(&next, stored.unchanged()).await {
-                Ok(()) => return Ok(Some(next)),
-                Err(error) if is_race(&error) => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Err(contended(thread_id, request_id))
+        self.declared().await?;
+        let mut applied = None;
+        self.repo
+            .update(&id(thread_id, request_id)?, |current| {
+                let Some(current) = current else {
+                    return Ok(None);
+                };
+                let Some(next) = change(&decode_body(&current)?) else {
+                    return Ok(None);
+                };
+                let body = encode(&next)?;
+                applied = Some(next);
+                Ok(Some(body))
+            })
+            .await?;
+        Ok(applied)
     }
 }
 
 /// Whether `error` means another writer got there first.
 fn is_race(error: &StorageError) -> bool {
     error.kind() == ErrorKind::Conflict
-}
-
-fn contended(thread_id: &str, request_id: &str) -> StorageError {
-    StorageError::conflict(format!(
-        "turn {thread_id}/{request_id} kept changing under {CAS_ATTEMPTS} attempts"
-    ))
 }
 
 /// `turn` marked interrupted as of `now`.
@@ -303,7 +285,7 @@ impl TurnStates for DriverTurnStates {
     fn put(&self, state: &TurnState) -> Result<(), String> {
         let state = state.clone();
         self.run(|inner| async move {
-            inner.write(&state, Precondition::None).await?;
+            inner.write(&state).await?;
             if state.lifecycle == TurnLifecycle::Completed {
                 inner.prune_completed(&state.thread_id).await?;
             }
@@ -314,26 +296,28 @@ impl TurnStates for DriverTurnStates {
     fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> {
         let state = state.clone();
         self.run(|inner| async move {
-            for _ in 0..CAS_ATTEMPTS {
-                let pre = match inner.get_turn(&state.thread_id, &state.request_id).await? {
-                    Some(stored) if stored.doc.lifecycle == TurnLifecycle::Completed => {
-                        return Ok(false);
+            inner.declared().await?;
+            let mut declined = false;
+            let written = inner
+                .repo
+                .update(&id(&state.thread_id, &state.request_id)?, |current| {
+                    declined = false;
+                    if let Some(current) = current
+                        && decode_body(&current)?.lifecycle == TurnLifecycle::Completed
+                    {
+                        declined = true;
+                        return Ok(None);
                     }
-                    Some(stored) => stored.unchanged(),
-                    None => Precondition::Absent,
-                };
-                match inner.write(&state, pre).await {
-                    Ok(()) => {
-                        if state.lifecycle == TurnLifecycle::Completed {
-                            inner.prune_completed(&state.thread_id).await?;
-                        }
-                        return Ok(true);
-                    }
-                    Err(error) if is_race(&error) => {}
-                    Err(error) => return Err(error),
-                }
+                    Ok(Some(encode(&state)?))
+                })
+                .await?;
+            if declined || written.is_none() {
+                return Ok(false);
             }
-            Err(contended(&state.thread_id, &state.request_id))
+            if state.lifecycle == TurnLifecycle::Completed {
+                inner.prune_completed(&state.thread_id).await?;
+            }
+            Ok(true)
         })
     }
 
@@ -364,12 +348,16 @@ impl TurnStates for DriverTurnStates {
     }
 
     fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
-        let key = id(thread_id, request_id);
+        let (thread_id, request_id) = (thread_id.to_string(), request_id.to_string());
         self.run(|inner| async move {
             inner.declared().await?;
             inner
                 .docs
-                .delete(COLLECTION, &key, Precondition::None)
+                .delete(
+                    COLLECTION,
+                    &id(&thread_id, &request_id)?,
+                    Precondition::None,
+                )
                 .await
         })
     }
@@ -439,6 +427,9 @@ impl TurnStates for DriverTurnStates {
         })
     }
 }
+
+#[path = "turn_states_storage.rs"]
+pub(super) mod storage;
 
 #[cfg(test)]
 #[path = "turn_states_tests.rs"]
