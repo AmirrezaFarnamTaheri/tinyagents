@@ -9,7 +9,7 @@
 mod types;
 
 pub use types::{
-    deterministic_reply_id, EventSink, FailureClassifier, IngressDecision, IngressPolicy,
-    IngressStage, QueueDisposition, ReplyStore, ScopeKey, Summarizer, TerminalEvent,
-    TurnHost, TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig, TurnRunnerError,
+    EventSink, FailureClassifier, IngressDecision, IngressPolicy, IngressStage, QueueDisposition,
+    ReplyStore, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner,
+    TurnRunnerConfig, TurnRunnerError, deterministic_reply_id,
 };

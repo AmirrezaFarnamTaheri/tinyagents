@@ -72,9 +72,18 @@ pub enum QueueDisposition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalEvent {
-    Completed { request_id: String, reply_id: String },
-    Failed { request_id: String, message: String, class: String },
-    Cancelled { request_id: String },
+    Completed {
+        request_id: String,
+        reply_id: String,
+    },
+    Failed {
+        request_id: String,
+        message: String,
+        class: String,
+    },
+    Cancelled {
+        request_id: String,
+    },
 }
 
 #[async_trait]
@@ -112,8 +121,12 @@ pub struct TurnResult {
 
 #[async_trait]
 pub trait ReplyStore: Send + Sync {
-    async fn persist(&self, request: &TurnRequest, reply_id: &str, result: &TurnResult)
-        -> Result<(), String>;
+    async fn persist(
+        &self,
+        request: &TurnRequest,
+        reply_id: &str,
+        result: &TurnResult,
+    ) -> Result<(), String>;
 }
 
 #[async_trait]
@@ -225,7 +238,10 @@ where
     pub async fn cancel(&self, scope: &ScopeKey, thread_id: &str, request_id: &str) -> bool {
         let key = (scope.clone(), thread_id.to_owned());
         let active = self.active.lock().await;
-        if let Some(turn) = active.get(&key).filter(|turn| turn.request_id == request_id) {
+        if let Some(turn) = active
+            .get(&key)
+            .filter(|turn| turn.request_id == request_id)
+        {
             turn.cancel.cancel();
             true
         } else {
@@ -253,8 +269,14 @@ where
         let key = (request.scope.clone(), request.thread_id.clone());
         let cancellation = crate::CancellationToken::new();
         if !request.host_authored {
-            if !matches!(request.disposition, QueueDisposition::Interrupt | QueueDisposition::Parallel)
-                && self.host.queue(&request, request.disposition).await.unwrap_or(false)
+            if !matches!(
+                request.disposition,
+                QueueDisposition::Interrupt | QueueDisposition::Parallel
+            ) && self
+                .host
+                .queue(&request, request.disposition)
+                .await
+                .unwrap_or(false)
             {
                 return Err(TurnRunnerError::Queued);
             }
@@ -277,7 +299,11 @@ where
         }
         let lock = {
             let mut locks = self.locks.lock().await;
-            Arc::clone(locks.entry(key.clone()).or_insert_with(|| Arc::new(Mutex::new(()))))
+            Arc::clone(
+                locks
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
         };
         let _session_guard = if request.disposition == QueueDisposition::Parallel {
             None
@@ -290,40 +316,66 @@ where
         };
         let origin = self.host.run_origin(&request);
 
-        let result = self.run_guarded(&request, &session, &origin, cancellation.clone()).await;
+        let result = self
+            .run_guarded(&request, &session, &origin, cancellation.clone())
+            .await;
         self.host.checkin(&request).await;
         if !request.host_authored {
             let mut active = self.active.lock().await;
-            if active.get(&key).is_some_and(|turn| turn.request_id == request.request_id) {
+            if active
+                .get(&key)
+                .is_some_and(|turn| turn.request_id == request.request_id)
+            {
                 active.remove(&key);
             }
         }
 
         match result {
             Ok(result) => {
-                let reply_id = deterministic_reply_id(&request.scope, &request.thread_id, &request.request_id);
+                let reply_id =
+                    deterministic_reply_id(&request.scope, &request.thread_id, &request.request_id);
                 if let Err(error) = self.replies.persist(&request, &reply_id, &result).await {
                     return self.fail(&request, error).await;
                 }
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
-                self.events.terminal(
-                    &request,
-                    TerminalEvent::Completed { request_id: request.request_id.clone(), reply_id },
-                ).await;
+                self.events
+                    .terminal(
+                        &request,
+                        TerminalEvent::Completed {
+                            request_id: request.request_id.clone(),
+                            reply_id,
+                        },
+                    )
+                    .await;
                 Ok(result)
             }
             Err(_error) if cancellation.is_cancelled() => {
-                self.events.terminal(&request, TerminalEvent::Cancelled { request_id: request.request_id.clone() }).await;
+                self.events
+                    .terminal(
+                        &request,
+                        TerminalEvent::Cancelled {
+                            request_id: request.request_id.clone(),
+                        },
+                    )
+                    .await;
                 Err(TurnRunnerError::Cancelled)
             }
             Err(error) => self.fail(&request, error).await,
         }
     }
 
-    async fn run_guarded(&self, request: &TurnRequest, session: &TurnSession, origin: &serde_json::Value, cancellation: crate::CancellationToken) -> Result<TurnResult, String> {
+    async fn run_guarded(
+        &self,
+        request: &TurnRequest,
+        session: &TurnSession,
+        origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+    ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
-        let run = self.host.run(request, session, origin, cancellation.clone(), progress_tx);
+        let run = self
+            .host
+            .run(request, session, origin, cancellation.clone(), progress_tx);
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
         let deadline = request.deadline.or(self.config.deadline);
         let started = Instant::now();
@@ -357,8 +409,17 @@ where
         }
     }
 
-    async fn close_or_timeout(&self, request: &TurnRequest, reason: &str) -> Result<TurnResult, String> {
-        match tokio::time::timeout(self.config.close_timeout, self.summarizer.grounded_close(request, reason)).await {
+    async fn close_or_timeout(
+        &self,
+        request: &TurnRequest,
+        reason: &str,
+    ) -> Result<TurnResult, String> {
+        match tokio::time::timeout(
+            self.config.close_timeout,
+            self.summarizer.grounded_close(request, reason),
+        )
+        .await
+        {
             Ok(Some(result)) => Ok(result),
             _ => Err(format!("turn {reason}")),
         }
@@ -366,11 +427,16 @@ where
 
     async fn fail<T>(&self, request: &TurnRequest, error: String) -> Result<T, TurnRunnerError> {
         let (class, message) = self.failures.classify(&error);
-        self.events.terminal(request, TerminalEvent::Failed {
-            request_id: request.request_id.clone(),
-            message: message.clone(),
-            class,
-        }).await;
+        self.events
+            .terminal(
+                request,
+                TerminalEvent::Failed {
+                    request_id: request.request_id.clone(),
+                    message: message.clone(),
+                    class,
+                },
+            )
+            .await;
         Err(TurnRunnerError::Failed(message))
     }
 }

@@ -457,7 +457,10 @@ pub struct SubagentUsage {
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
     pub charged_amount_usd: f64,
-    #[serde(default = "unknown_cost_source", skip_serializing_if = "is_unknown_cost_source")]
+    #[serde(
+        default = "unknown_cost_source",
+        skip_serializing_if = "is_unknown_cost_source"
+    )]
     pub cost_source: crate::cost::CostSource,
 }
 
