@@ -65,7 +65,37 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
         modality: InputModality,
         source: &str,
         max_bytes: usize,
-    ) -> std::result::Result<ResolvedAttachment, String>;
+    ) -> std::result::Result<ResolvedMedia, String>;
+}
+
+/// A resolved attachment plus host-authored context to preserve beside it.
+///
+/// Hosts can use `annotations` for safe workspace hints or recovered-source
+/// labels. The wrapper emits them before native media and with text fallbacks;
+/// failed resolutions cannot produce annotations. The host must not put
+/// credentials, signed URLs, or resolver errors in this context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMedia {
+    /// The bounded attachment bytes and display metadata.
+    pub attachment: ResolvedAttachment,
+    /// Safe host-authored labels to keep alongside the attachment.
+    pub annotations: Vec<String>,
+}
+
+impl ResolvedMedia {
+    /// Wrap an attachment without additional host context.
+    pub fn new(attachment: ResolvedAttachment) -> Self {
+        Self {
+            attachment,
+            annotations: Vec::new(),
+        }
+    }
+
+    /// Add one host-authored context line.
+    pub fn with_annotation(mut self, annotation: impl Into<String>) -> Self {
+        self.annotations.push(annotation.into());
+        self
+    }
 }
 
 /// Produce a text description for an image when the selected model cannot
@@ -294,13 +324,14 @@ where
         }
 
         let mut native_images = Vec::new();
+        let mut native_annotations = Vec::new();
         let mut image_fallback = Vec::new();
         for (index, source) in images.into_iter().enumerate() {
             if historical && !selected_images.is_some_and(|selected| selected[index]) {
                 image_fallback.push(self.omission(scope, InputModality::Image, &source));
                 continue;
             }
-            let attachment = match self
+            let resolved = match self
                 .resolve(
                     scope,
                     InputModality::Image,
@@ -322,14 +353,19 @@ where
                 }
                 Err(error) => return Err(error),
             };
+            let ResolvedMedia {
+                attachment,
+                annotations,
+            } = resolved;
             if self.native(InputModality::Image, &attachment.mime) {
+                native_annotations.extend(annotations);
                 let mime = validated_image_mime(&attachment)?;
                 native_images.push(ContentBlock::Image(ImageRef {
                     url: encode_data_uri(&mime, &attachment.bytes),
                     mime_type: Some(mime),
                 }));
             } else {
-                image_fallback.push(self.image_fallback(scope, &attachment).await?);
+                image_fallback.push(self.image_fallback(scope, &attachment, &annotations).await?);
             }
         }
 
@@ -340,7 +376,7 @@ where
                 file_fallback_text.push(self.omission(scope, InputModality::Document, &source));
                 continue;
             }
-            let attachment = match self
+            let resolved = match self
                 .resolve(
                     scope,
                     InputModality::Document,
@@ -362,7 +398,12 @@ where
                 }
                 Err(error) => return Err(error),
             };
+            let ResolvedMedia {
+                attachment,
+                annotations,
+            } = resolved;
             if self.native(InputModality::Document, &attachment.mime) {
+                native_annotations.extend(annotations);
                 native_images.push(ContentBlock::Document(MediaRef::base64(
                     STANDARD.encode(&attachment.bytes),
                     attachment.mime,
@@ -370,6 +411,7 @@ where
             } else {
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
                 file_payloads.push(payload);
+                file_fallback_text.extend(annotations);
                 if let Some(text) = archive_text {
                     file_fallback_text.push(self.limit_context(text));
                 }
@@ -400,6 +442,11 @@ where
         if !text_output.is_empty() {
             output.push(ContentBlock::Text(text_output));
         }
+        output.extend(
+            native_annotations
+                .into_iter()
+                .map(ContentBlock::Text),
+        );
         output.extend(native_images);
         Ok(output)
     }
@@ -420,19 +467,27 @@ where
             InputModality::Image => self.config.images.max_image_bytes(),
             _ => self.config.files.max_file_bytes(),
         };
-        let mut attachment = self
+        let resolved = self
             .resolve(scope, modality, &source, max_bytes, false)
             .await?;
+        let ResolvedMedia {
+            mut attachment,
+            annotations,
+        } = resolved;
         if attachment.mime == "application/octet-stream"
             && let Some(mime) = hinted_mime
         {
             attachment.mime = mime;
         }
         if self.native(modality, &attachment.mime) {
-            return Ok(vec![native_block(modality, attachment)?]);
+            let mut output: Vec<_> = annotations.into_iter().map(ContentBlock::Text).collect();
+            output.push(native_block(modality, attachment)?);
+            return Ok(output);
         }
         let fallback = match modality {
-            InputModality::Image => self.image_fallback(scope, &attachment).await?,
+            InputModality::Image => {
+                self.image_fallback(scope, &attachment, &annotations).await?
+            }
             _ => {
                 let (payload, archive_text) = self.file_fallback(&attachment).await;
                 let rendered = compose_multimodal_message("", &[], &[payload]);
@@ -445,7 +500,8 @@ where
                 }
             }
         };
-        Ok(vec![ContentBlock::Text(fallback)])
+        let fallback = join_annotations(&annotations, &fallback);
+        Ok(vec![ContentBlock::Text(self.limit_context(fallback))])
     }
 
     async fn resolve(
@@ -455,7 +511,7 @@ where
         source: &str,
         max_bytes: usize,
         require_file_mime: bool,
-    ) -> tinyinference_llm::Result<ResolvedAttachment> {
+    ) -> tinyinference_llm::Result<ResolvedMedia> {
         let remote = source.starts_with("http://") || source.starts_with("https://");
         let remote_allowed = match modality {
             InputModality::Image => self.config.images.allow_remote_fetch,
@@ -471,16 +527,16 @@ where
             .resolve(scope, modality, source, max_bytes)
             .await
             .map_err(|error| model_error(&error))?;
-        if attachment.bytes.len() > max_bytes {
+        if attachment.attachment.bytes.len() > max_bytes {
             return Err(model_error("attachment exceeds configured byte limit"));
         }
-        if modality == InputModality::Image && attachment.bytes.is_empty() {
+        if modality == InputModality::Image && attachment.attachment.bytes.is_empty() {
             return Err(model_error("image reference has no bytes"));
         }
-        if require_file_mime && !self.config.files.is_mime_allowed(&attachment.mime) {
+        if require_file_mime && !self.config.files.is_mime_allowed(&attachment.attachment.mime) {
             return Err(model_error(&format!(
                 "file MIME type '{}' is not allowed; supported: {}",
-                attachment.mime,
+                attachment.attachment.mime,
                 self.config.files.supported_rendered()
             )));
         }
@@ -504,6 +560,7 @@ where
         &self,
         scope: &Scope,
         image: &ResolvedAttachment,
+        annotations: &[String],
     ) -> tinyinference_llm::Result<String> {
         let mime = validated_image_mime(image)?;
         let details = match &self.image_readout {
@@ -513,10 +570,10 @@ where
                 .map_err(|error| model_error(&error))?,
             None => "Image contents are unavailable to this text-only model.".to_string(),
         };
-        Ok(self.limit_context(format!(
+        Ok(self.limit_context(join_annotations(annotations, &format!(
             "[Image attachment: {} bytes; mime={mime}]\nImage readout (untrusted):\n{details}",
             image.bytes.len()
-        )))
+        ))))
     }
 
     async fn file_fallback(
