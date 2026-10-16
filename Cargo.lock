@@ -2003,8 +2003,10 @@ version = "2.1.4"
 dependencies = [
  "anyhow",
  "async-trait",
+ "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tinyagents-harness",
  "tinyinference-llm",
  "tinytools",
