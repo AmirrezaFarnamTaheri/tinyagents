@@ -581,6 +581,7 @@ impl<L: TeamLedger> TeamService<L> {
         };
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
         let run_id = format!("team-run-{}", Uuid::new_v4().simple());
+        cleanup.execution = Some((worker_thread_id.clone(), run_id.clone()));
         let member = match self.ledger.mark_member_running(
             team_id,
             member_id,
@@ -595,11 +596,8 @@ impl<L: TeamLedger> TeamService<L> {
             }
         };
         cleanup.execution = Some((
-            member
-                .worker_thread_id
-                .clone()
-                .unwrap_or(worker_thread_id.clone()),
-            member.run_id.clone().unwrap_or(run_id.clone()),
+            member.worker_thread_id.clone().unwrap_or(worker_thread_id),
+            member.run_id.clone().unwrap_or(run_id),
         ));
 
         let execution = executor.execute(&member, &claimed).await;
