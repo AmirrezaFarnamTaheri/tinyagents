@@ -2852,9 +2852,14 @@ async fn learning_summary_contains_digested_success_and_classified_failure_outco
 #[tokio::test]
 async fn hosted_stream_learning_summary_preserves_tool_outcomes() {
     let mut response = tinyinference_llm::model::ModelResponse::assistant("");
-    response.message.tool_calls.push(tinyinference_llm::tool::ToolCall::new(
-        "stream-call", "noop", json!({"value":"stream"}),
-    ));
+    response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "stream-call",
+            "noop",
+            json!({"value":"stream"}),
+        ));
     let learning = Arc::new(RecordingLearning::default());
     let host = crate::host::HostCapabilities::new(
         Arc::new(StaticContextComposer::empty()),
@@ -2866,24 +2871,37 @@ async fn hosted_stream_learning_summary_preserves_tool_outcomes() {
             response,
             tinyinference_llm::model::ModelResponse::assistant("done"),
         ])))),
-    ).with_learning(learning.clone());
+    )
+    .with_learning(learning.clone());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
-    let mut stream = harness.invoke_agent_stream(
-        AgentInvocation::new(
-            host,
-            AgentTurnRequest::new("helper", vec![tinyinference_llm::message::Message::user("stream")]),
-            RunContext::new(RunConfig::new("hosted-learning-outcomes"), ()),
-        ),
-        &(),
-    ).await.expect("stream starts");
+    let mut stream = harness
+        .invoke_agent_stream(
+            AgentInvocation::new(
+                host,
+                AgentTurnRequest::new(
+                    "helper",
+                    vec![tinyinference_llm::message::Message::user("stream")],
+                ),
+                RunContext::new(RunConfig::new("hosted-learning-outcomes"), ()),
+            ),
+            &(),
+        )
+        .await
+        .expect("stream starts");
     while stream.next().await.is_some() {}
     yield_until(|| learning.summaries.lock().expect("learning lock").len() == 1).await;
     let summaries = learning.summaries.lock().expect("learning lock");
     assert_eq!(summaries[0].tool_outcomes.len(), 1);
     let outcome = &summaries[0].tool_outcomes[0];
     assert!(outcome.success);
-    assert_eq!(outcome.args_digest, sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"stream"})).unwrap()).iter().map(|byte| format!("{byte:02x}")).collect::<String>());
+    assert_eq!(
+        outcome.args_digest,
+        sha2::Sha256::digest(serde_json::to_vec(&json!({"value":"stream"})).unwrap())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
     assert!(outcome.duration_ms < 10_000);
 }
 

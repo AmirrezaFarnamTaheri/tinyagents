@@ -280,67 +280,141 @@ impl<Ctx: HookIdentity + Send + Sync> ToolHook<Ctx> for crate::command::HookEngi
         context: &ToolHookContext,
     ) -> ToolHookDecision {
         let identity = crate::command::context::TurnIdentity {
-                conversation_id: host.session_id(),
-                session_id: host.session_id(),
-                agent_id: host.agent_id(),
-                cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
-                ..Default::default()
-            };
+            conversation_id: host.session_id(),
+            session_id: host.session_id(),
+            agent_id: host.agent_id(),
+            cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
+            ..Default::default()
+        };
         let output = self.dispatch_tool_hooks(context, identity, true).await;
         output
     }
 
     async fn after_tool_context(&self, host: &Ctx, context: &ToolHookContext) -> Option<String> {
         let identity = crate::command::context::TurnIdentity {
-            conversation_id: host.session_id(), session_id: host.session_id(),
-            agent_id: host.agent_id(), cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
+            conversation_id: host.session_id(),
+            session_id: host.session_id(),
+            agent_id: host.agent_id(),
+            cwd: host.cwd().as_ref().map(|path| path.display().to_string()),
             ..Default::default()
         };
-        self.dispatch_tool_hooks(context, identity, false).await.additional_context
+        self.dispatch_tool_hooks(context, identity, false)
+            .await
+            .additional_context
     }
 }
 
 impl crate::command::HookEngine {
-    async fn dispatch_tool_hooks(&self, context: &ToolHookContext, identity: crate::command::context::TurnIdentity, pre: bool) -> ToolHookDecision {
+    async fn dispatch_tool_hooks(
+        &self,
+        context: &ToolHookContext,
+        identity: crate::command::context::TurnIdentity,
+        pre: bool,
+    ) -> ToolHookDecision {
         use crate::command::{HookEvent, HookPayload, ToolPayload};
-        let generic = if pre { HookEvent::PreToolUse } else if context.success == Some(false) { HookEvent::PostToolUseFailure } else { HookEvent::PostToolUse };
+        let generic = if pre {
+            HookEvent::PreToolUse
+        } else if context.success == Some(false) {
+            HookEvent::PostToolUseFailure
+        } else {
+            HookEvent::PostToolUse
+        };
         let mut output = ToolHookDecision::default();
         if self.has_hooks(generic).await {
-            let input = crate::command::context::build_input(generic, identity.clone(), HookPayload::Tool(ToolPayload {
-                tool_name: context.tool_name.clone(),
-                tool_input: context.arguments.clone(),
-                tool_use_id: context.call_id.clone(),
-                tool_output: context.output.clone(), duration_ms: context.duration_ms,
-                error_message: context.error.clone(),
-                ..Default::default()
-            }));
+            let input = crate::command::context::build_input(
+                generic,
+                identity.clone(),
+                HookPayload::Tool(ToolPayload {
+                    tool_name: context.tool_name.clone(),
+                    tool_input: context.arguments.clone(),
+                    tool_use_id: context.call_id.clone(),
+                    tool_output: context.output.clone(),
+                    duration_ms: context.duration_ms,
+                    error_message: context.error.clone(),
+                    ..Default::default()
+                }),
+            );
             output.merge(self.dispatch(generic, input).await.output);
         }
-        if output.is_deny() { return output; }
+        if output.is_deny() {
+            return output;
+        }
         let name = context.tool_name.to_ascii_lowercase();
         let derived = if ["shell", "bash", "run_command", "command"].contains(&name.as_str()) {
-            Some(if pre { HookEvent::BeforeShellExecution } else { HookEvent::AfterShellExecution })
+            Some(if pre {
+                HookEvent::BeforeShellExecution
+            } else {
+                HookEvent::AfterShellExecution
+            })
         } else if ["file_read", "read_file", "read", "readfile"].contains(&name.as_str()) && pre {
             Some(HookEvent::BeforeReadFile)
-        } else if ["file_write", "write_file", "edit_file", "write", "edit"].contains(&name.as_str()) && !pre {
+        } else if ["file_write", "write_file", "edit_file", "write", "edit"]
+            .contains(&name.as_str())
+            && !pre
+        {
             Some(HookEvent::AfterFileEdit)
-        } else if name.starts_with("mcp_") || name.starts_with("mcp:") || name.starts_with("mcp__") {
-            Some(if pre { HookEvent::BeforeMcpExecution } else { HookEvent::AfterMcpExecution })
-        } else { None };
-        if let Some(event) = derived && self.has_hooks(event).await {
+        } else if name.starts_with("mcp_") || name.starts_with("mcp:") || name.starts_with("mcp__")
+        {
+            Some(if pre {
+                HookEvent::BeforeMcpExecution
+            } else {
+                HookEvent::AfterMcpExecution
+            })
+        } else {
+            None
+        };
+        if let Some(event) = derived
+            && self.has_hooks(event).await
+        {
             let payload = match event {
-                HookEvent::BeforeShellExecution | HookEvent::AfterShellExecution => HookPayload::Shell(crate::command::types::ShellPayload {
-                    command: context.arguments.get("command").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
-                    sandbox: context.arguments.get("sandbox").and_then(serde_json::Value::as_bool).unwrap_or(false),
-                    output: context.output.clone(), duration_ms: context.duration_ms,
+                HookEvent::BeforeShellExecution | HookEvent::AfterShellExecution => {
+                    HookPayload::Shell(crate::command::types::ShellPayload {
+                        command: context
+                            .arguments
+                            .get("command")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        sandbox: context
+                            .arguments
+                            .get("sandbox")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        output: context.output.clone(),
+                        duration_ms: context.duration_ms,
+                    })
+                }
+                HookEvent::BeforeReadFile | HookEvent::AfterFileEdit => {
+                    HookPayload::File(crate::command::types::FilePayload {
+                        file_path: ["path", "file_path", "filename", "file"]
+                            .iter()
+                            .find_map(|k| {
+                                context
+                                    .arguments
+                                    .get(*k)
+                                    .and_then(serde_json::Value::as_str)
+                            })
+                            .unwrap_or_default()
+                            .to_owned(),
+                        edits: Vec::new(),
+                    })
+                }
+                _ => HookPayload::Tool(ToolPayload {
+                    tool_name: context.tool_name.clone(),
+                    tool_input: context.arguments.clone(),
+                    tool_use_id: context.call_id.clone(),
+                    tool_output: context.output.clone(),
+                    duration_ms: context.duration_ms,
+                    error_message: context.error.clone(),
+                    ..Default::default()
                 }),
-                HookEvent::BeforeReadFile | HookEvent::AfterFileEdit => HookPayload::File(crate::command::types::FilePayload {
-                    file_path: ["path", "file_path", "filename", "file"].iter().find_map(|k| context.arguments.get(*k).and_then(serde_json::Value::as_str)).unwrap_or_default().to_owned(),
-                    edits: Vec::new(),
-                }),
-                _ => HookPayload::Tool(ToolPayload { tool_name: context.tool_name.clone(), tool_input: context.arguments.clone(), tool_use_id: context.call_id.clone(), tool_output: context.output.clone(), duration_ms: context.duration_ms, error_message: context.error.clone(), ..Default::default() }),
             };
-            let result = self.dispatch(event, crate::command::context::build_input(event, identity, payload)).await;
+            let result = self
+                .dispatch(
+                    event,
+                    crate::command::context::build_input(event, identity, payload),
+                )
+                .await;
             output.merge(result.output);
         }
         output
