@@ -104,12 +104,14 @@ impl RebindableSessionStores {
         &self,
         backend: Arc<dyn StorageBackend>,
     ) -> std::result::Result<(), StorageError> {
+        // Serialize publication with agent registration so a concurrent
+        // `for_agent` cannot attach to the old provider after this registry
+        // snapshot. This synchronous lock is never held over async I/O.
+        let mut live_registry = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live_registry.retain(|_, weak| weak.strong_count() > 0);
         let next =
             Arc::new(DriverSessionStores::new(backend)?.recover_on_open(self.recover_on_open));
-        let live = self
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        let live = live_registry
             .iter()
             .filter_map(|(agent_id, weak)| {
                 weak.upgrade().map(|binding| (agent_id.clone(), binding))
@@ -125,13 +127,13 @@ impl RebindableSessionStores {
                     .map(|stores| (Arc::clone(binding), stores))
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
         for (binding, stores) in replacements {
             *binding
                 .current
                 .write()
                 .unwrap_or_else(PoisonError::into_inner) = stores;
         }
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
         Ok(())
     }
 }
@@ -294,6 +296,9 @@ impl TranscriptLocator for LiveTranscriptLocator {
         stem: &str,
         seed: TranscriptMeta,
     ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        // A bound history handle is an operation/session snapshot. The
+        // locator remains live for the next lookup, while this handle finishes
+        // against the backend it was opened on.
         self.0.snapshot().transcripts.open_stem(stem, seed)
     }
     fn adopt_legacy(
