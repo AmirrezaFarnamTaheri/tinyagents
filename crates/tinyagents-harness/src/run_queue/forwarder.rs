@@ -121,6 +121,8 @@ struct ForwardedItem {
 
 trait QueueAdapter: Send + Sync {
     fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem>;
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage;
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane);
     fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String>;
 }
 
@@ -136,6 +138,21 @@ impl<T: QueuedMessage> QueueAdapter for BorrowedQueue<'_, T> {
                 message: TaMessage::user(item.text().to_owned()),
             })
             .collect()
+    }
+
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        TaMessage::user(format!("{}{}", lane_prefix(lane), message.text()))
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        let text = message.text();
+        if let Some(text) = text.strip_prefix(STEER_PREFIX) {
+            (TaMessage::user(text), QueueLane::Steer)
+        } else if let Some(text) = text.strip_prefix(COLLECT_PREFIX) {
+            (TaMessage::user(text), QueueLane::Collect)
+        } else {
+            (TaMessage::user(text), QueueLane::Steer)
+        }
     }
 
     fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
@@ -155,6 +172,14 @@ impl<T: QueuedMessage> QueueAdapter for SharedQueue<T> {
         BorrowedQueue(self.0.as_ref()).drain(lane)
     }
 
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        BorrowedQueue(self.0.as_ref()).frame(lane, message)
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        BorrowedQueue(self.0.as_ref()).unframe(message)
+    }
+
     fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
         BorrowedQueue(self.0.as_ref()).requeue(lane, message, thread_label)
     }
@@ -171,6 +196,57 @@ impl QueueAdapter for BorrowedMessageQueue<'_> {
             .collect()
     }
 
+    fn frame(&self, lane: QueueLane, mut message: TaMessage) -> TaMessage {
+        if let TaMessage::User(user) = &mut message {
+            let prefix = lane_prefix(lane);
+            match user.content.first_mut() {
+                Some(tinyinference_llm::message::ContentBlock::Text(text)) if !text.is_empty() => {
+                    text.insert_str(0, prefix);
+                }
+                _ => user.content.insert(
+                    0,
+                    tinyinference_llm::message::ContentBlock::Text(prefix.into()),
+                ),
+            }
+        }
+        message
+    }
+
+    fn unframe(&self, mut message: TaMessage) -> (TaMessage, QueueLane) {
+        let lane = match &message {
+            TaMessage::User(user) => match user.content.first() {
+                Some(tinyinference_llm::message::ContentBlock::Text(text))
+                    if text.starts_with(STEER_PREFIX) =>
+                {
+                    QueueLane::Steer
+                }
+                Some(tinyinference_llm::message::ContentBlock::Text(text))
+                    if text.starts_with(COLLECT_PREFIX) =>
+                {
+                    QueueLane::Collect
+                }
+                _ => QueueLane::Steer,
+            },
+            _ => QueueLane::Steer,
+        };
+        if let TaMessage::User(user) = &mut message
+            && let Some(tinyinference_llm::message::ContentBlock::Text(text)) = user.content.first()
+            && text.starts_with(lane_prefix(lane))
+        {
+            let text = match &mut user.content[0] {
+                tinyinference_llm::message::ContentBlock::Text(text) => text,
+                _ => unreachable!("the checked first block is text"),
+            };
+            let stripped = text[lane_prefix(lane).len()..].to_owned();
+            if stripped.is_empty() {
+                user.content.remove(0);
+            } else {
+                *text = stripped;
+            }
+        }
+        (message, lane)
+    }
+
     fn requeue(&self, lane: QueueLane, message: TaMessage, _thread_label: &str) -> Option<String> {
         self.0.push_now(lane, message);
         None
@@ -184,42 +260,24 @@ impl QueueAdapter for SharedMessageQueue {
         BorrowedMessageQueue(self.0.as_ref()).drain(lane)
     }
 
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        BorrowedMessageQueue(self.0.as_ref()).frame(lane, message)
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        BorrowedMessageQueue(self.0.as_ref()).unframe(message)
+    }
+
     fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
         BorrowedMessageQueue(self.0.as_ref()).requeue(lane, message, thread_label)
     }
 }
 
-fn add_prefix(mut message: TaMessage, prefix: &str) -> TaMessage {
-    if let TaMessage::User(user) = &mut message {
-        user.content.insert(
-            0,
-            tinyinference_llm::message::ContentBlock::Text(prefix.into()),
-        );
+fn lane_prefix(lane: QueueLane) -> &'static str {
+    match lane {
+        QueueLane::Steer | QueueLane::Followup => STEER_PREFIX,
+        QueueLane::Collect => COLLECT_PREFIX,
     }
-    message
-}
-
-fn strip_prefix(mut message: TaMessage) -> (TaMessage, QueueLane) {
-    let first = match &message {
-        TaMessage::User(user) => user.content.first(),
-        _ => None,
-    };
-    let (prefix, lane) = if matches!(first, Some(tinyinference_llm::message::ContentBlock::Text(text)) if text.starts_with(STEER_PREFIX))
-    {
-        (STEER_PREFIX, QueueLane::Steer)
-    } else if matches!(first, Some(tinyinference_llm::message::ContentBlock::Text(text)) if text.starts_with(COLLECT_PREFIX))
-    {
-        (COLLECT_PREFIX, QueueLane::Collect)
-    } else {
-        return (message, QueueLane::Steer);
-    };
-    if let TaMessage::User(user) = &mut message
-        && let Some(tinyinference_llm::message::ContentBlock::Text(text)) = user.content.first_mut()
-        && let Some(stripped) = text.strip_prefix(prefix)
-    {
-        *text = stripped.to_owned();
-    }
-    (message, lane)
 }
 
 /// Drain `lane` and forward it into `handle`. With a `gate`, the drain and
@@ -233,7 +291,6 @@ fn forward_lane(
     thread_label: &str,
     lane: QueueLane,
     mode: &'static str,
-    prefix: &str,
     sink: &ForwardEventSink,
     gate: Option<&ClosedGate>,
 ) -> bool {
@@ -247,10 +304,9 @@ fn forward_lane(
             return true;
         }
         for msg in &drained {
-            handle.send(SteeringCommand::InjectMessage(add_prefix(
-                msg.message.clone(),
-                prefix,
-            )));
+            handle.send(SteeringCommand::InjectMessage(
+                queue.frame(lane, msg.message.clone()),
+            ));
         }
         let (item_id, text) = drained
             .first()
@@ -290,7 +346,6 @@ pub async fn forward_steers<T: QueuedMessage>(
         thread_label,
         QueueLane::Steer,
         "steer",
-        STEER_PREFIX,
         sink,
         None,
     );
@@ -316,7 +371,6 @@ pub async fn forward_collects<T: QueuedMessage>(
         thread_label,
         QueueLane::Collect,
         "collect",
-        COLLECT_PREFIX,
         sink,
         None,
     );
@@ -335,7 +389,6 @@ pub async fn forward_message_steers(
         thread_label,
         QueueLane::Steer,
         "steer",
-        STEER_PREFIX,
         sink,
         None,
     );
@@ -354,7 +407,6 @@ pub async fn forward_message_collects(
         thread_label,
         QueueLane::Collect,
         "collect",
-        COLLECT_PREFIX,
         sink,
         None,
     );
@@ -387,12 +439,9 @@ impl SteeringForwarderCore {
             let loop_sink = sink.clone();
             let loop_closed = closed.clone();
             tokio::spawn(async move {
-                for (lane, mode, prefix) in [
-                    (QueueLane::Steer, "steer", STEER_PREFIX),
-                    (QueueLane::Collect, "collect", COLLECT_PREFIX),
-                ]
-                .into_iter()
-                .cycle()
+                for (lane, mode) in [(QueueLane::Steer, "steer"), (QueueLane::Collect, "collect")]
+                    .into_iter()
+                    .cycle()
                 {
                     if lane == QueueLane::Steer {
                         tokio::time::sleep(POLL_INTERVAL).await;
@@ -406,7 +455,6 @@ impl SteeringForwarderCore {
                         &loop_label,
                         lane,
                         mode,
-                        prefix,
                         &loop_sink,
                         Some(&loop_closed),
                     ) {
@@ -435,7 +483,8 @@ impl SteeringForwarderCore {
 impl Drop for SteeringForwarderCore {
     fn drop(&mut self) {
         *lock_gate(&self.closed) = true;
-        if self.forwarder.take().is_some() {
+        if let Some(forwarder) = self.forwarder.take() {
+            forwarder.abort();
             tracing::debug!(
                 thread_id = self.thread_label.as_str(),
                 "[run_queue] closed steering forwarder (guard drop)"
@@ -446,17 +495,18 @@ impl Drop for SteeringForwarderCore {
             tracing::debug!("[run_queue] ran forwarder cleanup (guard drop)");
         }
 
+        let Some(queue) = self.run_queue.take() else {
+            self.handle.drain();
+            return;
+        };
         let residual = self.handle.drain();
         let requeue_items: Vec<_> = residual
             .into_iter()
             .filter_map(|command| match command {
-                SteeringCommand::InjectMessage(message) => Some(strip_prefix(message)),
+                SteeringCommand::InjectMessage(message) => Some(queue.unframe(message)),
                 _ => None,
             })
             .collect();
-        let Some(queue) = self.run_queue.take() else {
-            return;
-        };
         if requeue_items.is_empty() {
             return;
         }

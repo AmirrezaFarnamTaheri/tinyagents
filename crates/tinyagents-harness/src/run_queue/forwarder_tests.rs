@@ -335,8 +335,7 @@ async fn native_message_queue_forwarding_preserves_full_payload_and_lanes() {
         steers.as_slice(),
         [SteeringCommand::InjectMessage(TaMessage::User(message))]
             if message.content == vec![
-                ContentBlock::Text(STEER_PREFIX.into()),
-                ContentBlock::Text("inspect this".into()),
+                ContentBlock::Text(format!("{STEER_PREFIX}inspect this")),
                 image.clone(),
             ]
     ));
@@ -350,8 +349,7 @@ async fn native_message_queue_forwarding_preserves_full_payload_and_lanes() {
         handle.drain().as_slice(),
         [SteeringCommand::InjectMessage(TaMessage::User(message))]
             if message.content == vec![
-                ContentBlock::Text(COLLECT_PREFIX.into()),
-                ContentBlock::Text("inspect this".into()),
+                ContentBlock::Text(format!("{COLLECT_PREFIX}inspect this")),
                 image,
             ]
     ));
@@ -415,4 +413,59 @@ async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items()
         [ForwardEvent::Requeued { requeued: 1, item_id: None, text: Some(text), .. }]
             if text == "deferred"
     ));
+}
+
+#[tokio::test]
+async fn native_message_residual_round_trips_without_empty_prefix_blocks() {
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let original = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text("first block".into()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,roundtrip".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Json(serde_json::json!({"caption": "complete payload"})),
+        ],
+    });
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+
+    for _ in 0..2 {
+        let guard = MessageSteeringForwarderGuard::new(
+            handle.clone(),
+            Some(queue.clone()),
+            None,
+            "thread".into(),
+            sink.clone(),
+        );
+        queue.push_now(QueueLane::Steer, original.clone());
+        forward_message_steers(&queue, &handle, "thread", &sink).await;
+        drop(guard);
+        assert_eq!(queue.drain_now(QueueLane::Steer), vec![original.clone()]);
+    }
+
+    let original_empty_first = TaMessage::User(tinyinference_llm::message::UserMessage {
+        content: vec![
+            ContentBlock::Text(String::new()),
+            ContentBlock::Image(ImageRef {
+                url: "data:image/png;base64,empty".into(),
+                mime_type: Some("image/png".into()),
+            }),
+        ],
+    });
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "thread".into(),
+        sink.clone(),
+    );
+    queue.push_now(QueueLane::Steer, original_empty_first.clone());
+    forward_message_steers(&queue, &handle, "thread", &sink).await;
+    drop(guard);
+    assert_eq!(
+        queue.drain_now(QueueLane::Steer),
+        vec![original_empty_first]
+    );
 }

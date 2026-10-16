@@ -27,12 +27,10 @@ async fn native_message_feed_primes_complete_user_content_and_requeues_residuals
             SteeringCommand::InjectMessage(Message::User(steer)),
             SteeringCommand::InjectMessage(Message::User(collect))
         ] if steer.content == vec![
-            ContentBlock::Text("[User steering message]: ".into()),
-            ContentBlock::Text("look closely".into()),
+            ContentBlock::Text("[User steering message]: look closely".into()),
             media.clone(),
         ] && collect.content == vec![
-            ContentBlock::Text("[Additional context from user]: ".into()),
-            ContentBlock::Text("look closely".into()),
+            ContentBlock::Text("[Additional context from user]: look closely".into()),
             media.clone(),
         ]
     ));
