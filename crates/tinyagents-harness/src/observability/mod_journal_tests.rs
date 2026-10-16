@@ -108,7 +108,7 @@ async fn sealing_a_run_leaves_every_replay_page_unchanged() {
     assert_eq!(after, before);
     assert_eq!(
         journal
-            .read_filtered("run.sealed", 0, &["tool_started"])
+            .read_filtered("run.sealed", 0, &["tool.started"])
             .await
             .unwrap()
             .len(),

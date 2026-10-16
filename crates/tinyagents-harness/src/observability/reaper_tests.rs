@@ -128,10 +128,7 @@ mod sealing {
             }
         };
         assert_eq!(sealed(orphan.clone()).await, Some(true));
-        assert_eq!(
-            sealed(finished.as_str().to_owned()).await,
-            Some(false)
-        );
+        assert_eq!(sealed(finished.as_str().to_owned()).await, Some(false));
         assert_eq!(sealed(no_journal).await, None, "no stream was invented");
         assert_eq!(journal.read_from(&orphan, 0).await.unwrap().len(), 1);
     }
