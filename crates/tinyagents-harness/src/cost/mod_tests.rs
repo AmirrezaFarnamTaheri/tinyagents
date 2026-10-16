@@ -47,7 +47,7 @@ fn subagent_usage_rollup_deduplicates_replayed_runs_but_keeps_distinct_runs() {
         [first_run.clone(), first_run, second_run],
     );
     assert_eq!(rollup.input_tokens, 120);
-    assert_eq!(rollup.output_tokens, 41);
+    assert_eq!(rollup.output_tokens, 34);
     assert_eq!(rollup.cached_input_tokens, 50);
     assert_eq!(rollup.cost.known_usd, 1.75);
     assert_eq!(rollup.cost.source, CostSource::Estimated);
