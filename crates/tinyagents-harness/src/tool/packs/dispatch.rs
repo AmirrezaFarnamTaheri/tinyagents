@@ -125,12 +125,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
             .unwrap_or_else(|| arguments.clone());
         self.selected.as_ref().map_or_else(
             || {
-                self.pinned
-                    .supports_markdown()
-                    .then_some(ToolCallOptions {
+                if self.pinned.supports_markdown() {
+                    ToolCallOptions {
                         prefer_markdown: true,
-                    })
-                    .unwrap_or_default()
+                    }
+                } else {
+                    ToolCallOptions::default()
+                }
             },
             |dispatch| dispatch.call_options(&inner_arguments),
         )
