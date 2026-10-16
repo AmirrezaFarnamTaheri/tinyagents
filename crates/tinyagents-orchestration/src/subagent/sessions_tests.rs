@@ -50,6 +50,37 @@ fn upsert(force_fresh: bool, task_id: &str) -> SubagentSessionUpsert {
     }
 }
 
+#[test]
+fn legacy_session_rows_decode_without_a_lifecycle_key() {
+    let mut value = serde_json::to_value(DurableSubagentSession {
+        subagent_session_id: "legacy".into(),
+        parent_session: "parent".into(),
+        parent_thread_id: Some("thread".into()),
+        worker_thread_id: None,
+        agent_id: "researcher".into(),
+        display_name: None,
+        model: None,
+        sandbox_mode: "read_only".into(),
+        action_root: None,
+        task_key: "analysis".into(),
+        lifecycle_key: Some(lifecycle_key()),
+        task_title: "Analyze".into(),
+        current_task_id: Some("legacy-task".into()),
+        status: DurableSubagentStatus::Idle,
+        reusable: true,
+        latest_history: None,
+        latest_error: None,
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        last_used_at: "2026-01-01T00:00:00Z".into(),
+    })
+    .unwrap();
+    value.as_object_mut().unwrap().remove("lifecycleKey");
+    let decoded: DurableSubagentSession = serde_json::from_value(value).unwrap();
+    assert!(decoded.lifecycle_key.is_none());
+    assert_eq!(decoded.current_task_id.as_deref(), Some("legacy-task"));
+}
+
 #[tokio::test]
 async fn session_selector_requires_matching_scope_and_reusable_status() {
     let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();

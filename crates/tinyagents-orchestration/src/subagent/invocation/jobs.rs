@@ -14,7 +14,7 @@ use tinyagents_harness::steering::{
 };
 use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyinference_llm::message::Message;
-use tinytools::{Tool, ToolResult};
+use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
 use crate::subagent::{
     AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
@@ -904,6 +904,10 @@ pub struct SubAgentJobsTool {
     await_timeout: Option<AwaitTimeout>,
     require_identifier: bool,
     owner_scope: OwnerScope,
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
 }
 
 impl SubAgentJobsTool {
@@ -921,6 +925,10 @@ impl SubAgentJobsTool {
             await_timeout: None,
             require_identifier: false,
             owner_scope: Arc::new(|owner| owner.to_string()),
+            permission: PermissionLevel::ReadOnly,
+            scope: ToolScope::All,
+            category: ToolCategory::System,
+            timeout: ToolTimeout::Inherit,
         }
     }
 
@@ -1000,6 +1008,22 @@ impl SubAgentJobsTool {
         self
     }
 
+    /// Preserves host execution metadata when a product alias uses this
+    /// generic dispatch implementation.
+    pub fn with_metadata(
+        mut self,
+        permission: PermissionLevel,
+        scope: ToolScope,
+        category: ToolCategory,
+        timeout: ToolTimeout,
+    ) -> Self {
+        self.permission = permission;
+        self.scope = scope;
+        self.category = category;
+        self.timeout = timeout;
+        self
+    }
+
     /// Overlays durable sessions in list/query and enables durable close.
     /// `parent_key` maps the live run owner to the host's durable parent scope.
     pub fn with_sessions(
@@ -1047,6 +1071,33 @@ impl Tool for SubAgentJobsTool {
             }
             json!({"type":"object","properties":properties})
         })
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        self.permission
+    }
+
+    fn scope(&self) -> ToolScope {
+        self.scope
+    }
+
+    fn category(&self) -> ToolCategory {
+        self.category
+    }
+
+    fn timeout_policy(&self, args: &Value) -> ToolTimeout {
+        if self.timeout != ToolTimeout::Inherit {
+            return self.timeout;
+        }
+        let Some(timeout) = self.await_timeout.as_ref() else {
+            return ToolTimeout::Inherit;
+        };
+        let empty = serde_json::Map::new();
+        ToolTimeout::Millis(
+            timeout
+                .requested_secs(args.as_object().unwrap_or(&empty))
+                .saturating_mul(1000),
+        )
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -1289,6 +1340,10 @@ pub struct SubAgentMessageTool {
     lane: Option<QueueLane>,
     lane_field: Option<String>,
     owner_scope: OwnerScope,
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
 }
 
 impl SubAgentMessageTool {
@@ -1304,6 +1359,10 @@ impl SubAgentMessageTool {
             lane: None,
             lane_field: None,
             owner_scope: Arc::new(|owner| owner.to_string()),
+            permission: PermissionLevel::ReadOnly,
+            scope: ToolScope::All,
+            category: ToolCategory::System,
+            timeout: ToolTimeout::Inherit,
         }
     }
 
@@ -1366,6 +1425,22 @@ impl SubAgentMessageTool {
         self
     }
 
+    /// Preserves host execution metadata when a product alias uses this
+    /// generic dispatch implementation.
+    pub fn with_metadata(
+        mut self,
+        permission: PermissionLevel,
+        scope: ToolScope,
+        category: ToolCategory,
+        timeout: ToolTimeout,
+    ) -> Self {
+        self.permission = permission;
+        self.scope = scope;
+        self.category = category;
+        self.timeout = timeout;
+        self
+    }
+
     /// Enables steering a live durable session by its session id.
     pub fn with_sessions(
         mut self,
@@ -1402,6 +1477,22 @@ impl Tool for SubAgentMessageTool {
             "required": ["message"],
             "oneOf": [{"required":["job_id"]},{"required":["session_id"]}]
         }))
+    }
+
+    fn permission_level(&self) -> PermissionLevel {
+        self.permission
+    }
+
+    fn scope(&self) -> ToolScope {
+        self.scope
+    }
+
+    fn category(&self) -> ToolCategory {
+        self.category
+    }
+
+    fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
+        self.timeout
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
