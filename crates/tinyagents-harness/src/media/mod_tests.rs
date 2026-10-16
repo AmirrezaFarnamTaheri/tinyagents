@@ -154,7 +154,7 @@ async fn image_tool_stores_blobs_and_reports_their_keys() {
     let saved = stored(&output).await;
     assert_eq!(saved.len(), 2);
     assert!(
-        !dir.path().join("generated-media").exists(),
+        !dir.path().join("harness/generated_media").exists(),
         "nothing is written to the workspace"
     );
     for key in &saved {
@@ -680,7 +680,11 @@ async fn persist_refuses_to_replace_an_existing_artifact() {
         .await
         .unwrap_err();
     assert!(error.contains("already exists"), "{error}");
-    let kept = output.blobs.get("generated-media/clip.png").await.unwrap();
+    let kept = output
+        .blobs
+        .get("harness/generated_media/clip.png")
+        .await
+        .unwrap();
     assert_eq!(kept.unwrap().bytes, b"one");
 }
 

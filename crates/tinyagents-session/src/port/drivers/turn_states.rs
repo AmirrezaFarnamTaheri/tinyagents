@@ -144,7 +144,12 @@ fn encode(state: &TurnState) -> Result<Value, StorageError> {
 }
 
 fn decode(stored: Versioned<Value>) -> Result<Versioned<TurnState>, StorageError> {
-    let Versioned { id, version, doc } = stored;
+    let Versioned {
+        id,
+        version,
+        doc,
+        meta,
+    } = stored;
     let turn = doc
         .get("turn")
         .cloned()
@@ -156,6 +161,7 @@ fn decode(stored: Versioned<Value>) -> Result<Versioned<TurnState>, StorageError
         id,
         version,
         doc: turn,
+        meta,
     })
 }
 

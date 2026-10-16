@@ -205,6 +205,7 @@ impl DriverRunLedger {
                     id: found.id,
                     version: found.version,
                     doc: decode(found.doc)?,
+                    meta: found.meta,
                 })
             })
             .transpose()

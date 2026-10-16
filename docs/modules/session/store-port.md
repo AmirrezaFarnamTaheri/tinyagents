@@ -164,7 +164,7 @@ literals and providers are unchanged.
 | --- | --- |
 | transcripts | `session_transcripts`: one index document per stem (thread, agent, sub-agent flag, creation time); `session_transcript_entries`: an append-only log per stem |
 | turn states | `session_turn_states`: one document per `(thread, request)` |
-| key-value | `session_kv` through the harness `DriverStore` |
+| key-value | `tsd.kv` (owner `session`) through the harness `DriverStore` |
 | journal | streams `16:session_journal/<name>` (the harness `DriverAppendStore` always writes `<prefix len>:` first) |
 
 - **Transcript log.** Each write is one entry, numbered from 0 and claimed
@@ -220,7 +220,7 @@ Native internal stream/blob metadata preparation remains the driver's job.
 This API does not grant a lease, bind actor identity, disable lazy declarations,
 or validate restricted actor reads. A host must separately use the owning
 native schema-validation contract when integrating actors without DDL authority.
-`DriverStore::collection_spec(collection)` also exposes the harness key-value
+`DriverStore::collection_spec()` also exposes the shared `tsd.kv`
 declaration for hosts using that adapter independently.
 
 ## Conformance

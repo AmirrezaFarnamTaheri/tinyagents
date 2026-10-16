@@ -127,12 +127,6 @@ impl StorageBackend for ProbeBackend {
             scoped.blobs().clone(),
         ))
     }
-    fn database(&self, name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Ok(Arc::new(Self {
-            inner: self.inner.database(name)?,
-            observed: self.observed.clone(),
-        }))
-    }
 }
 
 async fn prepared() -> (Arc<dyn StorageBackend>, Arc<Observations>) {

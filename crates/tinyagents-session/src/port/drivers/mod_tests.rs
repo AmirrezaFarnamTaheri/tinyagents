@@ -35,7 +35,7 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
         specs[2].indexes,
         vec![IndexSpec::new("by_thread", ["thread_id"])]
     );
-    assert_eq!(specs[3], DriverStore::collection_spec("session_kv"));
+    assert_eq!(specs[3], DriverStore::collection_spec());
     for spec in specs {
         spec.validate().unwrap();
         assert!(spec.ttl_field.is_none());
@@ -58,9 +58,9 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
         scoped
             .documents()
             .put(
-                "session_kv",
+                "tsd.kv",
                 "bootstrap-control",
-                serde_json::json!({"ns": "control", "value": "retained"}),
+                serde_json::json!({"owner": "session", "ns": "control", "key": "k", "value": "retained"}),
                 tinystoragedrivers_core::Precondition::Absent,
             )
             .await
@@ -71,7 +71,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
         assert_eq!(
             scoped
                 .documents()
-                .get("session_kv", "bootstrap-control")
+                .get("tsd.kv", "bootstrap-control")
                 .await
                 .unwrap()
                 .unwrap()
@@ -292,10 +292,6 @@ impl StorageBackend for Unbindable {
     fn for_scope(&self, _scope: &Scope) -> Result<ScopedStorage, StorageError> {
         Err(StorageError::unavailable("database is down"))
     }
-
-    fn database(&self, _name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unavailable("database is down"))
-    }
 }
 
 #[tokio::test]
@@ -473,9 +469,6 @@ impl StorageBackend for Flaky {
             Arc::clone(inner.blobs()),
         ))
     }
-    fn database(&self, name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        self.storage.database(name)
-    }
 }
 
 #[test]
@@ -546,13 +539,6 @@ impl StorageBackend for NativeRefusal {
     /// Refuses admission with the same source Arc supplied by the test.
     fn for_scope(&self, _: &Scope) -> Result<ScopedStorage, StorageError> {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
-    }
-    /// Refuses named database access for this scope-only fixture.
-    fn database(&self, _: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Err(StorageError::unsupported(
-            tinystoragedrivers_core::Capability::Fencing,
-            "database",
-        ))
     }
 }
 

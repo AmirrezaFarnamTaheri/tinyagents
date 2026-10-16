@@ -76,9 +76,14 @@ let kv = DriverStore::new(scoped.documents().clone());
 let journal = DriverAppendStore::with_prefix(scoped.streams().clone(), "journal/");
 ```
 
-- `DriverStore` keeps every namespace in one collection (`harness_store` by
-  default) as `{ns, key, value}` documents, so namespaces and keys may hold any
-  characters, and `list` is an indexed query.
+- `DriverStore` is a view of the shared `tsd.kv` primitive: each namespace is a
+  `Kv` namespace of the store's owner (`harness` by default, `with_owner` for
+  another). Entries are `{owner, ns, key, value}` documents under
+  `Key::of([owner, ns, key])`, so namespaces and keys may hold any characters,
+  and `list` is an indexed query. The `namespaced:` and `cache:` namespaces of
+  the `harness` owner are reserved for `DriverNamespacedStore` and
+  `DriverResponseCache`. A v1 `harness_store` moves over with
+  `storage::import_legacy_kv`.
 - `DriverAppendStore` maps each stream to a driver stream (optionally
   prefixed). Driver offsets are already dense and zero-based, matching the
   `AppendStore` contract.
@@ -88,7 +93,7 @@ let journal = DriverAppendStore::with_prefix(scoped.streams().clone(), "journal/
 ## Prepared document schemas
 
 With `storage-drivers`, `SchemaAdmission::Declare` keeps native collection
-creation as the default. `DriverStore::with_collection_and_schema_admission`
+creation as the default. `DriverStore::with_owner_and_schema_admission`
 can instead select `ValidateOnly` at construction. Both policies use the exact
 `DriverStore::collection_spec`; validation calls the native persisted-schema
 validator and never falls back to declaration or repair. Missing, incompatible,

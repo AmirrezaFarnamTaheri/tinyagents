@@ -161,6 +161,7 @@ impl DriverConversationStore {
             id: row.id,
             version: row.version,
             doc,
+            meta: row.meta,
         })
     }
     async fn load(&self, id: &str) -> ConversationResult<Option<Versioned<ThreadDoc>>> {

@@ -13,7 +13,7 @@
 //! | --- | --- |
 //! | transcripts | `session_transcripts` (one index document per stem) and `session_transcript_entries` (an append-only log per stem) |
 //! | turn states | `session_turn_states`, one document per turn |
-//! | key-value | `session_kv`, through the harness [`DriverStore`] |
+//! | key-value | `tsd.kv` owner `session`, through the harness [`DriverStore`] |
 //! | journal | streams `16:session_journal/<name>`, through the harness [`DriverAppendStore`] |
 //!
 //! # Sync seams
@@ -53,7 +53,8 @@ pub use turn_states::DriverTurnStates;
 const HASHED_SCOPE: &str = "sha256:";
 
 /// Collection holding each agent's key-value records.
-const KV_COLLECTION: &str = "session_kv";
+/// The `tsd.kv` owner of the session key-value store.
+const KV_OWNER: &str = "session";
 /// Prefix of each agent's journal streams.
 const JOURNAL_PREFIX: &str = "session_journal/";
 
@@ -158,7 +159,7 @@ impl DriverSessionStores {
     pub fn collection_specs() -> Vec<CollectionSpec> {
         let mut specs = transcripts::collection_specs().to_vec();
         specs.push(turn_states::collection_spec());
-        specs.push(DriverStore::collection_spec(KV_COLLECTION));
+        specs.push(DriverStore::collection_spec());
         specs
     }
 
@@ -343,9 +344,9 @@ impl DriverSessionStores {
                 self.schema_admission,
             )),
             turn_states: turn_states.clone(),
-            kv: Arc::new(DriverStore::with_collection_and_schema_admission(
+            kv: Arc::new(DriverStore::with_owner_and_schema_admission(
                 docs,
-                KV_COLLECTION,
+                KV_OWNER,
                 self.schema_admission,
             )),
             journal: Arc::new(DriverAppendStore::with_prefix(
