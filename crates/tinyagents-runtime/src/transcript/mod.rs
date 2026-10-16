@@ -2,7 +2,8 @@
 //!
 //! These helpers do not replace a lossless host [`crate::TranscriptCodec`].
 //! They intentionally project provider-neutral execution fields; hosts retain
-//! durable dialects, raw argument strings, metadata, and legacy marker policy.
+//! durable dialects, raw argument strings, and product-specific attachment
+//! handling.
 use tinyagents_harness::tinytools_agent::dialect::{
     DialectMessage, DialectRole, ToolResultEntry, TranscriptEntry,
 };
