@@ -260,7 +260,7 @@ pub enum TranscriptDelta {
 }
 
 /// Durable transcript information supplied after a successful append.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptCommitReceipt {
     pub path: PathBuf,
     pub delta: TranscriptDelta,
