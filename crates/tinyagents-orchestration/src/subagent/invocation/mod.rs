@@ -75,6 +75,7 @@
 
 mod jobs;
 mod policy_run;
+mod driver_tool;
 mod status_map;
 mod types;
 
@@ -82,6 +83,11 @@ const LOG_PREFIX: &str = "[subagent-tool]";
 
 pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
 pub use types::*;
+pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
+
+#[cfg(test)]
+#[path = "driver_tool_tests.rs"]
+mod driver_tool_tests;
 
 use std::sync::Arc;
 
