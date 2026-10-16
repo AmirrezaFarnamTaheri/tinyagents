@@ -185,6 +185,25 @@ impl RepeatProgressMiddleware {
     /// the batch, its summary is kept: replacing it named the last guard to
     /// trip as the cause instead of the first. The pause is sent either way.
     fn halt<C>(&self, ctx: &mut RunContext<C>, summary: String) {
+        self.halt_inner(ctx, summary, None);
+    }
+
+    /// Halt with a classifier-owned cause so terminal summaries can use typed
+    /// class and operation identifiers without parsing this note.
+    pub fn halt_classified<C>(
+        &self,
+        ctx: &mut RunContext<C>,
+        cause: crate::no_progress::ClassifiedStopCause,
+    ) {
+        self.halt_inner(ctx, cause.summary.clone(), Some(cause));
+    }
+
+    fn halt_inner<C>(
+        &self,
+        ctx: &mut RunContext<C>,
+        summary: String,
+        cause: Option<crate::no_progress::ClassifiedStopCause>,
+    ) {
         let first = {
             let mut slot = lock(&self.halt_summary);
             if slot.is_some() {
@@ -199,6 +218,7 @@ impl RepeatProgressMiddleware {
         // cause the slot keeps.
         if ctx.halted_by_guard.is_none() {
             ctx.halted_by_guard = Some(first);
+            ctx.halted_by_guard_cause = cause;
         }
         self.handle.send(SteeringCommand::Pause);
     }

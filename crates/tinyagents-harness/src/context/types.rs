@@ -506,6 +506,9 @@ pub struct RunContext<Ctx = ()> {
     /// Set by a no-progress / repeat guard that paused the run, holding its
     /// root-cause summary, so the loop can report `TerminalReason::Halted`.
     pub(crate) halted_by_guard: Option<String>,
+    /// Typed classifier cause for a guard halt, preserved independently from
+    /// the human-readable summary.
+    pub(crate) halted_by_guard_cause: Option<crate::no_progress::ClassifiedStopCause>,
     /// The kind of the most recent `LimitReached` event this run emitted.
     pub(crate) last_limit: std::sync::Mutex<Option<crate::events::LimitKind>>,
     /// The [`CallId`] the agent loop minted for the model call currently in

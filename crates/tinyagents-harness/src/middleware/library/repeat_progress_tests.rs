@@ -272,6 +272,28 @@ async fn the_halt_marker_names_the_first_cause() {
     assert_eq!(summary.lock().unwrap().as_deref(), Some("first cause"));
 }
 
+#[test]
+fn classified_halt_preserves_typed_cause_for_run_finalization() {
+    let handle = SteeringHandle::allow_all();
+    let mw = new_mw(handle, Arc::new(std::sync::Mutex::new(None)));
+    let mut ctx = ctx();
+    mw.halt_classified(
+        &mut ctx,
+        crate::no_progress::ClassifiedStopCause {
+            class: "permission".into(),
+            operation: "file_write".into(),
+            summary: "note wording can change".into(),
+        },
+    );
+    assert_eq!(
+        ctx.halted_by_guard.as_deref(),
+        Some("note wording can change")
+    );
+    let cause = ctx.take_halted_by_guard_cause().expect("typed cause");
+    assert_eq!(cause.class, "permission");
+    assert_eq!(cause.operation, "file_write");
+}
+
 #[tokio::test]
 async fn successful_repeat_tracker_resets_failed_and_exempt_batches() {
     let handle = SteeringHandle::allow_all();

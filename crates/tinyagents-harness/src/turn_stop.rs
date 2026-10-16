@@ -11,9 +11,8 @@
 //!
 //! [`TurnStop`] carries that fact from where it is decided to the progress
 //! events, the trace collector and the parent tool result. It is
-//! content-free by construction: the failure class and operation are read
-//! from the breaker's fixed note template and reduced to identifier
-//! characters, never the quoted tool output or target.
+//! content-free by construction: a typed breaker cause carries only stable
+//! class and operation identifiers, never the quoted tool output or target.
 
 /// Which mechanism stopped the turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +23,34 @@ pub enum TurnStopKind {
     WindDown,
     /// The run reached its model-call cap with work still pending.
     IterationCap,
+}
+
+/// Stable typed class for the failure that caused a breaker stop.
+///
+/// The value comes from the failure classifier at the point the stop is
+/// decided. It deliberately does not derive from the human-readable stop
+/// note, whose wording may change independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnFailureClass(String);
+
+impl TurnFailureClass {
+    /// Construct a class from the classifier's stable identifier.
+    pub fn new(class: impl Into<String>) -> Self {
+        Self(identifier(&class.into()).unwrap_or_else(|| "unknown".to_owned()))
+    }
+
+    /// Stable identifier suitable for logs and host summaries.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for TurnFailureClass {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
 }
 
 impl TurnStopKind {
@@ -44,7 +71,7 @@ pub struct TurnStop {
     /// Breaker only: the failure class (`uncertain_side_effect`,
     /// `permission`, …), or the stop-reason kind for notes without one
     /// (`repeated_failure`, `transient`, …).
-    pub failure_class: Option<String>,
+    pub failure_class: Option<TurnFailureClass>,
     /// Breaker only: the blocked operation (a tool name), when the note names
     /// one.
     pub operation: Option<String>,
@@ -53,9 +80,6 @@ pub struct TurnStop {
 /// The `Incomplete` reason the sub-agent runner reports for an iteration-cap
 /// stop. Shared so the parent can tell a cap from a breaker note.
 pub const SUBAGENT_ITERATION_CAP_REASON: &str = "reached its tool-call limit before finishing";
-
-/// Longest identifier kept from a stop note.
-const MAX_IDENT_CHARS: usize = 64;
 
 impl TurnStop {
     /// A wind-down stop.
@@ -76,29 +100,41 @@ impl TurnStop {
         }
     }
 
-    /// A breaker stop, with the class and operation read from its `note`.
+    /// A legacy breaker stop using the caller's explicit fallback class.
     ///
-    /// The classified template is `Stopping after N attempt(s): failure class
-    /// `X` still blocks operation `Y` on `Z`.`; only `X` and `Y` are kept
-    /// (the scope `Z` can be a URL or path). Other notes get the stop-reason
-    /// kind as their class and no operation.
-    ///
-    /// `fallback_class` maps a note with no class to the host's stop-reason
-    /// key (it may carry a `turn_stop.` prefix, which is stripped).
+    /// The note is retained only for the caller; it is not parsed. New code
+    /// should pass the actual classified cause to [`Self::breaker_with_cause`].
     pub fn breaker(note: &str, fallback_class: impl FnOnce(&str) -> &'static str) -> Self {
-        let lead = note.split("Last error").next().unwrap_or(note);
-        let failure_class = backticked_after(lead, "failure class `")
-            .and_then(ident)
-            .or_else(|| {
-                let key = fallback_class(note);
-                ident(key.strip_prefix("turn_stop.").unwrap_or(key))
-            });
-        let operation = backticked_after(lead, "still blocks operation `").and_then(ident);
+        let key = fallback_class(note);
+        let class = key.strip_prefix("turn_stop.").unwrap_or(key);
+        Self::breaker_with_cause(note, TurnFailureClass::new(class), None)
+    }
+
+    /// A breaker stop carrying the classifier's typed cause. `note` is kept
+    /// solely for the legacy human-readable summary; its text is never parsed.
+    pub fn breaker_with_cause(
+        _note: &str,
+        failure_class: TurnFailureClass,
+        operation: Option<String>,
+    ) -> Self {
         Self {
             kind: TurnStopKind::Breaker,
-            failure_class,
-            operation,
+            failure_class: Some(failure_class),
+            operation: operation.as_deref().and_then(identifier),
         }
+    }
+
+    /// Build a stop directly from the typed classified-failure result.
+    pub fn from_classified_cause(cause: crate::no_progress::ClassifiedStopCause) -> Self {
+        Self::breaker_with_cause(
+            &cause.summary,
+            Self::failure_class(cause.class),
+            Some(cause.operation),
+        )
+    }
+
+    fn failure_class(class: String) -> TurnFailureClass {
+        TurnFailureClass::new(class)
     }
 
     /// How a top-level run ended, from the outcome's flags. The breaker is the
@@ -117,6 +153,20 @@ impl TurnStop {
             return Some(Self::wind_down());
         }
         hit_cap.then(Self::iteration_cap)
+    }
+
+    /// Classify a turn using its typed breaker cause when one is available.
+    pub fn classify_with_cause(
+        breaker_halt: Option<&str>,
+        failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
+        wind_down: bool,
+        hit_cap: bool,
+        fallback_class: impl FnOnce(&str) -> &'static str,
+    ) -> Option<Self> {
+        if let Some(cause) = failure_cause {
+            return Some(Self::from_classified_cause(cause));
+        }
+        Self::classify(breaker_halt, wind_down, hit_cap, fallback_class)
     }
 
     /// The stop behind a sub-agent's `Incomplete { reason }`: the runner's
@@ -138,7 +188,7 @@ impl TurnStop {
         let mut out = format!("stopped: {}", self.kind.as_str());
         if let Some(class) = &self.failure_class {
             out.push(' ');
-            out.push_str(class);
+            out.push_str(class.as_str());
         }
         if let Some(operation) = &self.operation {
             out.push_str(" on ");
@@ -148,23 +198,15 @@ impl TurnStop {
     }
 }
 
-/// The text between `marker` and the next backtick.
-fn backticked_after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
-    text.split_once(marker)
-        .and_then(|(_, rest)| rest.split_once('`'))
-        .map(|(value, _)| value)
-}
-
-/// `value` when it is a bounded identifier (`[A-Za-z0-9_.:-]`), else `None`,
-/// so nothing but a class or tool name can reach a trace attribute.
-fn ident(value: &str) -> Option<String> {
+/// Keep only bounded machine identifiers in content-free stop summaries.
+fn identifier(value: &str) -> Option<String> {
     let value = value.trim();
-    let ok = !value.is_empty()
-        && value.chars().count() <= MAX_IDENT_CHARS
+    let valid = !value.is_empty()
+        && value.chars().count() <= 64
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
-    ok.then(|| value.to_string())
+    valid.then(|| value.to_owned())
 }
 
 #[cfg(test)]
