@@ -262,6 +262,47 @@ where
         );
         Ok(())
     }
+
+    async fn check_nested_tool(
+        &self,
+        ctx: &tinyagents_harness::context::RunContext<Ctx>,
+        _state: &(),
+        call: &tinyinference_llm::tool::ToolCall,
+    ) -> tinyagents_harness::error::Result<()> {
+        use tinyagents_harness::error::TinyAgentsError;
+        let event = ToolHookContext {
+            event: ToolHookEvent::PreToolUse,
+            call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            arguments: call.arguments.clone(),
+            success: None,
+            duration_ms: None,
+            output: None,
+            error: None,
+            session_id: ctx.data.session_id(),
+            agent_id: ctx.data.agent_id(),
+            cwd: ctx.data.cwd(),
+        };
+        for hook in &self.hooks {
+            let decision = hook.before_tool_decision(&ctx.data, &event).await;
+            let refusal = if decision.is_deny() {
+                decision.agent_message.or(decision.user_message).map(|reason| format!("denied: {reason}"))
+            } else if decision.is_ask() {
+                decision.agent_message.or(decision.user_message).map(|reason| format!("requires approval, unavailable for a nested call: {reason}"))
+            } else if decision.updated_input.is_some() {
+                Some("rewrites the call, which a nested call cannot apply".to_owned())
+            } else {
+                None
+            };
+            if let Some(refusal) = refusal {
+                return Err(TinyAgentsError::Tool(format!(
+                    "tool hook '{}' refused nested call to {}: {refusal}",
+                    hook.name(), event.tool_name
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
