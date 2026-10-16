@@ -13,7 +13,7 @@
 //! of the exchange. See [`super`] for the convention this module implements.
 
 use std::sync::Arc;
-use std::{path::{Path, PathBuf}, sync::atomic::{AtomicU64, Ordering}};
+use std::path::{Path, PathBuf};
 
 use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
@@ -386,30 +386,57 @@ impl ArtifactOffload {
             return Err(OffloadError::Materialization("artifact target changed during validation".into()));
         }
 
-        static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-        let mut temp = None;
-        for _ in 0..32 {
-            let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
-            let path = parent.join(format!(".artifact-{}-{id}.tmp", std::process::id()));
-            match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
-                Ok(mut file) => {
-                    use tokio::io::AsyncWriteExt;
-                    file.write_all(body.as_bytes()).await
-                        .map_err(|error| OffloadError::Materialization(error.to_string()))?;
-                    file.sync_all().await
-                        .map_err(|error| OffloadError::Materialization(error.to_string()))?;
-                    drop(file);
-                    temp = Some(path);
-                    break;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(OffloadError::Materialization(error.to_string())),
-            }
+        #[cfg(unix)]
+        {
+            let root = tokio::fs::canonicalize(root)
+                .await
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+            let relative_parent = parent
+                .strip_prefix(&root)
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?
+                .to_path_buf();
+            let file_name = target
+                .file_name()
+                .ok_or_else(|| OffloadError::Materialization("artifact target has no file name".into()))?
+                .to_os_string();
+            let bytes = body.into_bytes();
+            tokio::task::spawn_blocking(move || {
+                atomic_write_under_dir(&root, &relative_parent, &file_name, &bytes)
+            })
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
         }
-        let temp = temp.ok_or_else(|| OffloadError::Materialization("could not allocate temporary artifact file".into()))?;
-        if let Err(error) = tokio::fs::rename(&temp, &target).await {
-            let _ = tokio::fs::remove_file(&temp).await;
-            return Err(OffloadError::Materialization(error.to_string()));
+        #[cfg(not(unix))]
+        {
+            static NEXT_TEMP: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let mut temp = None;
+            for _ in 0..32 {
+                let id = NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path = parent.join(format!(".artifact-{}-{id}.tmp", std::process::id()));
+                match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
+                    Ok(mut file) => {
+                        use tokio::io::AsyncWriteExt;
+                        if let Err(error) = file.write_all(body.as_bytes()).await {
+                            let _ = tokio::fs::remove_file(&path).await;
+                            return Err(OffloadError::Materialization(error.to_string()));
+                        }
+                        file.sync_all().await
+                            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+                        drop(file);
+                        temp = Some(path);
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(OffloadError::Materialization(error.to_string())),
+                }
+            }
+            let temp = temp.ok_or_else(|| OffloadError::Materialization("could not allocate temporary artifact file".into()))?;
+            if let Err(error) = tokio::fs::rename(&temp, &target).await {
+                let _ = tokio::fs::remove_file(&temp).await;
+                return Err(OffloadError::Materialization(error.to_string()));
+            }
         }
         Ok(target)
     }
@@ -464,6 +491,78 @@ async fn canonicalize_existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf
             Err(error) => return Err(OffloadError::Materialization(error.to_string())),
         }
     }
+}
+
+#[cfg(unix)]
+fn atomic_write_under_dir(
+    root: &Path,
+    relative_parent: &Path,
+    target_name: &std::ffi::OsStr,
+    body: &[u8],
+) -> std::io::Result<()> {
+    use std::{io::Write, os::fd::OwnedFd, sync::atomic::{AtomicU64, Ordering}};
+    use rustix::fs::{AtFlags, Mode, OFlags, open, openat, renameat, unlinkat};
+
+    let mut directory: OwnedFd = open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )?;
+    for component in relative_parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        // Each segment is opened relative to the already pinned parent and
+        // with NOFOLLOW. A replaced symlink therefore fails closed.
+        directory = openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?;
+    }
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let mut temp_name = None;
+    let mut file = None;
+    for _ in 0..32 {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let name = format!(".artifact-{}-{id}.tmp", std::process::id());
+        match openat(
+            &directory,
+            name.as_str(),
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::RWUSR,
+        ) {
+            Ok(fd) => {
+                temp_name = Some(name);
+                file = Some(std::fs::File::from(fd));
+                break;
+            }
+            Err(error) if error == rustix::io::Errno::EXIST => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let temp_name = temp_name.ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::AlreadyExists, "could not allocate temporary artifact file")
+    })?;
+    let mut file = file.expect("temporary name and file are set together");
+    if let Err(error) = file.write_all(body).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = unlinkat(&directory, temp_name.as_str(), AtFlags::empty());
+        return Err(error);
+    }
+    drop(file);
+    if let Err(error) = renameat(
+        &directory,
+        temp_name.as_str(),
+        &directory,
+        target_name,
+    ) {
+        let _ = unlinkat(&directory, temp_name.as_str(), AtFlags::empty());
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// Split `outputs/x` / `workspace/x` into its kind and the name below it.
