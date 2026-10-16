@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tinystoragedrivers_core::primitives::{self, Leases};
 use tinystoragedrivers_core::{CollectionSpec, DocumentStore, Filter, StorageError};
 
-use super::transcripts::ENTRIES;
+use super::ENTRIES;
 
 /// The `tsd.leases` owner of the session crate's reservations.
 pub(super) const LEASE_OWNER: &str = "session";

@@ -43,7 +43,8 @@ use tinystoragedrivers_core::{
 use tokio::sync::{Mutex, OnceCell};
 
 use super::super::memory::MAX_GENERATIONS;
-use super::transcripts_reservation::{self as reservation, Reservation};
+use reservation::Reservation;
+pub(super) use reservation::leases_spec;
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
@@ -58,7 +59,6 @@ pub(super) const ENTRIES: &str = "session.transcript_entries";
 /// The body version both collections are written at.
 pub(crate) const SCHEMA_VERSION: u32 = 2;
 
-pub(super) use super::transcripts_reservation::leases_spec;
 
 /// Index refresh attempts after a durable write before leaving the repair
 /// to the next write or read.
@@ -1073,7 +1073,7 @@ impl DriverTranscriptLocator {
         };
         let predecessor_stem = session_stem(session);
         if let Err(error) = self.handle(&predecessor_stem, seed.clone()).seal(baseline) {
-            self.release(&stem, reservation);
+            self.release(&stem, &reservation);
             return Err(error);
         }
         let mut meta = seed;
@@ -1105,6 +1105,8 @@ impl DriverTranscriptLocator {
 
 #[path = "transcripts_adoption.rs"]
 mod adoption;
+#[path = "transcripts_reservation.rs"]
+mod reservation;
 #[path = "transcripts_display.rs"]
 mod display;
 
