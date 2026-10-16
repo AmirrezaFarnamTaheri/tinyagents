@@ -126,6 +126,32 @@ impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
         }
     }
 
+    /// Waits for the leader, returning `None` when this observer is cancelled.
+    pub async fn wait_or_cancel(
+        &self,
+        cancellation: &crate::CancellationToken,
+    ) -> Option<std::result::Result<V, E>> {
+        loop {
+            let notified = self.state.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(result) = self
+                .state
+                .result
+                .lock()
+                .expect("shared-flight result poisoned")
+                .clone()
+            {
+                return Some(result);
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return None,
+                _ = &mut notified => {}
+            }
+        }
+    }
+
     /// Publishes a result to all current and future waiters on this entry.
     pub fn complete(&self, result: std::result::Result<V, E>) {
         *self

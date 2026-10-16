@@ -217,10 +217,10 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
     .unwrap();
     let envelope: serde_json::Value = serde_json::from_str(&awaited.output()).unwrap();
     assert_eq!(envelope["status"], "awaiting_user");
-    assert_eq!(
-        envelope["awaiting_user_envelope"]["status"],
-        "awaiting_user"
-    );
+    let rendered = envelope["awaiting_user_envelope"].as_str().unwrap();
+    let pause = crate::subagent::SubagentAwaitingUser::parse(rendered).unwrap();
+    assert_eq!(pause.task_id, session.current_task_id.clone().unwrap());
+    assert_eq!(pause.agent_id, "researcher");
     let collected = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),
@@ -237,6 +237,10 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
         collected["awaiting_user"][0]["session_id"],
         session.subagent_session_id
     );
+    assert!(collected["awaiting_user"][0]["awaiting_user_envelope"]
+        .as_str()
+        .unwrap()
+        .contains("[SUBAGENT_AWAITING_USER]"));
     let closed = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),

@@ -40,7 +40,7 @@ pub use detached::{
     steering_command_for_lane, subagent_record_for_task, task_id_for_session,
     task_id_for_session_in_records, task_status_label, wait_detached, wait_error_from_registry,
 };
-pub use driver::{SubagentCapabilities, SubagentDriver};
+pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
 pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
