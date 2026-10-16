@@ -460,7 +460,7 @@ impl ArtifactOffload {
 }
 
 #[cfg(any(not(unix), test))]
-fn atomic_write_with_capability(
+pub(super) fn atomic_write_with_capability(
     root: &Path,
     relative_parent: &Path,
     target_name: &std::ffi::OsStr,
@@ -497,9 +497,8 @@ fn atomic_write_with_capability(
             Err(error) => return Err(error),
         }
     }
-    let temp = temp.ok_or_else(|| {
-        std::io::Error::other("could not allocate temporary artifact file")
-    })?;
+    let temp =
+        temp.ok_or_else(|| std::io::Error::other("could not allocate temporary artifact file"))?;
     if let Err(error) = parent.rename(&temp, &parent, target_name) {
         let _ = parent.remove_file(&temp);
         return Err(error);
@@ -570,11 +569,7 @@ pub(super) fn atomic_write_under_dir(
         directory = match opened {
             Ok(directory) => directory,
             Err(error) if error == rustix::io::Errno::NOENT => {
-                match mkdirat(
-                    &directory,
-                    name,
-                    Mode::RUSR | Mode::WUSR | Mode::XUSR,
-                ) {
+                match mkdirat(&directory, name, Mode::RUSR | Mode::WUSR | Mode::XUSR) {
                     Ok(()) | Err(rustix::io::Errno::EXIST) => {}
                     Err(error) => return Err(error.into()),
                 }

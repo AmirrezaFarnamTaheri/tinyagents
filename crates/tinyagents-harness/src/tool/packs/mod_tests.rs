@@ -373,10 +373,13 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
     ));
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(MockModel::with_responses(vec![
-            response,
-            testkit::text_response("finished"),
-        ])))
+        .register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                response,
+                testkit::text_response("finished"),
+            ])),
+        )
         .register_tool_dispatch(dispatch);
     let parent = crate::context::RunContext::new(
         crate::context::RunConfig::new("outer-run"),
@@ -388,10 +391,14 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
         .expect("the harness admits and executes the selected packed tool");
 
     assert_eq!(selected.lock().unwrap().as_slice(), &["a_one"]);
-    let tool_result = run.messages.iter().find_map(|message| match message {
-        Message::Tool(message) => Some(message),
-        _ => None,
-    }).unwrap();
+    let tool_result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
     let result_text = serde_json::to_string(&tool_result.content).unwrap();
     assert!(result_text.contains("run=live-parent-state"));
     assert!(result_text.contains("call=packed-call-17"));

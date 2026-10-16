@@ -184,7 +184,30 @@ fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
     );
 
     assert!(result.is_err(), "symlinked parent must fail closed");
-    assert!(!outside.join("worker").exists(), "no directory is created outside the root");
+    assert!(
+        !outside.join("worker").exists(),
+        "no directory is created outside the root"
+    );
+}
+
+#[test]
+fn capability_materialization_writes_atomically_beneath_the_open_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("action");
+    std::fs::create_dir_all(&root).expect("create root");
+
+    super::ops::atomic_write_with_capability(
+        &root,
+        Path::new("outputs/worker"),
+        std::ffi::OsStr::new("result.md"),
+        b"body",
+    )
+    .expect("capability-relative atomic write");
+
+    assert_eq!(
+        std::fs::read(root.join("outputs/worker/result.md")).expect("read materialized body"),
+        b"body"
+    );
 }
 
 // ── Kinds and directories ─────────────────────────────────────────────────────
