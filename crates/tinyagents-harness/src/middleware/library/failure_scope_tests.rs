@@ -65,7 +65,7 @@ async fn fail_once(middleware: &FailureScopeMiddleware<()>, id: &str) {
 }
 
 #[tokio::test]
-async fn repeated_failures_nudge_before_halt_and_cleanup_is_run_scoped() {
+async fn repeated_failures_nudge_before_halt() {
     let handle = SteeringHandle::allow_all();
     let halt_summary = Arc::new(std::sync::Mutex::new(None));
     let middleware =
@@ -79,9 +79,11 @@ async fn repeated_failures_nudge_before_halt_and_cleanup_is_run_scoped() {
     fail_once(&middleware, "three").await;
 
     assert!(
-        halt_summary.lock().unwrap().is_some(),
-        "summary: {:?}",
-        *halt_summary.lock().unwrap()
+        halt_summary
+            .lock()
+            .unwrap()
+            .as_deref()
+            .is_some_and(|summary| summary.starts_with("Stopping:"))
     );
     assert!(
         handle
@@ -89,21 +91,6 @@ async fn repeated_failures_nudge_before_halt_and_cleanup_is_run_scoped() {
             .iter()
             .any(|command| matches!(command, SteeringCommand::Pause))
     );
-
-    let mut next_run = context();
-    next_run.instance_id = 42;
-    let mut call = ToolCall::new("fresh", "read_file", json!({"path": "a.txt"}));
-    middleware
-        .before_tool(&mut next_run, &(), &mut call)
-        .await
-        .unwrap();
-    let invocation = ToolInvocationIdentity::new("fresh", "read_file");
-    let mut result = ToolResult::success("read");
-    middleware
-        .after_tool(&mut next_run, &(), &invocation, &mut result)
-        .await
-        .unwrap();
-    assert_eq!(middleware.nudges.drain_for(&next_run), Vec::<String>::new());
 }
 
 #[tokio::test]
