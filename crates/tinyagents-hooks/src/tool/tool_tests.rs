@@ -173,7 +173,7 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
     )])));
     harness
         .invoke_in_context(
-            &host,
+            &(),
             RunContext::new(RunConfig::new("nested-hook-test"), host),
             vec![tinyinference_llm::message::Message::user("go")],
         )
