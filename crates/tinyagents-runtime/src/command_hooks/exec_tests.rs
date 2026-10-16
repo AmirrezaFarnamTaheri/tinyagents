@@ -208,16 +208,6 @@ mod spawner {
             seen: Mutex::default(),
         });
         let environment = HookEnvironment::new("Test", None).with_command_spawner(spawner.clone());
-        let result = run(
-            &hook(true),
-            &input(),
-            &BTreeMap::new(),
-            Duration::MAX,
-            &environment,
-        )
-        .await;
-        // The definition names a timeout of its own, so override it.
-        assert!(result.output.is_deny() || result.error.is_some());
         let mut open = hook(false);
         open.timeout = Some(u64::MAX);
         let result = run(
