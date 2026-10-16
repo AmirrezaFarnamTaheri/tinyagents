@@ -79,10 +79,21 @@ async fn long_input_hashes_fit_the_document_id_limit() {
 }
 
 #[tokio::test]
-async fn expired_entries_are_hidden_when_the_backend_has_no_native_ttl() {
+async fn a_backend_that_cannot_keep_expiry_refuses_a_ttl_instead_of_caching_forever() {
     let storage = MemoryStorage::new();
     let wrapped: Arc<dyn DocumentStore> = Arc::new(tinyagents_harness::testkit::WithoutNativeTtl(
         docs(&storage, "local"),
     ));
-    task_cache_contract(DriverTaskCache::new(wrapped)).await;
+    let cache = DriverTaskCache::new(wrapped);
+    let error = cache
+        .put(&key("g", "n", "h"), json!(1), Some(Duration::from_secs(60)))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, TinyAgentsError::Graph(_)), "{error:?}");
+    assert_eq!(cache.get(&key("g", "n", "h")).await.unwrap(), None);
+    // Without a TTL the entry needs no metadata and is stored.
+    cache
+        .put(&key("g", "n", "h"), json!(1), None)
+        .await
+        .unwrap();
 }

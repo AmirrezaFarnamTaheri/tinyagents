@@ -81,7 +81,12 @@ pub(super) fn all() -> Vec<Step> {
 }
 
 /// A target that keeps the time the record was first written, when known.
-fn target(collection: &str, id: String, body: &impl serde::Serialize, created_ms: i64) -> Option<TargetRecord> {
+fn target(
+    collection: &str,
+    id: String,
+    body: &impl serde::Serialize,
+    created_ms: i64,
+) -> Option<TargetRecord> {
     let record = TargetRecord::new(collection, id, serde_json::to_value(body).ok()?);
     Some(if created_ms > 0 {
         record.created_ms(created_ms)
@@ -137,7 +142,12 @@ fn checkpoint_row(ns: &str, source: &SourceRecord) -> Option<TargetRecord> {
         .and_then(Value::as_i64)
         .filter(|ms| *ms > 0)
         .unwrap_or(source.meta.created_ms);
-    target(CHECKPOINTS, checkpoint_id_key(ns, &thread, seq), &body, written)
+    target(
+        CHECKPOINTS,
+        checkpoint_id_key(ns, &thread, seq),
+        &body,
+        written,
+    )
 }
 
 fn threads(id: &'static str, from: u32, legacy: &'static Legacy) -> Step {

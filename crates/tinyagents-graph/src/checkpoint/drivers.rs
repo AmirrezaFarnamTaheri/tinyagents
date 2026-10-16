@@ -48,9 +48,9 @@ use super::{
     decode_json_err, merge_writes, require_checkpoint_id,
 };
 use crate::storage::{
-    CHECKPOINTS, DEFAULT_NAMESPACE, LEASE_OWNER, SCHEMA_VERSION, THREADS, WRITES,
-    checkpoint_id_key, checkpoints_spec, lease_key, leases_spec, subgraph_key, thread_id_key,
-    threads_spec, writes_id_key, writes_spec, CheckpointBody, ThreadBody, WritesBody,
+    CHECKPOINTS, CheckpointBody, DEFAULT_NAMESPACE, LEASE_OWNER, SCHEMA_VERSION, THREADS,
+    ThreadBody, WRITES, WritesBody, checkpoint_id_key, checkpoints_spec, lease_key, leases_spec,
+    subgraph_key, thread_id_key, threads_spec, writes_id_key, writes_spec,
 };
 
 /// Map a storage driver failure onto the graph's checkpoint error.
@@ -155,7 +155,10 @@ impl<State> DriverCheckpointer<State> {
                     writes_spec(),
                     leases_spec(),
                 ] {
-                    self.docs.ensure_collection(&spec).await.map_err(map_error)?;
+                    self.docs
+                        .ensure_collection(&spec)
+                        .await
+                        .map_err(map_error)?;
                 }
                 Ok::<(), TinyAgentsError>(())
             })
@@ -228,9 +231,9 @@ where
         // Through the shared classifier, so a `State` that no longer decodes
         // is tagged `[schema]` exactly as the file and SQLite backends tag it
         // (durable delegations prune such a checkpoint and start fresh).
-        let mut checkpoint: Checkpoint<State> = serde_json::from_value(record).map_err(|error| {
-            decode_json_err("storage driver checkpointer", "checkpoint", error)
-        })?;
+        // (`"record"` names the whole-checkpoint decode to the classifier.)
+        let mut checkpoint: Checkpoint<State> = serde_json::from_value(record)
+            .map_err(|error| decode_json_err("storage driver checkpointer", "record", error))?;
         checkpoint.normalize();
         Ok(checkpoint)
     }
@@ -254,7 +257,10 @@ where
             checkpoint: serde_json::to_value(&checkpoint)?,
         };
         self.checkpoints
-            .insert(&checkpoint_id_key(&self.ns, &checkpoint.thread_id, seq), &body)
+            .insert(
+                &checkpoint_id_key(&self.ns, &checkpoint.thread_id, seq),
+                &body,
+            )
             .await
             .map_err(map_error)?;
         Ok(id)
@@ -283,8 +289,9 @@ where
         namespace: &[String],
     ) -> Result<Option<Checkpoint<State>>> {
         self.declared().await?;
-        let mut filter =
-            self.thread_filter(thread_id).and(Filter::eq("subgraph", subgraph_key(namespace)));
+        let mut filter = self
+            .thread_filter(thread_id)
+            .and(Filter::eq("subgraph", subgraph_key(namespace)));
         if let Some(id) = checkpoint_id {
             filter = filter.and(Filter::eq("checkpoint_id", id));
         }
@@ -301,7 +308,7 @@ where
                 let record = stored.doc.get("checkpoint").cloned().unwrap_or(Value::Null);
                 let mut header: Checkpoint<serde::de::IgnoredAny> = serde_json::from_value(record)
                     .map_err(|error| {
-                        decode_json_err("storage driver checkpointer", "checkpoint", error)
+                        decode_json_err("storage driver checkpointer", "record", error)
                     })?;
                 header.normalize();
                 Ok(header.to_metadata())
@@ -321,10 +328,7 @@ where
         self.declared().await?;
         let counters = self
             .docs
-            .query_all(
-                THREADS,
-                &Query::filter(Filter::eq("ns", self.ns.as_str())),
-            )
+            .query_all(THREADS, &Query::filter(Filter::eq("ns", self.ns.as_str())))
             .await
             .map_err(map_error)?;
         let mut threads = Vec::new();
@@ -431,7 +435,12 @@ where
         self.declared().await?;
         match self
             .leases
-            .acquire(LEASE_OWNER, &lease_key(&self.ns, thread), owner, ttl_ms(ttl))
+            .acquire(
+                LEASE_OWNER,
+                &lease_key(&self.ns, thread),
+                owner,
+                ttl_ms(ttl),
+            )
             .await
         {
             Ok(lease) => Ok(lease.is_some()),

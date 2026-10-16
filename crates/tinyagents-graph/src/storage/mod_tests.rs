@@ -75,7 +75,10 @@ fn the_schema_composes_and_names_the_one_checkpointer() {
     let schema = storage_schema();
     assert_eq!(schema.owner.as_str(), "graph");
     let names: Vec<&str> = schema.items.iter().map(|item| item.name()).collect();
-    assert_eq!(names, ["graph.checkpoints", "graph.threads", "graph.writes"]);
+    assert_eq!(
+        names,
+        ["graph.checkpoints", "graph.threads", "graph.writes"]
+    );
     assert!(
         schema
             .items
@@ -94,10 +97,18 @@ async fn each_v1_prefix_becomes_its_own_namespace_of_the_same_collections() {
     v1_checkpoint(&storage, "flows_graph", "t", 0, "f1", 3).await;
     migrate(&storage).await;
 
-    for (ns, id, state) in [("graph", "g1", 1), ("delegation", "d1", 2), ("flows", "f1", 3)] {
+    for (ns, id, state) in [
+        ("graph", "g1", 1),
+        ("delegation", "d1", 2),
+        ("flows", "f1", 3),
+    ] {
         let cp = checkpointer(&storage, ns);
         let found = cp.get("t", None).await.unwrap().expect(ns);
-        assert_eq!((found.checkpoint_id.as_str(), found.state), (id, state), "{ns}");
+        assert_eq!(
+            (found.checkpoint_id.as_str(), found.state),
+            (id, state),
+            "{ns}"
+        );
         assert_eq!(cp.list_threads().await.unwrap(), ["t"], "{ns}");
         // The counter survived: the next checkpoint continues after the migrated one.
         let next = Checkpoint::new(9, Vec::new())
@@ -119,9 +130,13 @@ async fn each_v1_prefix_becomes_its_own_namespace_of_the_same_collections() {
         .unwrap();
     assert_eq!(row.doc["thread"], "t");
     assert_eq!(row.doc["seq"], 0);
-    assert!(row.doc["checkpoint"].is_object(), "typed, not a JSON string");
+    assert!(
+        row.doc["checkpoint"].is_object(),
+        "typed, not a JSON string"
+    );
     assert!(row.doc.get("record").is_none());
-    assert_eq!(row.meta.schema, 4);
+    // A row carries the version its step ends at: one step per prefix.
+    assert_eq!(row.meta.schema, 3);
 }
 
 #[tokio::test]
@@ -197,10 +212,25 @@ async fn a_live_v1_lease_is_carried_over_and_an_expired_one_dropped() {
     assert_eq!(import_legacy_leases(&storage).await.unwrap(), 1);
 
     let delegation = checkpointer(&storage, "delegation");
-    assert!(!delegation.try_claim("a", "other", Duration::from_secs(5)).await.unwrap());
-    assert!(delegation.renew("a", "worker-a", Duration::from_secs(5)).await.unwrap());
+    assert!(
+        !delegation
+            .try_claim("a", "other", Duration::from_secs(5))
+            .await
+            .unwrap()
+    );
+    assert!(
+        delegation
+            .renew("a", "worker-a", Duration::from_secs(5))
+            .await
+            .unwrap()
+    );
     let flows = checkpointer(&storage, "flows");
-    assert!(flows.try_claim("b", "other", Duration::from_secs(5)).await.unwrap());
+    assert!(
+        flows
+            .try_claim("b", "other", Duration::from_secs(5))
+            .await
+            .unwrap()
+    );
     // The legacy collections are gone and the import is recorded.
     assert!(
         storage
@@ -253,7 +283,10 @@ async fn v1_task_cache_rows_move_into_the_graph_kv_namespace() {
         .find(|row| row.doc["key"].as_str().is_some_and(|k| k.ends_with("soon")))
         .unwrap();
     assert_eq!(soon.doc["owner"], "graph");
-    assert!(soon.meta.expires_ms.is_some(), "the deadline is metadata now");
+    assert!(
+        soon.meta.expires_ms.is_some(),
+        "the deadline is metadata now"
+    );
     assert_eq!(import_legacy_task_cache(&storage).await.unwrap(), 0);
     let _ = (Leases::new(storage.documents()), WriteOptions::new());
 }

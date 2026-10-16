@@ -36,8 +36,8 @@ pub mod orchestration;
 pub mod parallel;
 pub mod recursion;
 pub mod reducer;
-pub mod storage;
 pub mod status;
+pub mod storage;
 pub mod stream;
 pub mod subagent_node;
 pub mod subgraph;
@@ -61,7 +61,6 @@ pub use channel::{
     Delta, Ephemeral, LastValue, Messages, NamedBarrier, ReducerRegistry, Topic, Untracked,
 };
 pub use checkpoint::DriverCheckpointer;
-pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
 pub use checkpoint::{
     BarrierArrivals, CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointConfig, CheckpointMetadata,
     CheckpointSource, CheckpointTuple, Checkpointer, CompletedTask, DurabilityMode,
@@ -115,6 +114,7 @@ pub use reducer::{
     OverwriteStateReducer, Reducer, SetUnionReducer, StateReducer,
 };
 pub use status::GraphRunStatus;
+pub use storage::{import_legacy_leases, import_legacy_task_cache, storage_schema};
 pub use stream::{
     CollectingSink, GraphEvent, GraphEventEnvelope, GraphEventSink, NoopSink, StreamMode,
     StreamProjection, project_graph_event,

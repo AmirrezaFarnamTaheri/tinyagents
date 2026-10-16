@@ -154,10 +154,8 @@ impl TaskCache for DriverTaskCache {
 
     async fn clear(&self, graph_id: &GraphId) -> Result<()> {
         self.declared().await?;
-        let filter = Filter::eq("owner", KV_OWNER).and(Filter::eq(
-            "ns",
-            self.kv_ns(graph_id.as_str()).as_str(),
-        ));
+        let filter = Filter::eq("owner", KV_OWNER)
+            .and(Filter::eq("ns", self.kv_ns(graph_id.as_str()).as_str()));
         self.docs
             .delete_where(primitives::KV, &filter)
             .await

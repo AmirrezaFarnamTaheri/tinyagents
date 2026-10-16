@@ -10,8 +10,8 @@
 use serde_json::Value;
 use tinyagents_harness::ids::now_ms;
 use tinystoragedrivers_core::{
-    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Key, Leases, Migrations,
-    Precondition, Query, Result, ScopedStorage, Sort, WriteOptions, primitives,
+    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Key, Leases, Migrations, Precondition,
+    Query, Result, ScopedStorage, Sort, WriteOptions, primitives,
 };
 
 use super::steps::LEGACY;
@@ -27,7 +27,8 @@ async fn legacy_rows(
     collection: &str,
 ) -> Result<Vec<tinystoragedrivers_core::Versioned<Value>>> {
     let docs = storage.documents();
-    docs.ensure_collection(&CollectionSpec::new(collection)).await?;
+    docs.ensure_collection(&CollectionSpec::new(collection))
+        .await?;
     let mut rows = Vec::new();
     let mut cursor: Option<Cursor> = None;
     loop {
@@ -89,7 +90,12 @@ pub async fn import_legacy_leases(storage: &ScopedStorage) -> Result<u64> {
                 continue;
             }
             let held = leases
-                .acquire(LEASE_OWNER, &lease_key(legacy.ns, thread), holder, expires - now)
+                .acquire(
+                    LEASE_OWNER,
+                    &lease_key(legacy.ns, thread),
+                    holder,
+                    expires - now,
+                )
                 .await?;
             carried += u64::from(held.is_some());
         }
