@@ -193,7 +193,7 @@ impl TurnTail {
         drop(self.guard);
         let early_exit = self.hook.and_then(|hook| hook.take());
         let hit_cap = run.is_some_and(|run| {
-            detect_hit_cap(
+            detect_hit_cap_with_cause(
                 run,
                 &TurnEndInputs {
                     max_iterations: self.max_iterations,
@@ -202,6 +202,7 @@ impl TurnTail {
                     breaker_halt: None,
                     wrap_up_injected: false,
                 },
+                run.failure_cause.as_ref(),
             )
         });
         let report = TurnReport {
