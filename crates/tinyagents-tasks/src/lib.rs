@@ -46,7 +46,7 @@ pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
 };
 pub use tool::{
-    OrchestrationTool, SteeringRegistry, orchestration_tool_schema, orchestration_tool_schemas,
+    OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema, orchestration_tool_schemas,
     orchestration_tools, orchestration_tools_with_steering, register_orchestration_tools,
 };
 pub use types::*;
