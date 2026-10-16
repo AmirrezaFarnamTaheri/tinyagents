@@ -12,8 +12,9 @@ pub struct PersistentFailoverBreakerConfig {
     pub base_backoff_ms: u64,
     /// Maximum delay between attempts.
     pub max_backoff_ms: u64,
-    /// Number of consecutive failures after which the caller should stop
-    /// scheduling retries until an operator or another policy resets the key.
+    /// Consecutive-failure threshold reported in failure/backoff outcomes.
+    /// Attempts become eligible again after the capped cooldown; the caller
+    /// decides whether to schedule them after this threshold is reached.
     pub failure_limit: u32,
 }
 
@@ -98,9 +99,9 @@ where
         })
     }
 
-    /// Clears the failure streak for `key`. A live attempt retains ownership
-    /// and can still report its completion; its generation is advanced so a
-    /// stale guard cannot mutate later state.
+    /// Clears the failure streak for `key` and releases any in-flight slot.
+    /// A guard from before the reset becomes stale and cannot mutate or release
+    /// a later attempt.
     pub fn reset(&self, key: &K) {
         let mut entries = self.lock_entries();
         let entry = entries.entry(key.clone()).or_default();
@@ -140,13 +141,6 @@ pub enum BreakerRejection {
         failure_count: u32,
         /// Whether the configured failure cap has been reached.
         failure_limit_reached: bool,
-    },
-    /// The configured consecutive-failure cap has been reached.
-    FailureLimit {
-        /// The next eligibility time after the capped cooldown.
-        next_attempt_ms: u64,
-        /// Consecutive failures recorded for this key.
-        failure_count: u32,
     },
 }
 

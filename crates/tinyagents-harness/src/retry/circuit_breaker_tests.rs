@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::{Arc, Barrier};
 
 #[test]
 fn a_shared_breaker_blocks_same_key_and_keeps_keys_independent() {
@@ -39,6 +40,55 @@ fn dropped_attempt_releases_in_flight_without_recording_a_failure() {
     assert!(breaker.try_acquire("key", 0).is_ok());
 }
 
+#[tokio::test]
+async fn cancelling_a_future_releases_its_attempt_guard() {
+    let breaker = PersistentFailoverBreaker::<String>::default();
+    let task_breaker = breaker.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let attempt = task_breaker.try_acquire("key".into(), 0).unwrap();
+        started_tx.send(()).unwrap();
+        std::future::pending::<()>().await;
+        drop(attempt);
+    });
+    started_rx.await.unwrap();
+    assert!(matches!(
+        breaker.try_acquire("key".into(), 0),
+        Err(BreakerRejection::InFlight)
+    ));
+    task.abort();
+    let _ = task.await;
+    assert!(breaker.try_acquire("key".into(), 0).is_ok());
+}
+
+#[test]
+fn concurrent_same_key_admission_has_only_one_winner() {
+    let breaker = PersistentFailoverBreaker::<String>::default();
+    let start = Arc::new(Barrier::new(3));
+    let attempted = Arc::new(Barrier::new(3));
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let breaker = breaker.clone();
+            let start = Arc::clone(&start);
+            let attempted = Arc::clone(&attempted);
+            std::thread::spawn(move || {
+                start.wait();
+                let result = breaker.try_acquire("shared".into(), 0);
+                attempted.wait();
+                result
+            })
+        })
+        .collect();
+    start.wait();
+    attempted.wait();
+    let admitted = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap().is_ok())
+        .filter(|admitted| *admitted)
+        .count();
+    assert_eq!(admitted, 1);
+}
+
 #[test]
 fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
     let breaker = PersistentFailoverBreaker::new(PersistentFailoverBreakerConfig {
@@ -77,25 +127,26 @@ fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
 }
 
 #[test]
-fn success_resets_the_streak_and_stale_drop_cannot_release_a_new_attempt() {
+fn reset_invalidates_a_stale_guard_and_success_resets_the_streak() {
     let breaker = PersistentFailoverBreaker::<String>::new(PersistentFailoverBreakerConfig {
         base_backoff_ms: 1,
         max_backoff_ms: 10,
         failure_limit: 2,
     });
     let mut old = breaker.try_acquire("key".into(), 0).unwrap();
-    old.record_failure(0).unwrap();
-    let mut current = breaker.try_acquire("key".into(), 1).unwrap();
+    breaker.reset(&"key".to_owned());
+    let mut current = breaker.try_acquire("key".into(), 0).unwrap();
+    assert!(old.record_failure(0).is_none());
     drop(old);
     assert!(matches!(
         breaker.try_acquire("key".into(), 1),
         Err(BreakerRejection::InFlight)
     ));
     current.record_success();
-    let mut after_success = breaker.try_acquire("key".into(), 1).unwrap();
-    let failure = after_success.record_failure(1).unwrap();
+    let mut after_success = breaker.try_acquire("key".into(), 0).unwrap();
+    let failure = after_success.record_failure(0).unwrap();
     assert_eq!(failure.failure_count, 1);
-    assert_eq!(failure.next_attempt_ms, 2);
+    assert_eq!(failure.next_attempt_ms, 1);
 }
 
 #[test]

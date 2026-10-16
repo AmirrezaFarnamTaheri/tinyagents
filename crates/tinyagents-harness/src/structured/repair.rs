@@ -152,7 +152,7 @@ fn parse_object_candidate(candidate: &str) -> Option<(Value, JsonRepair)> {
     if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
         return None;
     }
-    let without_trailing_commas = strip_object_trailing_commas(trimmed);
+    let without_trailing_commas = tinytools_agent::repair::json::strip_trailing_commas(trimmed);
     let (value, repair) = parse_lenient(&without_trailing_commas)?;
     let repair = if repair == JsonRepair::Strict && without_trailing_commas != trimmed {
         JsonRepair::TrailingComma
@@ -217,49 +217,6 @@ fn last_balanced_object(raw: &str) -> Option<&str> {
         }
     }
     best.and_then(|(begin, end)| raw.get(begin..end))
-}
-
-fn strip_object_trailing_commas(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if in_string {
-            output.push(byte);
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'"' {
-            in_string = true;
-            output.push(byte);
-            index += 1;
-            continue;
-        }
-        if byte == b',' {
-            let mut next = index + 1;
-            while bytes.get(next).is_some_and(u8::is_ascii_whitespace) {
-                next += 1;
-            }
-            if matches!(bytes.get(next), Some(b'}' | b']')) {
-                index += 1;
-                continue;
-            }
-        }
-        output.push(byte);
-        index += 1;
-    }
-    // The input was valid UTF-8 and this only removes ASCII commas.
-    String::from_utf8(output).expect("removing ASCII commas preserves UTF-8")
 }
 
 /// Removes a ```` ``` ```` fence, with or without a language tag.
