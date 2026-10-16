@@ -9,7 +9,7 @@ use std::{
 
 use futures::StreamExt;
 use tinyinference_llm::{
-    message::{ImageRef, UserMessage},
+    message::{ImageRef, MediaRef, UserMessage},
     model::{Modalities, ModelStreamItem},
 };
 
@@ -143,6 +143,19 @@ impl MediaImageReadout<String> for Readout {
         _image: &ResolvedAttachment,
     ) -> std::result::Result<String, String> {
         Ok("a small red square".into())
+    }
+}
+
+struct LongUnicodeReadout;
+
+#[async_trait]
+impl MediaImageReadout<String> for LongUnicodeReadout {
+    async fn readout(
+        &self,
+        _scope: &String,
+        _image: &ResolvedAttachment,
+    ) -> std::result::Result<String, String> {
+        Ok("🧪".repeat(2_000))
     }
 }
 
@@ -902,4 +915,81 @@ async fn nonvision_archive_fallback_lists_entries_without_extracting_them() {
     assert!(rendered.contains("Archive listing"));
     assert!(rendered.contains("notes/readme.txt"));
     assert!(rendered.contains("original was not extracted"));
+}
+
+#[tokio::test]
+async fn image_and_archive_fallback_context_is_unicode_safe_and_bounded() {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut bytes);
+        for index in 0..40 {
+            let name = format!("entries/{index:02}-{}.txt", "long-name".repeat(12));
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"entry bytes are not extracted")
+                .unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    let model = Arc::new(CaptureModel::new(false));
+    let mut sources = HashMap::new();
+    sources.insert(
+        "image".into(),
+        attachment("photo.png", "image/png", b"\x89PNG\r\n\x1a\n"),
+    );
+    sources.insert(
+        "archive".into(),
+        attachment("bundle.zip", "application/zip", bytes.get_ref()),
+    );
+    let resolver = Arc::new(Resolver {
+        sources,
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig {
+            files: FileLimits {
+                max_extracted_text_chars: 1_000,
+                ..FileLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        resolver,
+        Arc::default(),
+    )
+    .with_image_readout(Arc::new(LongUnicodeReadout));
+    let req = ModelRequest {
+        messages: vec![Message::User(UserMessage {
+            content: vec![
+                ContentBlock::Image(ImageRef {
+                    url: "image".into(),
+                    mime_type: Some("image/png".into()),
+                }),
+                ContentBlock::Document(MediaRef::path("archive")),
+            ],
+        })],
+        ..ModelRequest::default()
+    };
+
+    wrapped.invoke(&"tenant-a".into(), req).await.unwrap();
+
+    let captured = model.requests.lock().unwrap();
+    let Message::User(user) = &captured[0].messages[0] else {
+        panic!("prepared user message retained")
+    };
+    let contexts = user
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(contexts.len(), 2);
+    assert!(contexts.iter().all(|text| text.contains("Attachment context truncated")));
+    assert!(contexts.iter().all(|text| text.chars().count() <= 1_000 + 31));
+    assert!(contexts.iter().any(|text| text.contains("🧪")));
+    assert!(contexts
+        .iter()
+        .any(|text| text.contains("Archive listing (names are untrusted")));
 }
