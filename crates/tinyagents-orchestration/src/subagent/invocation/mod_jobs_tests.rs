@@ -375,11 +375,13 @@ async fn named_job_alias_uses_configured_operation_and_identifier_fields() {
     });
     let tool = SubAgentJobsTool::new(jobs.clone())
         .with_tool_name("list_subagents")
+        .with_description("List or query subagent work.")
         .with_parameters(schema.clone())
         .with_fixed_action(SubAgentJobAction::Query)
-        .with_identifier_fields("task_id", "subagent_session_id");
+        .with_identifier_field("task_id");
 
     assert_eq!(tool.name(), "list_subagents");
+    assert_eq!(tool.description(), "List or query subagent work.");
     assert_eq!(tool.parameters_schema(), schema);
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -409,7 +411,7 @@ async fn fixed_job_alias_rejects_missing_identifiers_and_defaults_stay_compatibl
     let alias = SubAgentJobsTool::new(jobs.clone())
         .with_tool_name("cancel_subagent")
         .with_fixed_action(SubAgentJobAction::Cancel)
-        .with_identifier_fields("task_id", "subagent_session_id");
+        .with_identifier_field("task_id");
     let missing = ToolDispatch::<(), ()>::execute(
         &alias,
         &(),
@@ -453,9 +455,11 @@ async fn named_message_alias_routes_mapped_id_and_message_fields() {
     });
     let tool = SubAgentMessageTool::new(jobs)
         .with_tool_name("steer_subagent")
+        .with_description("Send the worker a steering message.")
         .with_parameters(schema.clone())
         .with_argument_fields("task_id", "session_id", "text", "request_key");
     assert_eq!(tool.name(), "steer_subagent");
+    assert_eq!(tool.description(), "Send the worker a steering message.");
     assert_eq!(tool.parameters_schema(), schema);
 
     let result = ToolDispatch::<(), ()>::execute(

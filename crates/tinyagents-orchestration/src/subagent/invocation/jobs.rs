@@ -66,16 +66,14 @@ impl SubAgentJobAction {
 #[derive(Clone)]
 struct JobArgumentNames {
     action: String,
-    job_id: String,
-    session_id: String,
+    identifier: String,
 }
 
 impl Default for JobArgumentNames {
     fn default() -> Self {
         Self {
             action: "action".into(),
-            job_id: "job_id".into(),
-            session_id: "session_id".into(),
+            identifier: "job_id".into(),
         }
     }
 }
@@ -555,6 +553,7 @@ pub struct SubAgentJobsTool {
     sessions: Option<SessionOverlay>,
     tasks: Option<TaskOverlay>,
     tool_name: String,
+    description: String,
     parameters: Option<Value>,
     fixed_action: Option<SubAgentJobAction>,
     argument_names: JobArgumentNames,
@@ -568,6 +567,7 @@ impl SubAgentJobsTool {
             sessions: None,
             tasks: None,
             tool_name: "subagent_jobs".into(),
+            description: "Query an asynchronous subagent job by id, list all subagent jobs, or cancel one job with action \"cancel\".".into(),
             parameters: None,
             fixed_action: None,
             argument_names: JobArgumentNames::default(),
@@ -577,6 +577,12 @@ impl SubAgentJobsTool {
     /// Uses a host-facing name while retaining this tool's typed job logic.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
+        self
+    }
+
+    /// Uses a host-facing description for a named operation alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
         self
     }
 
@@ -593,14 +599,9 @@ impl SubAgentJobsTool {
         self
     }
 
-    /// Maps host schema identifier fields to the generic job/session fields.
-    pub fn with_identifier_fields(
-        mut self,
-        job_id: impl Into<String>,
-        session_id: impl Into<String>,
-    ) -> Self {
-        self.argument_names.job_id = job_id.into();
-        self.argument_names.session_id = session_id.into();
+    /// Maps a host schema identifier field to the generic job/session id.
+    pub fn with_identifier_field(mut self, identifier: impl Into<String>) -> Self {
+        self.argument_names.identifier = identifier.into();
         self
     }
 
@@ -633,7 +634,7 @@ impl Tool for SubAgentJobsTool {
     }
 
     fn description(&self) -> &str {
-        "Query an asynchronous subagent job by id, list all subagent jobs, or cancel one job with action \"cancel\"."
+        &self.description
     }
 
     fn parameters_schema(&self) -> Value {
@@ -684,7 +685,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
                 let job_id = object
-                    .get(&self.argument_names.job_id)
+                    .get(&self.argument_names.identifier)
                     .and_then(Value::as_str)
                     .ok_or_else(|| {
                         anyhow::anyhow!("job_id must be a string for action `cancel`")
@@ -694,7 +695,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(Some("close")) => {
                 let id = object
-                    .get(&self.argument_names.job_id)
+                    .get(&self.argument_names.identifier)
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
                 let (sessions, key) = self
@@ -713,7 +714,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(Some("await")) => {
                 let Some(id) = object
-                    .get(&self.argument_names.job_id)
+                    .get(&self.argument_names.identifier)
                     .and_then(Value::as_str)
                 else {
                     let mut tombstones = Vec::new();
@@ -788,7 +789,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
-        if let Some(value) = object.get(&self.argument_names.job_id) {
+        if let Some(value) = object.get(&self.argument_names.identifier) {
             let job_id = value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
@@ -858,6 +859,7 @@ pub struct SubAgentMessageTool {
     jobs: SubAgentJobRegistry,
     sessions: Option<SessionOverlay>,
     tool_name: String,
+    description: String,
     parameters: Option<Value>,
     argument_names: MessageArgumentNames,
 }
@@ -869,6 +871,7 @@ impl SubAgentMessageTool {
             jobs,
             sessions: None,
             tool_name: "subagent_message".into(),
+            description: "Send a message to a queued or running asynchronous subagent job.".into(),
             parameters: None,
             argument_names: MessageArgumentNames::default(),
         }
@@ -877,6 +880,12 @@ impl SubAgentMessageTool {
     /// Uses a host-facing name while retaining this tool's typed message logic.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
+        self
+    }
+
+    /// Uses a host-facing description for a named steering alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
         self
     }
 
@@ -921,7 +930,7 @@ impl Tool for SubAgentMessageTool {
     }
 
     fn description(&self) -> &str {
-        "Send a message to a queued or running asynchronous subagent job."
+        &self.description
     }
 
     fn parameters_schema(&self) -> Value {
