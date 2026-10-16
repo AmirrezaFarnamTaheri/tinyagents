@@ -585,7 +585,21 @@ async fn mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire
     drop(writer);
     let current = store.load("same").await.unwrap().unwrap();
     let stream = current.doc.stream().unwrap();
-    store.streams.append_batch_if_offset(&stream, 0, vec![serde_json::to_value(MessageDto::from_message(&message("agent:foreign", "wrong row"), to_ms).unwrap()).unwrap()]).await.unwrap();
+    store
+        .streams
+        .append_batch_if_offset(
+            &stream,
+            0,
+            vec![
+                serde_json::to_value(
+                    MessageDto::from_message(&message("agent:foreign", "wrong row"), to_ms)
+                        .unwrap(),
+                )
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
     let error = store
         .append_message("same", message("agent:next", "next"))
         .await

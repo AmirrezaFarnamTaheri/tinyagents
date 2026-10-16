@@ -132,13 +132,7 @@ async fn tombstone_and_recreated_incarnation_hide_old_stream_and_search_rows() {
     assert_ne!(current.doc.incarnation, old.doc.incarnation);
     assert_eq!(current.doc.thread.created_at, "2026-03-01T00:00:00Z");
     assert!(b.get_messages("same").await.unwrap().is_empty());
-    assert_eq!(
-        a.streams
-            .len(&old.doc.stream().unwrap())
-            .await
-            .unwrap(),
-        1
-    );
+    assert_eq!(a.streams.len(&old.doc.stream().unwrap()).await.unwrap(), 1);
 }
 
 #[tokio::test]

@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinystoragedrivers_core::{
-    CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope,
-    ScopeClass, ScopedStorage, StorageBackend, WriteOptions, schema::StepBody,
+    CollectionSpec, Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
+    ScopedStorage, StorageBackend, WriteOptions, schema::StepBody,
 };
 
 const INCARNATION: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
@@ -62,10 +62,22 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
     .unwrap();
 }
 
-async fn put_v1_stream(storage: &ScopedStorage, thread_id: &str, incarnation: &str, rows: &[Value]) {
-    let stream = format!("conversation_messages_v1:{}:{incarnation}", digest(thread_id));
+async fn put_v1_stream(
+    storage: &ScopedStorage,
+    thread_id: &str,
+    incarnation: &str,
+    rows: &[Value],
+) {
+    let stream = format!(
+        "conversation_messages_v1:{}:{incarnation}",
+        digest(thread_id)
+    );
     for row in rows {
-        storage.streams().append(&stream, row.clone()).await.unwrap();
+        storage
+            .streams()
+            .append(&stream, row.clone())
+            .await
+            .unwrap();
     }
 }
 
@@ -96,7 +108,11 @@ fn message(id: &str, content: &str) -> ThreadMessage {
     }
 }
 
-fn stream_step() -> Arc<dyn Fn(String, Vec<Value>) -> tinystoragedrivers_core::Result<Option<(String, Vec<Value>)>> + Send + Sync> {
+fn stream_step() -> Arc<
+    dyn Fn(String, Vec<Value>) -> tinystoragedrivers_core::Result<Option<(String, Vec<Value>)>>
+        + Send
+        + Sync,
+> {
     let step = conversations_storage_schema()
         .steps
         .into_iter()
@@ -122,7 +138,12 @@ fn the_schema_names_what_the_conversations_owner_declares() {
             "conversations.threads"
         ]
     );
-    assert!(schema.items.iter().all(|item| item.scope() == ScopeClass::Tenant));
+    assert!(
+        schema
+            .items
+            .iter()
+            .all(|item| item.scope() == ScopeClass::Tenant)
+    );
     let mut steps: Vec<&str> = schema.steps.iter().map(|step| step.id).collect();
     steps.sort_unstable();
     assert_eq!(steps, ["appends_v2", "messages_v2", "threads_v2"]);
@@ -133,12 +154,21 @@ fn the_schema_names_what_the_conversations_owner_declares() {
 async fn v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes() {
     let storage = storage();
     let id = "thread/1";
-    put_v1(&storage, "conversation_threads_v1", &digest(id), v1_thread(id, INCARNATION, 2, false)).await;
+    put_v1(
+        &storage,
+        "conversation_threads_v1",
+        &digest(id),
+        v1_thread(id, INCARNATION, 2, false),
+    )
+    .await;
     put_v1_stream(
         &storage,
         id,
         INCARNATION,
-        &[v1_message("m1", "one", INCARNATION), v1_message("m2", "two", INCARNATION)],
+        &[
+            v1_message("m1", "one", INCARNATION),
+            v1_message("m2", "two", INCARNATION),
+        ],
     )
     .await;
     let pending = v1_message("m3", "three", INCARNATION);
@@ -155,7 +185,11 @@ async fn v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes() {
     migrate(&storage).await;
 
     let docs = storage.documents();
-    let thread = docs.get("conversations.threads", "thread%2F1").await.unwrap().unwrap();
+    let thread = docs
+        .get("conversations.threads", "thread%2F1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(thread.meta.schema, 2);
     assert_eq!(thread.meta.created_ms, 1_700_000_000_000);
     assert_eq!(
@@ -168,7 +202,10 @@ async fn v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes() {
         })
     );
     let intent = docs
-        .get("conversations.appends", &format!("thread%2F1/{INCARNATION}"))
+        .get(
+            "conversations.appends",
+            &format!("thread%2F1/{INCARNATION}"),
+        )
         .await
         .unwrap()
         .unwrap();
@@ -194,21 +231,47 @@ async fn v1_threads_appends_and_messages_move_to_the_v2_names_and_shapes() {
             "created_ms": 1_767_312_000_500_i64
         })
     );
-    assert!(storage.streams().streams("conversation_messages_v1:").await.unwrap().is_empty());
-    assert_eq!(docs.count("conversation_threads_v1", &Default::default()).await.unwrap(), 0);
-    assert_eq!(docs.count("conversation_appends_v1", &Default::default()).await.unwrap(), 0);
+    assert!(
+        storage
+            .streams()
+            .streams("conversation_messages_v1:")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        docs.count("conversation_threads_v1", &Default::default())
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        docs.count("conversation_appends_v1", &Default::default())
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 #[tokio::test]
 async fn a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonical_streams() {
     let storage = storage();
     let id = "thread/1";
-    put_v1(&storage, "conversation_threads_v1", &digest(id), v1_thread(id, INCARNATION, 2, false)).await;
+    put_v1(
+        &storage,
+        "conversation_threads_v1",
+        &digest(id),
+        v1_thread(id, INCARNATION, 2, false),
+    )
+    .await;
     put_v1_stream(
         &storage,
         id,
         INCARNATION,
-        &[v1_message("m1", "one", INCARNATION), v1_message("m2", "two", INCARNATION)],
+        &[
+            v1_message("m1", "one", INCARNATION),
+            v1_message("m2", "two", INCARNATION),
+        ],
     )
     .await;
     put_v1(
@@ -243,7 +306,10 @@ async fn a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonica
     );
 
     // The next append finishes the migrated intent first, then lands its own message.
-    store.append_message(id, message("m4", "four")).await.unwrap();
+    store
+        .append_message(id, message("m4", "four"))
+        .await
+        .unwrap();
     assert_eq!(
         store.get_messages(id).await.unwrap(),
         vec![
@@ -253,16 +319,39 @@ async fn a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonica
             message("m4", "four"),
         ]
     );
-    assert_eq!(storage.documents().count("conversations.appends", &Default::default()).await.unwrap(), 0);
+    assert_eq!(
+        storage
+            .documents()
+            .count("conversations.appends", &Default::default())
+            .await
+            .unwrap(),
+        0
+    );
 
     // A rewrite opens a fresh incarnation whose stream carries the thread id.
-    let patch = ThreadMessagePatch { extra_metadata: Some(json!({"edited": true})) };
+    let patch = ThreadMessagePatch {
+        extra_metadata: Some(json!({"edited": true})),
+    };
     store.update_message(id, "m1", patch).await.unwrap();
-    let streams = storage.streams().streams("conversations.messages/").await.unwrap();
-    assert_eq!(streams.len(), 1, "the legacy-keyed stream is retired: {streams:?}");
-    assert!(streams[0].starts_with("conversations.messages/thread%2F1/"), "{streams:?}");
+    let streams = storage
+        .streams()
+        .streams("conversations.messages/")
+        .await
+        .unwrap();
+    assert_eq!(
+        streams.len(),
+        1,
+        "the legacy-keyed stream is retired: {streams:?}"
+    );
+    assert!(
+        streams[0].starts_with("conversations.messages/thread%2F1/"),
+        "{streams:?}"
+    );
     assert_eq!(store.get_messages(id).await.unwrap().len(), 4);
-    store.append_message(id, message("m5", "five")).await.unwrap();
+    store
+        .append_message(id, message("m5", "five"))
+        .await
+        .unwrap();
     assert_eq!(store.get_messages(id).await.unwrap().len(), 5);
 
     // Recreating a deleted v1 thread starts a fresh incarnation under the canonical key.
@@ -278,30 +367,67 @@ async fn a_migrated_conversation_reads_recovers_its_intent_and_moves_to_canonica
         })
         .await
         .unwrap();
-    assert_eq!(store.get_thread("gone").await.unwrap().unwrap().title, "Back");
+    assert_eq!(
+        store.get_thread("gone").await.unwrap().unwrap().title,
+        "Back"
+    );
 }
 
 #[tokio::test]
 async fn migrating_twice_changes_nothing() {
     let storage = storage();
     let id = "thread/1";
-    put_v1(&storage, "conversation_threads_v1", &digest(id), v1_thread(id, INCARNATION, 1, false)).await;
-    put_v1_stream(&storage, id, INCARNATION, &[v1_message("m1", "one", INCARNATION)]).await;
+    put_v1(
+        &storage,
+        "conversation_threads_v1",
+        &digest(id),
+        v1_thread(id, INCARNATION, 1, false),
+    )
+    .await;
+    put_v1_stream(
+        &storage,
+        id,
+        INCARNATION,
+        &[v1_message("m1", "one", INCARNATION)],
+    )
+    .await;
     migrate(&storage).await;
     migrate(&storage).await;
     let store = DriverConversationStore::new(storage.clone());
-    assert_eq!(store.get_messages(id).await.unwrap(), vec![message("m1", "one")]);
-    assert_eq!(storage.documents().count("conversations.threads", &Default::default()).await.unwrap(), 1);
+    assert_eq!(
+        store.get_messages(id).await.unwrap(),
+        vec![message("m1", "one")]
+    );
+    assert_eq!(
+        storage
+            .documents()
+            .count("conversations.threads", &Default::default())
+            .await
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
 fn the_stream_step_is_pure_and_keeps_the_v1_thread_key_and_incarnation() {
     let run = stream_step();
-    let name = format!("conversation_messages_v1:{}:{INCARNATION}", digest("thread/1"));
-    let entries = vec![v1_message("m1", "one", INCARNATION), v1_message("m2", "two", INCARNATION)];
+    let name = format!(
+        "conversation_messages_v1:{}:{INCARNATION}",
+        digest("thread/1")
+    );
+    let entries = vec![
+        v1_message("m1", "one", INCARNATION),
+        v1_message("m2", "two", INCARNATION),
+    ];
     let first = run(name.clone(), entries.clone()).unwrap().unwrap();
     assert_eq!(first, run(name, entries).unwrap().unwrap());
-    assert_eq!(first.0, format!("conversations.messages/{}/{INCARNATION}", digest("thread/1")));
+    assert_eq!(
+        first.0,
+        format!(
+            "conversations.messages/{}/{INCARNATION}",
+            digest("thread/1")
+        )
+    );
     assert_eq!(first.1.len(), 2);
     assert_eq!(first.1[1]["id"], "m2");
     assert!(first.1[1].get("incarnation").is_none() && first.1[1].get("schema").is_none());
@@ -324,7 +450,11 @@ fn the_stream_step_ends_a_stream_at_its_first_unreadable_row() {
 #[test]
 fn the_stream_step_drops_a_stream_whose_name_is_not_v1() {
     let run = stream_step();
-    assert!(run("conversation_messages_v1:nocolon".into(), vec![]).unwrap().is_none());
+    assert!(
+        run("conversation_messages_v1:nocolon".into(), vec![])
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -339,6 +469,12 @@ async fn a_v1_time_that_is_not_rfc_3339_migrates_as_the_epoch() {
     put_v1_stream(&storage, id, INCARNATION, &[row]).await;
     migrate(&storage).await;
     let store = DriverConversationStore::new(storage);
-    assert_eq!(store.get_thread(id).await.unwrap().unwrap().created_at, "1970-01-01T00:00:00Z");
-    assert_eq!(store.get_messages(id).await.unwrap()[0].created_at, "1970-01-01T00:00:00Z");
+    assert_eq!(
+        store.get_thread(id).await.unwrap().unwrap().created_at,
+        "1970-01-01T00:00:00Z"
+    );
+    assert_eq!(
+        store.get_messages(id).await.unwrap()[0].created_at,
+        "1970-01-01T00:00:00Z"
+    );
 }

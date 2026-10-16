@@ -37,7 +37,10 @@ fn times_round_trip_at_millisecond_precision() {
 fn a_time_that_is_not_rfc_3339_is_invalid_input() {
     for text in ["now", "2026-07-01", ""] {
         let error = to_ms(text).unwrap_err();
-        assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::InvalidInput);
+        assert_eq!(
+            error.kind(),
+            tinystoragedrivers_core::ErrorKind::InvalidInput
+        );
     }
 }
 
@@ -126,5 +129,8 @@ fn a_message_body_without_extra_metadata_reads_as_null_like_the_wire_type() {
         "id": "m", "content": "", "message_type": "text", "sender": "user", "created_ms": 0
     }))
     .unwrap();
-    assert_eq!(dto.into_message().unwrap().extra_metadata, serde_json::Value::Null);
+    assert_eq!(
+        dto.into_message().unwrap().extra_metadata,
+        serde_json::Value::Null
+    );
 }

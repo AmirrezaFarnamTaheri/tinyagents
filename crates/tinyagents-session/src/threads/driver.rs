@@ -223,9 +223,7 @@ impl DriverConversationStore {
         let stored = self
             .threads()?
             .update(&key, |current| {
-                let current = current
-                    .map(|dto| Self::thread_doc(&key, dto))
-                    .transpose()?;
+                let current = current.map(|dto| Self::thread_doc(&key, dto)).transpose()?;
                 Ok(Some(operation(current.as_ref())?.to_dto()?))
             })
             .await?;
