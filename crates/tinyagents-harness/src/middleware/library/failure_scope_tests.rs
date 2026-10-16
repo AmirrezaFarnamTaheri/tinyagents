@@ -31,7 +31,7 @@ impl FailureScopePolicy<()> for Policy {
         _scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment {
-        if result.is_error() {
+        if result.is_error {
             FailureAssessment::Failure {
                 error: result.output(),
                 hard_reject: false,
@@ -130,7 +130,11 @@ async fn host_can_classify_terminal_failures_with_a_typed_cause() {
         ) -> FailureAssessment {
             FailureAssessment::Halt {
                 summary: "terminal inference failure".into(),
-                cause: Some(ClassifiedStopCause::new("inference", "transport")),
+                cause: Some(ClassifiedStopCause {
+                    class: "inference".into(),
+                    operation: "transport".into(),
+                    summary: "terminal inference failure".into(),
+                }),
             }
         }
     }
