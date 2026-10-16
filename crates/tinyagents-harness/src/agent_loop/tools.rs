@@ -1614,6 +1614,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // live run's state. Duration is wall-clock (completion minus start);
         // `is_error` is a reported tool failure, distinct from execution Err.
         let duration_ms = crate::ids::now_ms().saturating_sub(prepared.started_at_ms);
+        let argument_bytes = serde_json::to_vec(&prepared.call.arguments).unwrap_or_default();
+        let args_digest = format!("{:x}", sha2::Sha256::digest(argument_bytes));
+        run.tool_outcomes.push(crate::host::ToolOutcomeRecord {
+            name: prepared.tool_name.clone(),
+            args_digest,
+            success: !result.is_error,
+            failure_class: result
+                .is_error
+                .then(|| crate::host::classify_tool_failure(&result.text()).to_owned()),
+            duration_ms,
+        });
         let output_bytes = model_output.len() as u64;
         let error = result.is_error.then_some(model_output.clone());
         // The transcript and event both answer the admitted call, never a
