@@ -35,8 +35,9 @@ pub struct MediaRequestConfig {
     pub images: ImageLimits,
     /// File count, size, extraction, and remote-fetch limits.
     pub files: FileLimits,
-    /// Maximum media-bearing historical blocks to resolve, newest first.
-    pub max_historical_media_blocks: usize,
+    /// Maximum historical media items to resolve, newest first. Each media
+    /// marker and typed media block counts as one item.
+    pub max_historical_media_items: usize,
 }
 
 impl Default for MediaRequestConfig {
@@ -44,7 +45,7 @@ impl Default for MediaRequestConfig {
         Self {
             images: ImageLimits::default(),
             files: FileLimits::default(),
-            max_historical_media_blocks: 8,
+            max_historical_media_items: 8,
         }
     }
 }
@@ -121,8 +122,10 @@ where
     ///
     /// The callback returns the caller's already-authorized scope from model
     /// state or trusted host metadata. It receives only the disposable request
-    /// copy, so it may consume a host carrier without changing the canonical
-    /// transcript. It is called separately for each invoke or stream.
+    /// copy, so it may consume a host carrier or normalize host-owned markers
+    /// without changing the canonical transcript. It runs before media
+    /// counting, must not perform source I/O, and is called separately for each
+    /// invoke or stream (including requests with no user messages).
     pub fn new(
         inner: Arc<dyn ChatModel<State>>,
         config: MediaRequestConfig,
@@ -205,7 +208,7 @@ where
         let selected_history = select_history_media(
             &request.messages,
             latest_user,
-            self.config.max_historical_media_blocks,
+            self.config.max_historical_media_items,
         );
         for (message_index, message) in request.messages.iter_mut().enumerate() {
             let Message::User(user) = message else {

@@ -513,7 +513,7 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
         ..Resolver::default()
     });
     let config = MediaRequestConfig {
-        max_historical_media_blocks: 1,
+        max_historical_media_items: 1,
         ..MediaRequestConfig::default()
     };
     let wrapped = wrapper(model.clone(), config, resolver.clone(), Arc::default());
@@ -571,7 +571,7 @@ async fn historical_marker_budget_selects_only_the_newest_references_in_a_text_b
     let wrapped = wrapper(
         model.clone(),
         MediaRequestConfig {
-            max_historical_media_blocks: 1,
+            max_historical_media_items: 1,
             ..MediaRequestConfig::default()
         },
         resolver.clone(),
