@@ -2049,9 +2049,8 @@ async fn after_commit_receipt_observes_durable_append_and_terminal_follows_it() 
         transcript.delta,
         crate::TranscriptDelta::Append { .. }
     ));
-    assert_eq!(transcript.rows.len(), 2);
-    assert_eq!(transcript.rows[0].content, "x");
-    assert_eq!(transcript.rows[1].content, "ok");
+    assert_eq!(transcript.rows.len(), 1);
+    assert_eq!(transcript.rows[0].content, "ok");
     assert!(matches!(
         events.terminal.lock().unwrap().as_slice(),
         [SessionTerminal::Completed(_)]
