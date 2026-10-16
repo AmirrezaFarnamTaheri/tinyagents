@@ -263,7 +263,7 @@ async fn derived_shell_hook_receives_generic_argument_rewrite() {
     for (name, body) in [
         (
             "rewrite.sh",
-            "#!/bin/sh\necho '{\"updatedInput\":{\"command\":\"rewritten command\"}}'\n",
+            "#!/bin/sh\necho '{\"updated_input\":{\"command\":\"rewritten command\"}}'\n",
         ),
         (
             "observe.sh",
