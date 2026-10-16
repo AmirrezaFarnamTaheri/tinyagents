@@ -64,14 +64,17 @@ pub enum CloseVerdict {
     Unclear,
 }
 
-/// Parse an exact first-line `ACCEPT` or `REJECT` verdict; all other output is
+/// Parse the last standalone `ACCEPT` or `REJECT` token; all other output is
 /// unclear and therefore fails closed.
 pub fn parse_close_verdict(text: &str) -> CloseVerdict {
-    match text.lines().next().unwrap_or_default().trim() {
-        "ACCEPT" => CloseVerdict::Accept,
-        "REJECT" => CloseVerdict::Reject,
-        _ => CloseVerdict::Unclear,
-    }
+    text.split(|c: char| !c.is_ascii_alphabetic())
+        .filter_map(|token| match token.to_ascii_uppercase().as_str() {
+            "ACCEPT" => Some(CloseVerdict::Accept),
+            "REJECT" => Some(CloseVerdict::Reject),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or(CloseVerdict::Unclear)
 }
 
 /// Render tool outputs under a total character budget, spending the budget on
