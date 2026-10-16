@@ -237,10 +237,12 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
         collected["awaiting_user"][0]["session_id"],
         session.subagent_session_id
     );
-    assert!(collected["awaiting_user"][0]["awaiting_user_envelope"]
-        .as_str()
-        .unwrap()
-        .contains("[SUBAGENT_AWAITING_USER]"));
+    assert!(
+        collected["awaiting_user"][0]["awaiting_user_envelope"]
+            .as_str()
+            .unwrap()
+            .contains("[SUBAGENT_AWAITING_USER]")
+    );
     let closed = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),

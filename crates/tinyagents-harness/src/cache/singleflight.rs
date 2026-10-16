@@ -25,9 +25,9 @@
 //! into every concurrent caller's failure while hiding the fact that each had
 //! its own retry budget — and an error is not a value worth caching.
 
-use std::{collections::HashMap, future::Future};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{collections::HashMap, future::Future};
 
 use crate::Result;
 use tinyinference_llm::model::ModelResponse;
@@ -238,12 +238,7 @@ impl Drop for LeaderGuard {
 
 impl std::fmt::Debug for SingleFlight {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inflight = self
-            .inflight
-            .entries
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let inflight = self.inflight.entries.lock().map(|m| m.len()).unwrap_or(0);
         f.debug_struct("SingleFlight")
             .field("inflight", &inflight)
             .finish()

@@ -10,7 +10,10 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
     assert_eq!(value["worker_thread_id"], "worker-thread");
     assert_eq!(value["tier"], "worker");
     assert_eq!(value["model_override"], "provider/model");
-    assert_eq!(serde_json::from_value::<SubagentOutcome>(value).unwrap(), outcome);
+    assert_eq!(
+        serde_json::from_value::<SubagentOutcome>(value).unwrap(),
+        outcome
+    );
 
     let legacy = serde_json::json!({
         "task_id": "legacy",

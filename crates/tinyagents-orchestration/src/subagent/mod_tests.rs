@@ -332,7 +332,10 @@ fn request(task_id: &str, data: &str) -> SubagentRequest<String> {
     SubagentRequest::fresh_from_parent(&parent, child, task_id, (), "do work", None).unwrap()
 }
 
-async fn request_with_parent(task_id: &str, run_context: RunContext<String>) -> SubagentRequest<String> {
+async fn request_with_parent(
+    task_id: &str,
+    run_context: RunContext<String>,
+) -> SubagentRequest<String> {
     let task_key = SubagentTaskKey::from_context(&run_context, task_id, Some("thread-1".into()));
     SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None, None)
         .await
@@ -1760,9 +1763,9 @@ async fn driver_custom_scope_resolver_sees_the_task_keys_root_run_id() {
     let child_of = |parent: &str| {
         let parent = parent.to_owned();
         async move {
-        let mut config = RunConfig::new(parent.clone());
-        config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
-        request_with_parent(&parent, RunContext::new(config, String::new())).await
+            let mut config = RunConfig::new(parent.clone());
+            config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
+            request_with_parent(&parent, RunContext::new(config, String::new())).await
         }
     };
 

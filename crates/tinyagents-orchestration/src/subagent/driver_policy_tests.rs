@@ -533,16 +533,14 @@ async fn cloned_in_flight_registry_coalesces_runs_across_driver_instances() {
     })
     .unwrap()
     .with_shared_in_flight(in_flight.clone());
-    let follower = driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
+    let follower =
+        driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
     let leader_request = request("shared-task");
     let key = leader_request.task_key().clone();
     let leader_token = CancellationToken::new();
     let leader_token_for_task = leader_token.clone();
-    let leader_task = tokio::spawn(async move {
-        leader
-            .run(leader_request, leader_token_for_task)
-            .await
-    });
+    let leader_task =
+        tokio::spawn(async move { leader.run(leader_request, leader_token_for_task).await });
 
     started_rx.await.unwrap();
     let entry = in_flight.get(&key).expect("leader reserved the task key");
@@ -578,14 +576,12 @@ async fn aborting_shared_flight_leader_wakes_other_drivers() {
     let leader_executor = Executor::hanging();
     let follower_executor = Executor::new(ok_with("follower must not execute"));
     let leader = driver(plain(), leader_executor.clone()).with_shared_in_flight(in_flight.clone());
-    let follower = driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
+    let follower =
+        driver(plain(), follower_executor.clone()).with_shared_in_flight(in_flight.clone());
     let leader_request = request("aborted-shared-task");
     let key = leader_request.task_key().clone();
-    let leader_task = tokio::spawn(async move {
-        leader
-            .run(leader_request, CancellationToken::new())
-            .await
-    });
+    let leader_task =
+        tokio::spawn(async move { leader.run(leader_request, CancellationToken::new()).await });
     for _ in 0..10_000 {
         if leader_executor.attempts.load(Ordering::SeqCst) > 0 {
             break;
@@ -608,22 +604,16 @@ async fn aborting_shared_flight_leader_wakes_other_drivers() {
     assert_eq!(entry.waiter_count(), 1, "second driver joined the leader");
 
     leader_task.abort();
-    let leader_join = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        leader_task,
-    )
-    .await
-    .expect("aborting the leader must complete its task handle")
-    .expect_err("leader task must report cancellation");
+    let leader_join = tokio::time::timeout(std::time::Duration::from_secs(10), leader_task)
+        .await
+        .expect("aborting the leader must complete its task handle")
+        .expect_err("leader task must report cancellation");
     assert!(leader_join.is_cancelled());
     assert!(entry.is_complete(), "leader drop must publish a result");
-    let follower_result = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        follower_task,
-    )
-    .await
-    .expect("leader drop must wake the follower")
-    .unwrap();
+    let follower_result = tokio::time::timeout(std::time::Duration::from_secs(10), follower_task)
+        .await
+        .expect("leader drop must wake the follower")
+        .unwrap();
     assert_eq!(follower_result, Err(SubagentError::Cancelled));
     assert_eq!(follower_executor.attempts.load(Ordering::SeqCst), 0);
 }

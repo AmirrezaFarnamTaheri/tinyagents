@@ -12,9 +12,11 @@ description = "Host-neutral subagent invocation and lifecycle orchestration."
 tinyagents-definition = { path = "../tinyagents-definition", version = "2.2.0" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+fs2 = "0.4"
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
 thiserror = "2"
 parking_lot = "0.12"
 tinyagents-graph = { path = "../tinyagents-graph", version = "2.2.0", default-features = false }
