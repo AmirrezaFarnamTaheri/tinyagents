@@ -581,7 +581,8 @@ impl SubagentExecutor<String> for NestedExecutor {
                         "nested work",
                         None,
                         None,
-                    )?,
+                    )
+                    .await?,
                     execution.cancellation,
                 )
                 .await?;
@@ -669,7 +670,7 @@ async fn caller_owned_child_context_keeps_its_lineage_into_execution() {
         .unwrap();
     driver(planner, executor.clone(), persistence)
         .run(
-            request_with_parent("lineage", child),
+            request_with_parent("lineage", child).await,
             CancellationToken::new(),
         )
         .await
@@ -1109,14 +1110,14 @@ async fn same_task_id_from_distinct_parent_runs_never_shares_lifecycle_state() {
 
     driver
         .run(
-            request_with_parent("same-task", first_parent),
+            request_with_parent("same-task", first_parent).await,
             CancellationToken::new(),
         )
         .await
         .unwrap();
     driver
         .run(
-            request_with_parent("same-task", second_parent),
+            request_with_parent("same-task", second_parent).await,
             CancellationToken::new(),
         )
         .await
@@ -1202,7 +1203,7 @@ async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
     let key = SubagentTaskKey::from_context(&original, "continued", Some("thread-1".into()));
     lifecycle
         .run(
-            continuation_request(key.clone(), original),
+            continuation_request(key.clone(), original).await,
             CancellationToken::new(),
         )
         .await
@@ -1210,7 +1211,7 @@ async fn continuation_keeps_original_key_with_a_fresh_owned_context() {
     let fresh = RunContext::new(RunConfig::new("fresh-turn-context"), "second".into());
     let completed = lifecycle
         .run(
-            continuation_request(key.clone(), fresh),
+            continuation_request(key.clone(), fresh).await,
             CancellationToken::new(),
         )
         .await
@@ -1478,13 +1479,14 @@ fn admission_policy(
     })
 }
 
-fn sibling_request(task_id: &str) -> SubagentRequest<String> {
+async fn sibling_request(task_id: &str) -> SubagentRequest<String> {
     // Every call builds a context with the same run id, so all tasks share one
     // parent and root.
     request_with_parent(
         task_id,
         RunContext::new(RunConfig::new("shared-parent"), String::new()),
     )
+    .await
 }
 
 #[tokio::test]
@@ -1500,12 +1502,12 @@ async fn driver_rejects_a_spawn_over_the_parent_cap_and_frees_the_slot_on_finish
     let first = tokio::spawn({
         let driver = driver.clone();
         let cancel = first_cancel.clone();
-        async move { driver.run(sibling_request("first"), cancel).await }
+        async move { driver.run(sibling_request("first").await, cancel).await }
     });
     started.await.unwrap();
 
     let rejected = driver
-        .run(sibling_request("second"), CancellationToken::new())
+        .run(sibling_request("second").await, CancellationToken::new())
         .await
         .unwrap_err();
 
@@ -1719,7 +1721,8 @@ async fn driver_scope_is_the_thread_so_turn_run_ids_share_the_cap() {
                     request_with_parent(
                         "t1",
                         RunContext::new(RunConfig::new("turn-1"), String::new()),
-                    ),
+                    )
+                    .await,
                     cancel,
                 )
                 .await
@@ -1730,7 +1733,8 @@ async fn driver_scope_is_the_thread_so_turn_run_ids_share_the_cap() {
     let second_turn = request_with_parent(
         "t2",
         RunContext::new(RunConfig::new("turn-2"), String::new()),
-    );
+    )
+    .await;
     let rejected = driver
         .run(second_turn, CancellationToken::new())
         .await
@@ -1753,19 +1757,19 @@ async fn driver_custom_scope_resolver_sees_the_task_keys_root_run_id() {
         })
         .with_scope_key(|cfg| format!("root:{}", cfg.lineage.root_run_id.as_str())),
     );
-    let child_of = |parent: &str| {
+    let child_of = |parent: &str| async move {
         let mut config = RunConfig::new(parent);
         config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
-        request_with_parent(parent, RunContext::new(config, String::new()))
+        request_with_parent(parent, RunContext::new(config, String::new())).await
     };
 
     driver
-        .run(child_of("parent-a"), CancellationToken::new())
+        .run(child_of("parent-a").await, CancellationToken::new())
         .await
         .unwrap();
     // A different immediate parent in the same tree shares the root's budget.
     let over = driver
-        .run(child_of("parent-b"), CancellationToken::new())
+        .run(child_of("parent-b").await, CancellationToken::new())
         .await
         .unwrap_err();
     assert_eq!(
