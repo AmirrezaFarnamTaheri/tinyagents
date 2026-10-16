@@ -1,7 +1,10 @@
 use super::*;
+use crate::subagent::SubAgentJobsTool;
 use crate::subagent::SubagentRequest;
 use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::ids::new_call_id;
+use tinyagents_harness::tool::ToolDispatch;
 use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
@@ -145,6 +148,69 @@ async fn concurrent_first_upserts_claim_one_durable_session_for_a_selector() {
     assert_eq!(left.subagent_session_id, right.subagent_session_id);
     let sessions = store.list_for_parent("parent", None).await.unwrap();
     assert_eq!(sessions.len(), 1);
+}
+
+#[tokio::test]
+async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
+    let store = DriverSubagentSessionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let owner_key = parent.instance_id().to_string();
+    let mut request = upsert(false, "task-waiting");
+    request.selector.parent_session = owner_key.clone();
+    let (session, _) = store.upsert_running(request).await.unwrap();
+    assert!(
+        store
+            .mark_finished(
+                &session.subagent_session_id,
+                "task-waiting",
+                DurableSubagentStatus::AwaitingUser,
+                Vec::new()
+            )
+            .await
+            .unwrap()
+    );
+    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::new())
+        .with_sessions(Arc::new(store.clone()), |owner| owner.to_string());
+
+    let listed = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let list: serde_json::Value = serde_json::from_str(&listed.output()).unwrap();
+    assert_eq!(list[0]["kind"], "session");
+    let awaited = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"action":"await","job_id":session.subagent_session_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&awaited.output()).unwrap();
+    assert_eq!(envelope["status"], "awaiting_user");
+    assert_eq!(
+        envelope["awaiting_user_envelope"]["status"],
+        "awaiting_user"
+    );
+    let closed = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        serde_json::json!({"action":"close","job_id":session.subagent_session_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert!(closed.output().contains("true"));
 }
 
 #[tokio::test]

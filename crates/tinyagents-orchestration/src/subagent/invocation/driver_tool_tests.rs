@@ -212,6 +212,64 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
     );
 }
 
+#[tokio::test]
+async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
+    let mut harness = AgentHarness::new();
+    harness.register_model("child", Arc::new(MockModel::constant("legacy result")));
+    let legacy = Arc::new(crate::subagent::SubAgent::new(
+        "worker",
+        "worker description",
+        Arc::new(harness),
+    ));
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
+    let callback_tx = tx.clone();
+    let tool =
+        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+            .with_driver_and_completion(
+                driver(),
+                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+                    let child = parent
+                        .child(RunConfig::new("worker-child"), ())
+                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+                    SubagentRequest::fresh_from_parent(
+                        parent,
+                        child,
+                        "driver-task",
+                        (),
+                        args["input"].as_str().unwrap_or_default(),
+                        None,
+                    )
+                },
+                |_| Some("parent-session".into()),
+                move |target, result| {
+                    if let Some(tx) = callback_tx.lock().unwrap().take() {
+                        let output = result
+                            .map(|outcome| (target.to_owned(), outcome.output))
+                            .map_err(|error| error);
+                        let _ = tx.send(output);
+                    }
+                },
+            );
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let response = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("driver-background"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.output()).unwrap()["status"],
+        "running"
+    );
+    let delivered = rx.await.unwrap().unwrap();
+    assert_eq!(delivered, ("parent-session".into(), "driver result".into()));
+}
+
 fn driver() -> Arc<SubagentDriver<(), ()>> {
     Arc::new(
         SubagentDriver::new(SubagentCapabilities {

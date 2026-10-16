@@ -206,11 +206,25 @@ pub fn parse_approval(text: &str) -> bool {
 /// Tool argument field used to map blocking mode into the subagent invocation mode.
 pub const DELEGATION_MODE_FIELD: &str = SUBAGENT_MODE_FIELD;
 
+/// Generic prompt guidance for a graph delegation planning worker.
+pub const DELEGATION_PLAN_PROMPT: &str = "Create a concise, verifiable plan for the requested task. Preserve its constraints and expected output.";
+/// Generic prompt guidance for a graph delegation execution worker.
+pub const DELEGATION_EXECUTE_PROMPT: &str = "Execute the current plan. Report concrete changes and evidence, and do not claim work that was not performed.";
+/// Generic prompt guidance for a graph delegation review worker.
+pub const DELEGATION_REVIEW_PROMPT: &str = "Review the latest execution against the request and plan. Reply with exactly APPROVE only when it is complete; otherwise explain the needed revision.";
+
+/// Creates a review-stage result using the canonical standalone APPROVE parser.
+pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
+    let text = text.into();
+    let approved = parse_approval(&text);
+    DelegationStageOutput { text, approved, prompt: None }
+}
+
 /// Single-target graph delegation tool with an injected worker for each stage.
 pub struct DelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     config: Arc<dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync>,
@@ -220,7 +234,7 @@ where
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     /// Constructs the tool from a host config factory and stage worker.
@@ -240,7 +254,7 @@ impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx> for DelegationTool<State,
 where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
+    Worker: Fn(&Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     fn tool(&self) -> Arc<dyn Tool> {
@@ -264,7 +278,7 @@ where
         }
         let worker = Arc::clone(&self.worker);
         let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
-            worker(stage, graph)
+            worker(&args, stage, graph)
         })
         .await
         .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
