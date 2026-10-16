@@ -17,7 +17,10 @@ use tinyagents_harness::tool::{
 };
 use tinytools::{Tool, ToolExposure};
 
-use crate::{RegistrationPlan, ToolAdmission, ToolRegistration, register_admitted};
+use crate::{
+    RegistrationPlan, ToolAdmission, ToolRegistration, ToolSurfaceDiff, register_admitted,
+    tool_surface_diff,
+};
 
 /// One shared, non-cloneable set of tools.
 pub type SharedToolSet = Arc<Vec<Box<dyn Tool>>>;
@@ -125,6 +128,15 @@ where
             .map(|tool| tool.name().to_string())
             .filter(|name| seen.insert(name.clone()))
             .collect()
+    }
+
+    /// Diffs this builder's de-duplicated tool names against a freshly
+    /// synthesized name set. Hosts can use this at each turn boundary to
+    /// withdraw revoked tools and decide whether wildcard policy admits new
+    /// names, while rebuilding the builder from the current executable sets.
+    pub fn surface_diff(&self, next: &HashSet<String>) -> ToolSurfaceDiff {
+        let previous = self.candidate_names().into_iter().collect();
+        tool_surface_diff(&previous, next)
     }
 
     /// Forces the sub-agent admission rule on.
