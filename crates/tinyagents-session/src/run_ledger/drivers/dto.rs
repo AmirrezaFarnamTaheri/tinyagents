@@ -32,12 +32,12 @@ pub(super) trait Stored: Sized {
 /// Mark storage-only types whose serde shape already is the stored body.
 macro_rules! stored_as_is {
     ($($type:ty),+ $(,)?) => {$(
-        impl Stored for $type {
+        impl $crate::run_ledger::drivers::dto::Stored for $type {
             type Dto = $type;
             fn to_dto(&self) -> Self::Dto {
                 self.clone()
             }
-            fn from_dto(dto: Self::Dto) -> Result<Self, StorageError> {
+            fn from_dto(dto: Self::Dto) -> Result<Self, tinystoragedrivers_core::StorageError> {
                 Ok(dto)
             }
         }
