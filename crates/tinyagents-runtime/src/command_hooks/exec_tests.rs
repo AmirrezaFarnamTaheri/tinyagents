@@ -159,4 +159,42 @@ mod spawner {
         let result = run_with(spawner, &hook(false)).await;
         assert!(result.error.unwrap().contains("signal"));
     }
+
+    struct SlowTeardown {
+        cleaned: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl CommandSpawner for SlowTeardown {
+        async fn run(&self, request: CommandRequest) -> Result<CommandOutput, String> {
+            tokio::time::sleep(request.timeout).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            self.cleaned
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Err("timed out; torn down".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_spawner_gets_a_grace_period_to_finish_its_timeout_teardown() {
+        let spawner = Arc::new(SlowTeardown {
+            cleaned: Default::default(),
+        });
+        let mut definition = hook(false);
+        definition.timeout = Some(1);
+        let environment = HookEnvironment::new("Test", None).with_command_spawner(spawner.clone());
+        let result = run(
+            &definition,
+            &input(),
+            &BTreeMap::new(),
+            Duration::from_secs(1),
+            &environment,
+        )
+        .await;
+        assert!(
+            spawner.cleaned.load(std::sync::atomic::Ordering::SeqCst),
+            "teardown must complete before the engine drops the spawner: {:?}",
+            result.error
+        );
+    }
 }
