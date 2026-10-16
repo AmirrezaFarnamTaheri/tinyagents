@@ -214,7 +214,7 @@ where
         // Calls refused by a later middleware never reach `after_tool`. Prune
         // their entries once the owning run has gone away, while retaining
         // every live parallel run's pending calls.
-        pending.retain(|_, (_, _, _, run)| run.strong_count() > 0);
+        // temporary red verification: leave abandoned entries unpruned
         pending.insert(
                 (ctx.instance_id(), call.id.clone()),
                 (
