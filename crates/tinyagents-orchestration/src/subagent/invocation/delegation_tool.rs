@@ -211,6 +211,9 @@ pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
     }
 }
 
+type ConfigFactory<State, Ctx> =
+    dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync;
+
 /// Single-target graph delegation tool with an injected worker for each stage.
 pub struct DelegationTool<State, Ctx, Worker, Fut>
 where
@@ -218,7 +221,7 @@ where
     Worker: Fn(Value, DelegationStage, DelegationState) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
-    config: Arc<dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync>,
+    config: Arc<ConfigFactory<State, Ctx>>,
     worker: Arc<Worker>,
 }
 

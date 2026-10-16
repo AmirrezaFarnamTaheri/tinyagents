@@ -20,19 +20,24 @@
 //! Live pushes are at-least-once: the host acknowledges with
 //! `mark_delivered`. Nothing here relaunches a child.
 
-mod driver;
 mod delivery;
+mod driver;
 mod format;
-mod router;
 mod registry;
+mod router;
 mod store;
 mod types;
 
+pub use delivery::{
+    CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
+    ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases,
+};
 pub use driver::DriverCompletionStore;
-pub use delivery::{CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases};
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
+pub use registry::{
+    CompletionRouterPool, CompletionRouterPoolError, open_driver_completion_store_or_memory,
+};
 pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
-pub use registry::{CompletionRouterPool, CompletionRouterPoolError, open_driver_completion_store_or_memory};
 pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,

@@ -617,9 +617,12 @@ pub struct SubagentOutcome {
     /// Known aggregate cost in USD, when the host can price every call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Whether the known `cost_usd` value is billed or estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_source: Option<tinyagents_harness::cost::CostSource>,
     /// Host-owned metadata that survives neutral persistence without making
     /// this crate depend on a host-specific outcome taxonomy.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(flatten)]
     pub extensions: BTreeMap<String, serde_json::Value>,
     /// Final visible text, retained even when cancellation arrives after work.
     pub output: String,
@@ -674,6 +677,7 @@ impl SubagentOutcome {
             tier: None,
             model_override: None,
             cost_usd: None,
+            cost_source: None,
             extensions: BTreeMap::new(),
             output: String::new(),
             history: Vec::new(),

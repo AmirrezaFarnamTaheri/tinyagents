@@ -10,8 +10,8 @@
 //!
 //! Neither reference implementation solves this: LangChain's own unit test
 //! documents the race rather than preventing it. So this is greenfield, and
-//! deliberately small — one in-flight map plus a `tokio::sync::broadcast`
-//! channel per key.
+//! deliberately small — one in-flight map plus a shared result and
+//! `tokio::sync::Notify` per key.
 //!
 //! # Semantics
 //!
@@ -211,12 +211,13 @@ pub struct SingleFlight {
 
 /// Removes a leader's entry even when its future is cancelled mid-call.
 ///
-/// Dropping the sender closes every follower receiver, which makes followers
-/// retry their own call instead of waiting forever behind an abandoned leader.
+/// An unfinished guard publishes a retry signal before retiring the entry, so
+/// followers never wait forever behind an abandoned leader.
 struct LeaderGuard {
     inflight: SharedFlightMap<String, ModelResponse, ()>,
     key: String,
     entry: SharedFlightEntry<ModelResponse, ()>,
+    finished: bool,
 }
 
 impl LeaderGuard {
@@ -225,14 +226,17 @@ impl LeaderGuard {
             Ok(response) => Ok(response.clone()),
             Err(_) => Err(()),
         });
+        self.finished = true;
         self.inflight.retire(&self.key, &self.entry);
     }
 }
 
 impl Drop for LeaderGuard {
     fn drop(&mut self) {
-        self.entry.complete(Err(()));
-        self.inflight.retire(&self.key, &self.entry);
+        if !self.finished {
+            self.entry.complete(Err(()));
+            self.inflight.retire(&self.key, &self.entry);
+        }
     }
 }
 
@@ -289,12 +293,13 @@ impl SingleFlight {
         }
 
         // Leader: install the guard before awaiting. If this future is dropped,
-        // the guard retires the sender and wakes followers through channel
-        // closure; without it, a cancelled leader wedges this key forever.
+        // the guard publishes a retry signal and retires this exact entry;
+        // without it, a cancelled leader wedges this key forever.
         let mut leader = LeaderGuard {
             inflight: self.inflight.clone(),
             key: key.to_string(),
             entry,
+            finished: false,
         };
         let result = call().await;
         leader.finish(&result);

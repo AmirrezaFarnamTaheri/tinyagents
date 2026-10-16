@@ -25,6 +25,7 @@
 
 mod completion;
 mod ledger;
+mod ops;
 mod roster;
 mod status;
 mod status_map;
@@ -39,6 +40,10 @@ pub use ledger::{
     record_cancelled, record_parent_session, record_spawned, record_status,
     record_subagent_session_id, record_to_wait_outcome, spawn_status_watcher,
     subagent_record_for_task, task_status_label,
+};
+pub use ops::{
+    CancelDetachedOutcome, CancelledSubagentMetadata, WaitAllItem, cancel_detached_or_durable,
+    resolve_detached_or_durable, wait_all_detached, wait_detached_or_durable,
 };
 pub use roster::{
     resume_ref_for_task, resume_ref_from_record, snapshot_for_owner, task_id_for_session,
@@ -63,3 +68,7 @@ mod steer_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "ops_tests.rs"]
+mod ops_test;

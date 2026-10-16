@@ -113,11 +113,11 @@ async fn file_store_reads_legacy_terminal_outcome_records() {
 async fn terminal_record_host_metadata_survives_neutral_read() {
     let dir = tempfile::tempdir().unwrap();
     let store = FileSubagentPersistence::new(dir.path());
-    let key = key("parent", "host-metadata");
-    let path = store.terminal_path(&key).unwrap();
+    let task_key = key("parent", "host-metadata");
+    let path = store.terminal_path(&task_key).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let record = serde_json::json!({
-        "key": key,
+        "key": task_key,
         "outcome": SubagentOutcome::completed("host-metadata", "done"),
         "agent_id": "worker",
         "elapsed_ms": 25,
@@ -125,7 +125,11 @@ async fn terminal_record_host_metadata_survives_neutral_read() {
     });
     std::fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
 
-    let outcome = store.load_terminal(&key("parent", "host-metadata")).await.unwrap().unwrap();
+    let outcome = store
+        .load_terminal(&key("parent", "host-metadata"))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(outcome.extensions["agent_id"], "worker");
     assert_eq!(outcome.extensions["elapsed_ms"], 25);
     assert_eq!(outcome.extensions["skill_filter_override"], "docs");
@@ -137,10 +141,29 @@ async fn independent_file_store_handles_commit_only_one_pause_for_a_key() {
     let first_store = FileSubagentPersistence::new(dir.path());
     let second_store = FileSubagentPersistence::new(dir.path());
     let key = key("parent", "concurrent");
-    let (first, second) = tokio::join!(
-        first_store.save_pause(pause(key.clone(), SubagentResume::default())),
-        second_store.save_pause(pause(key.clone(), SubagentResume::default())),
-    );
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let runtime = tokio::runtime::Handle::current();
+    let first_barrier = barrier.clone();
+    let first_runtime = runtime.clone();
+    let first_store_thread = first_store.clone();
+    let first_key = key.clone();
+    let first = std::thread::spawn(move || {
+        first_barrier.wait();
+        first_runtime
+            .block_on(first_store_thread.save_pause(pause(first_key, SubagentResume::default())))
+    });
+    let second_barrier = barrier.clone();
+    let second_runtime = runtime;
+    let second_store_thread = second_store.clone();
+    let second_key = key.clone();
+    let second = std::thread::spawn(move || {
+        second_barrier.wait();
+        second_runtime
+            .block_on(second_store_thread.save_pause(pause(second_key, SubagentResume::default())))
+    });
+    barrier.wait();
+    let first = first.join().expect("first persistence thread panicked");
+    let second = second.join().expect("second persistence thread panicked");
     let dispositions = [first.unwrap(), second.unwrap()];
     assert_eq!(
         dispositions
@@ -151,6 +174,73 @@ async fn independent_file_store_handles_commit_only_one_pause_for_a_key() {
     );
     assert!(dispositions.contains(&SubagentPausePersistenceDisposition::Existing));
     assert_eq!(first_store.keys_for_task("concurrent").unwrap(), vec![key]);
+}
+
+#[tokio::test]
+async fn concurrent_replacements_compare_and_swap_the_pause_file_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let first_store = FileSubagentPersistence::new(dir.path());
+    let second_store = FileSubagentPersistence::new(dir.path());
+    let key = key("parent", "replace-race");
+    let previous = SubagentResume {
+        checkpoint: Some("old".into()),
+        ..SubagentResume::default()
+    };
+    first_store
+        .save_pause(pause(key.clone(), previous.clone()))
+        .await
+        .unwrap();
+    let make_replacement = |checkpoint: &'static str| {
+        let mut next = pause(
+            key.clone(),
+            SubagentResume {
+                checkpoint: Some(checkpoint.into()),
+                ..SubagentResume::default()
+            },
+        );
+        next.replaces = Some(previous.clone());
+        next
+    };
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let runtime = tokio::runtime::Handle::current();
+    let first_barrier = barrier.clone();
+    let first_runtime = runtime.clone();
+    let first_store_thread = first_store.clone();
+    let first_replacement = make_replacement("first");
+    let first = std::thread::spawn(move || {
+        first_barrier.wait();
+        first_runtime.block_on(first_store_thread.save_pause(first_replacement))
+    });
+    let second_barrier = barrier.clone();
+    let second_runtime = runtime;
+    let second_store_thread = second_store.clone();
+    let second_replacement = make_replacement("second");
+    let second = std::thread::spawn(move || {
+        second_barrier.wait();
+        second_runtime.block_on(second_store_thread.save_pause(second_replacement))
+    });
+    barrier.wait();
+    let first = first.join().expect("first replacement thread panicked");
+    let second = second.join().expect("second replacement thread panicked");
+    let dispositions = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|value| **value == SubagentPausePersistenceDisposition::Replaced)
+            .count(),
+        1
+    );
+    assert!(dispositions.contains(&SubagentPausePersistenceDisposition::Existing));
+    assert!(matches!(
+        first_store
+            .load(&key)
+            .await
+            .unwrap()
+            .unwrap()
+            .checkpoint
+            .as_deref(),
+        Some("first" | "second")
+    ));
 }
 
 #[tokio::test]
@@ -165,8 +255,10 @@ async fn invalid_non_pause_record_is_not_returned_as_default_resume() {
         outcome: SubagentOutcome::completed("invalid-pause", "done"),
         replaces: None,
     };
+    assert!(store.save_pause(invalid.clone()).await.is_err());
     std::fs::write(path, serde_json::to_vec(&invalid).unwrap()).unwrap();
     assert_eq!(store.load(&key).await.unwrap(), None);
+    assert_eq!(store.load_pause(&key).await.unwrap(), None);
 }
 
 #[test]

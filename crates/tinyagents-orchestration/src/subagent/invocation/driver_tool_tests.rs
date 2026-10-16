@@ -244,9 +244,7 @@ async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
                 |_| Some("parent-session".into()),
                 move |target, result| {
                     if let Some(tx) = callback_tx.lock().unwrap().take() {
-                        let output = result
-                            .map(|outcome| (target.to_owned(), outcome.output))
-                            .map_err(|error| error);
+                        let output = result.map(|outcome| (target.to_owned(), outcome.output));
                         let _ = tx.send(output);
                     }
                 },

@@ -7,6 +7,7 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
     outcome.tier = Some("worker".into());
     outcome.model_override = Some("provider/model".into());
     outcome.cost_usd = Some(0.125);
+    outcome.cost_source = Some(tinyagents_harness::cost::CostSource::Estimated);
     outcome.extensions.insert(
         "host_checkpoint".into(),
         serde_json::json!({"skill_filter_override":"docs", "elapsed_ms":17}),
@@ -16,7 +17,8 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
     assert_eq!(value["tier"], "worker");
     assert_eq!(value["model_override"], "provider/model");
     assert_eq!(value["cost_usd"], 0.125);
-    assert_eq!(value["extensions"]["host_checkpoint"]["elapsed_ms"], 17);
+    assert_eq!(value["cost_source"], "estimated");
+    assert_eq!(value["host_checkpoint"]["elapsed_ms"], 17);
     assert_eq!(
         serde_json::from_value::<SubagentOutcome>(value).unwrap(),
         outcome
@@ -42,4 +44,16 @@ fn outcome_metadata_round_trips_and_legacy_records_default_it() {
     assert_eq!(decoded.tier, None);
     assert_eq!(decoded.model_override, None);
     assert_eq!(decoded.cost_usd, None);
+    assert_eq!(decoded.cost_source, None);
+}
+
+#[test]
+fn outcome_extensions_capture_unknown_legacy_fields() {
+    let mut value = serde_json::to_value(SubagentOutcome::completed("task", "done")).unwrap();
+    value["skill_filter_override"] = serde_json::json!("docs");
+    let outcome: SubagentOutcome = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        outcome.extension("skill_filter_override"),
+        Some(&serde_json::json!("docs"))
+    );
 }

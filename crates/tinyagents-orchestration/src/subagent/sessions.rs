@@ -455,33 +455,25 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
                 {
                     Ok(_) => {}
                     Err(error) if error.kind() == ErrorKind::Conflict && !upsert.force_fresh => {
-                        let mut reused = false;
-                        for _ in 0..CAS_ATTEMPTS {
-                            let should_update = this
-                                .mutate(&session_id, |current| {
-                                    if !current.matches_selector(&upsert.selector) {
-                                        return false;
-                                    }
-                                    current.lifecycle_key = session.lifecycle_key.clone();
-                                    current.worker_thread_id = session
-                                        .worker_thread_id
-                                        .clone()
-                                        .or(current.worker_thread_id.clone());
-                                    current.current_task_id = session.current_task_id.clone();
-                                    current.task_title = session.task_title.clone();
-                                    current.status = DurableSubagentStatus::Running;
-                                    current.reusable = true;
-                                    current.updated_at = session.updated_at.clone();
-                                    current.last_used_at = session.last_used_at.clone();
-                                    true
-                                })
-                                .await?;
-                            if should_update {
-                                reused = true;
-                                break;
-                            }
-                            break;
-                        }
+                        let reused = this
+                            .mutate(&session_id, |current| {
+                                if !current.matches_selector(&upsert.selector) {
+                                    return false;
+                                }
+                                current.lifecycle_key = session.lifecycle_key.clone();
+                                current.worker_thread_id = session
+                                    .worker_thread_id
+                                    .clone()
+                                    .or(current.worker_thread_id.clone());
+                                current.current_task_id = session.current_task_id.clone();
+                                current.task_title = session.task_title.clone();
+                                current.status = DurableSubagentStatus::Running;
+                                current.reusable = true;
+                                current.updated_at = session.updated_at.clone();
+                                current.last_used_at = session.last_used_at.clone();
+                                true
+                            })
+                            .await?;
                         if !reused {
                             return Err(SubagentError::Persistence(
                                 "matching session was concurrently closed".into(),

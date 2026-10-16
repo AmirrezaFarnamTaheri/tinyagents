@@ -50,10 +50,10 @@ pub fn is_unexecuted_tool_call_stub(output: &str) -> bool {
     if !contains_tool_call_payload(output) {
         return false;
     }
-    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(output.trim()) {
-        if map.contains_key("tool_calls") {
-            return true;
-        }
+    if let Ok(serde_json::Value::Object(map)) = serde_json::from_str(output.trim())
+        && map.contains_key("tool_calls")
+    {
+        return true;
     }
     !strip_tool_calls_from_response(output)
         .chars()

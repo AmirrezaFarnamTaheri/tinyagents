@@ -16,6 +16,13 @@ use tinytools::{Tool, ToolResult};
 
 use crate::subagent::{SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest};
 
+type RequestFactory<State, Ctx, H> = dyn Fn(&State, &RunContext<Ctx>, &Value, &CallId) -> Result<SubagentRequest<Ctx, H>, SubagentError>
+    + Send
+    + Sync;
+type DeliveryTarget<Ctx, H> = dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync;
+type CompletionCallback =
+    dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync;
+
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
 ///
 /// Hosts construct the validated request with `request_factory`; this keeps
@@ -28,19 +35,9 @@ pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     description: String,
     parameters: Value,
     driver: Arc<SubagentDriver<Ctx, H>>,
-    request_factory: Arc<
-        dyn Fn(
-                &State,
-                &RunContext<Ctx>,
-                &Value,
-                &CallId,
-            ) -> Result<SubagentRequest<Ctx, H>, SubagentError>
-            + Send
-            + Sync,
-    >,
-    delivery_target: Arc<dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync>,
-    completion:
-        Option<Arc<dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync>>,
+    request_factory: Arc<RequestFactory<State, Ctx, H>>,
+    delivery_target: Arc<DeliveryTarget<Ctx, H>>,
+    completion: Option<Arc<CompletionCallback>>,
     _state: PhantomData<fn(&State)>,
 }
 

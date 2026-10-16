@@ -27,6 +27,12 @@ use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
 
+type SessionOverlay = (
+    Arc<dyn SubagentSessionStore>,
+    Arc<dyn Fn(u64) -> String + Send + Sync>,
+);
+type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
+
 const LOG_PREFIX: &str = "[subagent-jobs]";
 
 /// Settles an inline job if its tool future is dropped (tool timeout, parent
@@ -482,11 +488,8 @@ impl SubAgentJobRegistry {
 #[derive(Clone)]
 pub struct SubAgentJobsTool {
     jobs: SubAgentJobRegistry,
-    sessions: Option<(
-        Arc<dyn SubagentSessionStore>,
-        Arc<dyn Fn(u64) -> String + Send + Sync>,
-    )>,
-    tasks: Option<(Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>)>,
+    sessions: Option<SessionOverlay>,
+    tasks: Option<TaskOverlay>,
 }
 
 impl SubAgentJobsTool {
@@ -644,35 +647,34 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
-                if let Some((sessions, key)) = &self.sessions {
-                    if let Some(session) = sessions
+                if let Some((sessions, key)) = &self.sessions
+                    && let Some(session) = sessions
                         .get(id)
                         .await?
                         .filter(|session| session.parent_session == key(parent.instance_id()))
-                    {
-                        let awaiting_user =
-                            session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
-                        let question = session
-                            .latest_history
-                            .as_ref()
-                            .and_then(|history| history.last())
-                            .map(tinyinference_llm::message::Message::text)
-                            .unwrap_or_default();
-                        let envelope = crate::subagent::SubagentAwaitingUser {
-                            task_id: session.current_task_id.clone().unwrap_or_default(),
-                            agent_id: session.agent_id.clone(),
-                            worker_thread_id: session.worker_thread_id.clone(),
-                            question,
-                            checkpointed: true,
-                        };
-                        return Ok(ToolResult::json(json!({
-                            "session_id": session.subagent_session_id,
-                            "task_id": session.current_task_id,
-                            "status": session.status,
-                            "awaiting_user_envelope": awaiting_user.then_some(envelope.render()),
-                            "latest_error": session.latest_error,
-                        })));
-                    }
+                {
+                    let awaiting_user =
+                        session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
+                    let question = session
+                        .latest_history
+                        .as_ref()
+                        .and_then(|history| history.last())
+                        .map(tinyinference_llm::message::Message::text)
+                        .unwrap_or_default();
+                    let envelope = crate::subagent::SubagentAwaitingUser {
+                        task_id: session.current_task_id.clone().unwrap_or_default(),
+                        agent_id: session.agent_id.clone(),
+                        worker_thread_id: session.worker_thread_id.clone(),
+                        question,
+                        checkpointed: true,
+                    };
+                    return Ok(ToolResult::json(json!({
+                        "session_id": session.subagent_session_id,
+                        "task_id": session.current_task_id,
+                        "status": session.status,
+                        "awaiting_user_envelope": awaiting_user.then_some(envelope.render()),
+                        "latest_error": session.latest_error,
+                    })));
                 }
                 return Err(SubAgentJobError::NotFound(id.to_owned()).into());
             }
@@ -746,10 +748,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
 #[derive(Clone)]
 pub struct SubAgentMessageTool {
     jobs: SubAgentJobRegistry,
-    sessions: Option<(
-        Arc<dyn SubagentSessionStore>,
-        Arc<dyn Fn(u64) -> String + Send + Sync>,
-    )>,
+    sessions: Option<SessionOverlay>,
 }
 
 impl SubAgentMessageTool {

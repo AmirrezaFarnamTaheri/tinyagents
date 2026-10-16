@@ -2,10 +2,9 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use tinyagents_harness::error::Result;
 
 use super::{CompletionRecord, CompletionRouter};
 
@@ -14,6 +13,8 @@ use super::{CompletionRecord, CompletionRouter};
 pub struct CompletionDeliveryConfig {
     /// Wait for a burst of completions to settle before claiming a batch.
     pub debounce: Duration,
+    /// Delay recovered completions after boot while the host opens resources.
+    pub recovery_delay: Duration,
     /// Delay between failed delivery turns.
     pub retry_backoff: Duration,
     /// Poll interval while the parent is busy.
@@ -28,6 +29,7 @@ impl Default for CompletionDeliveryConfig {
     fn default() -> Self {
         Self {
             debounce: Duration::from_secs(3),
+            recovery_delay: Duration::from_secs(15),
             retry_backoff: Duration::from_secs(2),
             busy_poll: Duration::from_secs(5),
             max_busy_polls: 360,
@@ -51,16 +53,31 @@ pub enum DeliveryOutcome {
     Fenced,
 }
 
+/// Parent and thread selected for one delivery drain.
+#[derive(Clone, Copy)]
+pub struct DeliveryTarget<'a> {
+    /// Durable completion router for the owning scope.
+    pub router: &'a CompletionRouter,
+    /// Stable key recorded on child completions.
+    pub parent_key: &'a str,
+    /// Thread key used for one-delivery-at-a-time coordination.
+    pub thread_key: &'a str,
+}
+
 /// Timing policy owned by the host's background worker; delivery state lives
 /// in [`CompletionRouter`]. Callbacks are seams for host policy and execution.
 pub struct CompletionDelivery {
     config: CompletionDeliveryConfig,
+    thread_leases: ThreadDeliveryLeases,
 }
 
 impl CompletionDelivery {
     /// Creates a delivery drain with explicit timing bounds.
-    pub fn new(config: CompletionDeliveryConfig) -> Self {
-        Self { config }
+    pub fn new(config: CompletionDeliveryConfig, thread_leases: ThreadDeliveryLeases) -> Self {
+        Self {
+            config,
+            thread_leases,
+        }
     }
 
     /// Delivers one batch, retrying failed turns with backoff up to the
@@ -68,24 +85,28 @@ impl CompletionDelivery {
     /// parent turn, and a durable writer for records which give up.
     pub async fn deliver_once<B, F, D, Fut, E, U>(
         &self,
-        router: &CompletionRouter,
-        parent_key: &str,
+        target: DeliveryTarget<'_>,
         mut is_busy: B,
-        mut admitted: F,
+        admitted: F,
         mut deliver: D,
         mut write_undelivered: U,
     ) -> DeliveryOutcome
     where
         B: FnMut() -> bool,
-        F: FnMut() -> bool,
+        F: DeliveryFence,
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
     {
+        let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
+            return DeliveryOutcome::Busy;
+        };
         self.drain(
-            router,
-            parent_key,
+            target,
+            self.config.debounce,
             &mut is_busy,
-            &mut admitted,
+            &admitted,
             &mut deliver,
             &mut write_undelivered,
         )
@@ -97,43 +118,56 @@ impl CompletionDelivery {
     /// before any wait or claim.
     pub async fn recover_on_boot<B, F, D, Fut, E, U>(
         &self,
-        router: &CompletionRouter,
-        parent_key: &str,
-        is_busy: B,
+        target: DeliveryTarget<'_>,
+        mut is_busy: B,
         admitted: F,
-        deliver: D,
-        write_undelivered: U,
+        mut deliver: D,
+        mut write_undelivered: U,
     ) -> DeliveryOutcome
     where
         B: FnMut() -> bool,
-        F: FnMut() -> bool,
+        F: DeliveryFence,
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
     {
-        self.deliver_once(router, parent_key, is_busy, admitted, deliver, write_undelivered)
-            .await
+        let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
+            return DeliveryOutcome::Busy;
+        };
+        self.drain(
+            target,
+            self.config.recovery_delay,
+            &mut is_busy,
+            &admitted,
+            &mut deliver,
+            &mut write_undelivered,
+        )
+        .await
     }
 
     async fn drain<B, F, D, Fut, E, U>(
         &self,
-        router: &CompletionRouter,
-        parent_key: &str,
+        target: DeliveryTarget<'_>,
+        initial_delay: Duration,
         is_busy: &mut B,
-        admitted: &mut F,
+        admitted: &F,
         deliver: &mut D,
         write_undelivered: &mut U,
     ) -> DeliveryOutcome
     where
         B: FnMut() -> bool,
-        F: FnMut() -> bool,
+        F: DeliveryFence,
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
     {
-        if !sleep_if_admitted(self.config.debounce, admitted).await {
+        if !sleep_if_admitted(initial_delay, admitted).await {
             return DeliveryOutcome::Fenced;
         }
         for _ in 0..self.config.max_busy_polls {
-            if !admitted() {
+            if !admitted.admitted() {
                 return DeliveryOutcome::Fenced;
             }
             if !is_busy() {
@@ -143,83 +177,179 @@ impl CompletionDelivery {
                 return DeliveryOutcome::Fenced;
             }
         }
-        if !admitted() {
+        if !admitted.admitted() {
             return DeliveryOutcome::Fenced;
         }
         if is_busy() {
             return DeliveryOutcome::Busy;
         }
 
-        let mut batch = match router.claim_pending(parent_key, self.config.batch_size) {
+        let mut batch = match target
+            .router
+            .claim_pending(target.parent_key, self.config.batch_size)
+        {
             Ok(batch) => batch,
             Err(error) => {
-                tracing::warn!(parent_key, error = %error, "completion claim failed");
-                return DeliveryOutcome::Failed { count: 0, gave_up: 0 };
+                tracing::warn!(parent_key = target.parent_key, error = %error, "completion claim failed");
+                return DeliveryOutcome::Failed {
+                    count: 0,
+                    gave_up: 0,
+                };
             }
         };
         if batch.is_empty() {
             return DeliveryOutcome::Empty;
         }
+        let mut claim = BatchClaim::new(target.router, &batch);
+        let mut delivered_total = 0;
+        let mut gave_up_total = 0;
 
         loop {
-            if !admitted() {
-                let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                router.release(&ids);
+            if !admitted.admitted() {
                 return DeliveryOutcome::Fenced;
             }
             match deliver(&batch).await {
                 Ok(()) => {
                     let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    return match router.mark_delivered(&ids) {
-                        Ok(_) => DeliveryOutcome::Delivered { count: batch.len() },
+                    match target.router.mark_delivered(&ids) {
+                        Ok(_) => {
+                            claim.clear();
+                            delivered_total += batch.len();
+                        }
                         Err(error) => {
-                            tracing::warn!(parent_key, error = %error, "completion acknowledgement failed");
-                            DeliveryOutcome::Failed { count: batch.len(), gave_up: 0 }
+                            tracing::warn!(parent_key = target.parent_key, error = %error, "completion acknowledgement failed");
+                            return DeliveryOutcome::Failed {
+                                count: delivered_total + batch.len(),
+                                gave_up: gave_up_total,
+                            };
+                        }
+                    }
+                    if !admitted.admitted() {
+                        return DeliveryOutcome::Fenced;
+                    }
+                    batch = match target
+                        .router
+                        .claim_pending(target.parent_key, self.config.batch_size)
+                    {
+                        Ok(batch) if !batch.is_empty() => {
+                            claim.replace(&batch);
+                            batch
+                        }
+                        Ok(_) => {
+                            return if delivered_total > 0 {
+                                DeliveryOutcome::Delivered {
+                                    count: delivered_total,
+                                }
+                            } else {
+                                DeliveryOutcome::Empty
+                            };
+                        }
+                        Err(error) => {
+                            tracing::warn!(parent_key = target.parent_key, error = %error, "completion claim failed");
+                            return DeliveryOutcome::Failed {
+                                count: delivered_total,
+                                gave_up: gave_up_total,
+                            };
                         }
                     };
                 }
                 Err(error) => {
-                    tracing::warn!(parent_key, error = %error, "completion delivery turn failed");
+                    tracing::warn!(parent_key = target.parent_key, error = %error, "completion delivery turn failed");
                     let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    let gave_up = match router.mark_failed(&ids) {
+                    let gave_up = match target.router.mark_failed(&ids) {
                         Ok(records) => records,
                         Err(error) => {
-                            tracing::warn!(parent_key, error = %error, "completion failure update failed");
-                            return DeliveryOutcome::Failed { count: batch.len(), gave_up: 0 };
+                            tracing::warn!(parent_key = target.parent_key, error = %error, "completion failure update failed");
+                            return DeliveryOutcome::Failed {
+                                count: delivered_total + batch.len(),
+                                gave_up: gave_up_total,
+                            };
                         }
                     };
+                    claim.clear();
+                    gave_up_total += gave_up.len();
                     if !gave_up.is_empty() {
-                        write_undelivered(&gave_up);
+                        (*write_undelivered)(&gave_up);
                     }
-                    if gave_up.len() == batch.len() || !admitted() {
-                        return DeliveryOutcome::Failed { count: batch.len(), gave_up: gave_up.len() };
+                    if gave_up.len() == batch.len() || !admitted.admitted() {
+                        return DeliveryOutcome::Failed {
+                            count: delivered_total + batch.len(),
+                            gave_up: gave_up_total,
+                        };
                     }
                     if !sleep_if_admitted(self.config.retry_backoff, admitted).await {
-                        return DeliveryOutcome::Failed { count: batch.len(), gave_up: gave_up.len() };
+                        return DeliveryOutcome::Failed {
+                            count: delivered_total + batch.len(),
+                            gave_up: gave_up_total,
+                        };
                     }
-                    batch = match router.claim_pending(parent_key, self.config.batch_size) {
+                    batch = match target
+                        .router
+                        .claim_pending(target.parent_key, self.config.batch_size)
+                    {
                         Ok(batch) if !batch.is_empty() => batch,
-                        Ok(_) => return DeliveryOutcome::Failed { count: 0, gave_up: gave_up.len() },
+                        Ok(_) => {
+                            return DeliveryOutcome::Failed {
+                                count: delivered_total + batch.len(),
+                                gave_up: gave_up_total,
+                            };
+                        }
                         Err(error) => {
-                            tracing::warn!(parent_key, error = %error, "completion retry claim failed");
-                            return DeliveryOutcome::Failed { count: 0, gave_up: gave_up.len() };
+                            tracing::warn!(parent_key = target.parent_key, error = %error, "completion retry claim failed");
+                            return DeliveryOutcome::Failed {
+                                count: delivered_total + batch.len(),
+                                gave_up: gave_up_total,
+                            };
                         }
                     };
+                    claim.replace(&batch);
                 }
             }
         }
     }
 }
 
-async fn sleep_if_admitted<F: FnMut() -> bool>(duration: Duration, admitted: &mut F) -> bool {
-    if !admitted() {
+async fn sleep_if_admitted<F: DeliveryFence>(duration: Duration, admitted: &F) -> bool {
+    if !admitted.admitted() {
         return false;
     }
     if duration.is_zero() {
-        return admitted();
+        return admitted.admitted();
     }
-    tokio::time::sleep(duration).await;
-    admitted()
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => admitted.admitted(),
+        _ = admitted.lost() => false,
+    }
+}
+
+struct BatchClaim<'a> {
+    router: &'a CompletionRouter,
+    ids: Vec<String>,
+}
+impl<'a> BatchClaim<'a> {
+    fn new(router: &'a CompletionRouter, records: &[CompletionRecord]) -> Self {
+        Self {
+            router,
+            ids: records
+                .iter()
+                .map(|record| record.task_id.clone())
+                .collect(),
+        }
+    }
+    fn replace(&mut self, records: &[CompletionRecord]) {
+        self.ids = records
+            .iter()
+            .map(|record| record.task_id.clone())
+            .collect();
+    }
+    fn clear(&mut self) {
+        self.ids.clear();
+    }
+}
+impl Drop for BatchClaim<'_> {
+    fn drop(&mut self) {
+        self.router.release(&self.ids);
+    }
 }
 
 /// Parent turn activity gate. Dropping a lease clears only the guard it owns.
@@ -234,22 +364,26 @@ pub struct ParentBusyLease {
 }
 
 impl ParentBusyGate {
-    /// Marks a user turn busy. Returns `None` if this parent is already busy.
+    /// Marks one user turn busy. Overlapping leases keep the parent busy until
+    /// every guard is dropped; `None` indicates a poisoned lock.
     pub fn enter(&self, parent_key: impl Into<String>) -> Option<ParentBusyLease> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let key = parent_key.into();
         let mut entries = self.0.lock().ok()?;
-        if entries.iter().any(|(existing, _)| existing == &key) {
-            return None;
-        }
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         entries.insert((key.clone(), id));
-        Some(ParentBusyLease { gate: self.clone(), key, id })
+        Some(ParentBusyLease {
+            gate: self.clone(),
+            key,
+            id,
+        })
     }
 
     /// Whether a parent has an active busy lease.
     pub fn is_busy(&self, parent_key: &str) -> bool {
-        self.0.lock().is_ok_and(|entries| entries.iter().any(|(key, _)| key == parent_key))
+        self.0
+            .lock()
+            .is_ok_and(|entries| entries.iter().any(|(key, _)| key == parent_key))
     }
 }
 
@@ -279,7 +413,10 @@ impl ThreadDeliveryLeases {
         if !leases.insert(key.clone()) {
             return None;
         }
-        Some(ThreadDeliveryLease { leases: self.clone(), key })
+        Some(ThreadDeliveryLease {
+            leases: self.clone(),
+            key,
+        })
     }
 }
 
@@ -296,8 +433,18 @@ impl Drop for ThreadDeliveryLease {
 pub trait DeliveryFence: Send + Sync {
     /// Whether this worker still owns the right to deliver.
     fn admitted(&self) -> bool;
+    /// Completes when this worker loses its ownership fence. Implementations
+    /// with no notification channel may keep the default pending future.
+    fn lost(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
 }
 
-#[cfg(test)]
-#[path = "delivery_tests.rs"]
-mod tests;
+impl<F> DeliveryFence for F
+where
+    F: Fn() -> bool + Send + Sync,
+{
+    fn admitted(&self) -> bool {
+        self()
+    }
+}

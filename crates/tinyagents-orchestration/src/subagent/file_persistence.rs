@@ -136,11 +136,11 @@ impl FileSubagentPersistence {
     }
 
     fn key_lock(&self, key: &SubagentTaskKey) -> Result<std::fs::File, SubagentError> {
-        Ok(self.lock_path(
+        self.lock_path(
             &self
                 .directory()
                 .join(format!("{}.lock", Self::key_id(key)?)),
-        )?)
+        )
     }
 
     fn index_lock_path(&self, task_id: &str) -> Result<PathBuf, SubagentError> {
@@ -323,7 +323,10 @@ impl SubagentPersistence for FileSubagentPersistence {
         if self.read_terminal(key)?.is_some() {
             return Ok(None);
         }
-        Ok(self.read_pause(key)?.map(|pause| pause.outcome))
+        Ok(self
+            .read_pause(key)?
+            .filter(|pause| pause_resume(pause).is_some())
+            .map(|pause| pause.outcome))
     }
 
     async fn save_pause(
@@ -331,6 +334,11 @@ impl SubagentPersistence for FileSubagentPersistence {
         pause: PersistedSubagentPause,
     ) -> Result<SubagentPausePersistenceDisposition, SubagentError> {
         let _lock = self.key_lock(&pause.key)?;
+        if pause_resume(&pause).is_none() {
+            return Err(SubagentError::Persistence(
+                "attempted to persist a non-paused subagent outcome as a pause".into(),
+            ));
+        }
         if self.read_terminal(&pause.key)?.is_some() {
             return Ok(SubagentPausePersistenceDisposition::TerminalExisting);
         }
@@ -376,12 +384,21 @@ impl SubagentPersistence for FileSubagentPersistence {
         if !expected_matches {
             return Ok(SubagentTerminalPersistenceDisposition::PauseExisting);
         }
+        let mut extensions = outcome.extensions.clone();
+        let agent_id = extensions
+            .remove("agent_id")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let elapsed_ms = extensions
+            .remove("elapsed_ms")
+            .and_then(|value| value.as_u64())
+            .unwrap_or_default();
         let record = TerminalRecord {
             key: Some(key.clone()),
             outcome: outcome.clone(),
-            agent_id: String::new(),
-            elapsed_ms: 0,
-            extensions: outcome.extensions.clone(),
+            agent_id,
+            elapsed_ms,
+            extensions,
         };
         let inserted = self.insert_file(
             &self.terminal_path(key)?,

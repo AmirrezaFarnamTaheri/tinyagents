@@ -36,6 +36,19 @@ struct DetachedTaskEntry<Metadata, Status> {
     steer_requests: RecentRequestIds,
 }
 
+/// Notification for a hard-aborted detached future.
+#[derive(Debug, Clone)]
+pub struct DetachedAbortEvent<Metadata, Status> {
+    /// Task id removed from the live registry.
+    pub task_id: TaskId,
+    /// Owner recorded at registration.
+    pub owner_id: String,
+    /// Application metadata needed to settle its durable run ledger.
+    pub metadata: Metadata,
+    /// Latest status observed before the future was aborted.
+    pub status: Status,
+}
+
 type RegistryGuard<'a, Metadata, Status> =
     MutexGuard<'a, HashMap<TaskId, DetachedTaskEntry<Metadata, Status>>>;
 
@@ -55,6 +68,7 @@ pub struct DetachedTaskRegistry<Metadata, Status> {
     inner: Arc<Mutex<HashMap<TaskId, DetachedTaskEntry<Metadata, Status>>>>,
     steering: SteeringRegistry,
     is_terminal: Arc<dyn Fn(&Status) -> bool + Send + Sync>,
+    on_abort: Arc<dyn Fn(DetachedAbortEvent<Metadata, Status>) + Send + Sync>,
     soft_cap: usize,
 }
 
@@ -75,8 +89,20 @@ where
             inner: Arc::default(),
             steering,
             is_terminal: Arc::new(is_terminal),
+            on_abort: Arc::new(|_| {}),
             soft_cap: soft_cap.max(1),
         }
+    }
+
+    /// Installs a synchronous observer called when cancellation hard-aborts a
+    /// spawned future. The observer can settle a durable ledger and publish a
+    /// terminal event before the registry drops its final runtime handles.
+    pub fn with_abort_observer(
+        mut self,
+        observer: impl Fn(DetachedAbortEvent<Metadata, Status>) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_abort = Arc::new(observer);
+        self
     }
 
     /// Registers the executor handles for a detached task.
@@ -492,6 +518,15 @@ where
             cancellation.cancel();
         }
         if let Some(abort) = &entry.abort {
+            let status = entry.status.borrow().clone();
+            if !(self.is_terminal)(&status) {
+                (self.on_abort)(DetachedAbortEvent {
+                    task_id: task_id.clone(),
+                    owner_id: entry.owner_id.clone(),
+                    metadata: entry.metadata.clone(),
+                    status,
+                });
+            }
             abort.abort();
         }
         Ok(CancelledDetachedTask {
@@ -532,3 +567,7 @@ where
         TinyAgentsError::Graph(error.to_string())
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;

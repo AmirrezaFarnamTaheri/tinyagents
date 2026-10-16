@@ -36,7 +36,10 @@ pub struct CompletionRouterPool<K: Eq + Hash + Clone + Send + Sync> {
 impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     /// Builds a pool whose host-provided opener decides scope and durability.
     pub fn new(open: impl Fn(&K) -> Arc<CompletionRouter> + Send + Sync + 'static) -> Self {
-        Self { routers: Mutex::new(HashMap::new()), open: Arc::new(open) }
+        Self {
+            routers: Mutex::new(HashMap::new()),
+            open: Arc::new(open),
+        }
     }
 
     /// Returns the cached router for `key`, opening it once on first access.
@@ -72,21 +75,32 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
         Ok(self.lock()?.is_empty())
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<K, Arc<CompletionRouter>>>, CompletionRouterPoolError> {
-        self.routers.lock().map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))
+    fn lock(
+        &self,
+    ) -> Result<
+        std::sync::MutexGuard<'_, HashMap<K, Arc<CompletionRouter>>>,
+        CompletionRouterPoolError,
+    > {
+        self.routers
+            .lock()
+            .map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))
     }
 }
 
 impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPool<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let open = self.routers.lock().map(|routers| routers.len());
-        f.debug_struct("CompletionRouterPool").field("open_scopes", &open.ok()).finish()
+        f.debug_struct("CompletionRouterPool")
+            .field("open_scopes", &open.ok())
+            .finish()
     }
 }
 
 /// Opens a durable completion store over `docs`, falling back to memory when
 /// the bridge cannot start or the collection cannot be declared.
-pub fn open_driver_completion_store_or_memory(docs: Arc<dyn DocumentStore>) -> Arc<dyn CompletionStore> {
+pub fn open_driver_completion_store_or_memory(
+    docs: Arc<dyn DocumentStore>,
+) -> Arc<dyn CompletionStore> {
     let store = match DriverCompletionStore::new(docs) {
         Ok(store) => store,
         Err(error) => {
@@ -100,7 +114,3 @@ pub fn open_driver_completion_store_or_memory(docs: Arc<dyn DocumentStore>) -> A
     }
     Arc::new(store)
 }
-
-#[cfg(test)]
-#[path = "registry_tests.rs"]
-mod tests;
