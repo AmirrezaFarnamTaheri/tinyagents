@@ -25,7 +25,7 @@
 //! into every concurrent caller's failure while hiding the fact that each had
 //! its own retry budget — and an error is not a value worth caching.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
 use std::sync::{Arc, Mutex};
 
 use crate::Result;
@@ -38,7 +38,7 @@ use tinyinference_llm::model::ModelResponse;
 /// retry on an error; it publishes the leader's complete typed result.
 #[derive(Clone)]
 pub struct SharedFlightMap<K, V, E> {
-    entries: Arc<Mutex<HashMap<K, Arc<SharedFlightEntry<V, E>>>>>,
+    entries: Arc<Mutex<HashMap<K, SharedFlightEntry<V, E>>>>,
 }
 
 impl<K, V, E> Default for SharedFlightMap<K, V, E> {
@@ -56,7 +56,7 @@ pub struct SharedFlightEntry<V, E> {
 }
 
 struct SharedFlightState<V, E> {
-    result: Mutex<Option<Result<V, E>>>,
+    result: Mutex<Option<std::result::Result<V, E>>>,
     notify: tokio::sync::Notify,
 }
 
@@ -64,6 +64,11 @@ impl<K, V, E> SharedFlightMap<K, V, E>
 where
     K: Eq + std::hash::Hash,
 {
+    /// Creates an empty typed in-flight registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Claims leadership for `key`, or returns the current shared entry.
     pub fn claim(&self, key: K) -> (SharedFlightEntry<V, E>, bool) {
         let mut entries = self.entries.lock().expect("shared-flight map poisoned");
@@ -96,7 +101,7 @@ where
 
 impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
     /// Waits for the leader to publish its complete result.
-    pub async fn wait(&self) -> Result<V, E> {
+    pub async fn wait(&self) -> std::result::Result<V, E> {
         loop {
             let notified = self.state.notify.notified();
             tokio::pin!(notified);
@@ -115,7 +120,7 @@ impl<V: Clone, E: Clone> SharedFlightEntry<V, E> {
     }
 
     /// Publishes a result to all current and future waiters on this entry.
-    pub fn complete(&self, result: Result<V, E>) {
+    pub fn complete(&self, result: std::result::Result<V, E>) {
         *self
             .state
             .result
