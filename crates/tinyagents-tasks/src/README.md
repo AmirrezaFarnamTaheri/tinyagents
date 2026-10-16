@@ -36,6 +36,9 @@ call `orchestration_tools` to build the full set, or call
   against one store.
 - `orchestration_tools_with_steering(store, steering)` — same, with steering
   wired.
+- `orchestration_tools_with_status_overlay(store, overlay)` and
+  `register_orchestration_tools_with_status_overlay(..)` — build or register
+  the full set with a host's durable session/completion snapshots.
 - `register_orchestration_tools(registry, store, ..)` — inserts the full set
   into a `ToolRegistry`.
 - `orchestration_tool_schema(kind)` / `orchestration_tool_schemas()` — the
