@@ -577,11 +577,20 @@ async fn simultaneous_idle_steer_and_followup_admission_has_one_owner() {
             .total,
         1
     );
-    release.notify_one();
-    started.notified().await;
-    release.notify_one();
+    let scope = request(QueueDisposition::Interrupt, false).scope;
+    let active_id = runner
+        .in_flight_request_id(&scope, "thread-a")
+        .await
+        .unwrap();
+    assert!(runner.cancel(&scope, "thread-a", Some(&active_id)).await);
     let results = [a.await.unwrap(), b.await.unwrap()];
-    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(TurnRunnerError::Cancelled)))
+            .count(),
+        1
+    );
     assert_eq!(
         results
             .iter()
