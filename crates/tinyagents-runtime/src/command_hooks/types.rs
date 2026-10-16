@@ -592,7 +592,7 @@ fn append_message(slot: &mut Option<String>, addition: Option<String>) {
     }
 }
 
-/// One `command` hook run, handed to a [`CommandSpawner`].
+/// One `command` hook run, handed to a [`CommandSpawner`](super::environment::CommandSpawner).
 #[derive(Debug, Clone)]
 pub struct CommandRequest {
     /// The hook's command line, exactly as written in `hooks.json`.
@@ -609,7 +609,7 @@ pub struct CommandRequest {
     pub timeout: Duration,
 }
 
-/// What a [`CommandSpawner`] observed when the process finished.
+/// What a [`CommandSpawner`](super::environment::CommandSpawner) observed when the process finished.
 #[derive(Debug, Clone, Default)]
 pub struct CommandOutput {
     /// Exit code, or `None` when the process was terminated by a signal.
