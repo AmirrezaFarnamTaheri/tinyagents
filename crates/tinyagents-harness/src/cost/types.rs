@@ -4,6 +4,7 @@
 //! recursive run tree (model call → run → parent run).
 
 use serde::{Deserialize, Serialize};
+use super::CostTally;
 
 /// Per-token pricing for a model.
 ///
@@ -88,4 +89,70 @@ pub struct CostTotals {
     /// Sum of all component costs.
     #[serde(default)]
     pub total_cost: f64,
+}
+
+/// Token and cost usage attributed to a completed delegated run.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SubagentUsage {
+    /// Stable task identity used to ignore replayed ledger entries.
+    pub task_id: String,
+    /// Input tokens consumed by this child and its own descendants.
+    pub input_tokens: u64,
+    /// Output tokens consumed by this child and its own descendants.
+    pub output_tokens: u64,
+    /// Cached input tokens, a subset of `input_tokens`.
+    pub cached_input_tokens: u64,
+    /// Child cost with its certainty source retained.
+    pub cost: CostTally,
+}
+
+/// Aggregate usage for a root run and the unique delegated runs it completed.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UsageRollup {
+    /// Input tokens including child runs.
+    pub input_tokens: u64,
+    /// Output tokens including child runs.
+    pub output_tokens: u64,
+    /// Cached input tokens including child runs.
+    pub cached_input_tokens: u64,
+    /// Cost including child runs; unknown source is preserved.
+    pub cost: CostTally,
+    /// Child details in first-seen order, with duplicate task ids omitted.
+    pub subagents: Vec<SubagentUsage>,
+}
+
+/// Rolls child usage into one run while ignoring duplicate/replayed task rows.
+/// Each child entry must describe only that child's run tree; callers should
+/// pass each descendant once. Token counts keep their original units, and
+/// cached tokens remain a subset rather than being added twice.
+pub fn roll_up_subagent_usage(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    cost: CostTally,
+    children: impl IntoIterator<Item = SubagentUsage>,
+) -> UsageRollup {
+    use std::collections::HashSet;
+
+    let mut result = UsageRollup {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cost,
+        subagents: Vec::new(),
+    };
+    let mut seen = HashSet::new();
+    for child in children {
+        if !seen.insert(child.task_id.clone()) {
+            continue;
+        }
+        result.input_tokens = result.input_tokens.saturating_add(child.input_tokens);
+        result.output_tokens = result.output_tokens.saturating_add(child.output_tokens);
+        result.cached_input_tokens = result
+            .cached_input_tokens
+            .saturating_add(child.cached_input_tokens);
+        result.cost.merge(child.cost);
+        result.subagents.push(child);
+    }
+    result
 }

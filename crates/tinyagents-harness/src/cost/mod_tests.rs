@@ -21,6 +21,36 @@ fn pricing() -> ModelPricing {
 }
 
 #[test]
+fn subagent_usage_rollup_counts_each_task_once_and_keeps_cost_certainty() {
+    let child = SubagentUsage {
+        task_id: "child-1".into(),
+        input_tokens: 12,
+        output_tokens: 7,
+        cached_input_tokens: 5,
+        cost: CostTally {
+            known_usd: 0.25,
+            source: CostSource::Estimated,
+        },
+    };
+    let rollup = roll_up_subagent_usage(
+        100,
+        20,
+        40,
+        CostTally {
+            known_usd: 1.0,
+            source: CostSource::Charged,
+        },
+        [child.clone(), child],
+    );
+    assert_eq!(rollup.input_tokens, 112);
+    assert_eq!(rollup.output_tokens, 27);
+    assert_eq!(rollup.cached_input_tokens, 45);
+    assert_eq!(rollup.cost.known_usd, 1.25);
+    assert_eq!(rollup.cost.source, CostSource::Estimated);
+    assert_eq!(rollup.subagents.len(), 1);
+}
+
+#[test]
 fn estimates_each_component() {
     let usage = Usage {
         input_tokens: 1000,
