@@ -307,7 +307,10 @@ fn estimated_zero_and_reported_zero_costs_keep_distinct_provenance_without_doubl
     );
     assert_eq!(generations[1].attributes["gen_ai.usage.cost_usd"], 0.0);
     assert_eq!(generations[1].attributes["gen_ai.cost.source"], "estimated");
-    assert_eq!(collector.spans()[0].attributes["gen_ai.usage.cost_usd"], 0.0);
+    assert_eq!(
+        collector.spans()[0].attributes["gen_ai.usage.cost_usd"],
+        0.0
+    );
 }
 
 #[test]
@@ -898,6 +901,127 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
             generation.parent_span_id.as_deref(),
             Some(child.span_id.as_str())
         );
-        assert_eq!(generation.attributes["gen_ai.usage.cost_usd"], expected_cost);
+        assert_eq!(
+            generation.attributes["gen_ai.usage.cost_usd"],
+            expected_cost
+        );
     }
+}
+
+#[test]
+fn host_enrichment_uses_exact_generation_identity_and_preserves_native_costs() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-enrichment", None));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        0,
+        1,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("priced"),
+            model: "model-x".into(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        1,
+        2,
+        AgentEvent::ModelCompleted {
+            call_id: CallId::new("priced"),
+            started_at_ms: Some(1),
+            usage: Some(Usage::default()),
+            input: None,
+            output: None,
+        },
+    ));
+    assert_eq!(
+        collector.enrich_generation(
+            &RunId::new("missing"),
+            &CallId::new("priced"),
+            GenerationEnrichment::default(),
+        ),
+        Err(GenerationEnrichmentError::GenerationNotFound),
+    );
+    collector
+        .enrich_generation(
+            &RunId::new("run"),
+            &CallId::new("priced"),
+            GenerationEnrichment {
+                provider_id: Some("host-provider".into()),
+                pricing: Some(GenerationPricing {
+                    input_per_mtok_usd: Some(0.25),
+                    cached_input_per_mtok_usd: None,
+                    output_per_mtok_usd: Some(1.0),
+                }),
+                estimated_cost_usd: Some(0.4),
+            },
+        )
+        .unwrap();
+    let generation = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .unwrap();
+    assert_eq!(generation.attributes["gen_ai.provider"], "host-provider");
+    assert_eq!(
+        generation.attributes["gen_ai.pricing.input_per_mtok_usd"],
+        0.25
+    );
+    assert_eq!(generation.attributes["gen_ai.usage.cost_usd"], 0.4);
+    assert_eq!(
+        collector.spans()[0].attributes["gen_ai.usage.cost_usd"],
+        0.4
+    );
+
+    let mut charged = SpanCollector::new(TraceContext::new("trace-charged", None));
+    charged.record(&observation_in_run(
+        "charged-run",
+        None,
+        "charged-run",
+        0,
+        1,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("charged"),
+            model: "model-x".into(),
+        },
+    ));
+    charged.record(&observation_in_run(
+        "charged-run",
+        None,
+        "charged-run",
+        1,
+        2,
+        AgentEvent::ModelCompleted {
+            call_id: CallId::new("charged"),
+            started_at_ms: Some(1),
+            usage: Some(Usage {
+                charged_amount: Some(ChargedAmount::usd_micros(0)),
+                ..Default::default()
+            }),
+            input: None,
+            output: None,
+        },
+    ));
+    charged
+        .enrich_generation(
+            &RunId::new("charged-run"),
+            &CallId::new("charged"),
+            GenerationEnrichment {
+                estimated_cost_usd: Some(8.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let charged_generation = charged
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .unwrap();
+    assert_eq!(charged_generation.attributes["gen_ai.usage.cost_usd"], 0.0);
+    assert_eq!(
+        charged_generation.attributes["gen_ai.cost.source"],
+        "provider_reported"
+    );
 }

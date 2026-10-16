@@ -24,7 +24,12 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
   `SpanStatus`, `RunType`, `TraceContext`, `trace_session_id`.
 - `ExportBrand`: product identity stamped onto exported telemetry.
 - `collector::SpanCollector`: event-driven generation, tool, subagent and run
-  spans with payload capture gated by `TraceContext`.
+  spans with payload capture gated by `TraceContext`. Feed root and child
+  observations through `record`; `record_event` is a root-run convenience for
+  live events without observation identity. Hosts can add provider/pricing
+  metadata to a completed generation with `enrich_generation(run_id, call_id,
+  GenerationEnrichment)`, while native charged usage and recorded costs remain
+  authoritative.
 - `serialize`: content caps (`MAX_TOOL_CONTENT_CHARS`,
   `MAX_ERROR_MESSAGE_CHARS`, `MAX_MODEL_CONTENT_CHARS`),
   `capture_model_content` (keeps a large request structured, newest messages

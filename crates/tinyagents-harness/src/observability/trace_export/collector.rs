@@ -630,16 +630,28 @@ impl SpanCollector {
             .get(&key)
             .copied()
             .ok_or(GenerationEnrichmentError::GenerationNotFound)?;
-        let pricing_values = enrichment
-            .pricing
-            .iter()
-            .flat_map(|pricing| [
-                ("gen_ai.pricing.input_per_mtok_usd", pricing.input_per_mtok_usd),
-                ("gen_ai.pricing.cached_input_per_mtok_usd", pricing.cached_input_per_mtok_usd),
-                ("gen_ai.pricing.output_per_mtok_usd", pricing.output_per_mtok_usd),
-            ]);
-        if pricing_values.clone().any(|(_, value)| value.is_some_and(|v| !v.is_finite() || v < 0.0))
-            || enrichment.estimated_cost_usd.is_some_and(|v| !v.is_finite() || v < 0.0)
+        let pricing_values = enrichment.pricing.iter().flat_map(|pricing| {
+            [
+                (
+                    "gen_ai.pricing.input_per_mtok_usd",
+                    pricing.input_per_mtok_usd,
+                ),
+                (
+                    "gen_ai.pricing.cached_input_per_mtok_usd",
+                    pricing.cached_input_per_mtok_usd,
+                ),
+                (
+                    "gen_ai.pricing.output_per_mtok_usd",
+                    pricing.output_per_mtok_usd,
+                ),
+            ]
+        });
+        if pricing_values
+            .clone()
+            .any(|(_, value)| value.is_some_and(|v| !v.is_finite() || v < 0.0))
+            || enrichment
+                .estimated_cost_usd
+                .is_some_and(|v| !v.is_finite() || v < 0.0)
         {
             return Err(GenerationEnrichmentError::InvalidPricing);
         }
@@ -650,7 +662,9 @@ impl SpanCollector {
         }
         for (key, value) in pricing_values {
             if let Some(value) = value {
-                self.spans[index].attributes.insert(key.into(), json_f64(value));
+                self.spans[index]
+                    .attributes
+                    .insert(key.into(), json_f64(value));
             }
         }
         if let Some(estimate) = enrichment.estimated_cost_usd {
@@ -658,16 +672,28 @@ impl SpanCollector {
                 .attributes
                 .contains_key("gen_ai.usage.cost_usd");
             if !has_authoritative_cost {
-                self.spans[index].attributes.insert("gen_ai.usage.cost_usd".into(), json_f64(estimate));
-                self.spans[index].attributes.insert("gen_ai.cost.source".into(), json_str("estimated"));
+                self.spans[index]
+                    .attributes
+                    .insert("gen_ai.usage.cost_usd".into(), json_f64(estimate));
+                self.spans[index]
+                    .attributes
+                    .insert("gen_ai.cost.source".into(), json_str("estimated"));
                 if let Some(parent) = self.spans[index]
                     .parent_span_id
                     .as_deref()
                     .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
                 {
-                    let prior = self.spans[parent].attributes.get("gen_ai.usage.cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
-                    self.spans[parent].attributes.insert("gen_ai.usage.cost_usd".into(), json_f64(prior + estimate));
-                    self.spans[parent].attributes.insert("gen_ai.cost.source".into(), json_str("estimated"));
+                    let prior = self.spans[parent]
+                        .attributes
+                        .get("gen_ai.usage.cost_usd")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0);
+                    self.spans[parent]
+                        .attributes
+                        .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + estimate));
+                    self.spans[parent]
+                        .attributes
+                        .insert("gen_ai.cost.source".into(), json_str("estimated"));
                 }
             }
         }
