@@ -8,7 +8,7 @@ use std::{
 
 use futures::StreamExt;
 use tinyinference_llm::{
-    message::UserMessage,
+    message::{ImageRef, UserMessage},
     model::{Modalities, ModelStreamItem},
 };
 
