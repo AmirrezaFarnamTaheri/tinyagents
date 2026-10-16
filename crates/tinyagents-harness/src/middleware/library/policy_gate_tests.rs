@@ -499,3 +499,38 @@ async fn policy_gate_serialises_concurrent_prompts_only() {
     );
     assert_approvals_serialise(middleware, resolver).await;
 }
+
+#[tokio::test]
+async fn session_ceiling_runs_before_builder_policy() {
+    let runs = Arc::new(Mutex::new(0));
+    let base = Base {
+        runs: Arc::clone(&runs),
+        fail: false,
+    };
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling)),
+    );
+    let mut stack = MiddlewareStack::<(), Host>::new();
+    stack.push_tool_middleware(middleware);
+    let ctx = RunContext::new(RunConfig::new("cli-session"), Host { channel: "cli" });
+    let result = stack
+        .run_wrapped_tool(&ctx, &(), call("web_only"), &base)
+        .await
+        .unwrap()
+        .into_result();
+    assert!(result.is_error);
+    assert!(result.output().contains("session ceiling"));
+    assert_eq!(*runs.lock().unwrap(), 0);
+}
+
+#[test]
+fn session_skill_listing_cannot_introduce_unavailable_tools() {
+    let gate = ToolPolicyGateMiddleware::new(Arc::new(NamePolicy)).with_session_listing(Arc::new(
+        |_ctx: &RunContext<Host>, _candidates: &[String]| {
+            vec!["visible".to_owned(), "not-in-this-run".to_owned()]
+        },
+    ));
+    let names = vec!["visible".to_owned(), "hidden".to_owned()];
+    assert_eq!(gate.visible_tool_names(&ctx(), &names), vec!["visible"]);
+}
