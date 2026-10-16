@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 
-use anyhow::Result;
 use serde_json::Value;
+use tinyagents_harness::Result;
 use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_core::{StorageBackend, StorageError};
 
@@ -98,11 +98,8 @@ impl RebindableSessionStores {
     /// Existing method calls retain the provider snapshot they started with;
     /// subsequent calls through a live handle resolve against the new backend.
     pub fn rebind(&self, backend: Arc<dyn StorageBackend>) -> Result<(), StorageError> {
-        let current = self.current();
-        let next = Arc::new(
-            DriverSessionStores::with_bridge(backend, current.bridge().clone())
-                .recover_on_open(self.recover_on_open),
-        );
+        let next =
+            Arc::new(DriverSessionStores::new(backend)?.recover_on_open(self.recover_on_open));
         let live = self
             .live
             .lock()
