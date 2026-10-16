@@ -24,6 +24,7 @@
 //! bounded queue drops rather than stalls; backend errors are reported, not
 //! propagated), and `flush` blocks until the durable log has caught up.
 
+mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
 mod profile;
@@ -50,7 +51,7 @@ pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
 #[cfg(feature = "langfuse")]
 #[doc(hidden)]
 pub use langfuse::{clean_nulls, iso_ms};
-pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs};
+pub use reaper::{ORPHAN_REAP_REASON, reap_orphaned_runs, reap_orphaned_runs_and_seal};
 pub use status::{
     DriverStatusStore, is_active, mint_run_id, process_env_secrets, secrets_from_vars,
 };
@@ -66,6 +67,8 @@ use crate::error::Result;
 use crate::events::{AgentEvent, EventListener, EventRecord, HarnessRunStatus};
 use crate::ids::{CallId, RunId};
 use crate::store::AppendStore;
+use journal_entry::JournalEntry;
+pub(crate) use journal_entry::journal_entry_from_v1;
 
 // ---------------------------------------------------------------------------
 // AgentLatencyMetrics
@@ -352,7 +355,7 @@ impl<A: AppendStore> StoreEventJournal<A> {
 impl<A: AppendStore + 'static> HarnessEventJournal for StoreEventJournal<A> {
     async fn append(&self, obs: AgentObservation) -> Result<u64> {
         let stream = obs.run_id.as_str().to_string();
-        let value = serde_json::to_value(&obs)?;
+        let value = serde_json::to_value(JournalEntry::from_observation(&obs))?;
         self.store.append(&stream, value).await
     }
 
@@ -360,7 +363,7 @@ impl<A: AppendStore + 'static> HarnessEventJournal for StoreEventJournal<A> {
         let raw = self.store.read_from(run_id, offset).await?;
         let mut out = Vec::with_capacity(raw.len());
         for (_offset, value) in raw {
-            out.push(serde_json::from_value(value)?);
+            out.push(decode_entry(run_id, value)?);
         }
         Ok(out)
     }
@@ -390,10 +393,20 @@ impl<A: AppendStore + 'static> HarnessEventJournal for StoreEventJournal<A> {
         let raw = self.store.read_window(run_id, offset, limit).await?;
         let mut out = Vec::with_capacity(raw.len());
         for (position, value) in raw {
-            out.push((position, serde_json::from_value(value)?));
+            out.push((position, decode_entry(run_id, value)?));
         }
         Ok(out)
     }
+
+    async fn seal_run(&self, run_id: &str) -> Result<()> {
+        tracing::debug!(run_id, "[journal] sealing run journal");
+        self.store.seal(run_id).await
+    }
+}
+
+/// Rebuilds the wire observation of `run_id` from a stored journal row.
+fn decode_entry(run_id: &str, value: serde_json::Value) -> Result<AgentObservation> {
+    Ok(serde_json::from_value::<JournalEntry>(value)?.into_observation(run_id))
 }
 
 // ---------------------------------------------------------------------------
@@ -792,3 +805,7 @@ fn poisoned<E: std::fmt::Display>(what: &str, err: E) -> crate::error::TinyAgent
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "mod_journal_tests.rs"]
+mod journal_tests;

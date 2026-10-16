@@ -18,12 +18,12 @@
 //!   owners (the session crate's key-value store is one) share the collection
 //!   without meeting.
 //! - [`DriverAppendStore`] maps each harness stream to the driver stream
-//!   `<len>:<prefix><stream>`, the prefix empty when there is none. The
-//!   length is always written, so no two `(prefix, stream)` pairs, prefixed
-//!   or not, ever address one stream. Offsets are the
-//!   driver's dense offsets, which already match the [`AppendStore`]
-//!   contract. (The run journal moves to its sealed v2 stream family in a
-//!   later change.)
+//!   `<prefix><stream>`, the prefix empty when there is none. The run journal
+//!   uses the prefix [`DriverAppendStore::JOURNAL_PREFIX`]
+//!   (`harness.journal/`), so a run's stream is `harness.journal/<run id>`.
+//!   Offsets are the driver's dense offsets, which already match the
+//!   [`AppendStore`] contract. [`AppendStore::seal`] seals the driver stream,
+//!   which a reader cannot tell from an open one.
 
 use std::sync::Arc;
 
@@ -166,14 +166,24 @@ pub struct DriverAppendStore {
 }
 
 impl DriverAppendStore {
-    /// Map each harness stream `s` to the driver stream `0:s`.
+    /// The prefix of the run journal's streams (`harness.journal/<run id>`),
+    /// the stream family [`crate::storage_schema`] declares.
+    pub const JOURNAL_PREFIX: &'static str = "harness.journal/";
+
+    /// Map each harness stream `s` to the driver stream `s`.
     pub fn new(streams: Arc<dyn StreamStore>) -> Self {
         Self::with_prefix(streams, "")
     }
 
-    /// Map each harness stream to `<len>:<prefix><stream>`, so several
-    /// independent append stores can share one backend. The prefix length is
-    /// part of the name, so `("a", "bc")` and `("ab", "c")` stay apart.
+    /// The store of the run journal: each run's stream is
+    /// `harness.journal/<run id>`.
+    pub fn journal(streams: Arc<dyn StreamStore>) -> Self {
+        Self::with_prefix(streams, Self::JOURNAL_PREFIX)
+    }
+
+    /// Map each harness stream to `<prefix><stream>`, so several independent
+    /// append stores can share one backend. The caller picks prefixes that
+    /// cannot run into each other (end each with a separator such as `/`).
     pub fn with_prefix(streams: Arc<dyn StreamStore>, prefix: impl Into<String>) -> Self {
         Self {
             streams,
@@ -182,7 +192,7 @@ impl DriverAppendStore {
     }
 
     fn name(&self, stream: &str) -> String {
-        format!("{}:{}{stream}", self.prefix.len(), self.prefix)
+        format!("{}{stream}", self.prefix)
     }
 }
 
@@ -241,6 +251,28 @@ impl AppendStore for DriverAppendStore {
             .len(&self.name(stream))
             .await
             .map_err(map_error)
+    }
+
+    async fn seal(&self, stream: &str) -> Result<()> {
+        let name = self.name(stream);
+        match self.streams.seal(&name).await {
+            Ok(outcome) => {
+                tracing::debug!(
+                    stream = %name,
+                    base = outcome.base,
+                    len = outcome.len,
+                    blob_bytes = outcome.blob_bytes,
+                    "[store] sealed stream"
+                );
+                Ok(())
+            }
+            // Nothing was ever appended: there is nothing to close.
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                tracing::debug!(stream = %name, "[store] seal skipped: no such stream");
+                Ok(())
+            }
+            Err(error) => Err(map_error(error)),
+        }
     }
 }
 

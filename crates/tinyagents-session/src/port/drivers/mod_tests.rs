@@ -833,3 +833,35 @@ async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn the_journal_lives_in_the_harness_journal_stream_family() {
+    let backend = Arc::new(MemoryStorage::new());
+    let provider =
+        DriverSessionStores::new(backend.clone(), tinystoragedrivers_core::Scope::local()).unwrap();
+    let stores = provider.for_agent("agent-1");
+    stores
+        .journal
+        .append("run.abc", serde_json::json!({"kind": "x"}))
+        .await
+        .unwrap();
+
+    let scoped = backend
+        .for_scope(&provider.scope_for("agent-1").unwrap())
+        .unwrap();
+    assert_eq!(
+        scoped.streams().streams("").await.unwrap(),
+        vec!["harness.journal/run.abc".to_owned()]
+    );
+    stores.journal.seal("run.abc").await.unwrap();
+    assert!(
+        scoped
+            .streams()
+            .info("harness.journal/run.abc")
+            .await
+            .unwrap()
+            .unwrap()
+            .sealed_ms
+            .is_some()
+    );
+}
