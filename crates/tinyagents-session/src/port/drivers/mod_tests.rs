@@ -125,41 +125,75 @@ fn stores_work_outside_any_runtime() {
 }
 
 #[test]
-fn a_valid_agent_id_is_its_own_scope() {
+fn an_agent_is_stored_under_its_principal_of_the_tenant() {
+    let provider = memory();
+    assert_eq!(provider.tenant(), &Scope::local());
     assert_eq!(
-        DriverSessionStores::scope_for("agent-7").as_str(),
-        "agent-7"
+        provider.scope_for("agent-7").unwrap().as_str(),
+        "local/agent:agent-7"
     );
+    let tenant = Scope::tenant("alice").unwrap();
+    let provider =
+        DriverSessionStores::new(Arc::new(MemoryStorage::new()), tenant.clone()).unwrap();
+    assert_eq!(
+        provider.scope_for("agent-7").unwrap().as_str(),
+        "u:alice/agent:agent-7"
+    );
+    assert_eq!(provider.scope_for("agent-7").unwrap().tenant_scope(), Some(tenant));
 }
 
 #[test]
-fn any_other_agent_id_maps_to_a_stable_hashed_scope() {
-    let spaced = DriverSessionStores::scope_for("has a space");
-    assert!(spaced.as_str().starts_with("sha256:"));
-    assert_eq!(spaced, DriverSessionStores::scope_for("has a space"));
-    assert_ne!(spaced, DriverSessionStores::scope_for("has  a space"));
-    assert!(
-        DriverSessionStores::scope_for("")
-            .as_str()
-            .starts_with("sha256:")
-    );
+fn an_agent_id_outside_the_segment_grammar_is_hashed_under_its_tenant() {
+    let provider = memory();
+    let spaced = provider.scope_for("has a space").unwrap();
+    assert!(spaced.as_str().starts_with("local/agent:~"), "{spaced}");
+    assert_eq!(spaced, provider.scope_for("has a space").unwrap());
+    assert_ne!(spaced, provider.scope_for("has  a space").unwrap());
     let long = "a".repeat(300);
     assert!(
-        DriverSessionStores::scope_for(&long)
+        provider
+            .scope_for(&long)
+            .unwrap()
             .as_str()
-            .starts_with("sha256:")
+            .starts_with("local/agent:~")
     );
+    assert_eq!(spaced.tenant_scope(), Some(Scope::local()));
 }
 
 #[test]
-fn a_raw_id_can_never_name_a_hashed_scope() {
-    let hashed = DriverSessionStores::scope_for("has a space");
-    let impostor = DriverSessionStores::scope_for(hashed.as_str());
-    assert_ne!(
-        impostor, hashed,
-        "ids in the reserved prefix are hashed too"
-    );
-    assert!(impostor.as_str().starts_with("sha256:"));
+fn an_empty_agent_id_has_no_scope() {
+    let provider = memory();
+    assert!(provider.scope_for("").is_err());
+    assert!(provider.try_for_agent("").is_err());
+}
+
+#[test]
+fn a_provider_needs_a_tenant_scope() {
+    for scope in [
+        Scope::cluster(),
+        Scope::local().agent("someone").unwrap(),
+    ] {
+        let error =
+            DriverSessionStores::new(Arc::new(MemoryStorage::new()), scope.clone()).unwrap_err();
+        assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::InvalidInput);
+    }
+}
+
+#[test]
+fn two_tenants_on_one_backend_never_see_each_others_agents() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let alice = DriverSessionStores::new(Arc::clone(&backend), Scope::tenant("alice").unwrap())
+        .unwrap()
+        .for_agent("a");
+    let bob = DriverSessionStores::new(backend, Scope::tenant("bob").unwrap())
+        .unwrap()
+        .for_agent("a");
+    alice
+        .turn_states
+        .put(&TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z"))
+        .unwrap();
+    assert!(bob.turn_states.get("t").unwrap().is_none());
+    assert!(alice.turn_states.get("t").unwrap().is_some());
 }
 
 #[test]
