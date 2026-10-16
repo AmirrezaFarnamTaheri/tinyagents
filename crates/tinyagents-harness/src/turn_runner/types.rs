@@ -398,11 +398,7 @@ where
         state_out: &mut Option<ActiveTurn<P>>,
         next_out: &mut Option<(TurnRequest<P>, ActiveTurn<P>)>,
     ) -> Result<TurnResult, TurnRunnerError> {
-        let started = Instant::now();
-        let deadline = request
-            .deadline
-            .or(self.config.deadline)
-            .map(|duration| started + duration);
+        let deadline = TurnDeadline::new(request.deadline.or(self.config.deadline));
         let cancellation = reservation
             .as_ref()
             .map(|state| state.cancel.clone())
@@ -416,7 +412,7 @@ where
             ] {
                 match self
                     .before_deadline(
-                        deadline,
+                        deadline.at,
                         &cancellation,
                         self.ingress.apply(stage, &mut request),
                     )
@@ -526,7 +522,7 @@ where
             None
         } else {
             match self
-                .before_deadline(deadline, &cancellation, lock.lock_owned())
+                .before_deadline(deadline.at, &cancellation, lock.lock_owned())
                 .await
             {
                 Ok(guard) => Some(guard),
@@ -545,10 +541,14 @@ where
             }
         };
         let checkout = if request.disposition == QueueDisposition::Parallel {
-            self.before_deadline(deadline, &cancellation, self.host.checkout_fork(&request))
-                .await
+            self.before_deadline(
+                deadline.at,
+                &cancellation,
+                self.host.checkout_fork(&request),
+            )
+            .await
         } else {
-            self.before_deadline(deadline, &cancellation, self.host.checkout(&request))
+            self.before_deadline(deadline.at, &cancellation, self.host.checkout(&request))
                 .await
         };
         let session = match checkout {
@@ -573,7 +573,7 @@ where
         };
         match self
             .before_deadline(
-                deadline,
+                deadline.at,
                 &cancellation,
                 self.host.validate_fingerprint(&request, &session),
             )
@@ -610,7 +610,6 @@ where
                 &origin,
                 cancellation.clone(),
                 Arc::clone(&run_queue),
-                started,
                 deadline,
             )
             .await;
@@ -914,8 +913,7 @@ where
         origin: &serde_json::Value,
         cancellation: crate::CancellationToken,
         queue: Arc<RunQueue<TurnRequest<P>>>,
-        started: Instant,
-        deadline: Option<Instant>,
+        deadline: TurnDeadline,
     ) -> Result<TurnResult, String> {
         let (progress_tx, mut progress_rx) = mpsc::channel(32);
         let task_cancellation = crate::CancellationToken::new();
@@ -928,12 +926,15 @@ where
             progress_tx,
         );
         let idle = request.idle_timeout.unwrap_or(self.config.idle_timeout);
-        let mut last_progress = started;
+        let mut last_progress = deadline.started;
         let mut work_in_flight = 0usize;
         let mut progress_open = true;
         tokio::pin!(run);
         loop {
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            if deadline
+                .at
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
                 task_cancellation.cancel();
                 self.host.cancel_children(request).await;
                 return self
@@ -948,7 +949,7 @@ where
                     self.host.cancel_children(request).await;
                     return Err("turn cancelled".into());
                 }
-                _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.is_some() => {
+                _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
@@ -965,7 +966,7 @@ where
                                     self.host.cancel_children(request).await;
                                     return Err("turn cancelled".into());
                                 }
-                                _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.is_some() => {
+                                _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {
                                     task_cancellation.cancel();
                                     self.host.cancel_children(request).await;
                                     return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
@@ -1038,6 +1039,22 @@ where
 enum PreRunStop {
     Cancelled,
     Deadline,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TurnDeadline {
+    started: Instant,
+    at: Option<Instant>,
+}
+
+impl TurnDeadline {
+    fn new(duration: Option<Duration>) -> Self {
+        let started = Instant::now();
+        Self {
+            started,
+            at: duration.map(|duration| started + duration),
+        }
+    }
 }
 
 /// Stable reply identity for idempotent host persistence.
