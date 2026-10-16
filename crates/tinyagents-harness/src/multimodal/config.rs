@@ -129,11 +129,7 @@ impl FileLimits {
     /// count is preserved as the hard-disable setting.
     pub fn effective(&self) -> (usize, usize, usize) {
         (
-            if self.max_files == 0 {
-                0
-            } else {
-                self.max_files.clamp(1, 16)
-            },
+            self.max_files.clamp(1, 16),
             self.max_file_size_mb.clamp(1, 50),
             self.max_extracted_text_chars.clamp(1_000, 200_000),
         )

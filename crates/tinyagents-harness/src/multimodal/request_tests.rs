@@ -3,7 +3,7 @@ use std::{collections::HashMap, io::Write, sync::atomic::{AtomicUsize, Ordering}
 
 use futures::StreamExt;
 use tinyinference_llm::{
-    message::{AssistantMessage, UserMessage},
+    message::UserMessage,
     model::{Modalities, ModelStreamItem},
 };
 
@@ -34,10 +34,7 @@ impl ChatModel<String> for CaptureModel {
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
         self.requests.lock().unwrap().push(request);
-        Ok(ModelResponse {
-            message: AssistantMessage::default(),
-            ..ModelResponse::default()
-        })
+        Ok(ModelResponse::assistant(""))
     }
 }
 
@@ -222,7 +219,11 @@ async fn invoke_and_stream_prepare_disposable_requests_without_changing_history(
     let items: Vec<ModelStreamItem> = stream.collect().await;
 
     assert!(matches!(items.first(), Some(ModelStreamItem::Started)));
-    assert_eq!(original, canonical, "the caller's request remains canonical");
+    assert_eq!(
+        serde_json::to_value(&original).unwrap(),
+        serde_json::to_value(&canonical).unwrap(),
+        "the caller's request remains canonical"
+    );
     let calls = model.requests.lock().unwrap();
     assert_eq!(calls.len(), 2);
     for prepared in calls.iter() {
@@ -246,9 +247,11 @@ async fn concurrent_calls_keep_their_immutable_scope_separate() {
     let resolver = Arc::new(Resolver { sources, ..Resolver::default() });
     let wrapped = wrapper(model, MediaRequestConfig::default(), resolver.clone(), Arc::default());
 
+    let scope_a = "scope-a".to_string();
+    let scope_b = "scope-b".to_string();
     let (a, b) = tokio::join!(
-        wrapped.invoke(&"scope-a".into(), request("[IMAGE:image]")),
-        wrapped.invoke(&"scope-b".into(), request("[IMAGE:image]")),
+        wrapped.invoke(&scope_a, request("[IMAGE:image]")),
+        wrapped.invoke(&scope_b, request("[IMAGE:image]")),
     );
 
     a.unwrap();
