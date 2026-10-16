@@ -55,6 +55,7 @@ pub struct SpanCollector {
 impl SpanCollector {
     /// Creates an empty collector for `context`.
     pub fn new(context: TraceContext) -> Self {
+        let root_run_id = context.root_run_id.clone().or_else(|| context.run_id.clone());
         Self {
             context,
             spans: Vec::new(),
@@ -64,7 +65,7 @@ impl SpanCollector {
             open_subagents: HashMap::new(),
             run_roots: HashMap::new(),
             current_run_id: None,
-            root_run_id: context.root_run_id.clone().or_else(|| context.run_id.clone()),
+            root_run_id,
             last_generation: HashMap::new(),
             last_activity_ms: 0,
             first_input_recorded: false,
