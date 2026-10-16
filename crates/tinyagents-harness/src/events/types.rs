@@ -398,6 +398,10 @@ pub enum AgentEvent {
         depth: usize,
         /// Human-readable failure description.
         error: String,
+        /// Child run identity. Optional for journals written before this link
+        /// was added; when present it matches the child's observation stream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child_run_id: Option<RunId>,
     },
 
     /// The model called a tool that is not registered, and the run's
@@ -603,6 +607,10 @@ pub enum AgentEvent {
         name: String,
         /// Depth of the child run in the recursion tree (parent depth + 1).
         depth: usize,
+        /// Identity of the child run started by this event. This joins the
+        /// parent lifecycle record to the child's durable observation stream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child_run_id: Option<RunId>,
     },
 
     /// A sub-agent child run finished.
@@ -611,6 +619,9 @@ pub enum AgentEvent {
         name: String,
         /// Depth of the child run in the recursion tree.
         depth: usize,
+        /// Identity of the child run completed by this event.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        child_run_id: Option<RunId>,
     },
 
     /// An existing sub-agent was *reused* for a follow-up turn rather than
