@@ -173,6 +173,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> Middleware<State, Ctx> for Transcript
         }
         Ok(())
     }
+
+    async fn after_agent(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _state: &State,
+        _run: &mut crate::middleware::AgentRun,
+    ) -> Result<()> {
+        self.capture.forget_run(ctx.instance_id());
+        Ok(())
+    }
+
+    async fn on_error(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        _error: &crate::error::TinyAgentsError,
+    ) -> Result<()> {
+        self.capture.forget_run(ctx.instance_id());
+        Ok(())
+    }
 }
 
 /// Renders messages from an unanswered provider request as bounded plain text.

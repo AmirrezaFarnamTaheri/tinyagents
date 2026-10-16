@@ -133,7 +133,8 @@ pub use output_cap::{
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
-    PolicyDecision, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware, record_approved,
+    PolicyDecision, SessionToolCeiling, SessionToolListing, ToolCallPolicy, ToolPolicyGate,
+    ToolPolicyGateMiddleware, record_approved,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use repeat_progress::{
