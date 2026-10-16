@@ -53,9 +53,11 @@ format contributes a header naming it plus a content hash.
   text/archive/image fallbacks. The host supplies [`MediaSourceResolver`] for
   authorized source access, [`MediaHistoryFallback`] for its safe history
   behavior, and may supply [`MediaImageReadout`] plus selected-model
-  [`ModelProfile`] facts. Its synchronous trusted-request callback may consume
-  request metadata or normalize host markers on the disposable copy before
-  counting; it must not resolve sources or perform other I/O.
+  [`ModelProfile`] facts. A resolver returns [`ResolvedMedia`] so host-authored
+  safe path or recovery annotations stay beside native media and in fallbacks.
+  Its synchronous trusted-request callback may consume request metadata or
+  normalize host markers on the disposable copy before counting; it must not
+  resolve sources or perform other I/O.
 - [`error`] — [`MultimodalError`] and its [`Result`] alias; every variant
   carries the offending `input` verbatim so a multi-attachment turn's failure
   is attributable.
