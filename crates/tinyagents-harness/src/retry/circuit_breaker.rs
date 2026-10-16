@@ -87,11 +87,11 @@ where
                 failure_limit_reached: entry.failures >= self.config.failure_limit,
             });
         }
-        entry.generation = entry.generation.wrapping_add(1).max(1);
+        entry.generation = Arc::new(());
         entry.in_flight = true;
         Ok(PersistentFailoverAttempt {
             key,
-            generation: entry.generation,
+            generation: Arc::clone(&entry.generation),
             entries: Arc::clone(&self.entries),
             config: self.config,
             finished: false,
@@ -107,7 +107,7 @@ where
         entry.failures = 0;
         entry.next_attempt_ms = 0;
         entry.in_flight = false;
-        entry.generation = entry.generation.wrapping_add(1).max(1);
+        entry.generation = Arc::new(());
         // Any active attempt is invalidated and its slot released. Its stale
         // guard cannot mutate a later attempt's state.
     }
@@ -117,12 +117,12 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Entry {
     failures: u32,
     next_attempt_ms: u64,
     in_flight: bool,
-    generation: u64,
+    generation: Arc<()>,
 }
 
 /// Why a persistent breaker did not admit an attempt.
@@ -163,7 +163,7 @@ pub struct PersistentFailoverFailure {
 /// without recording a failure, including when a future is cancelled.
 pub struct PersistentFailoverAttempt<K: Eq + Hash> {
     key: K,
-    generation: u64,
+    generation: Arc<()>,
     entries: Arc<Mutex<HashMap<K, Entry>>>,
     config: PersistentFailoverBreakerConfig,
     finished: bool,
@@ -177,13 +177,13 @@ where
     pub fn record_success(&mut self) {
         let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = entries.get_mut(&self.key)
-            && entry.generation == self.generation
+            && Arc::ptr_eq(&entry.generation, &self.generation)
             && entry.in_flight
         {
             entry.failures = 0;
             entry.next_attempt_ms = 0;
             entry.in_flight = false;
-            entry.generation = entry.generation.wrapping_add(1).max(1);
+            entry.generation = Arc::new(());
         }
         self.finished = true;
     }
@@ -197,7 +197,7 @@ where
         }
         let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let entry = entries.get_mut(&self.key)?;
-        if entry.generation != self.generation || !entry.in_flight {
+        if !Arc::ptr_eq(&entry.generation, &self.generation) || !entry.in_flight {
             self.finished = true;
             return None;
         }
@@ -210,7 +210,7 @@ where
             .min(self.config.max_backoff_ms);
         entry.next_attempt_ms = now_ms.saturating_add(delay);
         entry.in_flight = false;
-        entry.generation = entry.generation.wrapping_add(1).max(1);
+        entry.generation = Arc::new(());
         self.finished = true;
         Some(PersistentFailoverFailure {
             failure_count: entry.failures,
@@ -230,11 +230,11 @@ where
         }
         let mut entries = self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(entry) = entries.get_mut(&self.key)
-            && entry.generation == self.generation
+            && Arc::ptr_eq(&entry.generation, &self.generation)
             && entry.in_flight
         {
             entry.in_flight = false;
-            entry.generation = entry.generation.wrapping_add(1).max(1);
+            entry.generation = Arc::new(());
         }
     }
 }
