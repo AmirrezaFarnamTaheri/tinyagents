@@ -1,40 +1,67 @@
-//! Versioned record envelopes, scoped declarations, conditional updates and paging.
+//! v2 names, scoped declarations, storage-body conversion, conditional updates and paging.
+//!
+//! Records are stored as the snake_case DTOs of [`super::dto`] and
+//! [`super::dto_history`] under `Key::of` ids; a single-record read-modify-write
+//! is one [`Repo::update`] loop. Operations that must commit several documents
+//! together (a status change with its event, a claim with its dependency checks)
+//! keep their own validated-batch loops.
 
 use super::DriverRunLedger;
+use super::dto::Stored;
 use chrono::{DateTime, Utc};
-use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use serde_json::Value;
+use tinystoragedrivers_core::primitives::{self, Repo};
+use tinystoragedrivers_core::schema::MIGRATIONS_COLLECTION;
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Precondition, Query, Sort,
-    StorageError, Versioned,
+    CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, Query, Sort, StorageError, Versioned,
+    WriteOp, WriteOptions,
 };
 
-pub(super) const WORKFLOWS: &str = "run_ledger_workflow_runs";
-pub(super) const TELEMETRY: &str = "run_ledger_telemetry";
-pub(super) const AGENTS: &str = "run_ledger_agent_runs";
-pub(super) const TEAMS: &str = "run_ledger_teams";
-pub(super) const MEMBERS: &str = "run_ledger_members";
-pub(super) const EFFECTS: &str = "run_ledger_tool_effects";
-pub(super) const IMPORTS: &str = "run_ledger_agent_imports";
-pub(super) const EVENTS: &str = "run_ledger_event_outbox";
-pub(super) const EVENT_HEADS: &str = "run_ledger_event_heads";
-pub(super) const TASKS: &str = "run_ledger_tasks";
-pub(super) const HIST_SESSIONS: &str = "session_history_sessions";
-pub(super) const HIST_MESSAGES: &str = "session_history_messages";
-pub(super) const HIST_TOOL_CALLS: &str = "session_history_tool_calls";
-pub(super) const HIST_FTS: &str = "session_history_fts";
-pub(super) const HIST_COUNTERS: &str = "session_history_counters";
+/// The owner of the run ledger's collections and stream.
+pub(super) const LEDGER_OWNER: &str = "ledger";
+/// The owner of the session history's collections.
+pub(super) const HISTORY_OWNER: &str = "history";
+/// The body version every v1 -> v2 step produces.
+pub(super) const SCHEMA_VERSION: u32 = 2;
+
+pub(super) const WORKFLOWS: &str = "ledger.workflow_runs";
+pub(super) const TELEMETRY: &str = "ledger.telemetry";
+pub(super) const AGENTS: &str = "ledger.agent_runs";
+pub(super) const TEAMS: &str = "ledger.teams";
+pub(super) const MEMBERS: &str = "ledger.members";
+pub(super) const EFFECTS: &str = "ledger.tool_effects";
+pub(super) const EVENTS: &str = "ledger.event_outbox";
+pub(super) const EVENT_HEADS: &str = "ledger.event_heads";
+pub(super) const TASKS: &str = "ledger.tasks";
+/// The per-run event stream family: `ledger.events/<run>`.
+pub(super) const EVENT_STREAM: &str = "ledger.events";
+pub(super) const HIST_SESSIONS: &str = "history.sessions";
+pub(super) const HIST_MESSAGES: &str = "history.messages";
+pub(super) const HIST_TOOL_CALLS: &str = "history.tool_calls";
+pub(super) const HIST_FTS: &str = "history.search";
+/// Attempts of the validated-batch loops (the single-record loops use
+/// [`Repo::update`]'s own budget).
 pub(super) const CAS_ATTEMPTS: usize = 64;
 
-/// Length-prefixed identifiers preserve arbitrary classic IDs without exceeding driver limits.
-pub(super) fn key(parts: &[&str]) -> String {
-    let mut digest = Sha256::new();
-    for part in parts {
-        digest.update((part.len() as u64).to_be_bytes());
-        digest.update(part.as_bytes());
-    }
-    hex::encode(digest.finalize())
+/// The id of a record: its parts joined and escaped by [`Key::of`].
+pub(super) fn key(parts: &[&str]) -> Result<String, StorageError> {
+    Ok(Key::of(parts)?.as_str().to_owned())
+}
+
+/// The name of `run_id`'s event stream, `ledger.events/<run>`.
+pub(super) fn event_stream(run_id: &str) -> Result<String, StorageError> {
+    Ok(format!("{EVENT_STREAM}/{}", key(&[run_id])?))
+}
+
+/// The id of a workflow run's driver lease in `tsd.leases`: owner `ledger`,
+/// key `Key::of(["workflow", run_id])`.
+pub(super) fn workflow_lease_key(run_id: &str) -> Result<String, StorageError> {
+    key(&["workflow", run_id])
+}
+
+/// The current time at the precision the ledger stores: whole milliseconds.
+pub(super) fn now() -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap_or_else(Utc::now)
 }
 
 /// Ignore trim-empty filter inputs, retaining nonblank values verbatim as SQL does.
@@ -45,128 +72,128 @@ pub(super) fn eq_nonblank(filter: Filter, field: &str, value: Option<&str>) -> F
     }
 }
 
-/// Declare only portable indexes; expiry never deletes durable run metadata.
-pub(super) fn specs() -> Vec<CollectionSpec> {
+/// The run ledger's `ledger.*` declarations. Expiry never deletes durable run
+/// metadata, so none declares a TTL.
+pub(super) fn ledger_specs() -> Vec<CollectionSpec> {
     vec![
         CollectionSpec::new(super::entry_tree::HEADS),
         CollectionSpec::new(super::entry_tree::ENTRIES)
-            .index(IndexSpec::new(
-                "session_ordinal",
-                ["record.sessionId", "record.entry.ordinal"],
-            ))
-            .index(IndexSpec::new(
-                "session_parent",
-                ["record.sessionId", "record.entry.parent_id"],
-            )),
+            .index(IndexSpec::new("session_ordinal", ["session_id", "ordinal"]))
+            .index(IndexSpec::new("session_parent", ["session_id", "parent_id"])),
         CollectionSpec::new(super::entry_tree::LABELS)
-            .index(IndexSpec::new("session", ["record.sessionId"])),
+            .index(IndexSpec::new("session", ["session_id"])),
         CollectionSpec::new(super::entry_tree::INDEXES)
-            .index(IndexSpec::new("session", ["record.sessionId"])),
-        CollectionSpec::new(HIST_SESSIONS)
-            .index(IndexSpec::new(
-                "status_started",
-                ["record.status", "startedUs"],
-            ))
-            .index(IndexSpec::new(
-                "parent",
-                ["record.parent_session_id", "startedUs"],
-            ))
-            .index(IndexSpec::new("agent", ["record.agent_definition_id"]))
-            .index(IndexSpec::new("thread", ["record.thread_id"]))
-            .index(IndexSpec::new("channel", ["record.source_channel"]))
-            .index(IndexSpec::new("started", ["startedUs"])),
-        CollectionSpec::new(HIST_MESSAGES).index(IndexSpec::new(
-            "session_id",
-            ["record.session_id", "record.id"],
-        )),
-        CollectionSpec::new(HIST_TOOL_CALLS)
-            .index(IndexSpec::new(
-                "session_id",
-                ["record.session_id", "record.id"],
-            ))
-            .index(IndexSpec::new("tool", ["record.tool_name"]))
-            .index(IndexSpec::new("created", ["createdUs"])),
-        CollectionSpec::new(HIST_FTS)
-            .index(IndexSpec::new("session", ["record.sessionId"]))
-            .searchable(["record.agentName", "record.content", "record.toolName"]),
-        CollectionSpec::new(HIST_COUNTERS),
-        CollectionSpec::new(IMPORTS),
+            .index(IndexSpec::new("session", ["session_id"])),
         CollectionSpec::new(EVENT_HEADS),
         CollectionSpec::new(EVENTS)
-            .index(IndexSpec::new("run_sequence", ["record.runId", "record.sequence"]).unique()),
+            .index(IndexSpec::new("run_sequence", ["run_id", "sequence"]).unique()),
         CollectionSpec::new(EFFECTS)
-            .index(IndexSpec::new("run", ["record.runId"]))
-            .index(IndexSpec::new("status", ["record.status"]))
-            .index(IndexSpec::new("started", ["startedSql"])),
+            .index(IndexSpec::new("run", ["run_id"]))
+            .index(IndexSpec::new("status", ["status"]))
+            .index(IndexSpec::new("started", ["started_ms"])),
         CollectionSpec::new(WORKFLOWS)
-            .index(IndexSpec::new("definition", ["record.definitionId"]))
-            .index(IndexSpec::new("status", ["record.status"]))
-            .index(IndexSpec::new("thread", ["record.parentThreadId"]))
-            .index(IndexSpec::new("updated", ["updatedSql"]))
-            .index(IndexSpec::new("lease", ["record.leaseExpiresAt"])),
-        CollectionSpec::new(TELEMETRY).index(IndexSpec::new("updated", ["updatedSql"])),
+            .index(IndexSpec::new("definition", ["definition_id"]))
+            .index(IndexSpec::new("status", ["status"]))
+            .index(IndexSpec::new("thread", ["parent_thread_id"]))
+            .index(IndexSpec::new("updated", ["updated_ms"])),
+        CollectionSpec::new(TELEMETRY).index(IndexSpec::new("updated", ["updated_ms"])),
         CollectionSpec::new(AGENTS)
-            .index(IndexSpec::new("status", ["record.status"]))
-            .index(IndexSpec::new("kind", ["record.kind"]))
-            .index(IndexSpec::new("parent", ["record.parentRunId"]))
-            .index(IndexSpec::new("thread", ["record.parentThreadId"]))
-            .index(IndexSpec::new("updated", ["updatedSql"]))
-            .index(IndexSpec::new("worker", ["record.workerThreadId"])),
+            .index(IndexSpec::new("status", ["status"]))
+            .index(IndexSpec::new("kind", ["kind"]))
+            .index(IndexSpec::new("parent", ["parent_run_id"]))
+            .index(IndexSpec::new("thread", ["parent_thread_id"]))
+            .index(IndexSpec::new("updated", ["updated_ms"]))
+            .index(IndexSpec::new("worker", ["worker_thread_id"])),
         CollectionSpec::new(TEAMS)
-            .index(IndexSpec::new("thread", ["record.parentThreadId"]))
-            .index(IndexSpec::new("status", ["record.status"]))
-            .index(IndexSpec::new("updated", ["updatedSql"])),
+            .index(IndexSpec::new("thread", ["parent_thread_id"]))
+            .index(IndexSpec::new("status", ["status"]))
+            .index(IndexSpec::new("updated", ["updated_ms"])),
         CollectionSpec::new(MEMBERS)
-            .index(IndexSpec::new("team", ["record.teamId"]))
-            .index(IndexSpec::new("team_name", ["record.teamId", "record.name"]).unique())
-            .index(IndexSpec::new("created", ["createdSql"])),
+            .index(IndexSpec::new("team", ["team_id"]))
+            .index(IndexSpec::new("team_name", ["team_id", "name"]).unique())
+            .index(IndexSpec::new("created", ["created_ms"])),
         CollectionSpec::new(TASKS)
-            .index(IndexSpec::new("team", ["record.teamId"]))
-            .index(IndexSpec::new("status", ["record.status"]))
-            .index(IndexSpec::new("claimed", ["record.claimedByMemberId"]))
+            .index(IndexSpec::new("team", ["team_id"]))
+            .index(IndexSpec::new("status", ["status"]))
+            .index(IndexSpec::new("claimed", ["claimed_by_member_id"]))
             .index(IndexSpec::new(
                 "order",
-                ["record.teamId", "record.orderIndex", "createdSql"],
+                ["team_id", "order_index", "created_ms"],
             )),
     ]
 }
 
-/// Store SQL-compatible timestamp sort keys alongside the domain's camelCase serde shape.
-pub(super) fn encode<T: Serialize + DeserializeOwned>(record: &T) -> Result<Value, StorageError> {
-    let record = serde_json::to_value(record)?;
-    // JSON may silently encode nonfinite floats as null; refuse a body that
-    // the same domain type cannot read back before any native write occurs.
-    let _: T = serde_json::from_value(record.clone())?;
-    let sql_time = |field: &str| -> Result<Value, StorageError> {
-        record
-            .get(field)
-            .and_then(Value::as_str)
-            .map(|time| {
-                DateTime::parse_from_rfc3339(time)
-                    .map(|time| Value::String(time.with_timezone(&Utc).to_rfc3339()))
-                    .map_err(|_| StorageError::serialization("invalid ledger timestamp"))
-            })
-            .transpose()
-            .map(|time| time.unwrap_or(Value::Null))
-    };
-    Ok(
-        json!({"schemaVersion":1,"updatedSql":sql_time("updatedAt")?,"createdSql":sql_time("createdAt")?,"startedSql":sql_time("startedAt")?,"record":record}),
-    )
+/// The session history's `history.*` declarations.
+pub(super) fn history_specs() -> Vec<CollectionSpec> {
+    vec![
+        CollectionSpec::new(HIST_SESSIONS)
+            .index(IndexSpec::new("status_started", ["status", "started_ms"]))
+            .index(IndexSpec::new(
+                "parent",
+                ["parent_session_id", "started_ms"],
+            ))
+            .index(IndexSpec::new("agent", ["agent_definition_id"]))
+            .index(IndexSpec::new("thread", ["thread_id"]))
+            .index(IndexSpec::new("channel", ["source_channel"]))
+            .index(IndexSpec::new("started", ["started_ms"])),
+        CollectionSpec::new(HIST_MESSAGES)
+            .index(IndexSpec::new("session_id", ["session_id", "id"])),
+        CollectionSpec::new(HIST_TOOL_CALLS)
+            .index(IndexSpec::new("session_id", ["session_id", "id"]))
+            .index(IndexSpec::new("tool", ["tool_name"]))
+            .index(IndexSpec::new("created", ["created_ms"])),
+        CollectionSpec::new(HIST_FTS)
+            .index(IndexSpec::new("session", ["session_id"]))
+            .searchable(["agent_name", "content", "tool_name"]),
+    ]
 }
 
-pub(super) fn decode<T: DeserializeOwned>(value: Value) -> Result<T, StorageError> {
-    if value.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
-        return Err(StorageError::serialization(
-            "unsupported run-ledger document schema",
-        ));
-    }
-    serde_json::from_value(
-        value
-            .get("record")
-            .cloned()
-            .ok_or_else(|| StorageError::serialization("missing ledger record"))?,
-    )
-    .map_err(Into::into)
+/// Every collection of both owners, as one declaration list.
+pub(super) fn specs() -> Vec<CollectionSpec> {
+    let mut all = ledger_specs();
+    all.extend(history_specs());
+    all
+}
+
+/// The shared `tsd.*` collections this ledger reads: leases, counters and the
+/// migration receipts.
+fn primitive_specs() -> Vec<CollectionSpec> {
+    let mut all = primitives::collection_specs();
+    all.push(CollectionSpec::new(MIGRATIONS_COLLECTION));
+    all
+}
+
+/// A record's body, refusing one the same domain type cannot read back (JSON
+/// silently encodes nonfinite floats as null) before any native write occurs.
+pub(super) fn dto_of<T: Stored>(record: &T) -> Result<T::Dto, StorageError> {
+    let dto = record.to_dto();
+    let value = serde_json::to_value(&dto)?;
+    let _: T::Dto = serde_json::from_value(value)?;
+    Ok(dto)
+}
+
+/// A record as the document body the ledger stores.
+pub(super) fn encode<T: Stored>(record: &T) -> Result<Value, StorageError> {
+    Ok(serde_json::to_value(dto_of(record)?)?)
+}
+
+pub(super) fn decode<T: Stored>(value: Value) -> Result<T, StorageError> {
+    T::from_dto(serde_json::from_value(value)?)
+}
+
+/// A conditional put of `record` at `id`.
+pub(super) fn put_op<T: Stored>(
+    collection: &str,
+    id: String,
+    record: &T,
+    precondition: tinystoragedrivers_core::Precondition,
+) -> Result<WriteOp, StorageError> {
+    Ok(WriteOp::Put {
+        collection: collection.into(),
+        id,
+        doc: encode(record)?,
+        precondition,
+    })
 }
 
 impl DriverRunLedger {
@@ -174,7 +201,7 @@ impl DriverRunLedger {
     pub(super) async fn declare(&self) -> Result<(), StorageError> {
         self.declared
             .get_or_try_init(|| async {
-                for spec in specs() {
+                for spec in specs().into_iter().chain(primitive_specs()) {
                     if self.validate_collections {
                         self.scoped
                             .documents()
@@ -190,7 +217,13 @@ impl DriverRunLedger {
             .map(|_| ())
     }
 
-    pub(super) async fn read<T: DeserializeOwned + Send>(
+    /// A typed handle on `collection` whose writes declare the v2 body version.
+    pub(super) fn repo<T: Stored>(&self, collection: &str) -> Result<Repo<T::Dto>, StorageError> {
+        Ok(Repo::new(self.scoped.documents(), collection)?
+            .with_options(WriteOptions::new().schema(SCHEMA_VERSION)))
+    }
+
+    pub(super) async fn read<T: Stored + Send>(
         &self,
         collection: &str,
         id: &str,
@@ -198,7 +231,7 @@ impl DriverRunLedger {
         self.declare().await?;
         self.scoped
             .documents()
-            .get(collection, &key(&[id]))
+            .get(collection, &key(&[id])?)
             .await?
             .map(|found| {
                 Ok(Versioned {
@@ -219,7 +252,7 @@ impl DriverRunLedger {
         merge: F,
     ) -> Result<T, StorageError>
     where
-        T: Serialize + DeserializeOwned + Clone + Send + Sync,
+        T: Stored + Clone + Send + Sync,
         F: Fn(Option<T>) -> T + Send + Sync,
     {
         self.change(collection, id, |previous| {
@@ -230,6 +263,10 @@ impl DriverRunLedger {
     }
 
     /// Evaluate eligibility against the read version, re-evaluating only native CAS conflicts.
+    ///
+    /// One [`Repo::update`] loop: `change` returns the record to store (or
+    /// `None` to leave it) and a result, and runs again on a lost swap, so it
+    /// must be free of side effects.
     pub(super) async fn change<T, R, F>(
         &self,
         collection: &str,
@@ -237,55 +274,24 @@ impl DriverRunLedger {
         change: F,
     ) -> Result<R, StorageError>
     where
-        T: Serialize + DeserializeOwned + Send + Sync,
+        T: Stored + Send + Sync,
         R: Send,
         F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
     {
-        self.change_with(collection, id, change, encode::<T>).await
+        self.declare().await?;
+        let repo = self.repo::<T>(collection)?;
+        let mut outcome = None;
+        repo.update(&key(&[id])?, |previous| {
+            let previous = previous.map(T::from_dto).transpose()?;
+            let (record, result) = change(previous)?;
+            outcome = Some(result);
+            record.as_ref().map(dto_of).transpose()
+        })
+        .await?;
+        outcome.ok_or_else(|| StorageError::backend("run-ledger update ran no attempt"))
     }
 
-    /// [`Self::change`] with a caller-supplied document encoder, for records that
-    /// carry their own sort keys.
-    pub(super) async fn change_with<T, R, F, E>(
-        &self,
-        collection: &str,
-        id: &str,
-        change: F,
-        encoder: E,
-    ) -> Result<R, StorageError>
-    where
-        T: Serialize + DeserializeOwned + Send + Sync,
-        R: Send,
-        F: Fn(Option<T>) -> Result<(Option<T>, R), StorageError> + Send + Sync,
-        E: Fn(&T) -> Result<Value, StorageError> + Send + Sync,
-    {
-        for _ in 0..CAS_ATTEMPTS {
-            let previous = self.read::<T>(collection, id).await?;
-            let condition = previous
-                .as_ref()
-                .map(|row| Precondition::Version(row.version))
-                .unwrap_or(Precondition::Absent);
-            let (record, result) = change(previous.map(|row| row.doc))?;
-            let Some(record) = record else {
-                return Ok(result);
-            };
-            match self
-                .scoped
-                .documents()
-                .put(collection, &key(&[id]), encoder(&record)?, condition)
-                .await
-            {
-                Ok(_) => return Ok(result),
-                Err(error) if error.kind() == ErrorKind::Conflict => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(StorageError::conflict(
-            "run-ledger update contention budget exhausted",
-        ))
-    }
-
-    pub(super) async fn records<T: DeserializeOwned + Send>(
+    pub(super) async fn records<T: Stored + Send>(
         &self,
         collection: &str,
         query: Query,
@@ -301,7 +307,7 @@ impl DriverRunLedger {
     }
 
     /// Count all matches, then follow driver cursors for the requested SQL-style offset/page.
-    pub(super) async fn page<T: DeserializeOwned + Send>(
+    pub(super) async fn page<T: Stored + Send>(
         &self,
         collection: &str,
         filter: Filter,
@@ -322,7 +328,7 @@ impl DriverRunLedger {
         }
         let mut skip = offset;
         let mut query = Query::filter(filter)
-            .sort(Sort::desc("updatedSql"))
+            .sort(Sort::desc("updated_ms"))
             .limit(256);
         loop {
             let page = self.scoped.documents().query(collection, &query).await?;
