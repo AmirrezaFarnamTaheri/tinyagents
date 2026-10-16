@@ -123,8 +123,10 @@ fn typed_breaker_cause_prevents_a_cap_classification() {
         operation: "write_file".into(),
         summary: "human-readable note may change".into(),
     };
-    let mut run = AgentRun::default();
-    run.model_calls = 1;
+    let run = AgentRun {
+        model_calls: 1,
+        ..AgentRun::default()
+    };
     assert!(!detect_hit_cap_with_cause(
         &run,
         &inputs,
