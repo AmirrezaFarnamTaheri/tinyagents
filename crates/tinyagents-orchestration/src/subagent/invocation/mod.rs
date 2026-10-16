@@ -652,9 +652,11 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// for every recursive invocation.
     pub fn new(subagent: Arc<SubAgent<State, Ctx>>, child_data: ChildDataPolicy<Ctx>) -> Self {
         let tool_name = subagent.name().to_owned();
+        let tool_description = subagent.description().to_owned();
         Self {
             subagent,
             tool_name,
+            tool_description,
             child_data,
             parameters: Self::default_parameters(),
             declaration: std::sync::OnceLock::new(),
@@ -700,7 +702,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     {
         let dispatch = DriverSubAgentTool::new(
             self.tool_name.clone(),
-            self.subagent.description().to_owned(),
+            self.tool_description.clone(),
             driver,
             request_factory,
             delivery_target,
@@ -741,7 +743,7 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     {
         let dispatch = DriverSubAgentTool::new(
             self.tool_name.clone(),
-            self.subagent.description().to_owned(),
+            self.tool_description.clone(),
             driver,
             request_factory,
             delivery_target,
@@ -844,12 +846,21 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
+        self.declaration = std::sync::OnceLock::new();
+        self
+    }
+
+    /// Overrides the model-facing description for a named driver alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.tool_description = description.into();
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
     /// Overrides the model-visible JSON Schema for the tool arguments.
     pub fn with_parameters(mut self, parameters: Value) -> Self {
         self.parameters = parameters;
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
@@ -975,7 +986,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         };
         let subagent_run_id = child.run_id().as_str().to_owned();
         let tool_call_id = call_id.map(|id| id.as_str().to_owned());
-        let (job_id, steering) = self.jobs.create_with_cancellation(
+        let run_queue = Arc::new(tinyagents_harness::run_queue::RunQueue::new());
+        let (job_id, steering) = self.jobs.create_with_cancellation_and_queue(
             &self.tool_name,
             parent.instance_id(),
             child.cancellation.clone(),
@@ -983,11 +995,14 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
                 subagent_run_id: Some(subagent_run_id.clone()),
                 parent_tool_call_id: tool_call_id.clone(),
             },
+            Some(run_queue.clone()),
         );
         tracing::debug!(
             "{LOG_PREFIX} spawn job_id={job_id} subagent_run_id={subagent_run_id} tool_call_id={tool_call_id:?}"
         );
-        let mut child = child.with_steering(steering.clone());
+        let mut child = child
+            .with_steering(steering.clone())
+            .with_run_queue(run_queue.clone());
         stamp_link_metadata(
             &mut child.config.metadata,
             &subagent_run_id,
@@ -1135,7 +1150,7 @@ where
         Arc::clone(self.declaration.get_or_init(|| {
             Arc::new(SubAgentToolDeclaration {
                 name: self.tool_name.clone(),
-                description: self.subagent.description().to_owned(),
+                description: self.tool_description.clone(),
                 parameters: self.parameters.clone(),
             })
         }))

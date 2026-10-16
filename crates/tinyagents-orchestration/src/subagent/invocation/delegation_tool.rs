@@ -223,6 +223,9 @@ where
 {
     config: Arc<ConfigFactory<State, Ctx>>,
     worker: Arc<Worker>,
+    name: String,
+    description: String,
+    parameters: Value,
 }
 
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
@@ -239,7 +242,28 @@ where
         Self {
             config: Arc::new(config),
             worker: Arc::new(worker),
+            name: "delegate_graph".into(),
+            description: "Plan, execute, and review delegated work.".into(),
+            parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
         }
+    }
+
+    /// Overrides the model-facing name while keeping graph execution generic.
+    pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Overrides the model-facing description for a host-owned alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    /// Supplies a host-owned schema, including dynamic target enums.
+    pub fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = parameters;
+        self
     }
 }
 
@@ -253,9 +277,9 @@ where
 {
     fn tool(&self) -> Arc<dyn Tool> {
         Arc::new(DelegationDeclaration {
-            name: "delegate_graph".into(),
-            description: "Plan, execute, and review delegated work.".into(),
-            parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
+            name: self.name.clone(),
+            description: self.description.clone(),
+            parameters: self.parameters.clone(),
             exposure: ToolExposure::Direct,
         })
     }

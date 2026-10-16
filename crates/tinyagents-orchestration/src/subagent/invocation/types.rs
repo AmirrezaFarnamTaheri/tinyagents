@@ -164,6 +164,8 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) subagent: Arc<SubAgent<State, Ctx>>,
     /// Tool name exposed to the model (defaults to the sub-agent name).
     pub(crate) tool_name: String,
+    /// Tool description exposed to the model; defaults to the child description.
+    pub(crate) tool_description: String,
     /// Explicit parent-to-child application-data policy.
     pub(crate) child_data: ChildDataPolicy<Ctx>,
     /// JSON Schema describing the tool's model-visible arguments.
@@ -335,6 +337,8 @@ pub(crate) struct JobControl {
     /// Whether cancellation was requested while the child was still running.
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
+    /// Optional loop-consumed message queue for typed message aliases.
+    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
 }
 
 /// Error returned by job lookup or live-message delivery.
@@ -344,6 +348,9 @@ pub enum SubAgentJobError {
     /// No job exists for the supplied id.
     #[error("unknown subagent job `{0}`")]
     NotFound(String),
+    /// A lane-aware message was requested for a job without a message queue.
+    #[error("subagent job `{0}` has no lane-aware message queue")]
+    LaneUnavailable(String),
     /// Messages and cancellation only apply while a job is queued or running.
     #[error("subagent job `{job_id}` is already {status:?}")]
     Terminal {

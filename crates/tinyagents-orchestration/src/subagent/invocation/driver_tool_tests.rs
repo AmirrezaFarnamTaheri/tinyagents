@@ -164,6 +164,50 @@ async fn background_request_with_delivery_target_returns_task_reference() {
     assert_eq!(value["task_id"], "worker-task");
 }
 
+#[test]
+fn subagent_driver_alias_preserves_host_name_description_and_schema() {
+    let schema = json!({
+        "type":"object",
+        "required":["agent_id","prompt"],
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
+    });
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new(
+            "worker",
+            "generic child description",
+            Arc::new(AgentHarness::new()),
+        )),
+        ChildDataPolicy::new(|_: &()| ()),
+    )
+    .with_tool_name("delegate_to")
+    .with_description("Delegate to an allowed specialist.")
+    .with_parameters(schema.clone())
+    .with_driver(
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "worker-task",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| None,
+    );
+    let declaration = ToolDispatch::<(), ()>::tool(&tool);
+    assert_eq!(declaration.name(), "delegate_to");
+    assert_eq!(
+        declaration.description(),
+        "Delegate to an allowed specialist."
+    );
+    assert_eq!(declaration.parameters_schema(), schema);
+}
+
 #[tokio::test]
 async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
     let mut harness = AgentHarness::new();

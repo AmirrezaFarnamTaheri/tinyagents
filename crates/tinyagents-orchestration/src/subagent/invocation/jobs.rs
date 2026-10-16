@@ -8,6 +8,7 @@ use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{RunId, TaskId, next_seq};
+use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
@@ -34,6 +35,8 @@ type SessionOverlay = (
 type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
+const DEFAULT_AWAIT_TIMEOUT_SECS: u64 = 120;
+const MAX_AWAIT_TIMEOUT_SECS: u64 = 3600;
 
 /// A fixed operation for a host-named alias of [`SubAgentJobsTool`].
 ///
@@ -67,6 +70,23 @@ impl SubAgentJobAction {
 struct JobArgumentNames {
     action: String,
     identifier: String,
+}
+
+#[derive(Clone)]
+struct AwaitTimeout {
+    field: String,
+    default_secs: u64,
+    max_secs: u64,
+}
+
+impl AwaitTimeout {
+    fn requested_secs(&self, object: &serde_json::Map<String, Value>) -> u64 {
+        object
+            .get(&self.field)
+            .and_then(Value::as_u64)
+            .unwrap_or(self.default_secs)
+            .clamp(1, self.max_secs)
+    }
 }
 
 impl Default for JobArgumentNames {
@@ -162,6 +182,19 @@ impl SubAgentJobRegistry {
         cancellation: CancellationToken,
         link: JobLink,
     ) -> (SubAgentJobId, SteeringHandle) {
+        self.create_with_cancellation_and_queue(agent, owner, cancellation, link, None)
+    }
+
+    /// Registers a job with an optional loop-consumed queue for content
+    /// messages routed to a specific lane.
+    pub(crate) fn create_with_cancellation_and_queue(
+        &self,
+        agent: &str,
+        owner: u64,
+        cancellation: CancellationToken,
+        link: JobLink,
+        run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    ) -> (SubAgentJobId, SteeringHandle) {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
         let task_id = TaskId::new(id.as_str());
         let steering =
@@ -200,6 +233,7 @@ impl SubAgentJobRegistry {
             JobControl {
                 status,
                 cancellation_requested: false,
+                run_queue,
             },
         );
         (id, steering)
@@ -494,6 +528,17 @@ impl SubAgentJobRegistry {
         message: impl Into<String>,
         request_id: Option<&str>,
     ) -> Result<bool, SubAgentJobError> {
+        self.send_message_with_lane_and_request_id(job_id, owner, message, request_id, None)
+    }
+
+    fn send_message_with_lane_and_request_id(
+        &self,
+        job_id: &str,
+        owner: u64,
+        message: impl Into<String>,
+        request_id: Option<&str>,
+        lane: Option<QueueLane>,
+    ) -> Result<bool, SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let controls = self.controls();
         let not_found = || SubAgentJobError::NotFound(job_id.to_owned());
@@ -531,9 +576,16 @@ impl SubAgentJobRegistry {
                 Err(_) => return Err(not_found()),
             }
         }
-        handle.send(SteeringCommand::InjectMessage(Message::user(
-            message.into(),
-        )));
+        let message = message.into();
+        if let Some(lane) = lane {
+            let run_queue = control
+                .run_queue
+                .as_ref()
+                .ok_or_else(|| SubAgentJobError::LaneUnavailable(job_id.to_owned()))?;
+            run_queue.push_now(lane, Message::user(message));
+        } else {
+            handle.send(SteeringCommand::InjectMessage(Message::user(message)));
+        }
         Ok(false)
     }
 
@@ -557,6 +609,8 @@ pub struct SubAgentJobsTool {
     parameters: Option<Value>,
     fixed_action: Option<SubAgentJobAction>,
     argument_names: JobArgumentNames,
+    await_timeout: Option<AwaitTimeout>,
+    require_identifier: bool,
 }
 
 impl SubAgentJobsTool {
@@ -571,6 +625,8 @@ impl SubAgentJobsTool {
             parameters: None,
             fixed_action: None,
             argument_names: JobArgumentNames::default(),
+            await_timeout: None,
+            require_identifier: false,
         }
     }
 
@@ -602,6 +658,36 @@ impl SubAgentJobsTool {
     /// Maps a host schema identifier field to the generic job/session id.
     pub fn with_identifier_field(mut self, identifier: impl Into<String>) -> Self {
         self.argument_names.identifier = identifier.into();
+        self
+    }
+
+    /// Bounds a named await alias using the supplied integer argument field.
+    /// Missing or invalid values use `default_secs`; valid values clamp to
+    /// `1..=max_secs`.
+    pub fn with_await_timeout_field(
+        mut self,
+        field: impl Into<String>,
+        default_secs: u64,
+        max_secs: u64,
+    ) -> Self {
+        let max_secs = max_secs.max(1);
+        self.await_timeout = Some(AwaitTimeout {
+            field: field.into(),
+            default_secs: default_secs.clamp(1, max_secs),
+            max_secs,
+        });
+        self
+    }
+
+    /// Applies the legacy host wait contract: 120 seconds by default, bounded
+    /// to one hour.
+    pub fn with_legacy_await_timeout_field(self, field: impl Into<String>) -> Self {
+        self.with_await_timeout_field(field, DEFAULT_AWAIT_TIMEOUT_SECS, MAX_AWAIT_TIMEOUT_SECS)
+    }
+
+    /// Requires a job/session identifier for this named alias.
+    pub fn with_required_identifier(mut self) -> Self {
+        self.require_identifier = true;
         self
     }
 
@@ -681,6 +767,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .filter(|value| !value.is_null())
                 .map(Value::as_str),
         };
+        if self.require_identifier
+            && object
+                .get(&self.argument_names.identifier)
+                .and_then(Value::as_str)
+                .is_none()
+        {
+            anyhow::bail!("a job or session identifier is required");
+        }
         match action {
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
@@ -753,7 +847,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     ));
                 };
                 if self.jobs.get_owned(id, parent.instance_id()).is_some() {
-                    let job = self.jobs.wait_owned(id, parent.instance_id()).await?;
+                    let job = if let Some(timeout) = &self.await_timeout {
+                        let duration =
+                            std::time::Duration::from_secs(timeout.requested_secs(object));
+                        match tokio::time::timeout(
+                            duration,
+                            self.jobs.wait_owned(id, parent.instance_id()),
+                        )
+                        .await
+                        {
+                            Ok(result) => result?,
+                            Err(_) => self
+                                .jobs
+                                .get_owned(id, parent.instance_id())
+                                .ok_or_else(|| SubAgentJobError::NotFound(id.to_owned()))?,
+                        }
+                    } else {
+                        self.jobs.wait_owned(id, parent.instance_id()).await?
+                    };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
                 if let Some((sessions, key)) = &self.sessions
@@ -862,6 +973,8 @@ pub struct SubAgentMessageTool {
     description: String,
     parameters: Option<Value>,
     argument_names: MessageArgumentNames,
+    lane: Option<QueueLane>,
+    lane_field: Option<String>,
 }
 
 impl SubAgentMessageTool {
@@ -874,6 +987,8 @@ impl SubAgentMessageTool {
             description: "Send a message to a queued or running asynchronous subagent job.".into(),
             parameters: None,
             argument_names: MessageArgumentNames::default(),
+            lane: None,
+            lane_field: None,
         }
     }
 
@@ -909,6 +1024,23 @@ impl SubAgentMessageTool {
             message: message.into(),
             request_id: request_id.into(),
         };
+        self
+    }
+
+    /// Binds a named message operation to one real job queue lane.
+    ///
+    /// The generic `subagent_message` tool leaves this unset and preserves its
+    /// historical unframed steer behavior.
+    pub fn with_lane(mut self, lane: QueueLane) -> Self {
+        self.lane = Some(lane);
+        self
+    }
+
+    /// Reads a lane field from an alias schema. `"collect"` routes to the
+    /// collect lane; missing or unknown values preserve the host's default
+    /// steer behavior.
+    pub fn with_lane_field(mut self, field: impl Into<String>) -> Self {
+        self.lane_field = Some(field.into());
         self
     }
 
@@ -1005,11 +1137,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 Some(id)
             }
         };
-        let duplicate = self.jobs.send_message_with_request_id(
+        let lane = self.lane.or_else(|| {
+            self.lane_field.as_ref().map(|field| {
+                if args.get(field).and_then(Value::as_str) == Some("collect") {
+                    QueueLane::Collect
+                } else {
+                    QueueLane::Steer
+                }
+            })
+        });
+        let duplicate = self.jobs.send_message_with_lane_and_request_id(
             &job_id,
             parent.instance_id(),
             message,
             request_id,
+            lane,
         )?;
         let mut payload = json!({
             "job_id": job_id,
