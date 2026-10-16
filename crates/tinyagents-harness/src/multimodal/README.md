@@ -48,11 +48,14 @@ format contributes a header naming it plus a content hash.
   `escape_attr`).
 - [`request`] — [`MediaRequestModel`], a `ChatModel` decorator that prepares a
   disposable request, checks counts before reads, preserves per-call scope,
-  applies a bounded historical-media budget, dispatches native media only when
-  both model and transport support it, and renders text/archive/image
-  fallbacks. The host supplies [`MediaSourceResolver`] for authorized source
-  access, [`MediaHistoryFallback`] for its safe history behavior, and may
-  supply [`MediaImageReadout`] plus selected-model [`ModelProfile`] facts.
+  applies a bounded historical-media-item budget, dispatches native media only
+  when both model and transport support it, and renders character-bounded
+  text/archive/image fallbacks. The host supplies [`MediaSourceResolver`] for
+  authorized source access, [`MediaHistoryFallback`] for its safe history
+  behavior, and may supply [`MediaImageReadout`] plus selected-model
+  [`ModelProfile`] facts. Its synchronous trusted-request callback may consume
+  request metadata or normalize host markers on the disposable copy before
+  counting; it must not resolve sources or perform other I/O.
 - [`error`] — [`MultimodalError`] and its [`Result`] alias; every variant
   carries the offending `input` verbatim so a multi-attachment turn's failure
   is attributable.
@@ -76,7 +79,7 @@ format contributes a header naming it plus a content hash.
 | `payload.rs`  | `FilePayload`, message composition, truncation, hashing.           |
 | `request.rs` | `MediaRequestModel` and host scope/resolver/fallback seams.         |
 | `error.rs`    | `MultimodalError`, `Result`.                                       |
-| `mod_tests.rs`, `resolve_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, archive, PNG and stash behavior. |
+| `mod_tests.rs`, `resolve_tests.rs`, `request_tests.rs`, `archive/ops_tests.rs`, `png_tests.rs`, `blob_stash_tests.rs` | Marker, MIME, size, path, intake, request preparation, archive, PNG and stash behavior. |
 
 ## Operational constraints
 
@@ -86,6 +89,9 @@ format contributes a header naming it plus a content hash.
 - **Preserve the hard disable.** `max_files == 0` means *none* and remains
   zero in `FileLimits::effective`. `MediaRequestModel` checks it before asking
   the host source resolver to read anything.
+- Final image readout and archive fallback context is capped using
+  `max_extracted_text_chars` and Unicode scalar values, then marked when
+  truncated.
 - What stays with the host, deliberately: the `TextExtractor` implementation
   (which parser, if any, and its timeout), the attachment stash (where bytes
   live between ingress and dispatch), image-readout model choice, source
