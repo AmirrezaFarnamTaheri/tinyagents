@@ -1,5 +1,6 @@
 //! Behavioral tests for the host-classified failure-scope driver.
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
 use tinyinference_llm::tool::ToolCall;
@@ -11,7 +12,10 @@ use crate::middleware::{Middleware, ToolInvocationIdentity};
 use crate::no_progress::ClassifiedStopCause;
 use crate::steering::{SteeringCommand, SteeringHandle};
 
-struct Policy;
+#[derive(Default)]
+struct Policy {
+    guard_refusals: AtomicUsize,
+}
 
 impl crate::no_progress::FailurePolicy for Policy {
     fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
@@ -32,6 +36,9 @@ impl FailureScopePolicy<()> for Policy {
         _scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment {
+        if call.name == "memory_search" || call.name == "repeat_guard" {
+            return FailureAssessment::Ignore;
+        }
         assert_eq!(call.name, "read_file");
         assert_eq!(call.arguments, json!({"path": "a.txt"}));
         if result.is_error {
@@ -44,6 +51,19 @@ impl FailureScopePolicy<()> for Policy {
             FailureAssessment::Progress
         }
     }
+
+    fn is_repeat_guard_refusal(
+        &self,
+        _ctx: &RunContext<()>,
+        call: &ToolCall,
+        result: &ToolResult,
+    ) -> bool {
+        call.name == "repeat_guard" && result.is_error
+    }
+
+    fn record_guard_refusal(&self, _ctx: &RunContext<()>) {
+        self.guard_refusals.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 fn context(instance_id: u64) -> RunContext<()> {
@@ -52,19 +72,38 @@ fn context(instance_id: u64) -> RunContext<()> {
     ctx
 }
 
-async fn fail_once(middleware: &FailureScopeMiddleware<()>, run_id: u64, id: &str) {
+async fn observe_once(
+    middleware: &FailureScopeMiddleware<()>,
+    run_id: u64,
+    id: &str,
+    tool: &str,
+    arguments: serde_json::Value,
+    result: ToolResult,
+) {
     let mut ctx = context(run_id);
-    let mut call = ToolCall::new(id, "read_file", json!({"path": "a.txt"}));
+    let mut call = ToolCall::new(id, tool, arguments);
     middleware
         .before_tool(&mut ctx, &(), &mut call)
         .await
         .unwrap();
-    let invocation = ToolInvocationIdentity::new(id, "read_file");
-    let mut result = ToolResult::error("permission denied");
+    let invocation = ToolInvocationIdentity::new(id, tool);
+    let mut result = result;
     middleware
         .after_tool(&mut ctx, &(), &invocation, &mut result)
         .await
         .unwrap();
+}
+
+async fn fail_once(middleware: &FailureScopeMiddleware<()>, run_id: u64, id: &str) {
+    observe_once(
+        middleware,
+        run_id,
+        id,
+        "read_file",
+        json!({"path": "a.txt"}),
+        ToolResult::error("permission denied"),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -72,7 +111,7 @@ async fn repeated_failures_nudge_before_halt() {
     let handle = SteeringHandle::allow_all();
     let halt_summary = Arc::new(std::sync::Mutex::new(None));
     let middleware =
-        FailureScopeMiddleware::new(handle.clone(), halt_summary.clone(), Arc::new(Policy));
+        FailureScopeMiddleware::new(handle.clone(), halt_summary.clone(), Arc::new(Policy::default()));
 
     fail_once(&middleware, 41, "one").await;
     assert!(halt_summary.lock().unwrap().is_none());
@@ -105,14 +144,14 @@ async fn separate_run_instances_keep_halts_and_pause_handles_isolated() {
     let first = FailureScopeMiddleware::new(
         first_handle.clone(),
         first_summary.clone(),
-        Arc::new(Policy),
+        Arc::new(Policy::default()),
     );
     let second_handle = SteeringHandle::allow_all();
     let second_summary = Arc::new(std::sync::Mutex::new(None));
     let second = FailureScopeMiddleware::new(
         second_handle.clone(),
         second_summary.clone(),
-        Arc::new(Policy),
+        Arc::new(Policy::default()),
     );
 
     for n in 0..3 {
