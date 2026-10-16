@@ -15,6 +15,18 @@ fn observation(offset: u64, ts_ms: u64, event: AgentEvent) -> AgentObservation {
     }
 }
 
+fn observation_in_run(run: &str, parent: Option<&str>, root: &str, offset: u64, ts_ms: u64, event: AgentEvent) -> AgentObservation {
+    AgentObservation {
+        event_id: EventId::new(format!("{run}-{offset}")),
+        run_id: RunId::new(run),
+        parent_run_id: parent.map(RunId::new),
+        root_run_id: RunId::new(root),
+        offset,
+        ts_ms,
+        event,
+    }
+}
+
 #[test]
 fn observations_fold_generation_usage_ttft_and_run_lifecycle() {
     let context = TraceContext::new("trace-1", Some("user-1".into()))
@@ -631,4 +643,44 @@ fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_spa
     assert_eq!(child.attributes["gen_ai.usage.output_tokens"], 2);
     assert_eq!(child.attributes["gen_ai.usage.cost"], 0.25);
     assert_eq!(child.attributes["gen_ai.cost.source"], "estimated");
+}
+
+#[test]
+fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-parallel", None));
+    collector.record_event(&AgentEvent::RunStarted { run_id: RunId::new("parent"), thread_id: None }, 0);
+    collector.record_event(&AgentEvent::SubAgentStarted { name: "child-a".into(), depth: 1 }, 1);
+    collector.record_event(&AgentEvent::SubAgentRunStarted { name: "child-a".into(), depth: 1, run_id: RunId::new("a") }, 1);
+    collector.record_event(&AgentEvent::SubAgentStarted { name: "child-b".into(), depth: 1 }, 2);
+    collector.record_event(&AgentEvent::SubAgentRunStarted { name: "child-b".into(), depth: 1, run_id: RunId::new("b") }, 2);
+
+    collector.record(&observation_in_run("parent", None, "parent", 0, 3, AgentEvent::ModelStarted { call_id: CallId::new("same"), model: "parent-model".into() }));
+    collector.record(&observation_in_run("a", Some("parent"), "parent", 0, 4, AgentEvent::ModelStarted { call_id: CallId::new("same"), model: "child-a-model".into() }));
+    collector.record(&observation_in_run("b", Some("parent"), "parent", 0, 5, AgentEvent::ModelStarted { call_id: CallId::new("same"), model: "child-b-model".into() }));
+    for (run, model, cost, at) in [("a", "child-a-model", 0.25, 6), ("b", "child-b-model", 0.75, 7)] {
+        collector.record(&observation_in_run(run, Some("parent"), "parent", 1, at, AgentEvent::ModelCompleted {
+            call_id: CallId::new("same"), started_at_ms: Some(at - 2),
+            usage: Some(Usage { input_tokens: 10, ..Default::default() }), input: None, output: None,
+        }));
+        collector.record(&observation_in_run(run, Some("parent"), "parent", 2, at + 1, AgentEvent::CostRecorded {
+            cost: crate::cost::CostTotals { total_cost: cost, ..Default::default() },
+        }));
+        collector.record(&observation_in_run(run, Some("parent"), "parent", 3, at + 2, AgentEvent::UsageRecorded {
+            usage: Usage { input_tokens: 10, ..Default::default() },
+        }));
+        assert!(collector.spans().iter().any(|span| span.name == format!("llm.{model}")));
+    }
+
+    let parent = collector.spans().iter().find(|span| span.kind == SpanKind::Turn).unwrap();
+    assert!(parent.attributes.get("gen_ai.usage.input_tokens").is_none());
+    let child_spans: Vec<_> = collector.spans().iter().filter(|span| span.kind == SpanKind::Subagent).collect();
+    assert_eq!(child_spans.len(), 2);
+    for (name, expected_cost) in [("subagent.child-a", 0.25), ("subagent.child-b", 0.75)] {
+        let child = child_spans.iter().find(|span| span.name == name).unwrap();
+        assert_eq!(child.attributes["gen_ai.usage.input_tokens"], 10);
+        assert_eq!(child.attributes["gen_ai.usage.cost"], expected_cost);
+        let generation = collector.spans().iter().find(|span| span.kind == SpanKind::Generation && span.name.contains(name.trim_start_matches("subagent."))).unwrap();
+        assert_eq!(generation.parent_span_id.as_deref(), Some(child.span_id.as_str()));
+        assert_eq!(generation.attributes["gen_ai.usage.cost"], expected_cost);
+    }
 }
