@@ -405,6 +405,86 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
     assert!(result_text.contains("marker"));
 }
 
+#[tokio::test]
+async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch() {
+    let tools = bound(vec![FakeTool::plain("a_one")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let executed_for_selector = executed.clone();
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(move |selection| {
+        if selection.tool_name() != "a_one" {
+            return None;
+        }
+        let dispatch = RecordingParentDispatch {
+            tool: Arc::new(FakeTool::plain("a_one")),
+            executed: executed_for_selector.clone(),
+        };
+        Some(Arc::new(dispatch))
+    });
+    let mut harness: AgentHarness<(), String> = AgentHarness::new();
+    harness
+        .register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                testkit::tool_call_response(ToolCall::new(
+                    "denied-call",
+                    USE_SKILL,
+                    json!({"skill":"alpha", "tool":"a_one", "args":{}}),
+                )),
+                testkit::text_response("finished"),
+            ])),
+        )
+        .register_tool_dispatch(Arc::new(UseSkillDispatch::new(outer, selector)));
+    let mut policy = crate::runtime::RunPolicy::default();
+    policy.tool_rules = crate::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
+        tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["a_one"]),
+    ));
+    harness.with_policy(policy);
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("call the denied target")])
+        .await
+        .expect("tool rule denial is reported in the transcript");
+
+    assert_eq!(executed.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let tool_result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    let result_text = serde_json::to_string(&tool_result.content).unwrap();
+    assert!(result_text.contains("denied"));
+}
+
+struct RecordingParentDispatch {
+    tool: Arc<dyn Tool>,
+    executed: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl crate::tool::ToolDispatch<(), String> for RecordingParentDispatch {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.tool.clone()
+    }
+
+    async fn execute(
+        &self,
+        _state: &(),
+        _call_id: crate::CallId,
+        _arguments: Value,
+        _options: tinytools::ToolCallOptions,
+        _parent: &crate::context::RunContext<String>,
+    ) -> anyhow::Result<ToolResult> {
+        self.executed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(ToolResult::success("executed"))
+    }
+}
+
 #[test]
 fn packed_binding_preserves_outer_policy_transform_approval() {
     let handle = PackRegistryHandle::default();
