@@ -292,7 +292,6 @@ impl StorageBackend for Unbindable {
     fn for_scope(&self, _scope: &Scope) -> Result<ScopedStorage, StorageError> {
         Err(StorageError::unavailable("database is down"))
     }
-
 }
 
 #[tokio::test]
