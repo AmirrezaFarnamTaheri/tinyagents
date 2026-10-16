@@ -133,7 +133,7 @@ async fn namespaced_items_keep_their_segments_creation_time_and_expiry() {
 
     let row = storage
         .documents()
-        .get("tsd.kv", "harness/namespaced%3Amemories.alice/likes")
+        .get("tsd.kv", "harness/namespaced:memories.alice/likes")
         .await
         .unwrap()
         .expect("namespaced entries sit under the reserved namespaced: ns");
