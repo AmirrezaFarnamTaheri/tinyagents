@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::{TaskId, next_seq};
+use tinyagents_harness::ids::{RunId, TaskId, next_seq};
 use tinyagents_harness::steering::{
     SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
 };
@@ -19,7 +19,7 @@ use crate::subagent::{
     AppliedResult, DurableSubagentSessionSummary, IncompleteKind, SubagentSessionStore,
 };
 
-use tinyagents_tasks::DetachedTaskRegistryError;
+use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tokio::sync::watch;
 
 use super::types::{JobControl, JobMeta};
@@ -464,6 +464,7 @@ pub struct SubAgentJobsTool {
         Arc<dyn SubagentSessionStore>,
         Arc<dyn Fn(u64) -> String + Send + Sync>,
     )>,
+    tasks: Option<(Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>)>,
 }
 
 impl SubAgentJobsTool {
@@ -472,6 +473,7 @@ impl SubAgentJobsTool {
         Self {
             jobs,
             sessions: None,
+            tasks: None,
         }
     }
 
@@ -483,6 +485,16 @@ impl SubAgentJobsTool {
         parent_key: impl Fn(u64) -> String + Send + Sync + 'static,
     ) -> Self {
         self.sessions = Some((sessions, Arc::new(parent_key)));
+        self
+    }
+
+    /// Overlays host-managed task records owned by the requesting parent run.
+    pub fn with_task_store(
+        mut self,
+        tasks: Arc<dyn TaskStore>,
+        parent_run_id: impl Fn(u64) -> RunId + Send + Sync + 'static,
+    ) -> Self {
+        self.tasks = Some((tasks, Arc::new(parent_run_id)));
         self
     }
 }
@@ -618,6 +630,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                             value
                         }),
                 );
+            }
+            if let Some((tasks, parent_run_id)) = &self.tasks {
+                let filter = OrchestrationTaskFilter {
+                    parent_run_id: Some(parent_run_id(parent.instance_id())),
+                    ..OrchestrationTaskFilter::default()
+                };
+                rows.extend(tasks.list(filter).into_iter().map(|task| {
+                    let mut value = serde_json::to_value(task).unwrap_or(Value::Null);
+                    value["kind"] = Value::String("task".into());
+                    value
+                }));
             }
             Ok(ToolResult::json(Value::Array(rows)))
         }
