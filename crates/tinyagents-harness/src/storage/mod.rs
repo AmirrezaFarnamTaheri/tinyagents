@@ -16,3 +16,6 @@ pub(crate) const RUN_STATUS: &str = "harness.run_status";
 
 /// Cached tool-catalogue embedding vectors.
 pub(crate) const EMBEDDING_CACHE: &str = "harness.embedding_cache";
+
+/// The attachment stash's index: one row per stashed attachment.
+pub(crate) const ATTACHMENT_STASH: &str = "harness.attachment_stash";

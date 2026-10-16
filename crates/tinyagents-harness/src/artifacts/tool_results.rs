@@ -36,7 +36,7 @@ use tinystoragedrivers_core::{BlobStore, Capability, MemoryStorage, Scope, Stora
 use super::policy::{ArtifactRedactor, Redacted};
 
 /// The blob namespace every tool-result artifact lives under.
-const ARTIFACT_ROOT: &str = "tool-results";
+const ARTIFACT_ROOT: &str = "harness/tool_results";
 /// Pointers a host wrote before the store moved onto blobs
 /// (`artifacts/tool-results/...`) still page: a transcript outlives the store.
 const LEGACY_ARTIFACT_ROOT: &str = "artifacts/tool-results";
