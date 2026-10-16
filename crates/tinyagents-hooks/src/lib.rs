@@ -6,6 +6,9 @@
 pub mod command;
 pub mod lifecycle;
 pub mod scope;
+pub mod session;
 pub mod stop;
 pub mod tool;
 pub mod turn;
+
+pub use session::{FnSessionHooks, SessionHookFuture, SessionHookTypes};
