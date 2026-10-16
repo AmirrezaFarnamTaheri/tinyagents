@@ -386,9 +386,6 @@ impl crate::command::HookEngine {
                 }),
             );
             let generic_output = self.dispatch(generic, input).await.output;
-            if let Some(rewritten) = &generic_output.updated_input {
-                context.arguments = rewritten.clone();
-            }
             output.merge(generic_output);
         }
         if output.is_deny() {
