@@ -86,7 +86,7 @@ impl DocumentStore for NoPostCommitReads {
             self.inner
                 .put(
                     storage::TELEMETRY,
-                    &storage::key(&["run"]),
+                    &storage::key(&["run"]).unwrap(),
                     value.clone(),
                     Precondition::None,
                 )
@@ -183,7 +183,7 @@ async fn concurrent_telemetry_change_retries_before_agent_commit_and_returns_val
         .unwrap();
         let newer = native
             .documents()
-            .get(storage::TELEMETRY, &storage::key(&["run"]))
+            .get(storage::TELEMETRY, &storage::key(&["run"]).unwrap())
             .await
             .unwrap()
             .unwrap()

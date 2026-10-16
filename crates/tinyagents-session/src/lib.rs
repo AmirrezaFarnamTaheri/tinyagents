@@ -70,7 +70,7 @@
 //! use tinyagents_session::SessionStatus;
 //! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+//! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
 //! let ledger = DriverRunLedger::new(storage);
 //!
@@ -143,6 +143,9 @@ pub use port::{
 pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;
 pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};
+pub use run_ledger::drivers::{
+    LegacyLedgerImport, history_storage_schema, import_legacy_ledger, ledger_storage_schema,
+};
 pub use run_ledger::{LedgerError, LedgerResult, RunLedgerStore, SessionHistoryStore};
 pub use threads::{
     ConversationPurgeStats, ConversationThread, CreateConversationThread, CrossThreadHit,

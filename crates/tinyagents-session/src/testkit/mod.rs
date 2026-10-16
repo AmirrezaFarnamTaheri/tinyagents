@@ -18,7 +18,7 @@
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
 //! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! # tokio::runtime::Builder::new_multi_thread().build().unwrap().block_on(async {
+//! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
 //! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
 //! # });
