@@ -133,6 +133,19 @@ impl ToolHook<Host> for DenySecretHook {
     }
 }
 
+struct ObserveNestedCalls(Arc<Mutex<Vec<String>>>);
+
+#[async_trait]
+impl ToolHook<Host> for ObserveNestedCalls {
+    fn name(&self) -> &str {
+        "nested_observer"
+    }
+    async fn before_tool_decision(&self, _: &Host, context: &ToolHookContext) -> ToolHookDecision {
+        self.0.lock().unwrap().push(context.tool_name.clone());
+        HookOutput::default()
+    }
+}
+
 #[tokio::test]
 async fn nested_tool_calls_cannot_bypass_hook_denials() {
     use tinyagents_harness::{
@@ -147,6 +160,7 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
     };
     let ran_secret = Arc::new(Mutex::new(false));
     let nested_result = Arc::new(Mutex::new(None));
+    let observed = Arc::new(Mutex::new(Vec::new()));
     let mut response = ModelResponse::assistant("");
     response
         .message
@@ -173,9 +187,10 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
         result: Arc::clone(&nested_result),
     }));
     harness.register_tool(Arc::new(SecretTool(Arc::clone(&ran_secret))));
-    harness.push_middleware(Arc::new(ToolHooksMiddleware::new(vec![Arc::new(
-        DenySecretHook,
-    )])));
+    harness.push_middleware(Arc::new(ToolHooksMiddleware::new(vec![
+        Arc::new(ObserveNestedCalls(Arc::clone(&observed))),
+        Arc::new(DenySecretHook),
+    ])));
     harness
         .invoke_in_context(
             &(),
@@ -193,6 +208,10 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
     assert!(
         nested_result.contains("secret blocked"),
         "nested outcome: {nested_result}"
+    );
+    assert!(
+        observed.lock().unwrap().iter().any(|name| name == "secret"),
+        "allowing observers must see nested calls before the denial hook"
     );
 }
 
