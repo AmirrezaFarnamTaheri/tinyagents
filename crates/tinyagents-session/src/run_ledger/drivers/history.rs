@@ -244,7 +244,7 @@ impl DriverRunLedger {
             .documents()
             .query_all(
                 HIST_TOOL_CALLS,
-                &Query::filter(Filter::eq("record.tool_name", tool_name)),
+                &Query::filter(Filter::eq("tool_name", tool_name)),
             )
             .await?;
         rows.into_iter()
@@ -286,13 +286,13 @@ impl SessionHistoryStore for DriverRunLedger {
             ended_at: None,
         };
         let writes = vec![
-            WriteOp::Put {
-                collection: HIST_SESSIONS.into(),
-                id: key(&[&start.id]),
-                doc: session_doc(&record)?,
-                precondition: Precondition::Absent,
-            },
-            put_fts(session_fts_id(&start.id), &session_fts_row(&record))?,
+            put_op(
+                HIST_SESSIONS,
+                key(&[&start.id])?,
+                &record,
+                Precondition::Absent,
+            )?,
+            put_fts(session_fts_id(&start.id)?, &session_fts_row(&record))?,
         ];
         self.scoped
             .documents()
@@ -306,26 +306,21 @@ impl SessionHistoryStore for DriverRunLedger {
             "{LOG_PREFIX} record_session_end id={id} status={}",
             end.status.as_str()
         );
-        self.change_with(
-            HIST_SESSIONS,
-            id,
-            |previous: Option<SessionRecord>| {
-                let Some(mut record) = previous else {
-                    return Err(StorageError::invalid_input(format!(
-                        "session '{id}' not found"
-                    )));
-                };
-                record.status = end.status;
-                record.turn_count = end.turn_count;
-                record.input_tokens = end.input_tokens;
-                record.output_tokens = end.output_tokens;
-                record.cached_input_tokens = end.cached_input_tokens;
-                record.cost_usd = end.cost_usd;
-                record.ended_at = Some(Utc::now());
-                Ok((Some(record.clone()), record))
-            },
-            session_doc,
-        )
+        self.change(HIST_SESSIONS, id, |previous: Option<SessionRecord>| {
+            let Some(mut record) = previous else {
+                return Err(StorageError::invalid_input(format!(
+                    "session '{id}' not found"
+                )));
+            };
+            record.status = end.status;
+            record.turn_count = end.turn_count;
+            record.input_tokens = end.input_tokens;
+            record.output_tokens = end.output_tokens;
+            record.cached_input_tokens = end.cached_input_tokens;
+            record.cost_usd = end.cost_usd;
+            record.ended_at = Some(now());
+            Ok((Some(record.clone()), record))
+        })
         .await
         .map_err(Into::into)
     }
@@ -353,17 +348,17 @@ impl SessionHistoryStore for DriverRunLedger {
                 input_tokens: message.input_tokens,
                 output_tokens: message.output_tokens,
                 cost_usd: message.cost_usd,
-                created_at: Utc::now(),
+                created_at: now(),
             };
             let writes = vec![
-                WriteOp::Put {
-                    collection: HIST_MESSAGES.into(),
-                    id: message_id(id),
-                    doc: message_doc(&record)?,
-                    precondition: Precondition::Absent,
-                },
+                put_op(
+                    HIST_MESSAGES,
+                    message_id(id)?,
+                    &record,
+                    Precondition::Absent,
+                )?,
                 put_fts(
-                    message_fts_id(id),
+                    message_fts_id(id)?,
                     &message_fts_row(&message.session_id, &message.content),
                 )?,
             ];
@@ -391,17 +386,17 @@ impl SessionHistoryStore for DriverRunLedger {
                 tool_output: call.tool_output.as_deref().map(bounded_output),
                 status: call.status.clone(),
                 duration_ms: call.duration_ms,
-                created_at: Utc::now(),
+                created_at: now(),
             };
             let writes = vec![
-                WriteOp::Put {
-                    collection: HIST_TOOL_CALLS.into(),
-                    id: tool_call_id(id),
-                    doc: tool_call_doc(&record)?,
-                    precondition: Precondition::Absent,
-                },
+                put_op(
+                    HIST_TOOL_CALLS,
+                    tool_call_id(id)?,
+                    &record,
+                    Precondition::Absent,
+                )?,
                 put_fts(
-                    tool_fts_id(id),
+                    tool_fts_id(id)?,
                     &tool_fts_row(&call.session_id, &call.tool_name),
                 )?,
             ];
@@ -423,16 +418,16 @@ impl SessionHistoryStore for DriverRunLedger {
     ) -> Result<SessionSearchResult> {
         let mut filter = Filter::default();
         if let Some(status) = status {
-            filter = filter.and(Filter::eq("record.status", status));
+            filter = filter.and(Filter::eq("status", status));
         }
         if let Some(parent) = parent_id {
-            filter = filter.and(Filter::eq("record.parent_session_id", parent));
+            filter = filter.and(Filter::eq("parent_session_id", parent));
         }
         let (sessions, total) = self
             .page_sorted(
                 HIST_SESSIONS,
                 filter,
-                Sort::desc("startedUs"),
+                Sort::desc("started_ms"),
                 u64::from(limit.unwrap_or(50).min(500)),
                 u64::from(offset.unwrap_or(0)),
             )
@@ -449,11 +444,11 @@ impl SessionHistoryStore for DriverRunLedger {
         );
         let mut filter = Filter::default();
         for (field, value) in [
-            ("record.agent_definition_id", &params.agent_id),
-            ("record.source_channel", &params.source_channel),
-            ("record.parent_session_id", &params.parent_session_id),
-            ("record.status", &params.status),
-            ("record.thread_id", &params.thread_id),
+            ("agent_definition_id", &params.agent_id),
+            ("source_channel", &params.source_channel),
+            ("parent_session_id", &params.parent_session_id),
+            ("status", &params.status),
+            ("thread_id", &params.thread_id),
         ] {
             if let Some(value) = value {
                 filter = filter.and(Filter::eq(field, value.as_str()));
@@ -477,7 +472,7 @@ impl SessionHistoryStore for DriverRunLedger {
                 .page_sorted(
                     HIST_SESSIONS,
                     filter,
-                    Sort::desc("startedUs"),
+                    Sort::desc("started_ms"),
                     limit,
                     offset,
                 )
@@ -487,7 +482,7 @@ impl SessionHistoryStore for DriverRunLedger {
         self.declare().await?;
         let mut matched: Vec<SessionRecord> = Vec::new();
         let mut query = Query::filter(filter)
-            .sort(Sort::desc("startedUs"))
+            .sort(Sort::desc("started_ms"))
             .limit(256);
         loop {
             let page = self.scoped.documents().query(HIST_SESSIONS, &query).await?;
@@ -519,8 +514,8 @@ impl SessionHistoryStore for DriverRunLedger {
         let (rows, _) = self
             .page_sorted(
                 HIST_MESSAGES,
-                Filter::eq("record.session_id", session_id),
-                Sort::asc("record.id"),
+                Filter::eq("session_id", session_id),
+                Sort::asc("id"),
                 u64::from(limit.unwrap_or(200).min(1000)),
                 0,
             )
@@ -536,8 +531,8 @@ impl SessionHistoryStore for DriverRunLedger {
         let (rows, _) = self
             .page_sorted(
                 HIST_TOOL_CALLS,
-                Filter::eq("record.session_id", session_id),
-                Sort::asc("record.id"),
+                Filter::eq("session_id", session_id),
+                Sort::asc("id"),
                 u64::from(limit.unwrap_or(200).min(1000)),
                 0,
             )
@@ -549,8 +544,8 @@ impl SessionHistoryStore for DriverRunLedger {
         let (rows, _) = self
             .page_sorted(
                 HIST_SESSIONS,
-                Filter::eq("record.parent_session_id", session_id),
-                Sort::asc("startedUs"),
+                Filter::eq("parent_session_id", session_id),
+                Sort::asc("started_ms"),
                 u64::MAX,
                 0,
             )
@@ -565,10 +560,10 @@ impl SessionHistoryStore for DriverRunLedger {
             .documents()
             .query_all(
                 HIST_SESSIONS,
-                &Query::filter(Filter::eq("record.status", "running")),
+                &Query::filter(Filter::eq("status", "running")),
             )
             .await?;
-        let now = Utc::now();
+        let now = now();
         let mut changed = 0;
         for row in running {
             let mut session: SessionRecord = decode(row.doc)?;
@@ -580,7 +575,7 @@ impl SessionHistoryStore for DriverRunLedger {
                 .put(
                     HIST_SESSIONS,
                     &row.id,
-                    session_doc(&session)?,
+                    super::storage::encode(&session)?,
                     Precondition::Version(row.version),
                 )
                 .await;
