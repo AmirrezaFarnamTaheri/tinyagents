@@ -10,6 +10,8 @@
 //! long-standing OpenHuman host format so models already prompted for it behave
 //! identically after the crate cutover.
 
+use std::fmt::Write as _;
+
 use serde_json::{Map, Value};
 
 use tinyinference_llm::message::{ContentBlock, Message};
