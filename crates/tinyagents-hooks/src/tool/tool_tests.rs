@@ -57,6 +57,143 @@ fn call(id: &str) -> tinyinference_llm::tool::ToolCall {
     tinyinference_llm::tool::ToolCall::new(id, "read", serde_json::json!({"path":"secret"}))
 }
 
+struct NestedCaller {
+    result: Arc<Mutex<Option<String>>>,
+}
+
+#[async_trait]
+impl tinytools::Tool for NestedCaller {
+    fn name(&self) -> &str {
+        "caller"
+    }
+    fn description(&self) -> &str {
+        "calls a nested tool"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+        unreachable!()
+    }
+    async fn execute_with_context(
+        &self,
+        _: serde_json::Value,
+        _: tinytools::ToolCallOptions,
+        context: Option<&dyn tinytools::ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        let extension = context
+            .and_then(tinytools::ToolRunContext::host_extension)
+            .and_then(|value| {
+                value.downcast_ref::<tinyagents_harness::tool::ToolExecutionContext>()
+            })
+            .expect("harness nested-call context");
+        let result = extension.call_tool("secret", serde_json::json!({})).await;
+        *self.result.lock().unwrap() = Some(
+            result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "allowed".into()),
+        );
+        Ok(ToolResult::success("caller completed"))
+    }
+}
+
+struct SecretTool(Arc<Mutex<bool>>);
+
+#[async_trait]
+impl tinytools::Tool for SecretTool {
+    fn name(&self) -> &str {
+        "secret"
+    }
+    fn description(&self) -> &str {
+        "must be denied when called nested"
+    }
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type":"object"})
+    }
+    async fn execute(&self, _: serde_json::Value) -> anyhow::Result<ToolResult> {
+        *self.0.lock().unwrap() = true;
+        Ok(ToolResult::success("secret ran"))
+    }
+}
+
+struct DenySecretHook;
+
+#[async_trait]
+impl ToolHook<Host> for DenySecretHook {
+    fn name(&self) -> &str {
+        "deny_secret"
+    }
+    async fn before_tool_decision(&self, _: &Host, context: &ToolHookContext) -> ToolHookDecision {
+        if context.tool_name == "secret" {
+            HookOutput::deny("secret blocked")
+        } else {
+            HookOutput::default()
+        }
+    }
+}
+
+#[tokio::test]
+async fn nested_tool_calls_cannot_bypass_hook_denials() {
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        runtime::AgentHarness,
+    };
+    use tinyinference_llm::{model::ModelResponse, providers::MockModel};
+
+    let host = Host {
+        session: "nested-hooks",
+    };
+    let ran_secret = Arc::new(Mutex::new(false));
+    let nested_result = Arc::new(Mutex::new(None));
+    let mut response = ModelResponse::assistant("");
+    response
+        .message
+        .tool_calls
+        .push(tinyinference_llm::tool::ToolCall::new(
+            "parent-call",
+            "caller",
+            serde_json::json!({}),
+        ));
+    let mut harness: AgentHarness<Host> = AgentHarness::new();
+    harness.register_model(
+        "mock",
+        Arc::new(MockModel::with_responses(vec![
+            response,
+            ModelResponse::assistant("done"),
+        ])),
+    );
+    harness.set_default_model("mock");
+    harness.register_tool(Arc::new(NestedCaller {
+        result: Arc::clone(&nested_result),
+    }));
+    harness.register_tool(Arc::new(SecretTool(Arc::clone(&ran_secret))));
+    harness.push_middleware(Arc::new(ToolHooksMiddleware::new(vec![Arc::new(
+        DenySecretHook,
+    )])));
+    harness
+        .invoke_in_context(
+            &host,
+            RunContext::new(RunConfig::new("nested-hook-test"), host),
+            vec![tinyinference_llm::message::Message::user("go")],
+        )
+        .await
+        .expect("turn completes after nested refusal");
+
+    assert!(
+        !*ran_secret.lock().unwrap(),
+        "denied nested tool body must not run"
+    );
+    assert!(
+        nested_result
+            .lock()
+            .unwrap()
+            .as_deref()
+            .unwrap()
+            .contains("secret blocked")
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn command_engine_fires_generic_and_derived_shell_events() {
