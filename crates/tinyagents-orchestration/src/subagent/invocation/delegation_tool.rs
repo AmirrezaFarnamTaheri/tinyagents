@@ -60,10 +60,7 @@ pub struct DelegationRequest {
 pub struct MultiTargetDelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest) -> Fut
-        + Send
-        + Sync
-        + 'static,
+    Worker: Fn(DelegationRequest) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     name: String,
@@ -77,10 +74,7 @@ where
 impl<State, Ctx, Worker, Fut> MultiTargetDelegationTool<State, Ctx, Worker, Fut>
 where
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest) -> Fut
-        + Send
-        + Sync
-        + 'static,
+    Worker: Fn(DelegationRequest) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     /// Creates a multi-target delegation tool. `agents` entries are `(id, description)`.
@@ -113,10 +107,7 @@ impl<State, Ctx, Worker, Fut> ToolDispatch<State, Ctx>
 where
     State: Send + Sync + 'static,
     Ctx: Send + Sync + 'static,
-    Worker: Fn(DelegationRequest) -> Fut
-        + Send
-        + Sync
-        + 'static,
+    Worker: Fn(DelegationRequest) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = Result<DelegationStageOutput, String>> + Send + 'static,
 {
     fn tool(&self) -> Arc<dyn Tool> {
@@ -161,8 +152,8 @@ where
             envelope,
         };
         let result = (self.worker)(request.clone())
-        .await
-        .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
+            .await
+            .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
         Ok(ToolResult::json(
             json!({"agent":agent,"mode":request.mode,"output":result.text}),
         ))
