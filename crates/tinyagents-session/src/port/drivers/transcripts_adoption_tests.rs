@@ -306,7 +306,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
         .run(async move {
             docs.delete(
                 super::super::INDEX,
-                &super::super::doc_key(&["1700000200_planner"]),
+                &super::super::index_id("1700000200_planner").unwrap(),
                 tinystoragedrivers_core::Precondition::None,
             )
             .await
