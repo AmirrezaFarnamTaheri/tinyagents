@@ -6,4 +6,5 @@
 pub mod command;
 pub mod lifecycle;
 pub mod stop;
+pub mod scope;
 pub mod tool;
