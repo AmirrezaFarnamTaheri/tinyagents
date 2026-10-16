@@ -92,7 +92,7 @@ async fn start_member_releases_task_and_idles_member_on_executor_failure() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("worker stopped"));
+    assert!(format!("{error:#}").contains("worker stopped"));
     assert_eq!(
         service.ledger().list_tasks(&team.team.id).unwrap()[0].status,
         AgentTeamTaskStatus::Todo
