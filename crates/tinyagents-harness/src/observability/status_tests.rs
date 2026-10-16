@@ -112,9 +112,9 @@ async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
     store.put_status(status).await.unwrap();
     // A record from an incompatible build: right projections, wrong body.
     docs.put(
-        DriverStatusStore::DEFAULT_COLLECTION,
+        DriverStatusStore::COLLECTION,
         "bad",
-        serde_json::json!({"runId": "bad", "rootRunId": "bad", "threadId": null, "active": true, "record": {"nope": 1}}),
+        serde_json::json!({"run_id": "bad", "root_run_id": "bad", "active": true, "nope": 1}),
         Precondition::None,
     )
     .await
@@ -123,20 +123,15 @@ async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
 }
 
 #[tokio::test]
-async fn runs_of_different_tenants_and_collections_never_meet() {
+async fn runs_of_different_tenants_never_meet() {
     let storage = MemoryStorage::new();
     let alice = DriverStatusStore::new(Arc::clone(scoped(&storage, "alice").documents()));
     let bob = DriverStatusStore::new(Arc::clone(scoped(&storage, "bob").documents()));
-    let other = DriverStatusStore::with_collection(
-        Arc::clone(scoped(&storage, "alice").documents()),
-        "other_status",
-    );
     let mut status = HarnessRunStatus::new(RunId::new("run.shared"), ComponentId::new("m"));
     status.mark_running(HarnessPhase::Model);
     alice.put_status(status).await.unwrap();
     assert!(bob.get_status("run.shared").await.unwrap().is_none());
     assert!(bob.list_active().await.unwrap().is_empty());
-    assert!(other.get_status("run.shared").await.unwrap().is_none());
     assert_eq!(alice.list_active().await.unwrap().len(), 1);
 }
 
@@ -280,4 +275,51 @@ async fn a_journal_over_a_shared_append_store_handle_is_a_journal() {
     shared.append("s", serde_json::json!(1)).await.unwrap();
     assert_eq!(shared.read_window("s", 0, 5).await.unwrap().len(), 1);
     assert_eq!(shared.len("s").await.unwrap(), 1);
+}
+
+/// The v2 shape: one `harness.run_status` document per run, id = the run id,
+/// the status unwrapped into a snake_case body with `_ms` times and the three
+/// indexed projections beside it.
+#[tokio::test]
+async fn a_run_is_a_bare_snake_case_document_keyed_by_its_run_id() {
+    let storage = MemoryStorage::new();
+    let docs = Arc::clone(scoped(&storage, "local").documents());
+    let store = DriverStatusStore::new(Arc::clone(&docs));
+    let mut status = HarnessRunStatus::new(RunId::new("run.fixture"), ComponentId::new("m"))
+        .with_thread(ThreadId::new("thread-1"));
+    status.started_at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
+    status.updated_at = UNIX_EPOCH + Duration::from_millis(1_700_000_005_456);
+    status.mark_running(HarnessPhase::Model);
+    store.put_status(status.clone()).await.unwrap();
+
+    let row = docs
+        .get("harness.run_status", "run.fixture")
+        .await
+        .unwrap()
+        .expect("the id is Key::of([run_id])");
+    assert_eq!(row.doc["run_id"], "run.fixture");
+    assert_eq!(row.doc["root_run_id"], "run.fixture");
+    assert_eq!(row.doc["thread_id"], "thread-1");
+    assert_eq!(row.doc["active"], true);
+    assert_eq!(row.doc["status"], "running");
+    assert!(row.doc.get("record").is_none(), "no envelope");
+    assert!(row.doc.get("runId").is_none(), "no camelCase");
+    assert!(row.doc.get("started_at").is_none(), "no seconds field");
+    assert_eq!(row.doc["started_ms"], 1_700_000_000_123_u64);
+    assert!(row.meta.created_ms > 0);
+    assert_eq!(row.meta.schema, 2);
+
+    // The wire type still reads back with whole seconds, as before.
+    let back = store.get_status("run.fixture").await.unwrap().unwrap();
+    assert_eq!(back.started_at, UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+    assert_eq!(back.status, ExecutionStatus::Running);
+}
+
+#[test]
+fn the_declared_collection_indexes_the_three_projections() {
+    let spec = DriverStatusStore::collection_spec();
+    assert_eq!(spec.name, "harness.run_status");
+    let names: Vec<_> = spec.indexes.iter().map(|index| index.name.as_str()).collect();
+    assert_eq!(names, ["by_root", "by_thread", "by_active"]);
+    assert_eq!(spec.indexes[0].fields, ["root_run_id"]);
 }
