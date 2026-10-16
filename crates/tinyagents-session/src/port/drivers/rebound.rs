@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 
 use serde_json::Value;
-use tinyagents_harness::Result;
+use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_core::{StorageBackend, StorageError};
 
@@ -46,7 +46,10 @@ impl SessionStoreRegistry {
     }
 
     /// Rebinds every provider registered here, returning the number moved.
-    pub fn rebind(&self, backend: Arc<dyn StorageBackend>) -> Result<usize, StorageError> {
+    pub fn rebind(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+    ) -> std::result::Result<usize, StorageError> {
         let stores = self.live();
         for store in &stores {
             store.rebind(Arc::clone(&backend))?;
@@ -67,7 +70,7 @@ impl RebindableSessionStores {
     pub fn new(
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
-    ) -> Result<Arc<Self>, StorageError> {
+    ) -> std::result::Result<Arc<Self>, StorageError> {
         static PROCESS: std::sync::LazyLock<SessionStoreRegistry> =
             std::sync::LazyLock::new(SessionStoreRegistry::default);
         Self::new_in(&PROCESS, backend, recover_on_open)
@@ -78,7 +81,7 @@ impl RebindableSessionStores {
         registry: &SessionStoreRegistry,
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
-    ) -> Result<Arc<Self>, StorageError> {
+    ) -> std::result::Result<Arc<Self>, StorageError> {
         let driver = DriverSessionStores::new(backend)?.recover_on_open(recover_on_open);
         let this = Arc::new(Self {
             current: RwLock::new(Arc::new(driver)),
@@ -97,7 +100,10 @@ impl RebindableSessionStores {
     ///
     /// Existing method calls retain the provider snapshot they started with;
     /// subsequent calls through a live handle resolve against the new backend.
-    pub fn rebind(&self, backend: Arc<dyn StorageBackend>) -> Result<(), StorageError> {
+    pub fn rebind(
+        &self,
+        backend: Arc<dyn StorageBackend>,
+    ) -> std::result::Result<(), StorageError> {
         let next =
             Arc::new(DriverSessionStores::new(backend)?.recover_on_open(self.recover_on_open));
         let live = self
@@ -118,7 +124,7 @@ impl RebindableSessionStores {
                 next.try_for_agent(agent_id)
                     .map(|stores| (Arc::clone(binding), stores))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
         for (binding, stores) in replacements {
             *binding
@@ -154,19 +160,19 @@ impl LiveAgentStores {
 
 #[async_trait::async_trait]
 impl Store for LiveStore {
-    async fn get(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
+    async fn get(&self, namespace: &str, key: &str) -> HarnessResult<Option<Value>> {
         let store = self.0.snapshot().kv;
         store.get(namespace, key).await
     }
-    async fn put(&self, namespace: &str, key: &str, value: Value) -> Result<()> {
+    async fn put(&self, namespace: &str, key: &str, value: Value) -> HarnessResult<()> {
         let store = self.0.snapshot().kv;
         store.put(namespace, key, value).await
     }
-    async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
+    async fn delete(&self, namespace: &str, key: &str) -> HarnessResult<()> {
         let store = self.0.snapshot().kv;
         store.delete(namespace, key).await
     }
-    async fn list(&self, namespace: &str) -> Result<Vec<String>> {
+    async fn list(&self, namespace: &str) -> HarnessResult<Vec<String>> {
         let store = self.0.snapshot().kv;
         store.list(namespace).await
     }
@@ -174,11 +180,11 @@ impl Store for LiveStore {
 
 #[async_trait::async_trait]
 impl AppendStore for LiveAppendStore {
-    async fn append(&self, stream: &str, value: Value) -> Result<u64> {
+    async fn append(&self, stream: &str, value: Value) -> HarnessResult<u64> {
         let store = self.0.snapshot().journal;
         store.append(stream, value).await
     }
-    async fn read_from(&self, stream: &str, offset: u64) -> Result<Vec<(u64, Value)>> {
+    async fn read_from(&self, stream: &str, offset: u64) -> HarnessResult<Vec<(u64, Value)>> {
         let store = self.0.snapshot().journal;
         store.read_from(stream, offset).await
     }
@@ -187,11 +193,11 @@ impl AppendStore for LiveAppendStore {
         stream: &str,
         offset: u64,
         limit: usize,
-    ) -> Result<Vec<(u64, Value)>> {
+    ) -> HarnessResult<Vec<(u64, Value)>> {
         let store = self.0.snapshot().journal;
         store.read_window(stream, offset, limit).await
     }
-    async fn len(&self, stream: &str) -> Result<u64> {
+    async fn len(&self, stream: &str) -> HarnessResult<u64> {
         let store = self.0.snapshot().journal;
         store.len(stream).await
     }
@@ -203,40 +209,44 @@ struct LiveTurnStates(Arc<LiveAgentStores>);
 struct LiveTranscriptLocator(Arc<LiveAgentStores>);
 
 impl TurnStates for LiveTurnStates {
-    fn put(&self, state: &TurnState) -> Result<(), String> {
+    fn put(&self, state: &TurnState) -> std::result::Result<(), String> {
         self.0.snapshot().turn_states.put(state)
     }
-    fn put_unless_completed(&self, state: &TurnState) -> Result<bool, String> {
+    fn put_unless_completed(&self, state: &TurnState) -> std::result::Result<bool, String> {
         self.0.snapshot().turn_states.put_unless_completed(state)
     }
-    fn get(&self, thread_id: &str) -> Result<Option<TurnState>, String> {
+    fn get(&self, thread_id: &str) -> std::result::Result<Option<TurnState>, String> {
         self.0.snapshot().turn_states.get(thread_id)
     }
-    fn get_turn(&self, thread_id: &str, request_id: &str) -> Result<Option<TurnState>, String> {
+    fn get_turn(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+    ) -> std::result::Result<Option<TurnState>, String> {
         self.0
             .snapshot()
             .turn_states
             .get_turn(thread_id, request_id)
     }
-    fn delete(&self, thread_id: &str) -> Result<bool, String> {
+    fn delete(&self, thread_id: &str) -> std::result::Result<bool, String> {
         self.0.snapshot().turn_states.delete(thread_id)
     }
-    fn delete_turn(&self, thread_id: &str, request_id: &str) -> Result<bool, String> {
+    fn delete_turn(&self, thread_id: &str, request_id: &str) -> std::result::Result<bool, String> {
         self.0
             .snapshot()
             .turn_states
             .delete_turn(thread_id, request_id)
     }
-    fn list(&self) -> Result<Vec<TurnState>, String> {
+    fn list(&self) -> std::result::Result<Vec<TurnState>, String> {
         self.0.snapshot().turn_states.list()
     }
-    fn list_thread(&self, thread_id: &str) -> Result<Vec<TurnState>, String> {
+    fn list_thread(&self, thread_id: &str) -> std::result::Result<Vec<TurnState>, String> {
         self.0.snapshot().turn_states.list_thread(thread_id)
     }
-    fn clear_all(&self) -> Result<usize, String> {
+    fn clear_all(&self) -> std::result::Result<usize, String> {
         self.0.snapshot().turn_states.clear_all()
     }
-    fn mark_all_interrupted(&self, now: &str) -> Result<usize, String> {
+    fn mark_all_interrupted(&self, now: &str) -> std::result::Result<usize, String> {
         self.0.snapshot().turn_states.mark_all_interrupted(now)
     }
     fn settle_turn(
@@ -245,7 +255,7 @@ impl TurnStates for LiveTurnStates {
         request_id: &str,
         lifecycle: TurnLifecycle,
         now: &str,
-    ) -> Result<bool, String> {
+    ) -> std::result::Result<bool, String> {
         self.0
             .snapshot()
             .turn_states
@@ -335,7 +345,7 @@ impl SessionStoreProvider for RebindableSessionStores {
         binding.handles()
     }
 
-    fn try_for_agent(&self, agent_id: &str) -> Result<AgentStores, StorageError> {
+    fn try_for_agent(&self, agent_id: &str) -> std::result::Result<AgentStores, StorageError> {
         if let Some(binding) = self
             .live
             .lock()
@@ -359,14 +369,14 @@ impl SessionStoreProvider for RebindableSessionStores {
     fn bind_actor(
         &self,
         backend: Arc<dyn StorageBackend>,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+    ) -> std::result::Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         self.current().bind_actor(backend)
     }
     fn bind_actor_with_schema_admission(
         &self,
         backend: Arc<dyn StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
-    ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
+    ) -> std::result::Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         self.current()
             .bind_actor_with_schema_admission(backend, admission)
     }
