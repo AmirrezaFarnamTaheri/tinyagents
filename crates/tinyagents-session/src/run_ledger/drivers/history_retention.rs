@@ -6,11 +6,13 @@
 //! limits batch size; instead children are always deleted before the record
 //! that owns them, so an interrupted pass never leaves a record whose children
 //! vanished while the parent still claims them as live data.
+use super::dto_history::FtsRow;
 use super::history::{
-    FtsRow, fts_doc, message_fts_id, message_fts_row, session_fts_id, session_fts_row, tool_fts_id,
-    tool_fts_row,
+    message_fts_id, message_fts_row, session_fts_id, session_fts_row, tool_fts_id, tool_fts_row,
 };
-use super::storage::{EVENTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, decode};
+use super::storage::{
+    EVENTS, HIST_FTS, HIST_MESSAGES, HIST_SESSIONS, HIST_TOOL_CALLS, decode, put_op,
+};
 use super::*;
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use serde_json::Value;
@@ -66,7 +68,7 @@ impl DriverRunLedger {
     /// Ids of the index rows owned by `session_id`.
     async fn fts_ids_of(&self, session_id: &str) -> Result<Vec<String>> {
         Ok(self
-            .all_rows(HIST_FTS, Filter::eq("record.sessionId", session_id))
+            .all_rows(HIST_FTS, Filter::eq("session_id", session_id))
             .await?
             .into_iter()
             .map(|row| row.id)
@@ -75,7 +77,7 @@ impl DriverRunLedger {
 
     /// Delete `session_id`'s messages, tool calls and index rows.
     async fn delete_session_children(&self, session_id: &str) -> Result<()> {
-        let filter = || Filter::eq("record.session_id", session_id);
+        let filter = || Filter::eq("session_id", session_id);
         let mut ops: Vec<WriteOp> = Vec::new();
         for row in self.all_rows(HIST_MESSAGES, filter()).await? {
             ops.push(delete_op(HIST_MESSAGES, row.id));
@@ -95,12 +97,12 @@ impl DriverRunLedger {
         &self,
         older_than: DateTime<Utc>,
     ) -> Result<Vec<(Versioned<Value>, SessionRecord)>> {
-        let filter = Filter::ne("record.status", "running")
-            .and(Filter::lt("endedUs", older_than.timestamp_micros() + 1));
+        let filter = Filter::ne("status", "running")
+            .and(Filter::lt("ended_ms", older_than.timestamp_millis() + 1));
         let mut out = Vec::new();
         for row in self.all_rows(HIST_SESSIONS, filter).await? {
             let session: SessionRecord = decode(row.doc.clone())?;
-            // Compare instants: the stored key is microsecond-truncated.
+            // Compare instants: the stored time is millisecond-truncated.
             if session.status != SessionStatus::Running
                 && session.ended_at.is_some_and(|ended| ended < older_than)
             {
@@ -116,7 +118,7 @@ impl DriverRunLedger {
         for (row, session) in self.expired_sessions(older_than).await? {
             self.delete_session_children(&session.id).await?;
             let deletes = vec![
-                delete_op(HIST_FTS, session_fts_id(&session.id)),
+                delete_op(HIST_FTS, session_fts_id(&session.id)?),
                 WriteOp::Delete {
                     collection: HIST_SESSIONS.into(),
                     id: row.id,
@@ -153,8 +155,8 @@ impl DriverRunLedger {
             .documents()
             .query_all(
                 HIST_MESSAGES,
-                &Query::filter(Filter::eq("record.session_id", session_id))
-                    .sort(Sort::desc("record.id")),
+                &Query::filter(Filter::eq("session_id", session_id))
+                    .sort(Sort::desc("id")),
             )
             .await?;
         let mut ops = Vec::new();
@@ -163,7 +165,7 @@ impl DriverRunLedger {
             ops.push(delete_op(HIST_MESSAGES, row.id));
             // The trimmed message's index row goes with it, so search cannot
             // surface a session for text the transcript no longer holds.
-            ops.push(delete_op(HIST_FTS, message_fts_id(message.id)));
+            ops.push(delete_op(HIST_FTS, message_fts_id(message.id)?));
         }
         let results = self.apply_chunked(ops).await?;
         let removed = results
@@ -180,13 +182,13 @@ impl DriverRunLedger {
         older_than: DateTime<Utc>,
     ) -> Result<usize> {
         tracing::debug!("{LOG_PREFIX} prune_tool_calls_before.entry cutoff={older_than}");
-        let filter = Filter::lt("createdUs", older_than.timestamp_micros() + 1);
+        let filter = Filter::lt("created_ms", older_than.timestamp_millis() + 1);
         let mut ops = Vec::new();
         for row in self.all_rows(HIST_TOOL_CALLS, filter).await? {
             let call: SessionToolCall = decode(row.doc)?;
             if call.created_at < older_than {
                 ops.push(delete_op(HIST_TOOL_CALLS, row.id));
-                ops.push(delete_op(HIST_FTS, tool_fts_id(call.id)));
+                ops.push(delete_op(HIST_FTS, tool_fts_id(call.id)?));
             }
         }
         let results = self.apply_chunked(ops).await?;
@@ -252,19 +254,19 @@ impl DriverRunLedger {
         let mut rows: Vec<(String, FtsRow)> = Vec::new();
         for row in self.all_rows(HIST_SESSIONS, Filter::default()).await? {
             let session: SessionRecord = decode(row.doc)?;
-            rows.push((session_fts_id(&session.id), session_fts_row(&session)));
+            rows.push((session_fts_id(&session.id)?, session_fts_row(&session)));
         }
         for row in self.all_rows(HIST_MESSAGES, Filter::default()).await? {
             let message: SessionMessage = decode(row.doc)?;
             rows.push((
-                message_fts_id(message.id),
+                message_fts_id(message.id)?,
                 message_fts_row(&message.session_id, &message.content),
             ));
         }
         for row in self.all_rows(HIST_TOOL_CALLS, Filter::default()).await? {
             let call: SessionToolCall = decode(row.doc)?;
             rows.push((
-                tool_fts_id(call.id),
+                tool_fts_id(call.id)?,
                 tool_fts_row(&call.session_id, &call.tool_name),
             ));
         }
@@ -272,12 +274,7 @@ impl DriverRunLedger {
         let written = rows.len();
         let mut puts = Vec::with_capacity(written);
         for (id, row) in &rows {
-            puts.push(WriteOp::Put {
-                collection: HIST_FTS.into(),
-                id: id.clone(),
-                doc: fts_doc(row)?,
-                precondition: Precondition::None,
-            });
+            puts.push(put_op(HIST_FTS, id.clone(), row, Precondition::None)?);
         }
         self.apply_chunked(puts).await?;
         let stale: Vec<WriteOp> = self

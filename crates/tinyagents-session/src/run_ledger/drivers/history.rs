@@ -282,7 +282,7 @@ impl SessionHistoryStore for DriverRunLedger {
             cached_input_tokens: 0,
             cost_usd: 0.0,
             transcript_path: start.transcript_path,
-            started_at: Utc::now(),
+            started_at: now(),
             ended_at: None,
         };
         let writes = vec![
