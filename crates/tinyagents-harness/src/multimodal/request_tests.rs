@@ -609,8 +609,8 @@ async fn historical_text_recovers_each_failed_marker_without_losing_prose_or_val
         Arc::default(),
     )
     .with_history_fallback(history.clone());
-    let mut request = ModelRequest::default();
-    request.messages = vec![
+    let mut historical_request = ModelRequest::default();
+    historical_request.messages = vec![
         Message::User(UserMessage {
             content: vec![ContentBlock::Text(
                 "Caption [IMAGE:good-image] then [IMAGE:https://example.test/photo?token=secret]"
@@ -622,7 +622,10 @@ async fn historical_text_recovers_each_failed_marker_without_losing_prose_or_val
         }),
     ];
 
-    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
+    wrapped
+        .invoke(&"tenant-a".into(), historical_request)
+        .await
+        .unwrap();
 
     let captured = model.requests.lock().unwrap();
     let Message::User(old_user) = &captured[0].messages[0] else {
