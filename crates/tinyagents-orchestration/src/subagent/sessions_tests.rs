@@ -169,8 +169,15 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
             .await
             .unwrap()
     );
-    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::new())
-        .with_sessions(Arc::new(store.clone()), |owner| owner.to_string());
+    let task_store = Arc::new(tinyagents_tasks::InMemoryTaskStore::new());
+    let parent_run = tinyagents_harness::ids::RunId::new(owner_key);
+    task_store.insert(tinyagents_tasks::OrchestrationTaskSpec::new(
+        tinyagents_harness::ids::TaskId::new("task-record"),
+        tinyagents_tasks::OrchestrationTaskKind::SubAgent { agent_id: "researcher".into() },
+    ).with_lineage(parent_run.clone(), parent_run.clone())).unwrap();
+    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
+        .with_sessions(Arc::new(store.clone()), |owner| owner.to_string())
+        .with_task_store(task_store, move |_| parent_run.clone());
 
     let listed = ToolDispatch::<(), ()>::execute(
         &jobs,
@@ -184,6 +191,7 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
     .unwrap();
     let list: serde_json::Value = serde_json::from_str(&listed.output()).unwrap();
     assert_eq!(list[0]["kind"], "session");
+    assert!(list.as_array().unwrap().iter().any(|row| row["kind"] == "task"));
     let awaited = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),
