@@ -233,3 +233,7 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;
