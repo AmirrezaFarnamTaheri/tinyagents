@@ -118,21 +118,21 @@ impl<T: SessionHookTypes> FnSessionHooks<T> {
     }
 
     /// Run the callback before transcript resume.
-    pub async fn before_resume(
-        &self,
-        request: &mut T::Request,
-        options: &mut T::Options,
-        state: T::StateView<'_>,
+    pub async fn before_resume<'a>(
+        &'a self,
+        request: &'a mut T::Request,
+        options: &'a mut T::Options,
+        state: T::StateView<'a>,
     ) -> Result<T::ResumePreparation, T::Error> {
         (self.before_resume)(request, options, state).await
     }
 
     /// Run the callback before the driver sees the turn.
-    pub async fn before_turn(
-        &self,
-        request: &mut T::Request,
-        options: &mut T::Options,
-        state: T::StateView<'_>,
+    pub async fn before_turn<'a>(
+        &'a self,
+        request: &'a mut T::Request,
+        options: &'a mut T::Options,
+        state: T::StateView<'a>,
     ) -> Result<T::TurnPreparation, T::Error> {
         (self.before_turn)(request, options, state).await
     }
