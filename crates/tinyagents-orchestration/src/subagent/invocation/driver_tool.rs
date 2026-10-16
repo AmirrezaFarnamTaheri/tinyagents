@@ -153,10 +153,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// Resolves a per-turn run id to a stable host-owned authorization scope.
     /// The same resolver must be configured on the corresponding Jobs and
     /// Message aliases when a host recreates run contexts between turns.
-    pub fn with_owner_scope(
-        mut self,
-        resolve: Arc<OwnerScope>,
-    ) -> Self {
+    pub fn with_owner_scope(mut self, resolve: Arc<OwnerScope>) -> Self {
         self.owner_scope = resolve;
         self
     }

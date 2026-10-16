@@ -83,14 +83,10 @@ impl SubagentExecutor<()> for PauseThenCompleteExecutor {
             });
             Ok(outcome)
         } else {
-            let mut outcome = SubagentOutcome::completed(
-                execution.prepared.task_id,
-                "resumed completion",
-            );
+            let mut outcome =
+                SubagentOutcome::completed(execution.prepared.task_id, "resumed completion");
             outcome.worker_thread_id = Some("worker-thread".into());
-            outcome
-                .extensions
-                .insert("iterations".into(), json!(3));
+            outcome.extensions.insert("iterations".into(), json!(3));
             Ok(outcome)
         }
     }
@@ -946,7 +942,8 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     .await
     .unwrap();
     assert_eq!(
-        jobs.drain_lane_for_test(&public_id, tinyagents_harness::run_queue::QueueLane::Steer).len(),
+        jobs.drain_lane_for_test(&public_id, tinyagents_harness::run_queue::QueueLane::Steer)
+            .len(),
         0,
         "the default message path uses the steering channel, not the run queue"
     );

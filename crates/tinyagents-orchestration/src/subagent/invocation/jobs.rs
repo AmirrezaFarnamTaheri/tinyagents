@@ -989,10 +989,7 @@ impl SubAgentJobsTool {
     /// Resolves a per-turn run owner to a stable host-owned authorization key.
     /// Use the same resolver for spawn, job, and message aliases when run
     /// contexts are recreated between turns.
-    pub fn with_owner_scope(
-        mut self,
-        resolve: OwnerScope,
-    ) -> Self {
+    pub fn with_owner_scope(mut self, resolve: OwnerScope) -> Self {
         self.owner_scope = resolve;
         self
     }
@@ -1160,9 +1157,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                                 .map(|job_id| job_id.as_str().to_owned())
                                 .or_else(|| {
                                     let task_id = session.current_task_id?;
-                                    self.jobs
-                                        .get_owned(&task_id, &owner)
-                                        .map(|_| task_id)
+                                    self.jobs.get_owned(&task_id, &owner).map(|_| task_id)
                                 })
                         })
                 } else {
@@ -1172,11 +1167,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     let job = if let Some(timeout) = &self.await_timeout {
                         let duration =
                             std::time::Duration::from_secs(timeout.requested_secs(object));
-                        match tokio::time::timeout(
-                            duration,
-                            self.jobs.wait_owned(&job_id, &owner),
-                        )
-                        .await
+                        match tokio::time::timeout(duration, self.jobs.wait_owned(&job_id, &owner))
+                            .await
                         {
                             Ok(result) => result?,
                             Err(_) => self
@@ -1327,10 +1319,7 @@ impl SubAgentMessageTool {
 
     /// Resolves a per-turn run id to the stable owner key used by the matching
     /// spawn and Jobs aliases.
-    pub fn with_owner_scope(
-        mut self,
-        resolve: OwnerScope,
-    ) -> Self {
+    pub fn with_owner_scope(mut self, resolve: OwnerScope) -> Self {
         self.owner_scope = resolve;
         self
     }
@@ -1453,7 +1442,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             self.jobs
                 .driver_job_for_key(&session.lifecycle_key, &owner)
                 .map(|job_id| job_id.as_str().to_owned())
-                .or_else(|| self.jobs.get_owned(&task_id, &owner).map(|_| task_id.clone()))
+                .or_else(|| {
+                    self.jobs
+                        .get_owned(&task_id, &owner)
+                        .map(|_| task_id.clone())
+                })
                 .unwrap_or(task_id)
         } else {
             args.get(&self.argument_names.job_id)
