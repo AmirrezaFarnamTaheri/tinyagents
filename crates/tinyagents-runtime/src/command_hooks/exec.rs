@@ -169,7 +169,10 @@ async fn run_command(
                 stdin: payload,
                 timeout,
             };
-            match tokio::time::timeout(timeout + SPAWNER_GRACE, spawner.run(request)).await {
+            let deadline = timeout
+                .checked_add(SPAWNER_GRACE)
+                .ok_or_else(|| "hook timeout exceeds the supported range".to_string())?;
+            match tokio::time::timeout(deadline, spawner.run(request)).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(error)) => return Err(format!("host spawner: {error}")),
                 Err(_) => return Err(format!("timed out after {}s", timeout.as_secs())),

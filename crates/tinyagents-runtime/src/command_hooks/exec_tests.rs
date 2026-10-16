@@ -197,4 +197,38 @@ mod spawner {
             result.error
         );
     }
+
+    #[tokio::test]
+    async fn an_out_of_range_timeout_is_a_hook_failure_not_a_panic() {
+        let spawner = Arc::new(Scripted {
+            answer: Ok(CommandOutput {
+                exit_code: Some(0),
+                ..CommandOutput::default()
+            }),
+            seen: Mutex::default(),
+        });
+        let environment = HookEnvironment::new("Test", None).with_command_spawner(spawner.clone());
+        let result = run(
+            &hook(true),
+            &input(),
+            &BTreeMap::new(),
+            Duration::MAX,
+            &environment,
+        )
+        .await;
+        // The definition names a timeout of its own, so override it.
+        assert!(result.output.is_deny() || result.error.is_some());
+        let mut open = hook(false);
+        open.timeout = Some(u64::MAX);
+        let result = run(
+            &open,
+            &input(),
+            &BTreeMap::new(),
+            Duration::MAX,
+            &environment,
+        )
+        .await;
+        assert!(result.error.unwrap().contains("supported range"));
+        assert!(spawner.seen.lock().unwrap().is_empty(), "never spawned");
+    }
 }
