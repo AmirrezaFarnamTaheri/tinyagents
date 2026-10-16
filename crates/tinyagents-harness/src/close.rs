@@ -191,6 +191,7 @@ pub fn close_repair_instruction(template: &str, reason: &str) -> String {
 /// Ask, screen, separately verify, and repair at most once. Every call uses a
 /// request with no tool schemas and `ToolChoice::None`; `ToolDialect` rejects
 /// textual tool syntax even if a provider ignores that constraint.
+#[allow(clippy::too_many_arguments)] // Each argument is an explicit host policy seam.
 pub async fn grounded_close<State, M>(
     model: &M,
     state: &State,
@@ -262,6 +263,7 @@ where
 /// The instruction is caller-provided. If the model fails, returns tool
 /// syntax, or returns an invalid block, the harness appends the contract's
 /// deterministic synthesized block so the required-output invariant holds.
+#[allow(clippy::too_many_arguments)] // Keep the model, contract, and streaming state explicit.
 pub async fn repair_required_output<State, M>(
     model: &M,
     state: &State,
@@ -282,9 +284,7 @@ where
         return None;
     }
     let attempted = completion(model, state, dialect, history, repair_instruction, None).await;
-    let (candidate, usage, has_tool_call) = attempted
-        .map(|(text, usage, has_tool_call)| (text, usage, has_tool_call))
-        .unwrap_or_default();
+    let (candidate, usage, has_tool_call) = attempted.unwrap_or_default();
     let usable = !has_tool_call && output_satisfies_contract(&candidate, contract);
     let text = if reply_already_streamed {
         let block = if usable {
