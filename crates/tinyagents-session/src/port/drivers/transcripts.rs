@@ -20,11 +20,13 @@
 //! database) are serialized: the loser re-reads, sees the winner's entry, and
 //! decides again — which is also how a write that races a seal is refused.
 //!
-//! [`INDEX`] holds one small document per stem with the lookup fields
-//! (`thread_id`, `agent_id`, `agent_name`, `subagent`, `created_at`), so
+//! [`INDEX`] holds one small document per stem (id `Key::of([stem])`) with the
+//! lookup fields (`thread_id`, `agent_id`, `agent_name`, `subagent`), so
 //! "newest root transcript of this thread" is one indexed query instead of a
-//! scan of every log. It is refreshed after each write that changes them. A
-//! successor generation is reserved there before its predecessor is sealed.
+//! scan of every log. Its creation time is the document's `_created_ms`
+//! metadata, which the driver keeps. It is refreshed after each write that
+//! changes the fields. A successor generation is reserved as a `tsd.leases`
+//! record (see `transcripts_reservation.rs`) before its predecessor is sealed.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -33,13 +35,15 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
+use tinystoragedrivers_core::primitives::{Leases, Repo};
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec,
-    Precondition, Query, Sort, StorageError, Version,
+    Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
+    ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};
 
 use super::super::memory::MAX_GENERATIONS;
+use super::transcripts_reservation::{self as reservation, Reservation};
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,
@@ -47,9 +51,14 @@ use crate::transcript::{
 };
 
 /// One document per transcript stem: the lookup fields.
-pub(super) const INDEX: &str = "session_transcripts";
+pub(super) const INDEX: &str = "session.transcripts";
 /// One document per write to a transcript: its append-only log.
-pub(super) const ENTRIES: &str = "session_transcript_entries";
+pub(super) const ENTRIES: &str = "session.transcript_entries";
+
+/// The body version both collections are written at.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
+
+pub(super) use super::transcripts_reservation::leases_spec;
 
 /// Index refresh attempts after a durable write before leaving the repair
 /// to the next write or read.
@@ -58,34 +67,14 @@ const INDEX_ATTEMPTS: usize = 3;
 /// Insert attempts before a contended write gives up.
 const CAS_ATTEMPTS: usize = 64;
 
-/// How old an unwritten generation reservation must be before another
-/// compaction may take it over. A reservation that old was left by a process
-/// that stopped between reserving and writing; without a takeover its
-/// sealed predecessor would refuse every later write.
-const STALE_RESERVATION_MS: i64 = 30_000;
-
-/// Longest id before it is hashed, leaving room under the driver's limit for
-/// an entry's `#<seq>` suffix.
-const MAX_KEY_LEN: usize = 400;
-
-/// A document id for `parts`: length-prefixed so no two tuples collide, and
-/// replaced by its SHA-256 when it would exceed [`MAX_KEY_LEN`].
-pub(super) fn doc_key(parts: &[&str]) -> String {
-    let joined: String = parts
-        .iter()
-        .map(|part| format!("{}:{part}", part.len()))
-        .collect::<Vec<_>>()
-        .join("/");
-    if joined.len() <= MAX_KEY_LEN {
-        joined
-    } else {
-        use sha2::{Digest, Sha256};
-        format!("h:{}", hex::encode(Sha256::digest(joined.as_bytes())))
-    }
+/// The id of `stem`'s index document.
+fn index_id(stem: &str) -> Result<String, StorageError> {
+    Key::of([stem]).map(|key| key.as_str().to_owned())
 }
 
-fn entry_id(stem: &str, seq: u64) -> String {
-    format!("{}#{seq:010}", doc_key(&[stem]))
+/// The id of entry `seq` of `stem`: zero-padded, so ids list in log order.
+fn entry_id(stem: &str, seq: u64) -> Result<String, StorageError> {
+    Key::of([stem, format!("{seq:010}").as_str()]).map(|key| key.as_str().to_owned())
 }
 
 /// Whether `stem` names a sub-agent transcript: `__` separates a parent stem
@@ -93,10 +82,6 @@ fn entry_id(stem: &str, seq: u64) -> String {
 fn is_subagent(stem: &str) -> bool {
     stem.split_once("__")
         .is_some_and(|(parent, child)| !parent.is_empty() && !child.is_empty())
-}
-
-fn now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
 
 fn serialization(error: &serde_json::Error) -> StorageError {
@@ -170,10 +155,9 @@ struct Replay {
     sealed: bool,
     /// The lookup fields last written to [`INDEX`] by this handle.
     indexed: Option<Value>,
-    /// The version of the generation reservation this handle was opened
-    /// with, until its first write claims it (see
-    /// [`HistoryInner::claim_reservation`]).
-    reservation: Option<Version>,
+    /// The generation reservation this handle was opened with, until its
+    /// first write claims it (see [`HistoryInner::claim_reservation`]).
+    reservation: Option<Reservation>,
 }
 
 impl Replay {
@@ -216,16 +200,24 @@ pub(super) fn collection_specs() -> [CollectionSpec; 2] {
             .index(IndexSpec::new("by_stem", ["stem", "seq"]))
             .index(IndexSpec::new("by_stem_written", ["stem", "written"])),
         CollectionSpec::new(INDEX)
-            .index(IndexSpec::new("by_thread", ["thread_id", "created_at"]))
-            .index(IndexSpec::new(
-                "by_agent_name",
-                ["agent_name", "created_at"],
-            ))
-            .index(IndexSpec::new("by_agent_id", ["agent_id", "created_at"])),
+            .index(IndexSpec::new("by_thread", ["thread_id", CREATED_FIELD]))
+            .index(IndexSpec::new("by_agent_name", ["agent_name", CREATED_FIELD]))
+            .index(IndexSpec::new("by_agent_id", ["agent_id", CREATED_FIELD])),
     ]
 }
 
-/// Admits both collections, once per locator.
+/// Newest first: by creation time, ties broken by id so the order is stable.
+fn newest_first() -> [Sort; 2] {
+    [Sort::desc(CREATED_FIELD), Sort::desc(ID_FIELD)]
+}
+
+/// Oldest first, with the same stable tie-break.
+pub(super) fn oldest_first() -> [Sort; 2] {
+    [Sort::asc(CREATED_FIELD), Sort::asc(ID_FIELD)]
+}
+
+/// Admits the collections (and the lease collection reservations use), once
+/// per locator.
 #[derive(Debug, Default)]
 struct Declared {
     admitted: OnceCell<()>,
@@ -239,6 +231,9 @@ impl Declared {
                 for spec in collection_specs() {
                     self.schema_admission.admit(docs.as_ref(), &spec).await?;
                 }
+                self.schema_admission
+                    .admit(docs.as_ref(), &leases_spec())
+                    .await?;
                 Ok(())
             })
             .await
@@ -258,6 +253,31 @@ where
 
 // ── History ──────────────────────────────────────────────────────────
 
+/// The typed handles a locator and its histories write through.
+struct Tables {
+    /// Writes of [`ENTRIES`] at [`SCHEMA_VERSION`].
+    entries: Repo<Value>,
+    /// Writes of [`INDEX`] at [`SCHEMA_VERSION`].
+    index: Repo<Value>,
+    /// Generation reservations.
+    leases: Leases,
+}
+
+impl Tables {
+    fn new(docs: &Arc<dyn DocumentStore>) -> Self {
+        let options = WriteOptions::new().schema(SCHEMA_VERSION);
+        Self {
+            entries: Repo::new(docs, ENTRIES)
+                .expect("the entries collection name is valid")
+                .with_options(options),
+            index: Repo::new(docs, INDEX)
+                .expect("the index collection name is valid")
+                .with_options(options),
+            leases: Leases::new(docs),
+        }
+    }
+}
+
 /// A [`TranscriptHistory`] bound to one stem of a driver-backed locator.
 ///
 /// Handles are cheap and independent: two handles on one stem (or two
@@ -271,6 +291,7 @@ pub struct DriverTranscriptHistory {
 
 struct HistoryInner {
     docs: Arc<dyn DocumentStore>,
+    tables: Arc<Tables>,
     declared: Arc<Declared>,
     stem: String,
     seed: TranscriptMeta,
