@@ -176,7 +176,7 @@ pub fn trace_session_id(ui_session_id: Option<u64>, thread_id: &str) -> String {
         .unwrap_or_else(|| thread_id.to_string())
 }
 
-/// What a span represents. Mirrors the host's agent-progress lifecycle.
+/// What a span represents in the event-driven trace projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpanKind {
