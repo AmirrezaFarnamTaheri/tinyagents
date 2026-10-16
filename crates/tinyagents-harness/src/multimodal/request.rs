@@ -186,7 +186,7 @@ where
             return Ok(request);
         };
 
-        // Count the raw latest-turn media before deriving scope or calling any
+        // Count the host-normalized latest-turn media before calling any
         // source resolver. This keeps configured limits meaningful for reads.
         let (images, files) = count_user_media(&request.messages[latest_user]);
         let (max_images, _) = self.config.images.effective();
