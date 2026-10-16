@@ -23,20 +23,26 @@ async fn callbacks_mutate_and_observe_their_typed_inputs() {
     let after_commit_seen = Arc::clone(&observations);
     let terminal_seen = Arc::clone(&observations);
     let hooks = FnSessionHooks::<Types>::new(
-        |request, options, state| Box::pin(async move {
-            *request = format!("{request}:{state}");
-            *options += 1;
-            Ok("resume-prepared")
-        }),
-        |request, options, state| Box::pin(async move {
-            *request = format!("{request}:{state}");
-            *options += 2;
-            Ok("turn-prepared")
-        }),
+        |request, options, state| {
+            Box::pin(async move {
+                *request = format!("{request}:{state}");
+                *options += 1;
+                Ok("resume-prepared")
+            })
+        },
+        |request, options, state| {
+            Box::pin(async move {
+                *request = format!("{request}:{state}");
+                *options += 2;
+                Ok("turn-prepared")
+            })
+        },
         move |outcome, options| {
             let seen = Arc::clone(&before_commit_seen);
             Box::pin(async move {
-                seen.lock().unwrap().push(format!("before:{outcome}:{options}"));
+                seen.lock()
+                    .unwrap()
+                    .push(format!("before:{outcome}:{options}"));
                 Ok(())
             })
         },
@@ -58,15 +64,30 @@ async fn callbacks_mutate_and_observe_their_typed_inputs() {
 
     let mut request = "request".to_owned();
     let mut options = 0;
-    assert_eq!(hooks.before_resume(&mut request, &mut options, "resume").await, Ok("resume-prepared"));
-    assert_eq!(hooks.before_turn(&mut request, &mut options, "turn").await, Ok("turn-prepared"));
+    assert_eq!(
+        hooks
+            .before_resume(&mut request, &mut options, "resume")
+            .await,
+        Ok("resume-prepared")
+    );
+    assert_eq!(
+        hooks.before_turn(&mut request, &mut options, "turn").await,
+        Ok("turn-prepared")
+    );
     assert_eq!((&request[..], options), ("request:resume:turn", 3));
-    hooks.before_commit(&"candidate".to_owned(), &"transcript-options".to_owned()).await.unwrap();
+    hooks
+        .before_commit(&"candidate".to_owned(), &"transcript-options".to_owned())
+        .await
+        .unwrap();
     hooks.after_commit("receipt".to_owned()).await.unwrap();
     hooks.on_terminal("completed".to_owned()).await.unwrap();
     assert_eq!(
         *observations.lock().unwrap(),
-        ["before:candidate:transcript-options", "commit:receipt", "terminal:completed"]
+        [
+            "before:candidate:transcript-options",
+            "commit:receipt",
+            "terminal:completed"
+        ]
     );
 }
 
@@ -81,6 +102,12 @@ async fn callback_errors_are_returned_to_the_runtime_adapter() {
     );
     let mut request = String::new();
     let mut options = 0;
-    assert_eq!(hooks.before_turn(&mut request, &mut options, "state").await, Err("before turn failed"));
-    assert_eq!(hooks.after_commit(String::new()).await, Err("commit failed"));
+    assert_eq!(
+        hooks.before_turn(&mut request, &mut options, "state").await,
+        Err("before turn failed")
+    );
+    assert_eq!(
+        hooks.after_commit(String::new()).await,
+        Err("commit failed")
+    );
 }

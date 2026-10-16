@@ -155,3 +155,7 @@ impl<C: Clone + Send + Sync + 'static> SessionHooks<C>
         tinyagents_hooks::FnSessionHooks::on_terminal(self, terminal).await
     }
 }
+
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;
