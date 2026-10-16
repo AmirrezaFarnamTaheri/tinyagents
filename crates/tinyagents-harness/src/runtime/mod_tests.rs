@@ -21,6 +21,7 @@ use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::testkit::ScriptedModel;
 use futures::StreamExt;
+use sha2::Digest;
 use tinyagents_definition::{
     AgentDefinition, DefinitionRegistry, DefinitionRegistryError, InMemoryDefinitionRegistry,
 };
