@@ -540,6 +540,15 @@ impl SubagentRunResult {
 pub struct SubagentOutcome {
     /// Host-stable task identity.
     pub task_id: String,
+    /// Durable worker conversation id, when the host created one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    /// Host-resolved agent tier label, when the host has tiered agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Explicit model override used for this run, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_override: Option<String>,
     /// Final visible text, retained even when cancellation arrives after work.
     pub output: String,
     /// Complete model history without lossy transcript conversion.
@@ -577,6 +586,9 @@ impl SubagentOutcome {
     pub fn cancelled(task_id: impl Into<String>) -> Self {
         Self {
             task_id: task_id.into(),
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Cancelled,
@@ -601,6 +613,10 @@ impl SubagentOutcome {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
 
 /// The durable input to [`crate::subagent::SubagentPersistence::save_pause`].
 #[derive(Clone, Debug, PartialEq)]

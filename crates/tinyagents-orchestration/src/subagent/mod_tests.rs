@@ -167,6 +167,9 @@ impl SubagentExecutor<String> for FakeExecutor {
         };
         Ok(SubagentOutcome {
             task_id: execution.prepared.task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
             output: "result".into(),
             history: vec![Message::assistant("result")],
             status,
@@ -479,6 +482,9 @@ impl SubagentExecutor<String> for MismatchedExecutor {
     ) -> Result<SubagentOutcome, SubagentError> {
         Ok(SubagentOutcome {
             task_id: "other-task".into(),
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
             output: String::new(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,
@@ -514,6 +520,9 @@ impl SubagentExecutor<String> for PauseThenCompleteExecutor {
         self.actions.lock().unwrap().push(Action::Execute);
         Ok(SubagentOutcome {
             task_id: execution.prepared.task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
             output: if call == 1 {
                 "waiting".into()
             } else {
@@ -573,6 +582,9 @@ impl SubagentExecutor<String> for NestedExecutor {
                 .await?;
             return Ok(SubagentOutcome {
                 task_id,
+                worker_thread_id: None,
+                tier: None,
+                model_override: None,
                 output: "parent result".into(),
                 history: Vec::new(),
                 status: SubagentOutcomeKind::Completed,
@@ -589,6 +601,9 @@ impl SubagentExecutor<String> for NestedExecutor {
         }
         Ok(SubagentOutcome {
             task_id,
+            worker_thread_id: None,
+            tier: None,
+            model_override: None,
             output: "child result".into(),
             history: Vec::new(),
             status: SubagentOutcomeKind::Completed,
