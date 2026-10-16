@@ -144,7 +144,6 @@ fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client
         "connection reset by peer",
         "deadline exceeded",
         "temporarily unavailable",
-        "upstream returned 503",
     ] {
         assert_eq!(
             reason_of(&TinyAgentsError::Model(message.into())),
@@ -155,6 +154,10 @@ fn classifies_the_hosts_transient_transport_phrases_without_reclassifying_client
 
     let client_error = provider(Some(400), None, "invalid connection option", true);
     assert_eq!(reason_of(&client_error), FailoverReason::Format);
+    assert_eq!(
+        reason_of(&TinyAgentsError::Model("upstream returned 503".into())),
+        FailoverReason::Overloaded
+    );
     let unrelated = TinyAgentsError::Model("reconnection is disabled".into());
     assert_eq!(reason_of(&unrelated), FailoverReason::Transport);
 }
