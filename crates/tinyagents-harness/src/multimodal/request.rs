@@ -376,10 +376,22 @@ where
             }
         }
 
-        let composed = compose_multimodal_message(&clean_text, &[], &file_payloads);
         let mut output = Vec::new();
-        let mut text_output = composed;
-        for fallback in image_fallback.into_iter().chain(file_fallback_text) {
+        let mut text_output = compose_multimodal_message(&clean_text, &[], &[]);
+        let mut file_context = compose_multimodal_message("", &[], &file_payloads);
+        for fallback in file_fallback_text {
+            if !file_context.is_empty() {
+                file_context.push_str("\n\n");
+            }
+            file_context.push_str(&fallback);
+        }
+        if !file_context.is_empty() {
+            if !text_output.is_empty() {
+                text_output.push_str("\n\n");
+            }
+            text_output.push_str(&self.limit_context(file_context));
+        }
+        for fallback in image_fallback {
             if !text_output.is_empty() {
                 text_output.push_str("\n\n");
             }
