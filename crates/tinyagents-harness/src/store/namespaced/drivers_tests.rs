@@ -298,7 +298,7 @@ async fn a_root_search_ignores_lookalike_roots_and_flat_entries() {
     store.put(&ns(&["a-b"]), "k", json!(2)).await.unwrap();
     store.put(&ns(&["ab"]), "k", json!(3)).await.unwrap();
     crate::store::DriverStore::new(Arc::clone(&documents))
-        .put("namespaced:a", "k", json!(4))
+        .put("a", "k", json!(4))
         .await
         .unwrap();
     let found = store
