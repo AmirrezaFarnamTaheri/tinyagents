@@ -958,7 +958,20 @@ where
                     Some(signal) => match signal {
                         TurnSignal::Progress(event) => {
                             last_progress = Instant::now();
-                            self.events.progress(request, *event).await;
+                            tokio::select! {
+                                biased;
+                                _ = cancellation.cancelled() => {
+                                    task_cancellation.cancel();
+                                    self.host.cancel_children(request).await;
+                                    return Err("turn cancelled".into());
+                                }
+                                _ = async { if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.is_some() => {
+                                    task_cancellation.cancel();
+                                    self.host.cancel_children(request).await;
+                                    return self.close_or_timeout(request, "wall-clock deadline", &cancellation).await;
+                                }
+                                _ = self.events.progress(request, *event) => {}
+                            }
                         }
                         TurnSignal::WorkStarted => work_in_flight = work_in_flight.saturating_add(1),
                         TurnSignal::WorkFinished => {
