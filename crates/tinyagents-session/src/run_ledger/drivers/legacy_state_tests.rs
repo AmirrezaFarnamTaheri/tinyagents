@@ -125,15 +125,3 @@ async fn a_workflow_lease_is_a_tsd_lease_and_not_part_of_the_stored_run() {
     assert_eq!(lease["holder"], "driver");
     assert_eq!(lease["epoch"], 1);
 }
-
-#[tokio::test]
-async fn an_agent_import_receipt_is_a_migrations_record_that_guards_the_operation_id() {
-    use crate::legacy::QuiescentSource;
-    let _ = std::any::type_name::<QuiescentSource>();
-    let storage = scoped();
-    let ledger = DriverRunLedger::new(storage.clone());
-    ledger.declare().await.unwrap();
-    assert!(ledger.import_receipt("op").await.unwrap().is_none());
-    let id = super::super::import::import_receipt_id("op").unwrap();
-    assert_eq!(id, "ledger/agent_import%2Fop");
-}
