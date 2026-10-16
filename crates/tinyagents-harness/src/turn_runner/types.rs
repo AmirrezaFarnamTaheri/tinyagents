@@ -534,7 +534,7 @@ where
                 }
                 let suggestions = self.summarizer.suggestions(&request, &result).await;
                 self.events.suggestions(&request, suggestions).await;
-                if request.disposition != QueueDisposition::Parallel {
+                if !request.host_authored && request.disposition != QueueDisposition::Parallel {
                     let collected = run_queue.take(QueueLane::Collect, QueueMode::All).await;
                     self.events.collected(&request, collected).await;
                 }
@@ -768,6 +768,16 @@ where
         );
         self.parallel_active.lock().await.remove(&parallel_key);
         self.parallel_queues.lock().await.remove(&parallel_key);
+    }
+
+    async fn clear_parallel_tracking(&self, request: &TurnRequest<P>) {
+        let key = (
+            request.scope.clone(),
+            request.thread_id.clone(),
+            request.request_id.clone(),
+        );
+        self.parallel_active.lock().await.remove(&key);
+        self.parallel_queues.lock().await.remove(&key);
     }
 
     async fn fail<T>(&self, request: &TurnRequest<P>, error: String) -> Result<T, TurnRunnerError> {
