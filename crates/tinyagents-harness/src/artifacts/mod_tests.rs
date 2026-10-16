@@ -276,7 +276,7 @@ fn build_abstract_never_splits_a_multibyte_character() {
 fn sample_artifact(redacted: bool) -> OffloadedArtifact {
     OffloadedArtifact {
         kind: ArtifactKind::Output,
-        relative_path: "harness/outputs/agent/task-result.md".to_string(),
+        relative_path: "outputs/agent/task-result.md".to_string(),
         stored_bytes: 1234,
         original_bytes: 1300,
         redacted,
@@ -315,7 +315,7 @@ fn pointer_discloses_redaction_when_it_happened() {
 fn extract_artifact_paths_reads_pointers_out_of_a_handoff() {
     let handoff =
         format!("{ARTIFACT_POINTER_PREFIX} kind=output path=outputs/a.md bytes=10\nprose");
-    assert_eq!(extract_artifact_paths(&handoff), vec!["harness/outputs/a.md"]);
+    assert_eq!(extract_artifact_paths(&handoff), vec!["outputs/a.md"]);
 }
 
 #[test]
