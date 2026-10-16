@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
-use crate::tool::ToolDispatch;
+use crate::{runtime::AgentHarness, testkit, tool::ToolDispatch};
+use tinyinference_llm::{message::{AssistantMessage, Message}, model::ModelResponse, providers::MockModel, tool::ToolCall, usage::Usage};
 
 const MARKER: &str = "[not_found]";
 
@@ -343,6 +344,68 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
         "run=live-parent;call=admitted-call;args={\"marker\":\"inside\"}"
     );
     assert_eq!(bound.admission_target().unwrap().0.name(), "a_one");
+}
+
+#[tokio::test]
+async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_and_live_parent() {
+    let tools = bound(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let selected_for_selector = selected.clone();
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(move |selection| {
+        let name = selection.tool_name().to_owned();
+        selected_for_selector.lock().unwrap().push(name.clone());
+        let target_name = match name.as_str() {
+            "a_one" => "a_one",
+            "a_two" => "a_two",
+            _ => return None,
+        };
+        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain(
+            target_name,
+        )))))
+    });
+    let dispatch = Arc::new(UseSkillDispatch::new(outer, selector));
+    let response = ModelResponse {
+        message: AssistantMessage {
+            id: Some("packed-message".into()),
+            content: Vec::new(),
+            tool_calls: vec![ToolCall::new(
+                "packed-call-17",
+                USE_SKILL,
+                json!({"skill":"alpha", "tool":"a_one", "args":{"marker":"one"}}),
+            )],
+            usage: Some(Usage::new(1, 1)),
+            origin: None,
+        },
+        usage: Some(Usage::new(1, 1)),
+        finish_reason: Some("tool_calls".into()),
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+    };
+    let mut harness: AgentHarness<(), String> = AgentHarness::new();
+    harness
+        .register_model("mock", Arc::new(MockModel::with_responses(vec![
+            response,
+            testkit::text_response("finished", 1, 1),
+        ])))
+        .register_tool_dispatch(dispatch);
+    let parent = crate::context::RunContext::new(
+        crate::context::RunConfig::new("outer-run"),
+        "live-parent-state".to_owned(),
+    );
+    let run = harness
+        .invoke_in_context(&(), parent, vec![Message::user("run the packed tool")])
+        .await
+        .expect("the harness admits and executes the selected packed tool");
+
+    assert_eq!(selected.lock().unwrap().as_slice(), &["a_one"]);
+    let tool_result = run.messages.iter().find(|message| message.role() == "tool").unwrap();
+    assert!(tool_result.text().contains("run=live-parent-state"));
+    assert!(tool_result.text().contains("call=packed-call-17"));
+    assert!(tool_result.text().contains("\"marker\":\"one\""));
 }
 
 #[test]
