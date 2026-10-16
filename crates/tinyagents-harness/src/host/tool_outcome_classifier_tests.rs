@@ -121,3 +121,33 @@ fn usable_as_a_trait_object() {
         OutcomeClass::PermanentFailure
     );
 }
+
+#[test]
+fn status_classifier_uses_typed_status_precedence_and_conservative_retryability() {
+    let classifier = ToolStatusClassifier;
+    assert_eq!(
+        classifier.classify(
+            "tool",
+            &ToolResult::error("[policy-denied] approval timed out")
+        ),
+        OutcomeClass::PermanentFailure,
+        "a refusal marker must win over timeout wording"
+    );
+    assert_eq!(
+        classifier.classify("tool", &ToolResult::error("service unavailable")),
+        OutcomeClass::RetryableFailure
+    );
+    assert_eq!(
+        classifier.classify("tool", &ToolResult::error("timed out")),
+        OutcomeClass::PermanentFailure,
+        "the classifier cannot know whether repeating a timed-out effect is safe"
+    );
+    assert_eq!(
+        classifier.classify("tool", &ToolResult::error("unclassified failure")),
+        OutcomeClass::PermanentFailure
+    );
+    assert_eq!(
+        classifier.classify("tool", &ToolResult::success("an error was found")),
+        OutcomeClass::Success
+    );
+}
