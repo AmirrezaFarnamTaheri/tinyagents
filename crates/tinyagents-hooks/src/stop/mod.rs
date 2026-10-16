@@ -2,9 +2,11 @@
 
 mod hooks;
 mod latch;
+mod budget;
 
 pub use hooks::{StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState};
 pub use latch::StopLatch;
+pub use budget::BudgetStopHook;
 
 impl StopHookMetrics for tinyagents_harness::cost::TurnCost {
     fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {

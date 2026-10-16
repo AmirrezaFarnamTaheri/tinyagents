@@ -30,6 +30,7 @@ pub struct StopHookMiddleware<Metrics = ()> {
     runs: Mutex<HashMap<u64, HookRunState<Metrics>>>,
     seed: Option<Metrics>,
     observer: Option<StopObserver>,
+    halt_summary: Option<tinyagents_harness::middleware::library::HaltSummarySlot>,
 }
 
 impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
@@ -43,6 +44,7 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
             runs: Mutex::new(HashMap::new()),
             seed: None,
             observer: None,
+            halt_summary: None,
         }
     }
 
@@ -68,6 +70,15 @@ impl<Metrics: StopHookMetrics> StopHookMiddleware<Metrics> {
         F: Fn(&StopReport) + Send + Sync + 'static,
     {
         self.observer = Some(Arc::new(observer));
+        self
+    }
+
+    /// Record the first stop reason in the shared halt-summary slot.
+    pub fn with_halt_summary(
+        mut self,
+        slot: tinyagents_harness::middleware::library::HaltSummarySlot,
+    ) -> Self {
+        self.halt_summary = Some(slot);
         self
     }
 
@@ -197,6 +208,11 @@ where
                 .expect("active stop-hook run");
             run.stopped = true;
             drop(runs);
+            if let Some(slot) = &self.halt_summary {
+                *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+                    "Stopping after {} model call(s): {}", report.iteration, report.reason
+                ));
+            }
             if let Some(observer) = &self.observer {
                 observer(&report);
             }
