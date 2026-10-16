@@ -31,6 +31,7 @@
 //! its own, no raw id can name a hashed scope, and the mapping never changes.
 
 mod refused;
+mod rebound;
 mod transcripts;
 mod turn_states;
 
@@ -47,6 +48,7 @@ use super::{AgentStores, SessionStoreProvider};
 
 pub use transcripts::{DriverTranscriptHistory, DriverTranscriptLocator};
 pub use turn_states::DriverTurnStates;
+pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
 
 /// Prefix of the scopes agent ids are hashed into. Reserved: an agent id
 /// starting with it is hashed too, so it cannot name another agent's scope.
