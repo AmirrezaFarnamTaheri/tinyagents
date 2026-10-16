@@ -100,6 +100,22 @@ pub trait AppendStore: Send + Sync {
     /// This equals the offset the next [`append`](Self::append) will receive.
     /// Returns `0` for a stream that has never been written.
     async fn len(&self, stream: &str) -> Result<u64>;
+
+    /// Closes `stream` to further appends once its owner is done with it.
+    ///
+    /// Sealing never changes what a reader observes: offsets, values and
+    /// [`len`](Self::len) stay exactly as they were, so a sealed stream is
+    /// read with the same calls as an open one. A durable backend uses the
+    /// seal to store the finished stream compactly. Sealing is idempotent, and
+    /// sealing a stream that was never written is a no-op.
+    ///
+    /// The default does nothing: a store with no compact form for finished
+    /// streams (the in-memory one) keeps accepting appends. A backend that
+    /// seals refuses later appends to a sealed stream.
+    async fn seal(&self, stream: &str) -> Result<()> {
+        let _ = stream;
+        Ok(())
+    }
 }
 
 // ── Shared handles ──────────────────────────────────────────────────────────
