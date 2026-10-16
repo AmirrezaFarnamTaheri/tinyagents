@@ -9,7 +9,7 @@ use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
 use crate::{runtime::AgentHarness, testkit, tool::ToolDispatch};
-use tinyinference_llm::{message::{AssistantMessage, Message}, model::ModelResponse, providers::MockModel, tool::ToolCall, usage::Usage};
+use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";
 
@@ -366,30 +366,16 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
         )))))
     });
     let dispatch = Arc::new(UseSkillDispatch::new(outer, selector));
-    let response = ModelResponse {
-        message: AssistantMessage {
-            id: Some("packed-message".into()),
-            content: Vec::new(),
-            tool_calls: vec![ToolCall::new(
-                "packed-call-17",
-                USE_SKILL,
-                json!({"skill":"alpha", "tool":"a_one", "args":{"marker":"one"}}),
-            )],
-            usage: Some(Usage::new(1, 1)),
-            origin: None,
-        },
-        usage: Some(Usage::new(1, 1)),
-        finish_reason: Some("tool_calls".into()),
-        raw: None,
-        resolved_model: None,
-        continue_turn: None,
-        served_from_cache: false,
-    };
+    let response = testkit::tool_call_response(ToolCall::new(
+        "packed-call-17",
+        USE_SKILL,
+        json!({"skill":"alpha", "tool":"a_one", "args":{"marker":"one"}}),
+    ));
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
         .register_model("mock", Arc::new(MockModel::with_responses(vec![
             response,
-            testkit::text_response("finished", 1, 1),
+            testkit::text_response("finished"),
         ])))
         .register_tool_dispatch(dispatch);
     let parent = crate::context::RunContext::new(
@@ -402,10 +388,14 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
         .expect("the harness admits and executes the selected packed tool");
 
     assert_eq!(selected.lock().unwrap().as_slice(), &["a_one"]);
-    let tool_result = run.messages.iter().find(|message| message.role() == "tool").unwrap();
-    assert!(tool_result.text().contains("run=live-parent-state"));
-    assert!(tool_result.text().contains("call=packed-call-17"));
-    assert!(tool_result.text().contains("\"marker\":\"one\""));
+    let tool_result = run.messages.iter().find_map(|message| match message {
+        Message::Tool(message) => Some(message),
+        _ => None,
+    }).unwrap();
+    let result_text = serde_json::to_string(&tool_result.content).unwrap();
+    assert!(result_text.contains("run=live-parent-state"));
+    assert!(result_text.contains("call=packed-call-17"));
+    assert!(result_text.contains("\"marker\":\"one\""));
 }
 
 #[test]
