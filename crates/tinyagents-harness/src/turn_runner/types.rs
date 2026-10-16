@@ -656,28 +656,18 @@ where
         mode: QueueMode,
     ) -> Vec<TurnRequest<P>> {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self
-            .active
-            .lock()
-            .await
-            .get(&key)
-            .map(|turn| turn.queue.clone());
-        match queue {
-            Some(queue) => queue.take(lane, mode).await,
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => turn.queue.take(lane, mode).await,
             None => Vec::new(),
         }
     }
 
     pub async fn queue_status(&self, scope: &ScopeKey, thread_id: &str) -> QueueStatus {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self
-            .active
-            .lock()
-            .await
-            .get(&key)
-            .map(|turn| turn.queue.clone());
-        match queue {
-            Some(queue) => queue.status().await,
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => turn.queue.status().await,
             None => QueueStatus {
                 steers: 0,
                 followups: 0,
@@ -689,14 +679,9 @@ where
 
     pub async fn clear_queue(&self, scope: &ScopeKey, thread_id: &str) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self
-            .active
-            .lock()
-            .await
-            .get(&key)
-            .map(|turn| turn.queue.clone());
-        match queue {
-            Some(queue) => queue.clear().await,
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => turn.queue.clear().await,
             None => 0,
         }
     }
@@ -725,15 +710,10 @@ where
         request_id: &str,
     ) -> usize {
         let key = (scope.clone(), thread_id.to_owned());
-        let queue = self
-            .active
-            .lock()
-            .await
-            .get(&key)
-            .map(|turn| turn.queue.clone());
-        match queue {
-            Some(queue) => {
-                queue
+        let active = self.active.lock().await;
+        match active.get(&key) {
+            Some(turn) => {
+                turn.queue
                     .remove_where(|turn| turn.request_id == request_id)
                     .await
             }
