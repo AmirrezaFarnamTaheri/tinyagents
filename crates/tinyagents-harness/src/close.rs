@@ -135,7 +135,7 @@ pub fn render_tool_results(results: &[CloseToolResult], total_budget: usize) -> 
         };
         let content: String = source.chars().take(content_limit).collect();
         let suffix = if truncated { "…" } else { "" };
-        remaining = remaining.saturating_sub(content.chars().count() + suffix.len());
+        remaining = remaining.saturating_sub(content.chars().count() + suffix.chars().count());
         rendered.push(format!("{prefix}{content}{suffix}"));
     }
     rendered.reverse();

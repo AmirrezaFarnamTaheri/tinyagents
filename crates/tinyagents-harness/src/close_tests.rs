@@ -81,6 +81,11 @@ fn harness_quote_matching_normalizes_whitespace_but_ignores_short_phrases() {
 }
 
 #[test]
+fn result_truncation_respects_unicode_character_boundaries() {
+    assert_eq!(truncate_chars("  你好世界  ", 2), "你好… [truncated]");
+}
+
+#[test]
 fn repair_prompt_inserts_the_violation_into_host_template() {
     let prompt = close_repair_instruction("{repair_reason}\nTry again", "bad evidence");
     assert_eq!(prompt, "bad evidence\nTry again");
