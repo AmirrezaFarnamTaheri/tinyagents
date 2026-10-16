@@ -9,7 +9,6 @@ rust-version.workspace = true
 description = "Provider-neutral model, tool, middleware, and agent-loop runtime."
 
 [dependencies]
-cap-std.workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 # Keep this aligned with reqwest's transitive version. Claude Code request
@@ -51,6 +50,12 @@ uuid = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
+cap-std.workspace = true
+
+[dev-dependencies.cap-std]
+workspace = true
 
 [features]
 default = ["claude-code", "langfuse"]

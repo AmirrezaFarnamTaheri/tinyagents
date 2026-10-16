@@ -412,8 +412,11 @@ impl ArtifactOffload {
         }
         #[cfg(not(unix))]
         {
+            let canonical_root = tokio::fs::canonicalize(root)
+                .await
+                .map_err(|error| OffloadError::Materialization(error.to_string()))?;
             let relative_parent = parent
-                .strip_prefix(root)
+                .strip_prefix(&canonical_root)
                 .map_err(|error| OffloadError::Materialization(error.to_string()))?
                 .to_path_buf();
             let file_name = target
@@ -422,10 +425,9 @@ impl ArtifactOffload {
                     OffloadError::Materialization("artifact target has no file name".into())
                 })?
                 .to_os_string();
-            let root = root.to_path_buf();
             let bytes = body.into_bytes();
             tokio::task::spawn_blocking(move || {
-                atomic_write_with_capability(&root, &relative_parent, &file_name, &bytes)
+                atomic_write_with_capability(&canonical_root, &relative_parent, &file_name, &bytes)
             })
             .await
             .map_err(|error| OffloadError::Materialization(error.to_string()))?
@@ -457,7 +459,7 @@ impl ArtifactOffload {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(any(not(unix), test))]
 fn atomic_write_with_capability(
     root: &Path,
     relative_parent: &Path,
@@ -465,9 +467,8 @@ fn atomic_write_with_capability(
     body: &[u8],
 ) -> std::io::Result<()> {
     use cap_std::ambient_authority;
-    use cap_std::fs::Dir;
+    use cap_std::fs::{Dir, OpenOptions};
     use std::{
-        fs::OpenOptions,
         io::Write,
         sync::atomic::{AtomicU64, Ordering},
     };
