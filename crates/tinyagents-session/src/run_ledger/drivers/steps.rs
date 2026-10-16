@@ -5,12 +5,12 @@
 //! record: {camelCase wire body}}`. The wire types deserialize from `record`
 //! unchanged, and the storage DTOs take it from there.
 
-use super::dto::{Stored, to_ms};
 use super::dto::{EffectDto, from_ms};
+use super::dto::{Stored, to_ms};
 use super::entry_tree::{ENTRIES, HEADS, INDEXES, LABELS, ts_to_ms};
 use super::storage::{
-    AGENTS, EFFECTS, EVENT_HEADS, EVENT_STREAM, EVENTS, MEMBERS, TASKS, TEAMS, TELEMETRY,
-    WORKFLOWS, SCHEMA_VERSION, encode, event_stream, key,
+    AGENTS, EFFECTS, EVENT_HEADS, EVENT_STREAM, EVENTS, MEMBERS, SCHEMA_VERSION, TASKS, TEAMS,
+    TELEMETRY, WORKFLOWS, encode, event_stream, key,
 };
 use crate::run_ledger::tool_effects::ToolEffectStatus;
 use crate::run_ledger::types::*;
@@ -23,7 +23,12 @@ pub(super) fn v1_record<T: DeserializeOwned>(body: &Value) -> Option<T> {
     serde_json::from_value(body.get("record")?.clone()).ok()
 }
 
-fn target(item: &str, id: Option<String>, body: Option<Value>, source: &SourceRecord) -> Option<TargetRecord> {
+fn target(
+    item: &str,
+    id: Option<String>,
+    body: Option<Value>,
+    source: &SourceRecord,
+) -> Option<TargetRecord> {
     let record = TargetRecord::new(item, id?, body?);
     Some(if source.meta.created_ms > 0 {
         record.created_ms(source.meta.created_ms)
@@ -149,27 +154,36 @@ fn tool_effect(record: &Value) -> Option<(String, Value)> {
         settled_ms: time("settledAt"),
     };
     let _ = ToolEffectStatus::parse(&dto.status);
-    Some((key(&[run_id, call_id]).ok()?, serde_json::to_value(dto).ok()?))
+    Some((
+        key(&[run_id, call_id]).ok()?,
+        serde_json::to_value(dto).ok()?,
+    ))
 }
 
 /// `run_events:<sha>` -> `ledger.events/<run>`: the run id is in every entry
 /// (the v1 stream name is a digest of it); entries drop it.
 fn event_stream_step() -> Step {
-    Step::stream("run_events_v2", EVENT_STREAM, 1, SCHEMA_VERSION, |_, entries| {
-        let Some(run_id) = entries
-            .first()
-            .and_then(|entry| text(entry, "runId"))
-            .map(str::to_owned)
-        else {
-            return Ok(None);
-        };
-        let mut mapped = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let event: RunEvent = serde_json::from_value(entry)?;
-            mapped.push(serde_json::to_value(super::dto::StreamEvent::of(&event))?);
-        }
-        Ok(Some((event_stream(&run_id)?, mapped)))
-    })
+    Step::stream(
+        "run_events_v2",
+        EVENT_STREAM,
+        1,
+        SCHEMA_VERSION,
+        |_, entries| {
+            let Some(run_id) = entries
+                .first()
+                .and_then(|entry| text(entry, "runId"))
+                .map(str::to_owned)
+            else {
+                return Ok(None);
+            };
+            let mut mapped = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let event: RunEvent = serde_json::from_value(entry)?;
+                mapped.push(serde_json::to_value(super::dto::StreamEvent::of(&event))?);
+            }
+            Ok(Some((event_stream(&run_id)?, mapped)))
+        },
+    )
     .source_prefix("run_events:")
 }
 
@@ -177,9 +191,18 @@ fn event_stream_step() -> Step {
 pub(super) fn steps() -> Vec<Step> {
     let _ = (from_ms, to_ms);
     vec![
-        convert::<WorkflowRun>("workflow_runs_v2", WORKFLOWS, "run_ledger_workflow_runs", |r| key1(&r.id)),
-        convert::<RunTelemetry>("telemetry_v2", TELEMETRY, "run_ledger_telemetry", |r| key1(&r.run_id)),
-        convert::<AgentRun>("agent_runs_v2", AGENTS, "run_ledger_agent_runs", |r| key1(&r.id)),
+        convert::<WorkflowRun>(
+            "workflow_runs_v2",
+            WORKFLOWS,
+            "run_ledger_workflow_runs",
+            |r| key1(&r.id),
+        ),
+        convert::<RunTelemetry>("telemetry_v2", TELEMETRY, "run_ledger_telemetry", |r| {
+            key1(&r.run_id)
+        }),
+        convert::<AgentRun>("agent_runs_v2", AGENTS, "run_ledger_agent_runs", |r| {
+            key1(&r.id)
+        }),
         convert::<AgentTeam>("teams_v2", TEAMS, "run_ledger_teams", |r| key1(&r.id)),
         convert::<AgentTeamMember>("members_v2", MEMBERS, "run_ledger_members", |r| key1(&r.id)),
         convert::<AgentTeamTask>("tasks_v2", TASKS, "run_ledger_tasks", |r| key1(&r.id)),
@@ -187,13 +210,35 @@ pub(super) fn steps() -> Vec<Step> {
             key(&[&r.run_id, &r.sequence.to_string()]).ok()
         }),
         // The v1 head's id is a digest of the run id; the head is recomputed.
-        Step::new("event_heads_v2", EVENT_HEADS, 1, SCHEMA_VERSION, |_| Ok(Vec::new()))
-            .source("run_ledger_event_heads"),
-        value_step("tool_effects_v2", EFFECTS, "run_ledger_tool_effects", tool_effect),
-        value_step("entry_heads_v2", HEADS, "run_ledger_entry_heads", entry_head),
+        Step::new("event_heads_v2", EVENT_HEADS, 1, SCHEMA_VERSION, |_| {
+            Ok(Vec::new())
+        })
+        .source("run_ledger_event_heads"),
+        value_step(
+            "tool_effects_v2",
+            EFFECTS,
+            "run_ledger_tool_effects",
+            tool_effect,
+        ),
+        value_step(
+            "entry_heads_v2",
+            HEADS,
+            "run_ledger_entry_heads",
+            entry_head,
+        ),
         value_step("entries_v2", ENTRIES, "run_ledger_entries", entry_node),
-        value_step("entry_labels_v2", LABELS, "run_ledger_entry_labels", entry_label),
-        value_step("entry_indexes_v2", INDEXES, "run_ledger_entry_indexes", entry_index),
+        value_step(
+            "entry_labels_v2",
+            LABELS,
+            "run_ledger_entry_labels",
+            entry_label,
+        ),
+        value_step(
+            "entry_indexes_v2",
+            INDEXES,
+            "run_ledger_entry_indexes",
+            entry_index,
+        ),
         event_stream_step(),
     ]
 }

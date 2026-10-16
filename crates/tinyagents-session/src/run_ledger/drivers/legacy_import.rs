@@ -200,7 +200,7 @@ impl DriverRunLedger {
             highest = highest.max(u64::try_from(message.id).unwrap_or(0));
             imported += usize::from(
                 self.put_if_absent(HIST_MESSAGES, &message_id(message.id)?, encode(message)?)
-                .await?,
+                    .await?,
             );
         }
         self.raise_counter(MESSAGE_COUNTER, highest).await?;
@@ -212,7 +212,7 @@ impl DriverRunLedger {
             highest = highest.max(u64::try_from(call.id).unwrap_or(0));
             imported += usize::from(
                 self.put_if_absent(HIST_TOOL_CALLS, &tool_call_id(call.id)?, encode(call)?)
-                .await?,
+                    .await?,
             );
         }
         self.raise_counter(TOOL_CALL_COUNTER, highest).await?;
@@ -295,12 +295,8 @@ impl DriverRunLedger {
         let mut imported = 0;
         for row in &loaded.effects {
             imported += usize::from(
-                self.put_if_absent(
-                    EFFECTS,
-                    &key(&[&row.run_id, &row.call_id])?,
-                    encode(row)?,
-                )
-                .await?,
+                self.put_if_absent(EFFECTS, &key(&[&row.run_id, &row.call_id])?, encode(row)?)
+                    .await?,
             );
         }
         report.tool_effects = ImportCounts::tally(loaded.effects.len(), imported);

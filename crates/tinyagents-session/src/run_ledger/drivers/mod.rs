@@ -30,16 +30,14 @@ pub use import::AgentImportReport;
 #[cfg(feature = "legacy-import")]
 pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
 
-use std::sync::Arc;
 pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
 pub use schema::{history_storage_schema, ledger_storage_schema};
+use std::sync::Arc;
 use storage::{
-    LEDGER_OWNER, trunc, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now,
+    LEDGER_OWNER, MEMBERS, TASKS, TEAMS, TELEMETRY, WORKFLOWS, eq_nonblank, now, trunc,
     workflow_lease_key,
 };
-use tinystoragedrivers_core::{
-    Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError,
-};
+use tinystoragedrivers_core::{Filter, Leases, Query, Scope, ScopedStorage, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;
@@ -281,39 +279,40 @@ impl RunLedgerStore for DriverRunLedger {
     /// Implement [`RunLedgerStore::upsert_workflow_run`] without a weaker fallback.
     async fn upsert_workflow_run(&self, upsert: WorkflowRunUpsert) -> Result<WorkflowRun> {
         let now = now();
-        let row = self.change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
-            let first = previous.is_none();
-            let mut row = previous.unwrap_or(WorkflowRun {
-                id: upsert.id.clone(),
-                definition_id: upsert.definition_id.clone(),
-                parent_thread_id: None,
-                input: upsert.input.clone(),
-                phase_states: upsert.phase_states.clone(),
-                child_run_ids: upsert.child_run_ids.clone(),
-                status: upsert.status,
-                summary: None,
-                started_at: upsert.started_at.map(trunc).unwrap_or(now),
-                updated_at: now,
-                completed_at: None,
-                revision: 0,
-                lease_owner: None,
-                lease_expires_at: None,
-            });
-            row.definition_id = upsert.definition_id.clone();
-            row.parent_thread_id = upsert.parent_thread_id.clone().or(row.parent_thread_id);
-            row.input = upsert.input.clone();
-            row.phase_states = upsert.phase_states.clone();
-            row.child_run_ids = upsert.child_run_ids.clone();
-            row.status = upsert.status;
-            row.summary = upsert.summary.clone().or(row.summary);
-            row.updated_at = now;
-            row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
-            if !first {
-                row.revision = next_revision(row.revision)?;
-            }
-            Ok((Some(row.clone()), row))
-        })
-        .await?;
+        let row = self
+            .change(WORKFLOWS, &upsert.id, |previous: Option<WorkflowRun>| {
+                let first = previous.is_none();
+                let mut row = previous.unwrap_or(WorkflowRun {
+                    id: upsert.id.clone(),
+                    definition_id: upsert.definition_id.clone(),
+                    parent_thread_id: None,
+                    input: upsert.input.clone(),
+                    phase_states: upsert.phase_states.clone(),
+                    child_run_ids: upsert.child_run_ids.clone(),
+                    status: upsert.status,
+                    summary: None,
+                    started_at: upsert.started_at.map(trunc).unwrap_or(now),
+                    updated_at: now,
+                    completed_at: None,
+                    revision: 0,
+                    lease_owner: None,
+                    lease_expires_at: None,
+                });
+                row.definition_id = upsert.definition_id.clone();
+                row.parent_thread_id = upsert.parent_thread_id.clone().or(row.parent_thread_id);
+                row.input = upsert.input.clone();
+                row.phase_states = upsert.phase_states.clone();
+                row.child_run_ids = upsert.child_run_ids.clone();
+                row.status = upsert.status;
+                row.summary = upsert.summary.clone().or(row.summary);
+                row.updated_at = now;
+                row.completed_at = upsert.completed_at.map(trunc).or(row.completed_at);
+                if !first {
+                    row.revision = next_revision(row.revision)?;
+                }
+                Ok((Some(row.clone()), row))
+            })
+            .await?;
         if row.status.is_terminal() {
             self.release_workflow_lease(&row.id, now).await?;
             return Ok(row);
@@ -327,8 +326,7 @@ impl RunLedgerStore for DriverRunLedger {
         owner: &str,
         lease_for: chrono::Duration,
     ) -> Result<WorkflowLeaseClaim> {
-        self.claim_workflow_at(id, owner, lease_for, now())
-            .await
+        self.claim_workflow_at(id, owner, lease_for, now()).await
     }
 
     /// The lease is checked first and renewed (or ended, for a terminal status)
@@ -550,7 +548,10 @@ impl RunLedgerStore for DriverRunLedger {
         for run in runs {
             leased.push(self.with_lease(run, at).await?);
         }
-        Ok(WorkflowRunListResponse { runs: leased, count })
+        Ok(WorkflowRunListResponse {
+            runs: leased,
+            count,
+        })
     }
 
     async fn upsert_agent_team(&self, upsert: AgentTeamUpsert) -> Result<AgentTeam> {

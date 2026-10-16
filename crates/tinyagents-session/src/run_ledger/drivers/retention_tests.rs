@@ -287,10 +287,7 @@ async fn empty_retention_still_requires_native_admission() {
     let backend = MemoryStorage::new();
     let native = backend.for_scope(&Scope::new("a").unwrap()).unwrap();
     let (ledger, boundary) = wrap(&native, None, true);
-    let error = ledger
-        .prune_run_telemetry_before(now())
-        .await
-        .unwrap_err();
+    let error = ledger.prune_run_telemetry_before(now()).await.unwrap_err();
     assert!(
         matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
     );

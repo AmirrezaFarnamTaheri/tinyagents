@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::primitives::{self, LEASES};
 use tinystoragedrivers_core::{
-    CollectionSpec, Counters, Cursor, ErrorKind, Filter, ID_FIELD, Migrations,
-    Precondition, Query, Result, ScopedStorage, Sort,
+    CollectionSpec, Counters, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query,
+    Result, ScopedStorage, Sort,
 };
 
 const STEP: &str = "legacy_state_import";
@@ -52,13 +52,19 @@ fn legacy_key(parts: &[&str]) -> String {
     hex::encode(digest.finalize())
 }
 
-async fn rows(storage: &ScopedStorage, collection: &str) -> Result<Vec<tinystoragedrivers_core::Versioned<Value>>> {
+async fn rows(
+    storage: &ScopedStorage,
+    collection: &str,
+) -> Result<Vec<tinystoragedrivers_core::Versioned<Value>>> {
     let docs = storage.documents();
-    docs.ensure_collection(&CollectionSpec::new(collection)).await?;
+    docs.ensure_collection(&CollectionSpec::new(collection))
+        .await?;
     let mut out = Vec::new();
     let mut cursor: Option<Cursor> = None;
     loop {
-        let mut query = Query::filter(Filter::default()).sort(Sort::asc(ID_FIELD)).limit(PAGE);
+        let mut query = Query::filter(Filter::default())
+            .sort(Sort::asc(ID_FIELD))
+            .limit(PAGE);
         if let Some(after) = cursor.take() {
             query = query.after(after);
         }
@@ -81,7 +87,9 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
     primitives::ensure(storage).await?;
     storage
         .documents()
-        .ensure_collection(&CollectionSpec::new(tinystoragedrivers_core::MIGRATIONS_COLLECTION))
+        .ensure_collection(&CollectionSpec::new(
+            tinystoragedrivers_core::MIGRATIONS_COLLECTION,
+        ))
         .await?;
     let mut report = LegacyLedgerImport::default();
     if migrations.done(LEDGER_OWNER, STEP).await? {
@@ -90,7 +98,9 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
     let docs = storage.documents();
     let now_ms = chrono::Utc::now().timestamp_millis();
     for row in rows(storage, "run_ledger_workflow_runs").await? {
-        let Some(record) = row.doc.get("record") else { continue };
+        let Some(record) = row.doc.get("record") else {
+            continue;
+        };
         let (Some(run_id), Some(holder), Some(expires)) = (
             record.get("id").and_then(Value::as_str),
             record.get("leaseOwner").and_then(Value::as_str),
@@ -108,27 +118,38 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
         let body = json!({"holder": holder, "epoch": 1, "expires_ms": expires.timestamp_millis()});
         match docs.put(LEASES, &id, body, Precondition::Absent).await {
             Ok(_) => report.leases += 1,
-            Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
+            Err(error)
+                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
             Err(error) => return Err(error),
         }
     }
     let counters = Counters::new(docs);
-    let names = [("messages", super::history::MESSAGE_COUNTER), ("tool_calls", super::history::TOOL_CALL_COUNTER)];
+    let names = [
+        ("messages", super::history::MESSAGE_COUNTER),
+        ("tool_calls", super::history::TOOL_CALL_COUNTER),
+    ];
     for row in rows(storage, "session_history_counters").await? {
         for (v1_name, name) in names {
             if row.id != legacy_key(&[v1_name]) {
                 continue;
             }
             // The v1 counter held the next id to hand out; the primitive holds the last.
-            let next = row.doc.pointer("/record/next").and_then(Value::as_u64).unwrap_or(1);
+            let next = row
+                .doc
+                .pointer("/record/next")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
             counters
                 .set_at_least(HISTORY_OWNER, name, next.saturating_sub(1))
                 .await?;
             report.counters += 1;
         }
     }
-    docs.delete_where("session_history_counters", &Filter::default()).await?;
-    docs.delete_where("run_ledger_agent_imports", &Filter::default()).await.ok();
+    docs.delete_where("session_history_counters", &Filter::default())
+        .await?;
+    docs.delete_where("run_ledger_agent_imports", &Filter::default())
+        .await
+        .ok();
     migrations.mark_done(LEDGER_OWNER, STEP).await?;
     Ok(report)
 }

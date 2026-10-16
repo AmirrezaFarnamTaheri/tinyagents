@@ -155,8 +155,7 @@ impl DriverRunLedger {
             .documents()
             .query_all(
                 HIST_MESSAGES,
-                &Query::filter(Filter::eq("session_id", session_id))
-                    .sort(Sort::desc("id")),
+                &Query::filter(Filter::eq("session_id", session_id)).sort(Sort::desc("id")),
             )
             .await?;
         let mut ops = Vec::new();

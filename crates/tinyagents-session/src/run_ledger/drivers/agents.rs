@@ -99,11 +99,7 @@ impl DriverRunLedger {
     ) -> Result<AgentRunListResponse> {
         let filter = eq_nonblank(Filter::All, "status", request.status.as_deref());
         let filter = eq_nonblank(filter, "kind", request.kind.as_deref());
-        let filter = eq_nonblank(
-            filter,
-            "parent_run_id",
-            request.parent_run_id.as_deref(),
-        );
+        let filter = eq_nonblank(filter, "parent_run_id", request.parent_run_id.as_deref());
         let filter = eq_nonblank(
             filter,
             "parent_thread_id",
@@ -129,8 +125,7 @@ impl DriverRunLedger {
         use super::storage::{CAS_ATTEMPTS, key, put_op};
         use tinystoragedrivers_core::{DocumentStoreExt, ErrorKind, Precondition};
         self.declare().await?;
-        let filter =
-            Filter::eq("status", "running").or(Filter::eq("status", "pending"));
+        let filter = Filter::eq("status", "running").or(Filter::eq("status", "pending"));
         for _ in 0..CAS_ATTEMPTS {
             let rows = self
                 .scoped

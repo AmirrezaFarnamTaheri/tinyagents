@@ -13,8 +13,8 @@ use serde_json::Value;
 use tinystoragedrivers_core::primitives::{self, Repo};
 
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort, StorageError, Versioned,
-    WriteOp, WriteOptions,
+    CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort,
+    StorageError, Versioned, WriteOp, WriteOptions,
 };
 
 /// The owner of the run ledger's collections and stream.
@@ -84,7 +84,10 @@ pub(super) fn ledger_specs() -> Vec<CollectionSpec> {
         CollectionSpec::new(super::entry_tree::HEADS),
         CollectionSpec::new(super::entry_tree::ENTRIES)
             .index(IndexSpec::new("session_ordinal", ["session_id", "ordinal"]))
-            .index(IndexSpec::new("session_parent", ["session_id", "parent_id"])),
+            .index(IndexSpec::new(
+                "session_parent",
+                ["session_id", "parent_id"],
+            )),
         CollectionSpec::new(super::entry_tree::LABELS)
             .index(IndexSpec::new("session", ["session_id"])),
         CollectionSpec::new(super::entry_tree::INDEXES)

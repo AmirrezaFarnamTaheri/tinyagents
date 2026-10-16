@@ -11,15 +11,25 @@ use tinystoragedrivers_core::{
 
 fn scoped() -> ScopedStorage {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    backend.for_scope(&Scope::local().agent("a").unwrap()).unwrap()
+    backend
+        .for_scope(&Scope::local().agent("a").unwrap())
+        .unwrap()
 }
 
 async fn put(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
     let docs = storage.documents();
-    docs.ensure_collection(&CollectionSpec::new(collection)).await.unwrap();
-    docs.put_with(collection, id, body, Precondition::None, WriteOptions::new())
+    docs.ensure_collection(&CollectionSpec::new(collection))
         .await
         .unwrap();
+    docs.put_with(
+        collection,
+        id,
+        body,
+        Precondition::None,
+        WriteOptions::new(),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -43,11 +53,26 @@ async fn live_workflow_leases_and_history_counters_move_to_the_shared_primitives
         json!({"schemaVersion": 1, "record": {"next": 11}}),
     )
     .await;
-    put(&storage, "run_ledger_agent_imports", "receipt", json!({"record": {}})).await;
+    put(
+        &storage,
+        "run_ledger_agent_imports",
+        "receipt",
+        json!({"record": {}}),
+    )
+    .await;
 
     let report = import_legacy_ledger(&storage).await.unwrap();
-    assert_eq!(report, LegacyLedgerImport { leases: 1, counters: 1 });
-    assert_eq!(import_legacy_ledger(&storage).await.unwrap(), LegacyLedgerImport::default());
+    assert_eq!(
+        report,
+        LegacyLedgerImport {
+            leases: 1,
+            counters: 1
+        }
+    );
+    assert_eq!(
+        import_legacy_ledger(&storage).await.unwrap(),
+        LegacyLedgerImport::default()
+    );
 
     let ledger = DriverRunLedger::new(storage.clone());
     // The migrated lease is held by the old driver: nobody else can claim it.
@@ -72,17 +97,33 @@ async fn live_workflow_leases_and_history_counters_move_to_the_shared_primitives
     ));
     // The next message id continues after the v1 counter.
     ledger
-        .record_session_start(SessionStart { id: "s".into(), session_key: "s".into(), ..Default::default() })
+        .record_session_start(SessionStart {
+            id: "s".into(),
+            session_key: "s".into(),
+            ..Default::default()
+        })
         .await
         .unwrap();
     let id = ledger
-        .record_message(NewSessionMessage { session_id: "s".into(), role: "user".into(), content: "x".into(), ..Default::default() })
+        .record_message(NewSessionMessage {
+            session_id: "s".into(),
+            role: "user".into(),
+            content: "x".into(),
+            ..Default::default()
+        })
         .await
         .unwrap();
     assert_eq!(id, 11);
     // The v1 collections are emptied.
     for legacy in ["session_history_counters", "run_ledger_agent_imports"] {
-        assert!(storage.documents().query_all(legacy, &Default::default()).await.unwrap().is_empty());
+        assert!(
+            storage
+                .documents()
+                .query_all(legacy, &Default::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -113,7 +154,13 @@ async fn a_workflow_lease_is_a_tsd_lease_and_not_part_of_the_stored_run() {
         panic!("a free lease is acquired");
     };
     assert_eq!(row.lease_owner.as_deref(), Some("driver"));
-    let stored = storage.documents().get("ledger.workflow_runs", "wf").await.unwrap().unwrap().doc;
+    let stored = storage
+        .documents()
+        .get("ledger.workflow_runs", "wf")
+        .await
+        .unwrap()
+        .unwrap()
+        .doc;
     assert!(stored.get("lease_owner").is_none() && stored.get("lease_expires_at").is_none());
     let lease = storage
         .documents()

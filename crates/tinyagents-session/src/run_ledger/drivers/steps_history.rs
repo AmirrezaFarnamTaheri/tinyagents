@@ -17,7 +17,11 @@ use crate::types::{SessionMessage, SessionRecord, SessionToolCall};
 use tinystoragedrivers_core::{Result, SourceRecord, Step, TargetRecord};
 
 fn search_row(id: Result<String>, row: &FtsRow) -> Option<TargetRecord> {
-    Some(TargetRecord::new(HIST_FTS, id.ok()?, serde_json::to_value(row).ok()?))
+    Some(TargetRecord::new(
+        HIST_FTS,
+        id.ok()?,
+        serde_json::to_value(row).ok()?,
+    ))
 }
 
 fn with_created(record: TargetRecord, source: &SourceRecord) -> TargetRecord {
@@ -44,7 +48,10 @@ pub(super) fn steps() -> Vec<Step> {
                     TargetRecord::new(HIST_SESSIONS, id, body),
                     source,
                 ));
-                out.extend(search_row(session_fts_id(&session.id), &session_fts_row(&session)));
+                out.extend(search_row(
+                    session_fts_id(&session.id),
+                    &session_fts_row(&session),
+                ));
             }
             Ok(out)
         })
@@ -70,26 +77,32 @@ pub(super) fn steps() -> Vec<Step> {
             Ok(out)
         })
         .source("session_history_messages"),
-        Step::new("tool_calls_v2", HIST_TOOL_CALLS, 1, SCHEMA_VERSION, |batch| {
-            let mut out = Vec::new();
-            for source in &batch {
-                let Some(call) = v1_record::<SessionToolCall>(&source.body) else {
-                    continue;
-                };
-                let (Ok(id), Ok(body)) = (tool_call_id(call.id), encode(&call)) else {
-                    continue;
-                };
-                out.push(with_created(
-                    TargetRecord::new(HIST_TOOL_CALLS, id, body),
-                    source,
-                ));
-                out.extend(search_row(
-                    tool_fts_id(call.id),
-                    &tool_fts_row(&call.session_id, &call.tool_name),
-                ));
-            }
-            Ok(out)
-        })
+        Step::new(
+            "tool_calls_v2",
+            HIST_TOOL_CALLS,
+            1,
+            SCHEMA_VERSION,
+            |batch| {
+                let mut out = Vec::new();
+                for source in &batch {
+                    let Some(call) = v1_record::<SessionToolCall>(&source.body) else {
+                        continue;
+                    };
+                    let (Ok(id), Ok(body)) = (tool_call_id(call.id), encode(&call)) else {
+                        continue;
+                    };
+                    out.push(with_created(
+                        TargetRecord::new(HIST_TOOL_CALLS, id, body),
+                        source,
+                    ));
+                    out.extend(search_row(
+                        tool_fts_id(call.id),
+                        &tool_fts_row(&call.session_id, &call.tool_name),
+                    ));
+                }
+                Ok(out)
+            },
+        )
         .source("session_history_tool_calls"),
         Step::new("search_v2", HIST_FTS, 1, SCHEMA_VERSION, |_| Ok(Vec::new()))
             .source("session_history_fts"),

@@ -222,13 +222,7 @@ async fn later_event_collision_rolls_back_runs_and_import_receipt_together() {
         matches!(ledger.import_agent_family(&source, "import").await.unwrap_err(), super::super::super::LedgerError::Driver(ref error) if error.kind() == ErrorKind::Conflict)
     );
     assert!(ledger.get_agent_run("run").await.unwrap().is_none());
-    assert!(
-        ledger
-            .import_receipt("import")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(ledger.import_receipt("import").await.unwrap().is_none());
     let events = ledger
         .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
@@ -284,6 +278,19 @@ async fn changed_source_cannot_reuse_a_committed_import_operation() {
     let root = tempfile::tempdir().unwrap();
     let source = complete_source(&ledger, &root);
     ledger.import_agent_family(&source, "import").await.unwrap();
+    // The receipt is the importer's `tsd.migrations` record, fingerprint in `cursor`.
+    let receipt = ledger.import_receipt("import").await.unwrap().unwrap();
+    assert!(receipt.done && receipt.cursor.is_some());
+    assert_eq!(
+        (receipt.owner.as_str(), receipt.step.as_str()),
+        ("ledger", "agent_import/import")
+    );
+    assert!(
+        tinystoragedrivers_core::Migrations::new(&ledger.scoped)
+            .done("ledger", "agent_import/import")
+            .await
+            .unwrap()
+    );
     let db = rusqlite::Connection::open(source.path()).unwrap();
     db.execute("UPDATE agent_runs SET summary = 'changed'", [])
         .unwrap();

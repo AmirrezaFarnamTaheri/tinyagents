@@ -636,7 +636,10 @@ async fn terminal_entry_allocators_remain_representable_in_native_bson() {
         let row = native
             .scoped
             .documents()
-            .get(super::entry_tree::HEADS, &super::storage::key(&[session]).unwrap())
+            .get(
+                super::entry_tree::HEADS,
+                &super::storage::key(&[session]).unwrap(),
+            )
             .await
             .unwrap()
             .unwrap();

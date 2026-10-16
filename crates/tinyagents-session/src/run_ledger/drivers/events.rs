@@ -3,9 +3,7 @@
 //! Status and event receipts commit together. Stream projection is separate:
 //! no post-commit projection failure is represented as a rolled-back status CAS.
 use super::dto::{StreamEvent, stored_as_is};
-use super::storage::{
-    AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op,
-};
+use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op};
 use super::*;
 use serde::{Deserialize, Serialize};
 use tinystoragedrivers_core::{ErrorKind, Precondition, Versioned, WriteOp};
@@ -189,7 +187,8 @@ impl DriverRunLedger {
     ) -> Result<RunEventListResponse> {
         let limit = request.limit.unwrap_or(100).min(1000) as usize;
         let after = request.after_sequence.unwrap_or(0);
-        let filter = Filter::eq("run_id", request.run_id.clone()).and(Filter::gt("sequence", after));
+        let filter =
+            Filter::eq("run_id", request.run_id.clone()).and(Filter::gt("sequence", after));
         self.declare().await?;
         let mut events = Vec::with_capacity(limit);
         let mut query = Query::filter(filter)

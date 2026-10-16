@@ -25,8 +25,8 @@ use crate::types::{
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use tinystoragedrivers_core::{
-    Counters, DocumentStoreExt, ErrorKind, ID_FIELD, ExpectedDocument, Precondition, ReadCheck, Versioned,
-    WriteOp,
+    Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, ID_FIELD, Precondition, ReadCheck,
+    Versioned, WriteOp,
 };
 
 const LOG_PREFIX: &str = "[session_db]";
