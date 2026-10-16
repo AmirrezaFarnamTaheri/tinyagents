@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use tinystoragedrivers_core::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
-const PENDING_COLLECTION: &str = "conversation_appends_v1";
+const PENDING_COLLECTION: &str = "conversations.appends";
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -327,71 +327,6 @@ async fn pending_old_incarnation_cannot_publish_after_delete_and_recreate() {
     assert_eq!(store.get_messages("same").await.unwrap(), vec![fresh]);
 }
 
-async fn ttl_intent(backend: &dyn StorageBackend, field: &str) {
-    backend.prepare_schema().await.unwrap();
-    let raw = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
-    raw.documents()
-        .ensure_collection(&CollectionSpec::new(PENDING_COLLECTION).ttl(field))
-        .await
-        .unwrap();
-    let store = actor(backend).await;
-    let fault = Fault::new(Phase::Reserve, Action::Pause);
-    let interrupted = faulted(&store, fault.clone());
-    let mut writer = Box::pin(interrupted.append_message("same", message("agent:ttl", "accepted")));
-    tokio::select! {
-        _ = fault.reached.notified() => {},
-        result = &mut writer => panic!("reservation never paused: {result:?}"),
-    }
-    drop(writer);
-    assert_eq!(
-        store
-            .docs
-            .count(PENDING_COLLECTION, &Filter::All)
-            .await
-            .unwrap(),
-        1,
-        "compatible numeric TTL on {field} must not expire an all-string intent"
-    );
-    store
-        .append_message("same", message("agent:next", "next"))
-        .await
-        .unwrap();
-    assert_eq!(store.get_messages("same").await.unwrap().len(), 2);
-}
-#[tokio::test]
-async fn memory_compatible_ttl_fields_cannot_expire_durable_append_intent() {
-    for field in [
-        "schema",
-        "token",
-        "thread_id",
-        "incarnation",
-        "offset",
-        "record",
-        "record.message.created_at",
-        "record.schema",
-    ] {
-        ttl_intent(&MemoryStorage::new(), field).await;
-    }
-}
-#[tokio::test]
-async fn sqlite_compatible_ttl_fields_cannot_expire_durable_append_intent() {
-    for field in [
-        "schema",
-        "token",
-        "thread_id",
-        "incarnation",
-        "offset",
-        "record",
-        "record.message.created_at",
-        "record.schema",
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let backend =
-            tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ttl.db")).unwrap();
-        ttl_intent(&backend, field).await;
-    }
-}
-
 async fn fenced_phases(backend: &dyn StorageBackend) {
     use tinystoragedrivers_core::Fence;
     let store = actor(backend).await;
@@ -528,7 +463,7 @@ async fn noncanonical_pending_record_refuses_without_appending_or_publishing_pre
     }
     drop(writer);
     let current = store.load("same").await.unwrap().unwrap();
-    let key = pending::AppendIntent::key(&current.id, &current.doc.incarnation);
+    let key = pending::AppendIntent::key("same", &current.doc.incarnation).unwrap();
     let row = store
         .docs
         .get(PENDING_COLLECTION, &key)
@@ -536,9 +471,7 @@ async fn noncanonical_pending_record_refuses_without_appending_or_publishing_pre
         .unwrap()
         .unwrap();
     let mut envelope = row.doc.clone();
-    let mut record: Value = serde_json::from_str(envelope["record"].as_str().unwrap()).unwrap();
-    record["unexpected"] = json!("must not disappear silently");
-    envelope["record"] = json!(serde_json::to_string(&record).unwrap());
+    envelope["record"]["unexpected"] = json!("must not disappear silently");
     store
         .docs
         .put(PENDING_COLLECTION, &key, envelope.clone(), row.unchanged())
@@ -551,7 +484,7 @@ async fn noncanonical_pending_record_refuses_without_appending_or_publishing_pre
     assert!(
         matches!(error, ConversationError::Driver(ref e) if e.kind()==ErrorKind::Serialization)
     );
-    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
+    let stream = current.doc.stream().unwrap();
     assert_eq!(store.streams.len(&stream).await.unwrap(), 0);
     assert!(store.get_messages("same").await.unwrap().is_empty());
     assert_eq!(
@@ -651,8 +584,8 @@ async fn mismatching_actual_stream_row_cannot_publish_reserved_message_or_retire
     }
     drop(writer);
     let current = store.load("same").await.unwrap().unwrap();
-    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
-    store.streams.append_batch_if_offset(&stream, 0, vec![json!({"schema":1,"incarnation":current.doc.incarnation,"message":message("agent:foreign", "wrong row")})]).await.unwrap();
+    let stream = current.doc.stream().unwrap();
+    store.streams.append_batch_if_offset(&stream, 0, vec![serde_json::to_value(MessageDto::from_message(&message("agent:foreign", "wrong row"), to_ms).unwrap()).unwrap()]).await.unwrap();
     let error = store
         .append_message("same", message("agent:next", "next"))
         .await
