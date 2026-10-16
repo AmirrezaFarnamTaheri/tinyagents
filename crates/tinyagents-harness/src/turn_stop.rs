@@ -36,7 +36,7 @@ pub struct TurnFailureClass(String);
 impl TurnFailureClass {
     /// Construct a class from the classifier's stable identifier.
     pub fn new(class: impl Into<String>) -> Self {
-        Self(class.into())
+        Self(identifier(&class.into()).unwrap_or_else(|| "unknown".to_owned()))
     }
 
     /// Stable identifier suitable for logs and host summaries.
@@ -112,7 +112,7 @@ impl TurnStop {
         Self {
             kind: TurnStopKind::Breaker,
             failure_class: Some(failure_class),
-            operation,
+            operation: operation.as_deref().and_then(identifier),
         }
     }
 
@@ -188,6 +188,17 @@ impl TurnStop {
         }
         out
     }
+}
+
+/// Keep only bounded machine identifiers in content-free stop summaries.
+fn identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && value.chars().count() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
+    valid.then(|| value.to_owned())
 }
 
 #[cfg(test)]

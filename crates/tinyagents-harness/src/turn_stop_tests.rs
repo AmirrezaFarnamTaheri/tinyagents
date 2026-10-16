@@ -81,6 +81,18 @@ fn a_classified_stop_preserves_its_cause_without_reading_its_summary() {
 }
 
 #[test]
+fn typed_stop_identifiers_reject_free_text_and_paths() {
+    let stop = TurnStop::breaker_with_cause(
+        "ignored",
+        TurnFailureClass::new("permission from /home/alice"),
+        Some("write_file /home/alice/private".into()),
+    );
+    assert_eq!(stop.failure_class.as_ref().map(TurnFailureClass::as_str), Some("unknown"));
+    assert_eq!(stop.operation, None);
+    assert_eq!(stop.status_message(), "stopped: breaker unknown");
+}
+
+#[test]
 fn classify_prefers_breaker_then_wind_down_then_cap() {
     assert_eq!(TurnStop::classify(None, false, false, fallback), None);
     assert_eq!(

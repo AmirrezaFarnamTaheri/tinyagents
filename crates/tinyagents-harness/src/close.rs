@@ -180,15 +180,8 @@ where
     let started = tokio::time::Instant::now();
     for attempt in 0..2 {
         let remaining = budget.map(|limit| limit.saturating_sub(started.elapsed()));
-        let Some((candidate, call_usage, has_tool_call)) = completion(
-            model,
-            state,
-            dialect,
-            history,
-            &prompt,
-            remaining,
-        )
-        .await
+        let Some((candidate, call_usage, has_tool_call)) =
+            completion(model, state, dialect, history, &prompt, remaining).await
         else {
             if attempt == 1 {
                 break;
