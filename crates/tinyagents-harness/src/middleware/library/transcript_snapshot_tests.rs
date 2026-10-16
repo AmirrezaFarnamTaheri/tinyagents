@@ -60,16 +60,18 @@ fn unanswered_step_800_character_clip_matches_host_unicode_and_whitespace_output
     let assistant = AssistantMessage {
         id: None,
         content: vec![],
-        tool_calls: vec![ToolCall::new("call-1", "read_file", serde_json::json!({"path": path}))],
+        tool_calls: vec![ToolCall::new(
+            "call-1",
+            "read_file",
+            serde_json::json!({"path": path}),
+        )],
         usage: None,
         origin: None,
     };
     let user = format!("{}   tail", "a".repeat(797));
-    let rendered = render_unanswered_steps(
-        &[Message::Assistant(assistant), Message::user(user)],
-        800,
-    )
-    .expect("rendered failure steps");
+    let rendered =
+        render_unanswered_steps(&[Message::Assistant(assistant), Message::user(user)], 800)
+            .expect("rendered failure steps");
 
     let expected_args = format!("{{\"path\":\"{}...", "🧪".repeat(791));
     assert!(rendered.contains(&format!("- called `read_file` with {expected_args}\n")));
