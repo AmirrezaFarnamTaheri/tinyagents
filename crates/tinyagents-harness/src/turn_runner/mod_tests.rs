@@ -1,4 +1,5 @@
 use super::*;
+use crate::run_queue::{QueueLane, QueueMode};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -7,6 +8,7 @@ struct Host {
     release: Option<Arc<tokio::sync::Notify>>,
     fingerprint_error: bool,
     checkins: std::sync::atomic::AtomicUsize,
+    runs: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
@@ -49,6 +51,7 @@ impl TurnHost for Host {
         cancellation: crate::CancellationToken,
         _progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let (Some(started), Some(release)) = (&self.started, &self.release) {
             started.notify_one();
             tokio::select! {
@@ -356,6 +359,133 @@ async fn checked_out_session_is_checked_in_when_fingerprint_validation_fails() {
         Err(TurnRunnerError::Failed(_))
     ));
     assert_eq!(host.checkins.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn two_agents_can_run_the_same_thread_id_concurrently() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let host = Arc::new(ConcurrentHost {
+        barrier: barrier.clone(),
+        sessions: Mutex::default(),
+    });
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut first = request(QueueDisposition::Interrupt, false);
+    first.thread_id = "shared-name".into();
+    let mut second = first.clone();
+    second.scope.agent_id = "agent-b".into();
+    second.request_id = "request-b".into();
+    let first = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(first).await })
+    };
+    let second = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(second).await })
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+    })
+    .await
+    .expect("agent-scoped sessions must not share a lock");
+    assert_eq!(host.sessions.lock().unwrap().len(), 2);
+}
+
+struct ConcurrentHost {
+    barrier: Arc<tokio::sync::Barrier>,
+    sessions: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for ConcurrentHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.request_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: format!("fork:{}", request.request_id),
+            fingerprint: None,
+        })
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        request: &TurnRequest,
+        session: &TurnSession,
+        _origin: &serde_json::Value,
+        _cancellation: crate::CancellationToken,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        let expected_session = if request.disposition == QueueDisposition::Parallel {
+            format!("fork:{}", request.request_id)
+        } else {
+            request.request_id.clone()
+        };
+        assert_eq!(session.session_id, expected_session);
+        self.sessions
+            .lock()
+            .unwrap()
+            .push(session.session_id.clone());
+        self.barrier.wait().await;
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+#[tokio::test]
+async fn parallel_turns_use_independent_fork_sessions_and_run_concurrently() {
+    let host = Arc::new(ConcurrentHost {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        sessions: Mutex::default(),
+    });
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut first = request(QueueDisposition::Parallel, false);
+    first.request_id = "parallel-a".into();
+    let mut second = first.clone();
+    second.request_id = "parallel-b".into();
+    let first = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(first).await })
+    };
+    let second = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(second).await })
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+    })
+    .await
+    .expect("parallel branches must not serialize");
+    let sessions = host.sessions.lock().unwrap();
+    assert_eq!(sessions.as_slice(), ["parallel-a", "parallel-b"]);
 }
 
 struct QuietWorkHost {

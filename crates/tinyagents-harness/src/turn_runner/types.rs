@@ -374,16 +374,24 @@ where
         let _session_guard = if request.disposition == QueueDisposition::Parallel {
             None
         } else {
-            tokio::select! {
+            match tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => {
+                _ = cancellation.cancelled() => None,
+                guard = lock.lock_owned() => Some(guard),
+            } {
+                Some(guard) => Some(guard),
+                None => {
                     self.clear_tracking(&request).await;
-                    self.events.terminal(&request, TerminalEvent::Cancelled {
-                        request_id: request.request_id.clone(),
-                    }).await;
+                    self.events
+                        .terminal(
+                            &request,
+                            TerminalEvent::Cancelled {
+                                request_id: request.request_id.clone(),
+                            },
+                        )
+                        .await;
                     return Err(TurnRunnerError::Cancelled);
                 }
-                guard = lock.lock_owned() => Some(guard),
             }
         };
         let checkout = if request.disposition == QueueDisposition::Parallel {
@@ -531,6 +539,7 @@ where
         let started = Instant::now();
         let mut last_progress = started;
         let mut work_in_flight = 0usize;
+        let mut progress_open = true;
         tokio::pin!(run);
         loop {
             let idle_left = idle.saturating_sub(last_progress.elapsed());
@@ -541,18 +550,24 @@ where
                     self.host.cancel_children(request).await;
                     return Err("turn cancelled".into());
                 }
-                signal = progress_rx.recv() => if let Some(signal) = signal {
-                    match signal {
+                signal = progress_rx.recv(), if progress_open => match signal {
+                    Some(signal) => match signal {
                         TurnSignal::Progress(event) => {
                             last_progress = Instant::now();
                             self.events.progress(request, *event).await;
                         }
                         TurnSignal::WorkStarted => work_in_flight = work_in_flight.saturating_add(1),
-                        TurnSignal::WorkFinished => work_in_flight = work_in_flight.saturating_sub(1),
-                    }
+                        TurnSignal::WorkFinished => {
+                            work_in_flight = work_in_flight.saturating_sub(1);
+                            if work_in_flight == 0 {
+                                last_progress = Instant::now();
+                            }
+                        }
+                    },
+                    None => progress_open = false,
                 },
                 result = &mut run => return result,
-                _ = tokio::time::sleep(idle_left), if idle_left > Duration::ZERO && work_in_flight == 0 => {
+                _ = tokio::time::sleep(idle_left), if work_in_flight == 0 => {
                     cancellation.cancel();
                     self.host.cancel_children(request).await;
                     return self.close_or_timeout(request, "idle timeout").await;
