@@ -174,7 +174,7 @@ fn a_provider_needs_a_tenant_scope() {
         Scope::local().agent("someone").unwrap(),
     ] {
         let error =
-            DriverSessionStores::new(Arc::new(MemoryStorage::new()), tinystoragedrivers_core::Scope::local(), scope.clone()).unwrap_err();
+            DriverSessionStores::new(Arc::new(MemoryStorage::new()), scope.clone()).unwrap_err();
         assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::InvalidInput);
     }
 }
