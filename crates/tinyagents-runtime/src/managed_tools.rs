@@ -26,20 +26,23 @@ pub struct ManagedToolNames {
 impl ManagedToolNames {
     /// Reconciles the synthesized portion of visibility at a turn boundary.
     /// Revoked names are always removed. New names are admitted only when the
-    /// host's existing wildcard policy opts into them. Permanent names are
-    /// restored after the refresh and removed from the deferred set.
+    /// host's existing wildcard policy opts into them; existing deferred names
+    /// remain deferred. Permanent names are restored unless they are also in
+    /// the revoked synthesized set (which signals an authoritative revocation).
     pub fn refresh_synthesized(
         &mut self,
         previous: &HashSet<String>,
         next: &HashSet<String>,
         auto_include_new: bool,
     ) {
-        for name in previous.difference(next) {
+        let revoked = previous.difference(next).cloned().collect::<HashSet<_>>();
+        for name in &revoked {
             self.visible.remove(name);
             self.deferred.remove(name);
+            self.permanent.remove(name);
         }
         if auto_include_new {
-            self.visible.extend(next.iter().cloned());
+            self.visible.extend(next.difference(previous).cloned());
         }
         self.visible.extend(self.permanent.iter().cloned());
         self.deferred.retain(|name| !self.permanent.contains(name));
