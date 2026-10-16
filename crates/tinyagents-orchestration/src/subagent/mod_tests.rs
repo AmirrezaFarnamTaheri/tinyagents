@@ -332,16 +332,20 @@ fn request(task_id: &str, data: &str) -> SubagentRequest<String> {
     SubagentRequest::fresh_from_parent(&parent, child, task_id, (), "do work", None).unwrap()
 }
 
-fn request_with_parent(task_id: &str, run_context: RunContext<String>) -> SubagentRequest<String> {
+async fn request_with_parent(task_id: &str, run_context: RunContext<String>) -> SubagentRequest<String> {
     let task_key = SubagentTaskKey::from_context(&run_context, task_id, Some("thread-1".into()));
-    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None, None)
+        .await
+        .unwrap()
 }
 
-fn continuation_request(
+async fn continuation_request(
     task_key: SubagentTaskKey,
     run_context: RunContext<String>,
 ) -> SubagentRequest<String> {
-    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None).unwrap()
+    SubagentRequest::continue_with_key(task_key, run_context, (), "do work", None, None)
+        .await
+        .unwrap()
 }
 
 fn driver(
@@ -576,6 +580,7 @@ impl SubagentExecutor<String> for NestedExecutor {
                         (),
                         "nested work",
                         None,
+                        None,
                     )?,
                     execution.cancellation,
                 )
@@ -688,7 +693,9 @@ async fn opaque_host_request_reaches_the_planner_unchanged() {
         },
         "do work",
         None,
+        None,
     )
+    .await
     .unwrap();
     SubagentDriver::new(SubagentCapabilities {
         planner: Some(planner.clone()),
@@ -941,7 +948,7 @@ async fn fresh_request_rejects_an_unrelated_or_thread_mismatched_context() {
         "fresh".to_owned(),
     );
     assert!(matches!(
-        SubagentRequest::continue_with_key(key, fresh_wrong_thread, (), "input", None),
+        SubagentRequest::continue_with_key(key, fresh_wrong_thread, (), "input", None, None).await,
         Err(SubagentError::InvalidRequest(_))
     ));
 }
@@ -1675,7 +1682,9 @@ async fn driver_continuation_takes_a_live_slot_but_no_total_budget() {
         (),
         "continue",
         Some(SubagentResume::default()),
+        None,
     )
+    .await
     .unwrap();
     driver.run(resumed, CancellationToken::new()).await.unwrap();
     assert_eq!(
