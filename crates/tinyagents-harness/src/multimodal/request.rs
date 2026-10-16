@@ -28,6 +28,9 @@ use super::{
     payload::compose_multimodal_message,
 };
 
+type RequestScopeFactory<State, Scope> =
+    dyn Fn(&State, &mut ModelRequest) -> std::result::Result<Scope, String> + Send + Sync;
+
 /// Per-turn attachment limits copied from host configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaRequestConfig {
@@ -134,8 +137,7 @@ pub trait MediaHistoryFallback<Scope>: Send + Sync {
 pub struct MediaRequestModel<State, Scope> {
     inner: Arc<dyn ChatModel<State>>,
     config: MediaRequestConfig,
-    scope_for_request:
-        Arc<dyn Fn(&State, &mut ModelRequest) -> std::result::Result<Scope, String> + Send + Sync>,
+    scope_for_request: Arc<RequestScopeFactory<State, Scope>>,
     resolver: Arc<dyn MediaSourceResolver<Scope>>,
     extractor: Arc<dyn TextExtractor>,
     image_readout: Option<Arc<dyn MediaImageReadout<Scope>>>,

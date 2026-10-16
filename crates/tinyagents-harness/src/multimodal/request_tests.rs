@@ -46,10 +46,12 @@ impl ChatModel<String> for CaptureModel {
 
 impl CaptureModel {
     fn new(native_images: bool) -> Self {
-        let mut profile = ModelProfile::default();
-        profile.modalities = Modalities {
-            image_in: native_images,
-            ..Modalities::default()
+        let profile = ModelProfile {
+            modalities: Modalities {
+                image_in: native_images,
+                ..Modalities::default()
+            },
+            ..ModelProfile::default()
         };
         Self {
             requests: Mutex::default(),
@@ -522,24 +524,26 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
         ..MediaRequestConfig::default()
     };
     let wrapped = wrapper(model.clone(), config, resolver.clone(), Arc::default());
-    let mut historical_request = ModelRequest::default();
-    historical_request.messages = vec![
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Image(ImageRef {
-                url: "oldest".into(),
-                mime_type: Some("image/png".into()),
-            })],
-        }),
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Image(ImageRef {
-                url: "newest".into(),
-                mime_type: Some("image/png".into()),
-            })],
-        }),
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text("latest".into())],
-        }),
-    ];
+    let historical_request = ModelRequest {
+        messages: vec![
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Image(ImageRef {
+                    url: "oldest".into(),
+                    mime_type: Some("image/png".into()),
+                })],
+            }),
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Image(ImageRef {
+                    url: "newest".into(),
+                    mime_type: Some("image/png".into()),
+                })],
+            }),
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text("latest".into())],
+            }),
+        ],
+        ..ModelRequest::default()
+    };
 
     wrapped
         .invoke(&"tenant-a".into(), historical_request)
@@ -582,15 +586,17 @@ async fn historical_marker_budget_selects_only_the_newest_references_in_a_text_b
         resolver.clone(),
         Arc::default(),
     );
-    let mut historical_request = ModelRequest::default();
-    historical_request.messages = vec![
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text("[IMAGE:older] [IMAGE:newer]".into())],
-        }),
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text("latest".into())],
-        }),
-    ];
+    let historical_request = ModelRequest {
+        messages: vec![
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text("[IMAGE:older] [IMAGE:newer]".into())],
+            }),
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text("latest".into())],
+            }),
+        ],
+        ..ModelRequest::default()
+    };
 
     wrapped
         .invoke(&"tenant-a".into(), historical_request)
@@ -676,8 +682,10 @@ async fn trusted_preparer_consumes_carrier_when_request_has_no_user_message() {
         resolver,
         Arc::new(NoTextExtractor),
     );
-    let mut original = ModelRequest::default();
-    original.metadata = serde_json::json!({"trusted_scope":"workspace-a"});
+    let original = ModelRequest {
+        metadata: serde_json::json!({"trusted_scope":"workspace-a"}),
+        ..ModelRequest::default()
+    };
 
     wrapped.invoke(&"tenant-a".into(), original).await.unwrap();
 
@@ -715,19 +723,20 @@ async fn resolver_annotations_survive_next_to_native_media_only_after_success() 
         .await
         .unwrap();
 
-    let captured = model.requests.lock().unwrap();
-    let Message::User(user) = &captured[0].messages[0] else {
-        panic!("prepared user message retained")
-    };
-    assert!(matches!(
-        &user.content[0],
-        ContentBlock::Text(text) if text.contains("Recovered attachment")
-    ));
-    assert!(matches!(
-        &user.content[1],
-        ContentBlock::Image(image) if image.url.starts_with("data:image/png;base64,")
-    ));
-    drop(captured);
+    {
+        let captured = model.requests.lock().unwrap();
+        let Message::User(user) = &captured[0].messages[0] else {
+            panic!("prepared user message retained")
+        };
+        assert!(matches!(
+            &user.content[0],
+            ContentBlock::Text(text) if text.contains("Recovered attachment")
+        ));
+        assert!(matches!(
+            &user.content[1],
+            ContentBlock::Image(image) if image.url.starts_with("data:image/png;base64,")
+        ));
+    }
 
     let missing_model = Arc::new(CaptureModel::new(true));
     let missing_resolver = Arc::new(Resolver {
@@ -763,30 +772,33 @@ async fn missing_history_media_degrades_safely_but_missing_latest_media_fails() 
         Arc::default(),
     )
     .with_history_fallback(Arc::new(SafeHistory));
-    let mut history = ModelRequest::default();
-    history.messages = vec![
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Image(ImageRef {
-                url: "/private-value/also-private".into(),
-                mime_type: Some("image/png".into()),
-            })],
-        }),
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text("latest text".into())],
-        }),
-    ];
+    let history = ModelRequest {
+        messages: vec![
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Image(ImageRef {
+                    url: "/private-value/also-private".into(),
+                    mime_type: Some("image/png".into()),
+                })],
+            }),
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text("latest text".into())],
+            }),
+        ],
+        ..ModelRequest::default()
+    };
 
     wrapped.invoke(&"tenant-a".into(), history).await.unwrap();
-    let calls = model.requests.lock().unwrap();
-    let Message::User(old_user) = &calls[0].messages[0] else {
-        panic!("historical message retained")
-    };
-    let ContentBlock::Text(placeholder) = &old_user.content[0] else {
-        panic!("missing historical media becomes text")
-    };
-    assert!(placeholder.contains("safe-hint"));
-    assert!(!placeholder.contains("private-value"));
-    drop(calls);
+    {
+        let calls = model.requests.lock().unwrap();
+        let Message::User(old_user) = &calls[0].messages[0] else {
+            panic!("historical message retained")
+        };
+        let ContentBlock::Text(placeholder) = &old_user.content[0] else {
+            panic!("missing historical media becomes text")
+        };
+        assert!(placeholder.contains("safe-hint"));
+        assert!(!placeholder.contains("private-value"));
+    }
 
     let error = wrapped
         .invoke(&"tenant-a".into(), request("[IMAGE:latest-missing]"))
@@ -825,47 +837,50 @@ async fn historical_text_recovers_each_failed_marker_without_losing_prose_or_val
         Arc::default(),
     )
     .with_history_fallback(history.clone());
-    let mut historical_request = ModelRequest::default();
-    historical_request.messages = vec![
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text(
-                "Caption [IMAGE:good-image] then [IMAGE:https://example.test/photo?token=secret]"
-                    .into(),
-            )],
-        }),
-        Message::User(UserMessage {
-            content: vec![ContentBlock::Text("latest text".into())],
-        }),
-    ];
+    let historical_request = ModelRequest {
+        messages: vec![
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text(
+                    "Caption [IMAGE:good-image] then [IMAGE:https://example.test/photo?token=secret]"
+                        .into(),
+                )],
+            }),
+            Message::User(UserMessage {
+                content: vec![ContentBlock::Text("latest text".into())],
+            }),
+        ],
+        ..ModelRequest::default()
+    };
 
     wrapped
         .invoke(&"tenant-a".into(), historical_request)
         .await
         .unwrap();
 
-    let captured = model.requests.lock().unwrap();
-    let Message::User(old_user) = &captured[0].messages[0] else {
-        panic!("historical message retained")
-    };
-    let rendered = old_user
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Caption"));
-    assert!(rendered.contains("safe-hint"));
-    assert!(!rendered.contains("token=secret"));
-    assert!(
-        old_user
+    {
+        let captured = model.requests.lock().unwrap();
+        let Message::User(old_user) = &captured[0].messages[0] else {
+            panic!("historical message retained")
+        };
+        let rendered = old_user
             .content
             .iter()
-            .any(|block| matches!(block, ContentBlock::Image(_)))
-    );
-    drop(captured);
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Caption"));
+        assert!(rendered.contains("safe-hint"));
+        assert!(!rendered.contains("token=secret"));
+        assert!(
+            old_user
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image(_)))
+        );
+    }
     assert_eq!(
         history.unavailable.lock().unwrap().as_slice(),
         &[(
