@@ -368,6 +368,8 @@ where
         } else {
             if let Some(state) = state.as_ref() {
                 self.clear_tracking(&request, state.generation).await;
+            } else if request.disposition == QueueDisposition::Parallel {
+                self.clear_parallel_tracking(&request).await;
             }
         }
         result
