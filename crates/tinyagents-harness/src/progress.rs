@@ -1,17 +1,10 @@
-//! Real-time progress events emitted during an agent turn.
+//! Provider-neutral progress events emitted during an agent turn.
 //!
-//! Consumers (e.g. the web channel provider) create an
-//! `mpsc::Sender<AgentProgress>` and attach it to the [`Agent`] via
-//! [`OpenHumanSessionHost::set_on_progress`] before calling [`OpenHumanSessionHost::run_single`].
-//! The agent's turn loop sends events through this channel as it
-//! progresses — tool calls starting/completing, iteration boundaries,
-//! sub-agent lifecycle, etc.
-//!
-//! This is intentionally separate from [`DomainEvent`] (the global
-//! broadcast bus) because progress events are **per-request scoped**:
-//! they carry no routing info (client_id, thread_id) — the consumer
-//! that created the channel already knows those and tags the outgoing
-//! socket events accordingly.
+//! A host can receive [`AgentProgress`] values through a channel scoped to one
+//! turn, then translate them into its own event transport. Events cover
+//! iteration and tool-call activity, sub-agent lifecycle, and usage updates.
+//! They carry no host-specific routing data; the host adds any required
+//! routing context when forwarding them.
 
 /// A real-time progress event emitted during an agent turn.
 #[derive(Debug, Clone)]
@@ -367,7 +360,7 @@ pub enum AgentProgress {
     /// `total_usd` prefers backend-reported `charged_amount_usd`
     /// (sum of authoritative figures) and falls back to a tier-based
     /// token-rate estimate for calls that didn't carry one — see
-    /// [`tinyagents_harness::cost::TurnCost::total_usd`].
+    /// [`crate::cost::TurnCost::total_usd`].
     TurnCostUpdated {
         /// Last model that contributed to this update.
         model: String,
