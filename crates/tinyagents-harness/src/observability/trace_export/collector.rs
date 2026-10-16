@@ -561,40 +561,7 @@ impl SpanCollector {
                         .and_then(Value::as_str)
                         == Some("provider_reported");
                     if !provider_reported {
-                        self.spans[generation]
-                            .attributes
-                            .insert("gen_ai.usage.cost_usd".into(), json_f64(amount));
-                        self.spans[generation]
-                            .attributes
-                            .insert("gen_ai.cost.source".into(), json_str("estimated"));
-                    }
-                    if let Some(parent) = self.spans[generation]
-                        .parent_span_id
-                        .as_deref()
-                        .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
-                    {
-                        let source = self.spans[generation]
-                            .attributes
-                            .get("gen_ai.cost.source")
-                            .and_then(Value::as_str)
-                            .unwrap_or("estimated")
-                            .to_owned();
-                        let prior = self.spans[parent]
-                            .attributes
-                            .get("gen_ai.usage.cost_usd")
-                            .and_then(Value::as_f64)
-                            .unwrap_or(0.0);
-                        let addition = if source == "provider_reported" {
-                            0.0
-                        } else {
-                            amount
-                        };
-                        self.spans[parent]
-                            .attributes
-                            .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + addition));
-                        self.spans[parent]
-                            .attributes
-                            .insert("gen_ai.cost.source".into(), json_str(&source));
+                        self.set_generation_cost(generation, amount, "estimated");
                     }
                 }
             }
@@ -672,32 +639,56 @@ impl SpanCollector {
                 .attributes
                 .contains_key("gen_ai.usage.cost_usd");
             if !has_authoritative_cost {
-                self.spans[index]
-                    .attributes
-                    .insert("gen_ai.usage.cost_usd".into(), json_f64(estimate));
-                self.spans[index]
-                    .attributes
-                    .insert("gen_ai.cost.source".into(), json_str("estimated"));
-                if let Some(parent) = self.spans[index]
-                    .parent_span_id
-                    .as_deref()
-                    .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
-                {
-                    let prior = self.spans[parent]
-                        .attributes
-                        .get("gen_ai.usage.cost_usd")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0);
-                    self.spans[parent]
-                        .attributes
-                        .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + estimate));
-                    self.spans[parent]
-                        .attributes
-                        .insert("gen_ai.cost.source".into(), json_str("estimated"));
-                }
+                self.set_generation_cost(index, estimate, "estimated");
             }
         }
         Ok(())
+    }
+
+    fn set_generation_cost(&mut self, index: usize, amount: f64, source: &str) {
+        let prior = self.spans[index]
+            .attributes
+            .get("gen_ai.usage.cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let prior_source = self.spans[index]
+            .attributes
+            .get("gen_ai.cost.source")
+            .and_then(Value::as_str)
+            .unwrap_or("unreported");
+        self.spans[index]
+            .attributes
+            .insert("gen_ai.usage.cost_usd".into(), json_f64(amount));
+        self.spans[index]
+            .attributes
+            .insert("gen_ai.cost.source".into(), json_str(source));
+        let delta = match source {
+            // UsageRecorded carries provider charges to the run span. Remove
+            // an earlier estimate here; the native per-run event will add
+            // the authoritative charge once it arrives.
+            "provider_reported" if prior_source == "estimated" => -prior,
+            "provider_reported" => 0.0,
+            _ => amount - if prior_source == "estimated" { prior } else { 0.0 },
+        };
+        if delta != 0.0
+            && let Some(parent) = self.spans[index]
+                .parent_span_id
+                .as_deref()
+                .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
+        {
+            let prior_parent = self.spans[parent]
+                .attributes
+                .get("gen_ai.usage.cost_usd")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            self.spans[parent].attributes.insert(
+                "gen_ai.usage.cost_usd".into(),
+                json_f64((prior_parent + delta).max(0.0)),
+            );
+            self.spans[parent]
+                .attributes
+                .insert("gen_ai.cost.source".into(), json_str(source));
+        }
     }
 
     /// Closes open spans deterministically. Missing terminal events are marked
@@ -736,32 +727,9 @@ impl SpanCollector {
         now: u64,
     ) {
         let start = started_at_ms.unwrap_or(call.started_at_ms).min(now);
-        let usage_summary = usage.map(|usage| {
-            let cached = usage
-                .cache_read_tokens
-                .saturating_add(usage.cache_creation_tokens);
-            let input_total =
-                usage
-                    .input_tokens
-                    .max(cached)
-                    .max(
-                        usage
-                            .input_tokens
-                            .saturating_add(if usage.input_tokens < cached {
-                                cached
-                            } else {
-                                0
-                            }),
-                    );
-            (
-                input_total,
-                usage.cache_read_tokens,
-                usage.cache_creation_tokens,
-                usage.output_tokens,
-                usage.reasoning_tokens,
-                usage.charged_amount.map(|c| c.micros as f64 / 1_000_000.0),
-            )
-        });
+        let provider_cost = usage
+            .and_then(|usage| usage.charged_amount)
+            .map(|charged| charged.micros as f64 / 1_000_000.0);
         {
             let span = &mut self.spans[call.index];
             span.start_unix_ms = start;
@@ -784,7 +752,6 @@ impl SpanCollector {
                                     0
                                 }),
                         );
-                let cost = usage.charged_amount.map(|c| c.micros as f64 / 1_000_000.0);
                 for (key, value) in [
                     ("gen_ai.usage.input_tokens", json_u64(input_total)),
                     (
@@ -811,17 +778,11 @@ impl SpanCollector {
                 ] {
                     span.attributes.insert(key.into(), value);
                 }
-                span.attributes.insert(
-                    "gen_ai.cost.source".into(),
-                    json_str(if cost.is_some() {
-                        "provider_reported"
-                    } else {
-                        "unreported"
-                    }),
-                );
-                if let Some(cost) = cost {
+                if provider_cost.is_none()
+                    && !span.attributes.contains_key("gen_ai.usage.cost_usd")
+                {
                     span.attributes
-                        .insert("gen_ai.usage.cost_usd".into(), json_f64(cost));
+                        .insert("gen_ai.cost.source".into(), json_str("unreported"));
                 }
             }
             if let Some(delta) = call.first_delta_ms {
@@ -857,39 +818,8 @@ impl SpanCollector {
                 }
             }
         }
-        if self.spans[call.parent_index].kind == SpanKind::Subagent
-            && let Some((input, cached, cache_creation, output, reasoning, cost)) = usage_summary
-        {
-            let parent = &mut self.spans[call.parent_index];
-            for (key, add) in [
-                ("gen_ai.usage.input_tokens", input),
-                ("gen_ai.usage.output_tokens", output),
-                ("gen_ai.usage.cached_input_tokens", cached),
-                ("gen_ai.usage.cache_creation_tokens", cache_creation),
-                ("gen_ai.usage.reasoning_tokens", reasoning),
-            ] {
-                let prior = parent
-                    .attributes
-                    .get(key)
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                parent
-                    .attributes
-                    .insert(key.into(), json_u64(prior.saturating_add(add)));
-            }
-            if let Some(cost) = cost {
-                let prior = parent
-                    .attributes
-                    .get("gen_ai.usage.cost_usd")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0);
-                parent
-                    .attributes
-                    .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + cost));
-                parent
-                    .attributes
-                    .insert("gen_ai.cost.source".into(), json_str("provider_reported"));
-            }
+        if let Some(cost) = provider_cost {
+            self.set_generation_cost(call.index, cost, "provider_reported");
         }
     }
 
