@@ -596,8 +596,11 @@ impl<L: TeamLedger> TeamService<L> {
             }
         };
         cleanup.execution = Some((
-            member.worker_thread_id.clone().unwrap_or(worker_thread_id),
-            member.run_id.clone().unwrap_or(run_id),
+            member
+                .worker_thread_id
+                .clone()
+                .unwrap_or_else(|| worker_thread_id.clone()),
+            member.run_id.clone().unwrap_or_else(|| run_id.clone()),
         ));
 
         let execution = executor.execute(&member, &claimed).await;
