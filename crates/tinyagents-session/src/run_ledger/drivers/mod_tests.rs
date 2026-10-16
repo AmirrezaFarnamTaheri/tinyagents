@@ -503,14 +503,17 @@ async fn scoped_workflow_expiry_boundary_uses_exact_supplied_timestamp() {
         .upsert_workflow_run(workflow("workflow"))
         .await
         .unwrap();
+    // "old" holds a lease that lapses exactly at `now`.
     ledger
-        .merge(WORKFLOWS, "workflow", |previous: Option<WorkflowRun>| {
-            let mut row = previous.unwrap();
-            row.lease_owner = Some("old".into());
-            row.lease_expires_at = Some(now);
-            row
-        })
+        .leases_at(now - Duration::hours(1))
+        .acquire(
+            LEDGER_OWNER,
+            &storage::workflow_lease_key("workflow").unwrap(),
+            "old",
+            3_600_000,
+        )
         .await
+        .unwrap()
         .unwrap();
     assert!(
         !ledger

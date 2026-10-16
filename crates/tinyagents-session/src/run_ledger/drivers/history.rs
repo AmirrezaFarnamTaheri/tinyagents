@@ -25,7 +25,7 @@ use crate::types::{
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use tinystoragedrivers_core::{
-    Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, Precondition, ReadCheck, Versioned,
+    Counters, DocumentStoreExt, ErrorKind, ID_FIELD, ExpectedDocument, Precondition, ReadCheck, Versioned,
     WriteOp,
 };
 
@@ -164,7 +164,7 @@ impl DriverRunLedger {
         &self,
         collection: &str,
         filter: Filter,
-        sort: Sort,
+        sorts: &[Sort],
         limit: u64,
         offset: u64,
     ) -> Result<(Vec<T>, u64)> {
@@ -175,7 +175,10 @@ impl DriverRunLedger {
             return Ok((rows, total));
         }
         let mut skip = offset;
-        let mut query = Query::filter(filter).sort(sort).limit(256);
+        let mut query = Query::filter(filter).limit(256);
+        for sort in sorts {
+            query = query.sort(sort.clone());
+        }
         loop {
             let page = self.scoped.documents().query(collection, &query).await?;
             for row in page.items {
@@ -427,7 +430,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 filter,
-                Sort::desc("started_ms"), Sort::desc(ID_FIELD),
+                &[Sort::desc("started_ms"), Sort::desc(ID_FIELD)],
                 u64::from(limit.unwrap_or(50).min(500)),
                 u64::from(offset.unwrap_or(0)),
             )
@@ -472,7 +475,7 @@ impl SessionHistoryStore for DriverRunLedger {
                 .page_sorted(
                     HIST_SESSIONS,
                     filter,
-                    Sort::desc("started_ms"), Sort::desc(ID_FIELD),
+                    &[Sort::desc("started_ms"), Sort::desc(ID_FIELD)],
                     limit,
                     offset,
                 )
@@ -482,7 +485,8 @@ impl SessionHistoryStore for DriverRunLedger {
         self.declare().await?;
         let mut matched: Vec<SessionRecord> = Vec::new();
         let mut query = Query::filter(filter)
-            .sort(Sort::desc("started_ms"), Sort::desc(ID_FIELD))
+            .sort(Sort::desc("started_ms"))
+            .sort(Sort::desc(ID_FIELD))
             .limit(256);
         loop {
             let page = self.scoped.documents().query(HIST_SESSIONS, &query).await?;
@@ -515,7 +519,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_MESSAGES,
                 Filter::eq("session_id", session_id),
-                Sort::asc("id"),
+                &[Sort::asc("id")],
                 u64::from(limit.unwrap_or(200).min(1000)),
                 0,
             )
@@ -532,7 +536,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_TOOL_CALLS,
                 Filter::eq("session_id", session_id),
-                Sort::asc("id"),
+                &[Sort::asc("id")],
                 u64::from(limit.unwrap_or(200).min(1000)),
                 0,
             )
@@ -545,7 +549,7 @@ impl SessionHistoryStore for DriverRunLedger {
             .page_sorted(
                 HIST_SESSIONS,
                 Filter::eq("parent_session_id", session_id),
-                Sort::asc("started_ms"), Sort::asc(ID_FIELD),
+                &[Sort::asc("started_ms"), Sort::asc(ID_FIELD)],
                 u64::MAX,
                 0,
             )
