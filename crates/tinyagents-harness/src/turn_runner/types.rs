@@ -350,7 +350,12 @@ where
                 let mut current = Some(reserved.clone());
                 let mut following = None;
                 if self
-                    .run_one(followup.clone(), Some(reserved), &mut current, &mut following)
+                    .run_one(
+                        followup.clone(),
+                        Some(reserved),
+                        &mut current,
+                        &mut following,
+                    )
                     .await
                     .is_err()
                 {
@@ -431,6 +436,7 @@ where
                     .get(&key)
                     .is_none_or(|current| current.generation != reserved.generation)
                 {
+                    drop(active);
                     self.events
                         .terminal(
                             &request,

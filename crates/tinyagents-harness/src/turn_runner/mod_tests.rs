@@ -662,6 +662,53 @@ async fn stale_completion_cannot_consume_a_replacement_generations_queue() {
     assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 4);
 }
 
+#[tokio::test]
+async fn collect_arriving_during_terminal_delivery_runs_as_a_fresh_turn() {
+    let host = Arc::new(Host::default());
+    let events = Arc::new(BlockingTerminalEvents::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig::default(),
+    ));
+    let mut owner = request(QueueDisposition::Interrupt, false);
+    owner.request_id = "callback-owner".into();
+    let owner_task = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(owner).await })
+    };
+    events.terminal_started.notified().await;
+
+    let mut late_collect = request(QueueDisposition::Collect, false);
+    late_collect.request_id = "late-collect".into();
+    runner.run(late_collect).await.unwrap();
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+    events.release_terminal.notify_one();
+    owner_task.await.unwrap().unwrap();
+}
+
+#[derive(Default)]
+struct BlockingTerminalEvents {
+    terminal_started: tokio::sync::Notify,
+    release_terminal: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl EventSink for BlockingTerminalEvents {
+    async fn progress(&self, _request: &TurnRequest, _event: crate::progress::AgentProgress) {}
+    async fn terminal(&self, request: &TurnRequest, _event: TerminalEvent) {
+        if request.request_id == "callback-owner" {
+            self.terminal_started.notify_one();
+            self.release_terminal.notified().await;
+        }
+    }
+}
+
 #[derive(Default)]
 struct BlockingOldReplyStore {
     persist_started: tokio::sync::Notify,
