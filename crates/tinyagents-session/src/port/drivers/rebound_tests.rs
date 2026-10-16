@@ -126,7 +126,8 @@ impl Store for BlockingStore {
         if let Some(entered) = self.entered.lock().unwrap().take() {
             let _ = entered.send(());
         }
-        if let Some(release) = self.release.lock().unwrap().take() {
+        let release = { self.release.lock().unwrap().take() };
+        if let Some(release) = release {
             let _ = release.await;
         }
         Ok(Some(serde_json::json!("old-operation")))
@@ -283,9 +284,10 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
     ];
     let candidate_backends = backends.clone();
     let mut workers = Vec::new();
-    for backend in backends {
+    for backend in &backends {
         let provider = Arc::clone(&provider);
         let barrier = Arc::clone(&barrier);
+        let backend = Arc::clone(backend);
         workers.push(std::thread::spawn(move || {
             barrier.wait();
             provider.rebind(backend).unwrap();
