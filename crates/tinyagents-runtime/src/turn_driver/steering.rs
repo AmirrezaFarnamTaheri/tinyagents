@@ -83,7 +83,8 @@ impl<T: QueuedMessage> SteeringFeed for RunQueueFeed<T> {
     }
 }
 
-/// A [`SteeringFeed`] for the driver's native [`Message`] queue.
+/// A [`SteeringFeed`] for the driver's native
+/// [`tinyinference_llm::message::Message`] queue.
 ///
 /// Unlike host-defined [`RunQueueFeed`] payloads, native messages have no
 /// stable queue item ID. This adapter preserves complete user message content
