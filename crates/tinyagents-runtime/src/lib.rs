@@ -116,4 +116,7 @@ pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 #[path = "lib_tests.rs"]
 mod test;
 #[cfg(test)]
+#[path = "codec_tests.rs"]
+mod codec_tests;
+#[cfg(test)]
 mod test_store;
