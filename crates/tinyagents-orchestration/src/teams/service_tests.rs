@@ -172,3 +172,49 @@ async fn cancelling_start_member_releases_task_and_idles_member() {
         AgentTeamMemberStatus::Idle
     );
 }
+
+#[test]
+fn stale_claim_cleanup_cannot_release_a_successor_claim() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    let ClaimOutcome::Claimed(first_claim) = service
+        .claim_task(&team.team.id, &task.id, &member.id, "first-generation")
+        .unwrap()
+    else {
+        panic!("first generation should claim the task");
+    };
+    assert!(service
+        .ledger()
+        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+        .unwrap());
+    let ClaimOutcome::Claimed(second_claim) = service
+        .claim_task(&team.team.id, &task.id, &member.id, "successor-generation")
+        .unwrap()
+    else {
+        panic!("successor should claim the released task");
+    };
+
+    assert!(!service
+        .ledger()
+        .release_task(&team.team.id, &task.id, &member.id, "first-generation")
+        .unwrap());
+    let current = service.ledger().list_tasks(&team.team.id).unwrap().remove(0);
+    assert_eq!(current.claim_token.as_deref(), Some("successor-generation"));
+    assert_eq!(current.claim_token, second_claim.claim_token);
+    assert_ne!(first_claim.claim_token, second_claim.claim_token);
+}
