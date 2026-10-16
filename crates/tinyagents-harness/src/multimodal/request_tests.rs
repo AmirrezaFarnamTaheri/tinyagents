@@ -167,7 +167,7 @@ fn wrapper(
     MediaRequestModel::new(
         model,
         config,
-        |state: &String| Ok(state.clone()),
+        |state: &String, _request| Ok(state.clone()),
         resolver,
         extractor,
     )
@@ -184,7 +184,7 @@ async fn hard_zero_rejects_before_any_source_read() {
         },
         ..MediaRequestConfig::default()
     };
-    let wrapped = wrapper(model, disabled, resolver.clone(), Arc::default());
+    let wrapped = wrapper(model.clone(), disabled, resolver.clone(), Arc::default());
 
     let error = wrapped
         .invoke(&"tenant-a".into(), request("see [IMAGE:secret]"))
@@ -215,13 +215,17 @@ async fn hard_zero_also_blocks_media_only_present_in_history() {
         }),
     );
 
-    let error = wrapped
-        .invoke(&"tenant-a".into(), request)
-        .await
-        .expect_err("hard-zero disables historical media too");
+    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
 
-    assert!(error.to_string().contains("attachments are disabled"));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+    let captured = model.requests.lock().unwrap();
+    let Message::User(user) = &captured[0].messages[0] else {
+        panic!("historical user message retained")
+    };
+    assert!(matches!(
+        &user.content[0],
+        ContentBlock::Text(text) if text.contains("Earlier attachment omitted")
+    ));
 }
 
 #[tokio::test]
@@ -328,7 +332,7 @@ async fn resolution_error_and_cancellation_leave_the_canonical_request_unchanged
     let canceled_wrapper = MediaRequestModel::new(
         cancel_model,
         MediaRequestConfig::default(),
-        |state: &String| Ok(state.clone()),
+        |state: &String, _request| Ok(state.clone()),
         pending.clone(),
         Arc::default(),
     );

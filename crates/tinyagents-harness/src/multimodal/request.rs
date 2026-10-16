@@ -7,7 +7,7 @@
 //! obtained from the immutable `ChatModel` state for each call; it is never
 //! inferred from message text or a media reference.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -29,12 +29,24 @@ use super::{
 };
 
 /// Per-turn attachment limits copied from host configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaRequestConfig {
     /// Image count, size, and remote-fetch limits.
     pub images: ImageLimits,
     /// File count, size, extraction, and remote-fetch limits.
     pub files: FileLimits,
+    /// Maximum media-bearing historical blocks to resolve, newest first.
+    pub max_historical_media_blocks: usize,
+}
+
+impl Default for MediaRequestConfig {
+    fn default() -> Self {
+        Self {
+            images: ImageLimits::default(),
+            files: FileLimits::default(),
+            max_historical_media_blocks: 8,
+        }
+    }
 }
 
 /// Resolve one media source after the host has applied its access policy.
@@ -67,14 +79,37 @@ pub trait MediaImageReadout<Scope>: Send + Sync {
     ) -> std::result::Result<String, String>;
 }
 
+/// Host-specific safe text for media omitted from or unavailable in history.
+///
+/// An implementation chooses which old failures are recoverable and may
+/// render a workspace-relative hint. It should not echo remote URLs, signed
+/// query tokens, or arbitrary resolver errors. Returning `None` keeps the
+/// historical failure fatal.
+pub trait MediaHistoryFallback<Scope>: Send + Sync {
+    /// Render a historical item outside the bounded history budget.
+    fn omitted(&self, scope: &Scope, modality: InputModality, source: &str) -> String;
+
+    /// Render a recoverable historical resolution failure, or return `None`.
+    fn unavailable(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        source: &str,
+        error: &str,
+    ) -> Option<String>;
+}
+
 /// A `ChatModel` decorator that resolves media on a request copy.
 pub struct MediaRequestModel<State, Scope> {
     inner: Arc<dyn ChatModel<State>>,
     config: MediaRequestConfig,
-    scope_for_state: Arc<dyn Fn(&State) -> std::result::Result<Scope, String> + Send + Sync>,
+    scope_for_request:
+        Arc<dyn Fn(&State, &mut ModelRequest) -> std::result::Result<Scope, String> + Send + Sync>,
     resolver: Arc<dyn MediaSourceResolver<Scope>>,
     extractor: Arc<dyn TextExtractor>,
     image_readout: Option<Arc<dyn MediaImageReadout<Scope>>>,
+    history_fallback: Option<Arc<dyn MediaHistoryFallback<Scope>>>,
+    profile: Option<ModelProfile>,
 }
 
 impl<State, Scope> MediaRequestModel<State, Scope>
@@ -84,29 +119,51 @@ where
 {
     /// Wrap `inner` with generic request preparation.
     ///
-    /// The scope callback must return the caller's already-authorized scope
-    /// from immutable model state. It is called separately for each invoke or
-    /// stream, so concurrent calls cannot overwrite one another's scope.
+    /// The callback returns the caller's already-authorized scope from model
+    /// state or trusted host metadata. It receives only the disposable request
+    /// copy, so it may consume a host carrier without changing the canonical
+    /// transcript. It is called separately for each invoke or stream.
     pub fn new(
         inner: Arc<dyn ChatModel<State>>,
         config: MediaRequestConfig,
-        scope_for_state: impl Fn(&State) -> std::result::Result<Scope, String> + Send + Sync + 'static,
+        scope_for_request: impl Fn(&State, &mut ModelRequest) -> std::result::Result<Scope, String>
+            + Send
+            + Sync
+            + 'static,
         resolver: Arc<dyn MediaSourceResolver<Scope>>,
         extractor: Arc<dyn TextExtractor>,
     ) -> Self {
+        let profile = inner.profile().cloned();
         Self {
             inner,
             config,
-            scope_for_state: Arc::new(scope_for_state),
+            scope_for_request: Arc::new(scope_for_request),
             resolver,
             extractor,
             image_readout: None,
+            history_fallback: None,
+            profile,
         }
     }
 
     /// Install the host's image-to-text fallback for models without vision.
     pub fn with_image_readout(mut self, readout: Arc<dyn MediaImageReadout<Scope>>) -> Self {
         self.image_readout = Some(readout);
+        self
+    }
+
+    /// Set selected-model facts while retaining transport support checks.
+    pub fn with_profile(mut self, profile: ModelProfile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    /// Install host policy for bounded historical-media omission and recovery.
+    pub fn with_history_fallback(
+        mut self,
+        fallback: Arc<dyn MediaHistoryFallback<Scope>>,
+    ) -> Self {
+        self.history_fallback = Some(fallback);
         self
     }
 
@@ -128,11 +185,7 @@ where
         let (images, files) = count_user_media(&request.messages[latest_user]);
         let (max_images, _) = self.config.images.effective();
         let (max_files, _, _) = self.config.files.effective();
-        let request_has_media = request.messages.iter().any(|message| {
-            let (images, files) = count_user_media(message);
-            images + files > 0
-        });
-        if self.config.files.files_disabled() && request_has_media {
+        if self.config.files.files_disabled() && images + files > 0 {
             return Err(model_error("attachments are disabled for this request"));
         }
         if images > max_images {
@@ -146,22 +199,70 @@ where
             )));
         }
 
-        let scope = (self.scope_for_state)(state).map_err(|error| model_error(&error))?;
-        for message in &mut request.messages {
+        let scope = (self.scope_for_request)(state, &mut request)
+            .map_err(|error| model_error(&error))?;
+        let selected_history = selected_history_blocks(
+            &request.messages,
+            latest_user,
+            self.config.max_historical_media_blocks,
+        );
+        for (message_index, message) in request.messages.iter_mut().enumerate() {
             let Message::User(user) = message else {
                 continue;
             };
             let mut prepared = Vec::with_capacity(user.content.len());
-            for block in std::mem::take(&mut user.content) {
+            for (block_index, block) in std::mem::take(&mut user.content).into_iter().enumerate() {
+                let historical = message_index != latest_user && is_media_block(&block);
+                if historical && self.config.files.files_disabled() {
+                    prepared.extend(self.omitted_history(&scope, block));
+                    continue;
+                }
+                if historical && !selected_history.contains(&(message_index, block_index)) {
+                    prepared.extend(self.omitted_history(&scope, block));
+                    continue;
+                }
+                let recovery = historical.then(|| media_source_hint(&block)).flatten();
                 match block {
                     ContentBlock::Text(text) => {
-                        prepared.extend(self.prepare_text(&scope, &text).await?);
+                        match self.prepare_text(&scope, &text).await {
+                            Ok(blocks) => prepared.extend(blocks),
+                            Err(error) => {
+                                if let Some((modality, source)) = recovery.as_ref()
+                                    && let Some(placeholder) = self.recover_history(
+                                        &scope,
+                                        *modality,
+                                        source,
+                                        &error,
+                                    )
+                                {
+                                    prepared.push(ContentBlock::Text(placeholder));
+                                } else {
+                                    return Err(error);
+                                }
+                            }
+                        }
                     }
                     block @ (ContentBlock::Image(_)
                     | ContentBlock::Audio(_)
                     | ContentBlock::Video(_)
                     | ContentBlock::Document(_)) => {
-                        prepared.extend(self.prepare_block(&scope, block).await?);
+                        match self.prepare_block(&scope, block.clone()).await {
+                            Ok(blocks) => prepared.extend(blocks),
+                            Err(error) => {
+                                if let Some((modality, source)) = recovery.as_ref()
+                                    && let Some(placeholder) = self.recover_history(
+                                        &scope,
+                                        *modality,
+                                        source,
+                                        &error,
+                                    )
+                                {
+                                    prepared.push(ContentBlock::Text(placeholder));
+                                } else {
+                                    return Err(error);
+                                }
+                            }
+                        }
                     }
                     other => prepared.push(other),
                 }
@@ -191,6 +292,7 @@ where
                     InputModality::Image,
                     &source,
                     self.config.images.max_image_bytes(),
+                    false,
                 )
                 .await?;
             if self.native(InputModality::Image, &attachment.mime) {
@@ -213,6 +315,7 @@ where
                     InputModality::Document,
                     &source,
                     self.config.files.max_file_bytes(),
+                    true,
                 )
                 .await?;
             if self.native(InputModality::Document, &attachment.mime) {
@@ -261,7 +364,9 @@ where
             InputModality::Image => self.config.images.max_image_bytes(),
             _ => self.config.files.max_file_bytes(),
         };
-        let mut attachment = self.resolve(scope, modality, &source, max_bytes).await?;
+        let mut attachment = self
+            .resolve(scope, modality, &source, max_bytes, false)
+            .await?;
         if attachment.mime == "application/octet-stream"
             && let Some(mime) = hinted_mime
         {
@@ -291,6 +396,7 @@ where
         modality: InputModality,
         source: &str,
         max_bytes: usize,
+        require_file_mime: bool,
     ) -> tinyinference_llm::Result<ResolvedAttachment> {
         let remote = source.starts_with("http://") || source.starts_with("https://");
         let remote_allowed = match modality {
@@ -313,11 +419,18 @@ where
         if modality == InputModality::Image && attachment.bytes.is_empty() {
             return Err(model_error("image reference has no bytes"));
         }
+        if require_file_mime && !self.config.files.is_mime_allowed(&attachment.mime) {
+            return Err(model_error(&format!(
+                "file MIME type '{}' is not allowed; supported: {}",
+                attachment.mime,
+                self.config.files.supported_rendered()
+            )));
+        }
         Ok(attachment)
     }
 
     fn native(&self, modality: InputModality, mime: &str) -> bool {
-        let advertised = self.inner.profile().is_some_and(|profile| match modality {
+        let advertised = self.profile.as_ref().is_some_and(|profile| match modality {
             InputModality::Image => profile.modalities.image_in,
             InputModality::Audio => profile.modalities.audio_in,
             InputModality::Video => profile.modalities.video_in,
@@ -408,6 +521,56 @@ where
             None,
         )
     }
+
+    fn omitted_history(&self, scope: &Scope, block: ContentBlock) -> Vec<ContentBlock> {
+        match block {
+            ContentBlock::Text(text) => {
+                let (without_images, images) = parse_image_markers(&text);
+                let (clean, files) = parse_file_markers(&without_images);
+                if images.is_empty() && files.is_empty() {
+                    return vec![ContentBlock::Text(text)];
+                }
+                let mut output = clean;
+                for source in images {
+                    output.push_str("\n\n");
+                    output.push_str(&self.omission(scope, InputModality::Image, &source));
+                }
+                for source in files {
+                    output.push_str("\n\n");
+                    output.push_str(&self.omission(scope, InputModality::Document, &source));
+                }
+                vec![ContentBlock::Text(output)]
+            }
+            other => {
+                let Some((modality, source)) = media_source_hint(&other) else {
+                    return vec![other];
+                };
+                vec![ContentBlock::Text(self.omission(scope, modality, &source))]
+            }
+        }
+    }
+
+    fn omission(&self, scope: &Scope, modality: InputModality, source: &str) -> String {
+        self.history_fallback.as_ref().map_or_else(
+            || "[Earlier attachment omitted by history budget]".to_string(),
+            |fallback| fallback.omitted(scope, modality, source),
+        )
+    }
+
+    fn recover_history(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        source: &str,
+        error: &tinyinference_llm::Error,
+    ) -> Option<String> {
+        self.history_fallback.as_ref()?.unavailable(
+            scope,
+            modality,
+            source,
+            &error.to_string(),
+        )
+    }
 }
 
 #[async_trait]
@@ -417,7 +580,7 @@ where
     Scope: Send + Sync,
 {
     fn profile(&self) -> Option<&ModelProfile> {
-        self.inner.profile()
+        self.profile.as_ref()
     }
 
     fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
@@ -454,6 +617,88 @@ where
     ) -> tinyinference_llm::Result<tinyinference_llm::model::DeferredStatus> {
         self.inner.fetch_deferred(handle).await
     }
+}
+
+fn is_media_block(block: &ContentBlock) -> bool {
+    match block {
+        ContentBlock::Text(text) => {
+            let (_, images) = parse_image_markers(text);
+            let (_, files) = parse_file_markers(text);
+            !images.is_empty() || !files.is_empty()
+        }
+        ContentBlock::Image(_)
+        | ContentBlock::Audio(_)
+        | ContentBlock::Video(_)
+        | ContentBlock::Document(_) => true,
+        _ => false,
+    }
+}
+
+fn selected_history_blocks(
+    messages: &[Message],
+    latest_user: usize,
+    budget: usize,
+) -> HashSet<(usize, usize)> {
+    let mut selected = HashSet::new();
+    let mut remaining = budget;
+    for (message_index, message) in messages.iter().enumerate().rev() {
+        if message_index == latest_user {
+            continue;
+        }
+        let Message::User(user) = message else {
+            continue;
+        };
+        for (block_index, block) in user.content.iter().enumerate().rev() {
+            if !is_media_block(block) {
+                continue;
+            }
+            let count = match block {
+                ContentBlock::Text(text) => {
+                    let (_, images) = parse_image_markers(text);
+                    let (_, files) = parse_file_markers(text);
+                    images.len() + files.len()
+                }
+                _ => 1,
+            };
+            if count <= remaining {
+                selected.insert((message_index, block_index));
+                remaining -= count;
+            }
+        }
+    }
+    selected
+}
+
+fn media_source_hint(block: &ContentBlock) -> Option<(InputModality, String)> {
+    match block {
+        ContentBlock::Text(text) => {
+            let (_, images) = parse_image_markers(text);
+            if let Some(source) = images.into_iter().next() {
+                return Some((InputModality::Image, source));
+            }
+            let (_, files) = parse_file_markers(text);
+            files
+                .into_iter()
+                .next()
+                .map(|source| (InputModality::Document, source))
+        }
+        ContentBlock::Image(image) => Some((InputModality::Image, image.url.clone())),
+        ContentBlock::Audio(media) => media_source_hint_ref(InputModality::Audio, media),
+        ContentBlock::Video(media) => media_source_hint_ref(InputModality::Video, media),
+        ContentBlock::Document(media) => media_source_hint_ref(InputModality::Document, media),
+        _ => None,
+    }
+}
+
+fn media_source_hint_ref(modality: InputModality, media: &MediaRef) -> Option<(InputModality, String)> {
+    let source = match media {
+        MediaRef::Path { path, .. } => path,
+        MediaRef::Url { url, .. } => url,
+        MediaRef::Base64 { data, media_type } => {
+            return Some((modality, format!("data:{media_type};base64,{data}")));
+        }
+    };
+    Some((modality, source.clone()))
 }
 
 fn count_user_media(message: &Message) -> (usize, usize) {
