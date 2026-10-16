@@ -66,7 +66,7 @@ fn append_only_transcript_reopens_with_compacted_context_and_full_display_histor
     let open = || {
         DriverSessionStores::new(std::sync::Arc::new(
             SqliteStorage::open(database.path().join("sessions.sqlite")).unwrap(),
-        ))
+        ), tinystoragedrivers_core::Scope::local())
         .unwrap()
         .for_agent("researcher")
         .transcripts

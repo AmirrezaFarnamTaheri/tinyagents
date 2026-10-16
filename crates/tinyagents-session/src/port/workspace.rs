@@ -71,7 +71,7 @@ impl WorkspaceStores {
         }
         let backend: Arc<dyn StorageBackend> =
             Arc::new(SqliteStorage::open(workspace_dir.join(STORE_DIR))?);
-        let provider = Arc::new(DriverSessionStores::new(backend)?);
+        let provider = Arc::new(DriverSessionStores::new(backend, tinystoragedrivers_core::Scope::local())?);
         let stores = provider.try_for_agent(agent_id)?;
         let outcome = import_transcripts_once(&provider, agent_id, workspace_dir)?;
         tracing::debug!(

@@ -58,7 +58,7 @@ fn contract_meta() -> TranscriptMeta {
 fn driver_transcript_history_satisfies_the_conformance_suite() {
     use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
     let stores =
-        DriverSessionStores::new(Arc::new(tinystoragedrivers_core::MemoryStorage::new())).unwrap();
+        DriverSessionStores::new(Arc::new(tinystoragedrivers_core::MemoryStorage::new()), tinystoragedrivers_core::Scope::local()).unwrap();
     let history = stores
         .for_agent("contract")
         .transcripts

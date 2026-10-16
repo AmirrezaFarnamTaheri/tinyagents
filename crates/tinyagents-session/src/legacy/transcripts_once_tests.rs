@@ -31,7 +31,7 @@ fn meta() -> TranscriptMeta {
 }
 
 fn provider() -> DriverSessionStores {
-    DriverSessionStores::new(Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>).unwrap()
+    DriverSessionStores::new(Arc::new(MemoryStorage::new()) as Arc<dyn StorageBackend>, tinystoragedrivers_core::Scope::local()).unwrap()
 }
 
 fn write(workspace: &Path, stem: &str, text: &str) -> std::path::PathBuf {
