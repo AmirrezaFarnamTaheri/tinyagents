@@ -315,13 +315,13 @@ async fn stale_or_cross_agent_cancel_cannot_cancel_the_current_turn() {
         Arc::new(Replies::default()),
         Arc::new(Events::default()),
     ));
-    let mut request = request(QueueDisposition::Interrupt, false);
-    request.request_id = "current-request".into();
-    let scope = request.scope.clone();
-    let thread = request.thread_id.clone();
+    let mut active_request = request(QueueDisposition::Interrupt, false);
+    active_request.request_id = "current-request".into();
+    let scope = active_request.scope.clone();
+    let thread = active_request.thread_id.clone();
     let run = {
         let runner = runner.clone();
-        tokio::spawn(async move { runner.run(request).await })
+        tokio::spawn(async move { runner.run(active_request).await })
     };
 
     started.notified().await;
