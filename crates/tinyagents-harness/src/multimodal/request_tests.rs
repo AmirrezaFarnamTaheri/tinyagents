@@ -499,8 +499,8 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
         ..MediaRequestConfig::default()
     };
     let wrapped = wrapper(model.clone(), config, resolver.clone(), Arc::default());
-    let mut request = ModelRequest::default();
-    request.messages = vec![
+    let mut historical_request = ModelRequest::default();
+    historical_request.messages = vec![
         Message::User(UserMessage {
             content: vec![ContentBlock::Image(ImageRef {
                 url: "oldest".into(),
@@ -518,7 +518,10 @@ async fn historical_media_budget_bounds_reads_and_replaces_older_items() {
         }),
     ];
 
-    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
+    wrapped
+        .invoke(&"tenant-a".into(), historical_request)
+        .await
+        .unwrap();
 
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
     assert_eq!(resolver.scopes.lock().unwrap().len(), 1);
@@ -649,9 +652,23 @@ async fn historical_text_recovers_each_failed_marker_without_losing_prose_or_val
         &[(
             InputModality::Image,
             "https://example.test/photo?token=secret".into(),
-            "Model error: remote attachment fetch is disabled".into(),
+            "model error: remote attachment fetch is disabled".into(),
         )]
     );
+
+    let error = wrapped
+        .invoke(
+            &"tenant-a".into(),
+            request("[IMAGE:https://example.test/photo?token=secret]"),
+        )
+        .await
+        .expect_err("the same source failure remains fatal in the latest user turn");
+    assert!(
+        error
+            .to_string()
+            .contains("remote attachment fetch is disabled")
+    );
+    assert_eq!(history.unavailable.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
