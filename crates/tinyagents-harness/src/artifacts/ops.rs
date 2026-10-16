@@ -13,6 +13,7 @@
 //! of the exchange. See [`super`] for the convention this module implements.
 
 use std::sync::Arc;
+use std::{path::{Path, PathBuf}, sync::atomic::{AtomicU64, Ordering}};
 
 use tinystoragedrivers_core::{BlobStore, MemoryStorage, Scope, StorageBackend};
 
@@ -312,6 +313,107 @@ impl ArtifactOffload {
         Ok((artifact, stored.text))
     }
 
+    /// Check that the filesystem copy of a relative artifact key is allowed.
+    ///
+    /// This must run before [`write`](Self::write) when the caller requires
+    /// the blob store and filesystem copy to have the same path boundary.
+    pub async fn validate_materialization_target(
+        &self,
+        root: &Path,
+        key: &str,
+    ) -> Result<PathBuf, OffloadError> {
+        let (kind, relative) = split_key(key).ok_or_else(|| OffloadError::PathEscape {
+            root: format!("{OUTPUTS_DIR}|{SCRATCH_DIR}"),
+            path: key.to_string(),
+        })?;
+        let key = self.resolve(kind, relative)?;
+        let canonical_root = tokio::fs::canonicalize(root)
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+        let target = canonical_root.join(&key);
+        let parent = target
+            .parent()
+            .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
+
+        // Resolve the deepest existing ancestor so an existing symlink cannot
+        // redirect the eventual write outside the chosen artifact root.
+        let (canonical_parent, unresolved_parent) = canonicalize_existing_ancestor(parent).await?;
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err(OffloadError::PathEscape {
+                root: canonical_root.display().to_string(),
+                path: canonical_parent.display().to_string(),
+            });
+        }
+        let resolved_parent = canonical_parent.join(unresolved_parent);
+        let resolved_target = resolved_parent.join(target.file_name().unwrap_or_default());
+        self.check_materialization_policy(&resolved_target)?;
+        Ok(target)
+    }
+
+    fn check_materialization_policy(&self, target: &Path) -> Result<(), OffloadError> {
+        if let Some(policy) = self.policy.as_deref() {
+            if policy.is_internal_state(target) {
+                return Err(OffloadError::InternalState {
+                    path: target.display().to_string(),
+                });
+            }
+            if policy.internal_root().is_some_and(|root| target.starts_with(root)) {
+                return Err(OffloadError::InternalRoot {
+                    path: target.display().to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Materialize a previously stored artifact under `root` using an atomic
+    /// same-directory temporary file. Existing destination symlinks are
+    /// replaced by rename rather than opened or followed.
+    pub async fn materialize_to_fs(&self, root: &Path, key: &str) -> Result<PathBuf, OffloadError> {
+        let target = self.validate_materialization_target(root, key).await?;
+        let body = self
+            .read(key)
+            .await?
+            .ok_or_else(|| OffloadError::Materialization("artifact is missing from blob store".into()))?;
+        let parent = target
+            .parent()
+            .ok_or_else(|| OffloadError::Materialization("artifact target has no parent".into()))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+        let checked = self.validate_materialization_target(root, key).await?;
+        if checked != target {
+            return Err(OffloadError::Materialization("artifact target changed during validation".into()));
+        }
+
+        static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+        let mut temp = None;
+        for _ in 0..32 {
+            let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let path = parent.join(format!(".artifact-{}-{id}.tmp", std::process::id()));
+            match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
+                Ok(mut file) => {
+                    use tokio::io::AsyncWriteExt;
+                    file.write_all(body.as_bytes()).await
+                        .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+                    file.sync_all().await
+                        .map_err(|error| OffloadError::Materialization(error.to_string()))?;
+                    drop(file);
+                    temp = Some(path);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(OffloadError::Materialization(error.to_string())),
+            }
+        }
+        let temp = temp.ok_or_else(|| OffloadError::Materialization("could not allocate temporary artifact file".into()))?;
+        if let Err(error) = tokio::fs::rename(&temp, &target).await {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(OffloadError::Materialization(error.to_string()));
+        }
+        Ok(target)
+    }
+
     /// Read an artifact back by the key a pointer carried
     /// ([`OffloadedArtifact::relative_path`]).
     ///
@@ -332,6 +434,35 @@ impl ArtifactOffload {
     /// list them.
     pub fn blobs(&self) -> &Arc<dyn BlobStore> {
         &self.blobs
+    }
+}
+
+async fn canonicalize_existing_ancestor(path: &Path) -> Result<(PathBuf, PathBuf), OffloadError> {
+    let mut cursor = path.to_path_buf();
+    let mut suffix = Vec::new();
+    loop {
+        match tokio::fs::canonicalize(&cursor).await {
+            Ok(canonical) => {
+                let mut unresolved = PathBuf::new();
+                for component in suffix.iter().rev() {
+                    unresolved.push(component);
+                }
+                return Ok((canonical, unresolved));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| {
+                    OffloadError::Materialization(format!(
+                        "no existing parent for artifact target {}",
+                        path.display()
+                    ))
+                })?;
+                suffix.push(name.to_os_string());
+                if !cursor.pop() {
+                    return Err(OffloadError::Materialization(error.to_string()));
+                }
+            }
+            Err(error) => return Err(OffloadError::Materialization(error.to_string())),
+        }
     }
 }
 
@@ -395,4 +526,59 @@ pub async fn offload_oversized_result(
             (output, None)
         }
     }
+}
+
+/// Offload an oversized result only when its eventual filesystem target passes
+/// the host's path policy, then materialize the stored (redacted) artifact.
+///
+/// The materialization target is checked before the first blob-store write.
+/// Any refusal or I/O failure keeps the original inline result.
+pub async fn offload_oversized_result_to_fs(
+    output: String,
+    offload: &ArtifactOffload,
+    threshold_bytes: usize,
+    read_tool: &str,
+    materialize_root: &Path,
+) -> (String, Option<OffloadedArtifact>) {
+    if !should_offload(output.len(), threshold_bytes) {
+        return (output, None);
+    }
+    let name = offload.default_result_name();
+    let key = match offload.resolve(ArtifactKind::Output, &name) {
+        Ok(key) => key,
+        Err(error) => {
+            tracing::warn!(error = %error, "[artifact] refusing unsafe filesystem target");
+            return (output, None);
+        }
+    };
+    if let Err(error) = offload
+        .validate_materialization_target(materialize_root, &key)
+        .await
+    {
+        tracing::warn!(error = %error, path = %key, "[artifact] refusing unsafe filesystem target before storage");
+        return (output, None);
+    }
+    let (artifact, stored) = match offload
+        .write_returning_stored(ArtifactKind::Output, &name, &output)
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(error = %error, "[artifact] offload refused; keeping inline result");
+            return (output, None);
+        }
+    };
+    if let Err(error) = offload
+        .materialize_to_fs(materialize_root, &artifact.relative_path)
+        .await
+    {
+        tracing::warn!(error = %error, path = %artifact.relative_path, "[artifact] materialization failed; keeping inline result");
+        return (output, None);
+    }
+    let pointer = render_artifact_pointer(
+        &artifact,
+        &build_abstract(&stored, ABSTRACT_BUDGET_CHARS),
+        read_tool,
+    );
+    (pointer, Some(artifact))
 }
