@@ -14,10 +14,31 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{Tool, ToolResult};
 
+use super::jobs::InlineJobGuard;
 use super::types::DriverJobRegistration;
 use crate::subagent::{
     SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
 };
+
+fn status_tool_result(
+    task_id: String,
+    status: &str,
+    output: Option<String>,
+    error: Option<String>,
+) -> ToolResult {
+    let mut value = json!({ "task_id": task_id, "status": status });
+    if let Some(output) = output {
+        value["output"] = Value::String(output);
+    }
+    if let Some(error) = error {
+        value["error"] = Value::String(error);
+    }
+    if matches!(status, "completed" | "running" | "queued") {
+        ToolResult::json(value)
+    } else {
+        ToolResult::error(value.to_string())
+    }
+}
 
 type RequestFactory<State, Ctx, H> = dyn Fn(&State, &RunContext<Ctx>, &Value, &CallId) -> Result<SubagentRequest<Ctx, H>, SubagentError>
     + Send
@@ -185,7 +206,13 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             .as_ref()
             .map(|(_, id, _)| id.as_str().to_owned())
             .unwrap_or_else(|| task_id.clone());
-        if let Some((jobs, id, false)) = &bridged_job {
+        let job_guard = bridged_job
+            .as_ref()
+            .filter(|(_, _, created)| *created)
+            .map(|(jobs, id, _)| InlineJobGuard::new(jobs.clone(), id.clone()));
+        if target.is_some()
+            && let Some((jobs, id, false)) = &bridged_job
+        {
             let job = jobs
                 .get(id.as_str())
                 .ok_or_else(|| anyhow::anyhow!("registered subagent job disappeared"))?;
@@ -198,12 +225,12 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 crate::subagent::SubAgentJobStatus::Incomplete => "incomplete",
                 crate::subagent::SubAgentJobStatus::Cancelled => "cancelled",
             };
-            return Ok(ToolResult::json(json!({
-                "task_id": public_task_id,
-                "status": status,
-                "output": job.output,
-                "error": job.error,
-            })));
+            return Ok(status_tool_result(
+                public_task_id,
+                status,
+                job.output,
+                job.error,
+            ));
         }
         if let Some(target) = target {
             let cancellation = request.run_context().cancellation.clone();
@@ -212,11 +239,15 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             let detached_task_id = task_id.clone();
             let completion_target = target.clone();
             let bridge = bridged_job.clone();
+            let mut job_guard = job_guard;
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Ok(result.outcome.clone()));
+                        }
+                        if let Some(guard) = &mut job_guard {
+                            guard.disarm();
                         }
                         if result.should_emit_host_effects()
                             && let Some(completion) = completion
@@ -228,6 +259,9 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                         let error = error.to_string();
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Err(error.clone()));
+                        }
+                        if let Some(guard) = &mut job_guard {
+                            guard.disarm();
                         }
                         if let Some(completion) = completion {
                             completion(&completion_target, Err(error.clone()));
@@ -244,11 +278,15 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         }
 
         let cancellation = request.run_context().cancellation.clone();
+        let mut job_guard = job_guard;
         match self.driver.run(request, cancellation).await {
             Ok(result) => {
                 let outcome = result.outcome;
                 if let Some((jobs, id, _)) = &bridged_job {
                     jobs.mark_driver_result(id, Ok(outcome.clone()));
+                }
+                if let Some(guard) = &mut job_guard {
+                    guard.disarm();
                 }
                 let (status, error) = match &outcome.status {
                     SubagentOutcomeKind::Completed => ("completed", None),
@@ -258,23 +296,19 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     }
                     SubagentOutcomeKind::Cancelled => ("cancelled", Some("cancelled".into())),
                 };
-                let mut value = json!({
-                    "task_id": public_task_id,
-                    "status": status,
-                    "output": outcome.output,
-                });
-                if let Some(error) = error {
-                    value["error"] = Value::String(error);
-                }
-                Ok(if status == "completed" {
-                    ToolResult::json(value)
-                } else {
-                    ToolResult::error(value.to_string())
-                })
+                Ok(status_tool_result(
+                    public_task_id,
+                    status,
+                    Some(outcome.output),
+                    error,
+                ))
             }
             Err(error) => {
                 if let Some((jobs, id, _)) = &bridged_job {
                     jobs.mark_driver_result(id, Err(error.to_string()));
+                }
+                if let Some(guard) = &mut job_guard {
+                    guard.disarm();
                 }
                 Ok(ToolResult::error(format!("subagent driver: {error}")))
             }

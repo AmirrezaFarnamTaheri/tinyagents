@@ -35,9 +35,6 @@ type SessionOverlay = (
 type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
-const DEFAULT_AWAIT_TIMEOUT_SECS: u64 = 120;
-const MAX_AWAIT_TIMEOUT_SECS: u64 = 3600;
-
 struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
@@ -321,6 +318,18 @@ impl SubAgentJobRegistry {
             let control = controls
                 .get(id)
                 .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+            let status = control.status.borrow().status;
+            if status.is_terminal() {
+                return Ok((
+                    id.clone(),
+                    control.steering.clone(),
+                    control.run_queue.clone().unwrap_or_else(|| {
+                        Arc::new(tinyagents_harness::run_queue::RunQueue::new())
+                    }),
+                    control.cancellation.clone(),
+                    false,
+                ));
+            }
             if control.cancellation_requested {
                 return Err(SubAgentJobError::Cancelling(id.as_str().to_owned()));
             }
@@ -328,7 +337,6 @@ impl SubAgentJobRegistry {
                 .run_queue
                 .clone()
                 .ok_or_else(|| SubAgentJobError::LaneUnavailable(id.as_str().to_owned()))?;
-            let status = control.status.borrow().status;
             if status == SubAgentJobStatus::AwaitingInput && continuing {
                 control.status.send_modify(|job| {
                     job.status = SubAgentJobStatus::Running;
@@ -488,28 +496,28 @@ impl SubAgentJobRegistry {
             Ok(outcome) if matches!(outcome.status, crate::subagent::SubagentOutcomeKind::AwaitingInput(_))
         );
         if is_pause {
-            if self
-                .controls()
-                .get(id)
-                .is_some_and(|control| control.cancellation_requested)
-            {
-                self.settle(id, |job, _| {
-                    job.status = SubAgentJobStatus::Cancelled;
-                    job.error = Some(TinyAgentsError::Cancelled.to_string());
-                });
-                return;
-            }
-            if let Some(control) = self.controls().get(id) {
-                control.status.send_modify(|job| {
-                    if let Ok(outcome) = result {
+            let controls = self.controls();
+            if let Some(control) = controls.get(id) {
+                let task_id = TaskId::new(id.as_str());
+                if control.status.borrow().status.is_terminal() {
+                    return;
+                } else if control.cancellation_requested {
+                    let _ = self.tasks.release_cancellation_trusted(&task_id);
+                    control.status.send_modify(|job| {
+                        job.status = SubAgentJobStatus::Cancelled;
+                        job.error = Some(TinyAgentsError::Cancelled.to_string());
+                    });
+                    self.steering.deregister(&task_id);
+                } else if let Ok(outcome) = result {
+                    control.status.send_modify(|job| {
                         job.output = Some(outcome.output);
                         job.artifacts = outcome.artifacts;
                         job.schema_error = outcome.schema_error;
                         job.artifact_error = outcome.artifact_error;
                         job.status = SubAgentJobStatus::AwaitingInput;
                         job.error = None;
-                    }
-                });
+                    });
+                }
             }
             return;
         }
@@ -631,6 +639,15 @@ impl SubAgentJobRegistry {
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
+        if control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
+            let _ = self.tasks.release_cancellation_trusted(&task_id);
+            control.status.send_modify(|job| {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            });
+            self.steering.deregister(&task_id);
+            return Ok(control.status.borrow().clone());
+        }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
         Ok(snapshot)
@@ -903,12 +920,6 @@ impl SubAgentJobsTool {
             max_secs,
         });
         self
-    }
-
-    /// Applies the legacy host wait contract: 120 seconds by default, bounded
-    /// to one hour.
-    pub fn with_legacy_await_timeout_field(self, field: impl Into<String>) -> Self {
-        self.with_await_timeout_field(field, DEFAULT_AWAIT_TIMEOUT_SECS, MAX_AWAIT_TIMEOUT_SECS)
     }
 
     /// Requires a job/session identifier for this named alias.
