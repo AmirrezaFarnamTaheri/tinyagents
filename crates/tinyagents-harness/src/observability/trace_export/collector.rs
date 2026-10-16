@@ -1,4 +1,4 @@
-//! Event-driven span collection for a single harness run.
+//! Event-driven span collection for one root run and its child run tree.
 //!
 //! The collector consumes durable `AgentObservation`s directly. It owns only
 //! generic event-to-span projection; product identity and content policy are
@@ -30,10 +30,12 @@ struct CallStart {
 
 /// Folds native harness observations into a trace span tree.
 ///
-/// Create one collector per run, call [`record`](Self::record) in observation
-/// order, then call [`finish`](Self::finish) when the stream closes. Duplicate
-/// starts replace the abandoned call; terminal events without a matching
-/// start are ignored, which makes replay of partial journals deterministic.
+/// Create one collector per root run, call [`record`](Self::record) with
+/// observations from that run tree, then call [`finish`](Self::finish) when
+/// the stream closes. Call IDs and observation offsets are scoped to their
+/// explicit run identities. Duplicate starts force-close the abandoned span;
+/// unmatched terminal events synthesize a span so partial journals retain
+/// meaningful terminal outcomes.
 #[derive(Debug)]
 pub struct SpanCollector {
     context: TraceContext,
