@@ -120,6 +120,16 @@ impl DocumentStore for Documents {
     ) -> tinystoragedrivers_core::Result<Version> {
         self.inner.put(c, id, v, p).await
     }
+    async fn put_with(
+        &self,
+        c: &str,
+        id: &str,
+        v: Value,
+        p: Precondition,
+        o: tinystoragedrivers_core::WriteOptions,
+    ) -> tinystoragedrivers_core::Result<Version> {
+        self.inner.put_with(c, id, v, p, o).await
+    }
     async fn delete(
         &self,
         c: &str,
