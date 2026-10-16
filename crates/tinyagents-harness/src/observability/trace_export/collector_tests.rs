@@ -783,14 +783,14 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
     );
     collector.record_event(
         &AgentEvent::SubAgentStarted {
-            name: "child-a".into(),
+            name: "worker".into(),
             depth: 1,
         },
         1,
     );
     collector.record_event(
         &AgentEvent::SubAgentRunStarted {
-            name: "child-a".into(),
+            name: "worker".into(),
             depth: 1,
             run_id: RunId::new("a"),
         },
@@ -798,14 +798,14 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
     );
     collector.record_event(
         &AgentEvent::SubAgentStarted {
-            name: "child-b".into(),
+            name: "worker".into(),
             depth: 1,
         },
         2,
     );
     collector.record_event(
         &AgentEvent::SubAgentRunStarted {
-            name: "child-b".into(),
+            name: "worker".into(),
             depth: 1,
             run_id: RunId::new("b"),
         },
@@ -912,17 +912,20 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
         .filter(|span| span.kind == SpanKind::Subagent)
         .collect();
     assert_eq!(child_spans.len(), 2);
-    for (name, expected_cost) in [("subagent.child-a", 0.25), ("subagent.child-b", 0.75)] {
-        let child = child_spans.iter().find(|span| span.name == name).unwrap();
+    for (run_id, model, expected_cost) in
+        [("a", "child-a-model", 0.25), ("b", "child-b-model", 0.75)]
+    {
+        let child = child_spans
+            .iter()
+            .find(|span| span.attributes.get("run.id").and_then(Value::as_str) == Some(run_id))
+            .unwrap();
+        assert_eq!(child.name, "subagent.worker");
         assert_eq!(child.attributes["gen_ai.usage.input_tokens"], 10);
         assert_eq!(child.attributes["gen_ai.usage.cost_usd"], expected_cost);
         let generation = collector
             .spans()
             .iter()
-            .find(|span| {
-                span.kind == SpanKind::Generation
-                    && span.name.contains(name.trim_start_matches("subagent."))
-            })
+            .find(|span| span.kind == SpanKind::Generation && span.name == format!("llm.{model}"))
             .unwrap();
         assert_eq!(
             generation.parent_span_id.as_deref(),
