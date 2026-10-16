@@ -34,7 +34,7 @@ fn target(item: &str, id: Option<String>, body: Option<Value>, source: &SourceRe
 
 /// A step that rewrites each v1 record of wire type `T` as its DTO under the
 /// id `id_of` names; a record that does not decode is dropped.
-fn convert<T: Stored + DeserializeOwned>(
+fn convert<T: Stored + DeserializeOwned + 'static>(
     id: &'static str,
     item: &'static str,
     legacy: &'static str,

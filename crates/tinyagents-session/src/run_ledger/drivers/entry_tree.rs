@@ -1,7 +1,7 @@
 //! Immutable entry records with per-session allocation and native batch admission.
 
 use super::dto::{Stored, stored_as_is};
-use super::storage::{self, dto_of, key, put_op};
+use super::storage::{self, key, put_op};
 use super::{DriverRunLedger, now};
 use crate::entry_tree::{
     Branch, Entry, EntryId, EntryKind, Fork, ForkPosition, ForkScope, LabelEntry,

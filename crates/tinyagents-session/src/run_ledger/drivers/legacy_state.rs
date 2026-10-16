@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::primitives::{self, LEASES};
 use tinystoragedrivers_core::{
-    CollectionSpec, Counters, Cursor, DocumentStoreExt, ErrorKind, Filter, ID_FIELD, Migrations,
+    CollectionSpec, Counters, Cursor, ErrorKind, Filter, ID_FIELD, Migrations,
     Precondition, Query, Result, ScopedStorage, Sort,
 };
 

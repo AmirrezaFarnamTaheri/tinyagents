@@ -37,7 +37,7 @@ macro_rules! stored_as_is {
             fn to_dto(&self) -> Self::Dto {
                 self.clone()
             }
-            fn from_dto(dto: Self::Dto) -> Result<Self, tinystoragedrivers_core::StorageError> {
+            fn from_dto(dto: Self::Dto) -> ::std::result::Result<Self, tinystoragedrivers_core::StorageError> {
                 Ok(dto)
             }
         }
