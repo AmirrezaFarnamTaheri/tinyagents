@@ -342,27 +342,35 @@ where
     }
 
     pub async fn run(&self, request: TurnRequest<P>) -> Result<TurnResult, TurnRunnerError> {
-        let result = self.run_one(request.clone(), false).await;
+        let mut state = None;
+        let result = self.run_one(request.clone(), None, &mut state).await;
         if result.is_ok() && request.disposition != QueueDisposition::Parallel {
             let mut owner = request.clone();
+            let mut current = state.clone();
             loop {
+                let Some(owner_state) = current.as_ref() else { break };
                 let followup = self
                     .take_next_followup_or_release(
                         &owner.scope,
                         &owner.thread_id,
-                        &owner.request_id,
+                        owner_state.generation,
                     )
                     .await;
-                let Some(followup) = followup else { break };
+                let Some((followup, reserved)) = followup else { break };
                 owner = followup.clone();
-                if self.run_one(followup, true).await.is_err() {
+                current = Some(reserved.clone());
+                if self.run_one(followup, Some(reserved), &mut current).await.is_err() {
                     self.clear_queue(&owner.scope, &owner.thread_id).await;
-                    self.clear_tracking(&owner).await;
+                    if let Some(state) = current.as_ref() {
+                        self.clear_tracking(&owner, state.generation).await;
+                    }
                     break;
                 }
             }
         } else {
-            self.clear_tracking(&request).await;
+            if let Some(state) = state.as_ref() {
+                self.clear_tracking(&request, state.generation).await;
+            }
         }
         result
     }
@@ -370,7 +378,8 @@ where
     async fn run_one(
         &self,
         mut request: TurnRequest<P>,
-        queued_dispatch: bool,
+        reservation: Option<ActiveTurn<P>>,
+        state_out: &mut Option<ActiveTurn<P>>,
     ) -> Result<TurnResult, TurnRunnerError> {
         for stage in [
             IngressStage::StageAttachments,
@@ -389,7 +398,11 @@ where
         }
 
         let key = (request.scope.clone(), request.thread_id.clone());
-        let cancellation = crate::CancellationToken::new();
+        let cancellation = reservation
+            .as_ref()
+            .map(|state| state.cancel.clone())
+            .unwrap_or_default();
+        let mut primary_queue = reservation.as_ref().map(|state| state.queue.clone());
         if !request.host_authored {
             if request.disposition == QueueDisposition::Parallel {
                 self.parallel_active.lock().await.insert(
@@ -400,29 +413,42 @@ where
                     ),
                     cancellation.clone(),
                 );
+            } else if let Some(reserved) = reservation.as_ref() {
+                let mut active = self.active.lock().await;
+                if active.get(&key).is_none_or(|current| current.generation != reserved.generation) {
+                    self.events.terminal(&request, TerminalEvent::Cancelled {
+                        request_id: request.request_id.clone(),
+                    }).await;
+                    return Err(TurnRunnerError::Cancelled);
+                }
+                let mut state = reserved.clone();
+                state.request_id = request.request_id.clone();
+                state.cancel = cancellation.clone();
+                active.insert(key.clone(), state.clone());
+                *state_out = Some(state);
             } else {
                 let mut active = self.active.lock().await;
-                if !queued_dispatch
-                    && let Some(lane) = queue_lane(request.disposition)
-                    && active.contains_key(&key)
+                if let Some(lane) = queue_lane(request.disposition)
+                    && let Some(current) = active.get(&key)
                 {
-                    let queue = self.queue_for(key.clone()).await;
-                    queue.push(lane, request.clone()).await;
+                    current.queue.push(lane, request.clone()).await;
                     return Err(TurnRunnerError::Queued);
                 }
-                let previous = active.insert(
-                    key.clone(),
-                    ActiveTurn {
-                        request_id: request.request_id.clone(),
-                        cancel: cancellation.clone(),
-                    },
-                );
-                drop(active);
+                let queue = Arc::new(RunQueue::new());
+                let state = ActiveTurn {
+                    request_id: request.request_id.clone(),
+                    cancel: cancellation.clone(),
+                    generation: self.next_generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    queue: queue.clone(),
+                };
+                let previous = active.insert(key.clone(), state.clone());
+                *state_out = Some(state);
+                primary_queue = Some(queue);
                 if let Some(previous) = previous {
-                    previous.cancel.cancel();
                     if request.disposition == QueueDisposition::Interrupt {
-                        self.clear_queue(&request.scope, &request.thread_id).await;
+                        previous.queue.clear().await;
                     }
+                    previous.cancel.cancel();
                 }
             }
         }
@@ -433,8 +459,10 @@ where
                 request.request_id.clone(),
             ))
             .await
+        } else if let Some(queue) = primary_queue {
+            queue
         } else {
-            self.queue_for(key.clone()).await
+            Arc::new(RunQueue::new())
         };
         let lock = {
             let mut locks = self.locks.lock().await;
