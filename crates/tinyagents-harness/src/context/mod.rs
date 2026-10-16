@@ -527,6 +527,15 @@ impl<Ctx> RunContext<Ctx> {
         self.instance_id
     }
 
+    /// A weak liveness token for middleware that keeps per-run state.
+    ///
+    /// The token becomes un-upgradeable when this context is dropped. Middleware
+    /// can use it to reclaim state when callers abandon a run before terminal
+    /// callbacks fire.
+    pub fn lifecycle_token(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.lifecycle)
+    }
+
     /// Records that the middleware stack already dispatched `on_error` for the
     /// error currently unwinding this run.
     pub(crate) fn mark_on_error_dispatched(&mut self) {

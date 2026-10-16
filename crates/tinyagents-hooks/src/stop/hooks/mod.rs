@@ -117,7 +117,7 @@ where
             runs.insert(
                 context.instance_id(),
                 HookRunState {
-                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    lifecycle: context.lifecycle_token(),
                     metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 },
@@ -153,7 +153,7 @@ where
             let run = runs
                 .entry(context.instance_id())
                 .or_insert_with(|| HookRunState {
-                    lifecycle: Arc::downgrade(&context.lifecycle),
+                    lifecycle: context.lifecycle_token(),
                     metrics: self.fresh_metrics(),
                     ..HookRunState::default()
                 });
