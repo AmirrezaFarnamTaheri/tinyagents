@@ -41,7 +41,7 @@ pub const EXIT_DENY: i32 = 2;
 /// Timeout applied when neither the definition nor the engine names one.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long past a hook's deadline the engine waits for a [`CommandSpawner`] to
+/// How long past a hook's deadline the engine waits for a [`CommandSpawner`](super::environment::CommandSpawner) to
 /// finish its own timeout teardown before dropping it.
 pub const SPAWNER_GRACE: Duration = Duration::from_secs(5);
 
