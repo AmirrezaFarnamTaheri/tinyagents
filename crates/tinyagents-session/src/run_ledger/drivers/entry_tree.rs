@@ -353,73 +353,73 @@ impl Tree {
     fn check(&self) -> Result<ReadCheck> {
         Ok(ReadCheck {
             collection: HEADS.into(),
-            id: storage::key(&[&self.head.session_id])?,
+            id: key(&[&self.head.session_id])?,
             expected: self
                 .version
                 .map(tinystoragedrivers_core::ExpectedDocument::Version)
                 .unwrap_or(tinystoragedrivers_core::ExpectedDocument::Absent),
-        }
+        })
     }
 
     fn writes(&self) -> Result<Vec<WriteOp>> {
         let session = &self.head.session_id;
         let mut writes = Vec::new();
         for entry in &self.added {
-            writes.push(WriteOp::Put {
-                collection: ENTRIES.into(),
-                id: storage::key(&[session, entry.id.as_str()]),
-                doc: storage::encode(&Node {
+            writes.push(put_op(
+                ENTRIES,
+                key(&[session, entry.id.as_str()])?,
+                &Node {
                     session_id: session.clone(),
                     insertion: self.insertion[&entry.id],
                     entry: entry.clone(),
-                })?,
-                precondition: Precondition::Absent,
-            });
+                },
+                Precondition::Absent,
+            )?);
         }
         for name in &self.named {
-            writes.push(WriteOp::Put {
-                collection: LABELS.into(),
-                id: storage::key(&[session, name]),
-                doc: storage::encode(&Named {
+            writes.push(put_op(
+                LABELS,
+                key(&[session, name])?,
+                &Named {
                     session_id: session.clone(),
                     branch: Branch {
                         name: name.clone(),
                         tip_id: self.labels[name].clone(),
                     },
-                })?,
-                precondition: Precondition::None,
-            });
+                },
+                Precondition::None,
+            )?);
         }
         if self.reindexed {
             for tip in &self.old_indexes {
                 if !self.indexes.contains_key(tip) {
                     writes.push(WriteOp::Delete {
                         collection: INDEXES.into(),
-                        id: storage::key(&[session, tip.as_str()]),
+                        id: key(&[session, tip.as_str()])?,
                         precondition: Precondition::None,
                     });
                 }
             }
             for (tip, chain) in &self.indexes {
-                writes.push(WriteOp::Put {
-                    collection: INDEXES.into(),
-                    id: storage::key(&[session, tip.as_str()]),
-                    doc: storage::encode(&Index {
+                writes.push(put_op(
+                    INDEXES,
+                    key(&[session, tip.as_str()])?,
+                    &Index {
                         session_id: session.clone(),
                         tip: tip.clone(),
                         chain: chain.clone(),
-                    })?,
-                    precondition: Precondition::None,
-                });
+                    },
+                    Precondition::None,
+                )?);
             }
         }
         if !writes.is_empty() || self.reindexed {
-            writes.push(WriteOp::Put {
-                collection: HEADS.into(),
-                id: storage::key(&[session]),
-                doc: storage::encode(&self.head)?,
-                precondition: self.condition(),
-            });
+            writes.push(put_op(
+                HEADS,
+                key(&[session])?,
+                &self.head,
+                self.condition(),
+            )?);
         }
         Ok(writes)
     }
@@ -432,7 +432,7 @@ impl DriverRunLedger {
             let found = self
                 .scoped
                 .documents()
-                .get(HEADS, &storage::key(&[session]))
+                .get(HEADS, &key(&[session])?)
                 .await?;
             let version = found.as_ref().map(|row| row.version);
             let head = match found {
@@ -456,7 +456,7 @@ impl DriverRunLedger {
             if head.session_id != session {
                 return Err(StorageError::serialization("entry head session mismatch"));
             }
-            let query = Query::filter(Filter::eq("record.sessionId", session));
+            let query = Query::filter(Filter::eq("session_id", session));
             let mut entries = BTreeMap::new();
             let mut insertion = BTreeMap::new();
             for row in self.scoped.documents().query_all(ENTRIES, &query).await? {
@@ -490,7 +490,7 @@ impl DriverRunLedger {
             match self
                 .scoped
                 .documents()
-                .atomic_batch_checked(vec![tree.check()], Vec::new())
+                .atomic_batch_checked(vec![tree.check()?], Vec::new())
                 .await
             {
                 Ok(_) => return Ok(tree),
@@ -515,7 +515,7 @@ impl DriverRunLedger {
             match self
                 .scoped
                 .documents()
-                .atomic_batch_checked(vec![tree.check()], writes)
+                .atomic_batch_checked(vec![tree.check()?], writes)
                 .await
             {
                 Ok(_) => return Ok(result),
