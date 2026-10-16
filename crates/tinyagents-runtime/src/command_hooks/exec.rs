@@ -31,7 +31,8 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 
 use super::config::{HookDefinition, HookKind};
-use super::environment::{CommandOutput, CommandRequest, HookEnvironment};
+use super::environment::HookEnvironment;
+use super::types::{CommandOutput, CommandRequest};
 use super::types::{HookInput, HookOutput, HookPermission};
 
 /// Exit code a hook uses to refuse an action.
@@ -39,6 +40,10 @@ pub const EXIT_DENY: i32 = 2;
 
 /// Timeout applied when neither the definition nor the engine names one.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long past a hook's deadline the engine waits for a [`CommandSpawner`] to
+/// finish its own timeout teardown before dropping it.
+pub const SPAWNER_GRACE: Duration = Duration::from_secs(5);
 
 /// What running one hook produced, with enough detail for diagnostics.
 #[derive(Debug, Clone)]
@@ -164,7 +169,7 @@ async fn run_command(
                 stdin: payload,
                 timeout,
             };
-            match tokio::time::timeout(timeout, spawner.run(request)).await {
+            match tokio::time::timeout(timeout + SPAWNER_GRACE, spawner.run(request)).await {
                 Ok(Ok(output)) => output,
                 Ok(Err(error)) => return Err(format!("host spawner: {error}")),
                 Err(_) => return Err(format!("timed out after {}s", timeout.as_secs())),
