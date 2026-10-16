@@ -5,13 +5,15 @@
 mod types;
 pub use types::{StopDecision, StopHook, StopHookMetrics, StopReport, TurnState};
 
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinyagents_harness::middleware::{AgentRun, Middleware};
-use tinyagents_harness::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::middleware::{AgentRun, Middleware};
+use tinyagents_harness::steering::{
+    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringTarget,
+};
 use tinyinference_llm::model::ModelResponse;
 use types::HookRunState;
 
@@ -209,8 +211,11 @@ where
             run.stopped = true;
             drop(runs);
             if let Some(slot) = &self.halt_summary {
-                *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
-                    "Stopping after {} model call(s): {}", report.iteration, report.reason
+                *slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+                    "Stopping after {} model call(s): {}",
+                    report.iteration, report.reason
                 ));
             }
             if let Some(observer) = &self.observer {

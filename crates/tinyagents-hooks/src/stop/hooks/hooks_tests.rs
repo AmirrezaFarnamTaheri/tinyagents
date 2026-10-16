@@ -1,7 +1,7 @@
 use super::*;
 use tinyagents_harness::context::{RunConfig, RunContext};
-use tinyinference_llm::message::Message;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
+use tinyinference_llm::message::Message;
 
 #[derive(Clone, Default)]
 struct Metrics {
@@ -285,7 +285,11 @@ async fn stop_hook_success_cleanup_restarts_the_completed_call_tally() {
         .await
         .unwrap();
     middleware
-        .after_agent(&mut context, &(), &mut tinyagents_harness::middleware::AgentRun::new())
+        .after_agent(
+            &mut context,
+            &(),
+            &mut tinyagents_harness::middleware::AgentRun::new(),
+        )
         .await
         .unwrap();
     middleware
@@ -328,7 +332,8 @@ async fn stop_hook_pause_prevents_the_next_model_call_in_the_native_loop() {
         "read",
         serde_json::json!({}),
     ));
-    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
+        tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model("model", model.clone());
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
@@ -458,8 +463,9 @@ async fn stop_hooks_reject_a_steering_policy_that_disallows_pause() {
             observations: observations.clone(),
         })],
     );
-    let mut context =
-        run().with_steering(SteeringHandle::new(tinyagents_harness::steering::SteeringPolicy::new()));
+    let mut context = run().with_steering(SteeringHandle::new(
+        tinyagents_harness::steering::SteeringPolicy::new(),
+    ));
     let result = middleware.before_agent(&mut context, &()).await;
     assert!(matches!(result, Err(TinyAgentsError::Middleware(_))));
     let result = middleware
@@ -482,7 +488,8 @@ async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
         "read",
         serde_json::json!({}),
     ));
-    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
+        tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model("model", model.clone());
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
@@ -512,7 +519,8 @@ async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
 async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command() {
     let context = run();
     let handle = context.steering.clone().unwrap();
-    let mut harness: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
+    let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
+        tinyagents_harness::runtime::AgentHarness::new();
     harness.register_model(
         "model",
         Arc::new(tinyinference_llm::providers::MockModel::constant("done")),
@@ -536,7 +544,8 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
     assert!(handle.is_paused());
     assert!(handle.is_empty());
     handle.resume();
-    let mut next: tinyagents_harness::runtime::AgentHarness<()> = tinyagents_harness::runtime::AgentHarness::new();
+    let mut next: tinyagents_harness::runtime::AgentHarness<()> =
+        tinyagents_harness::runtime::AgentHarness::new();
     next.register_model(
         "model",
         Arc::new(tinyinference_llm::providers::MockModel::constant("next")),

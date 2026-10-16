@@ -1,10 +1,10 @@
 //! Tests for the memory-pack, packed-tool-route and budget-parity hooks.
 
 use super::*;
+use serde_json::json;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::middleware::library::BudgetTracker;
-use serde_json::json;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelRequest;
 use tinyinference_llm::tool::ToolCall;

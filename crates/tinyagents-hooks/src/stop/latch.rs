@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 
-use tinyagents_harness::middleware::library::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
+use tinyagents_harness::middleware::library::{
+    RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary,
+};
 
 use tinyagents_harness::middleware::library::HaltSummarySlot;
 

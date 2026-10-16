@@ -4,6 +4,6 @@
 //! contracts and stock dispatch machinery; it does not choose host policy.
 
 pub mod command;
-pub mod tool;
 pub mod lifecycle;
 pub mod stop;
+pub mod tool;

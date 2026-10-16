@@ -101,4 +101,3 @@ fn merged_tallies_keep_the_least_certain_source() {
     parent.merge(unknown);
     assert_eq!(parent.usd(), None);
 }
-
