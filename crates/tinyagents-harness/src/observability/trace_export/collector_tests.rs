@@ -207,3 +207,61 @@ fn failed_calls_keep_error_status_and_payloads_stay_gated() {
     assert_eq!(tool.input, None);
     assert_eq!(tool.attributes["error.message"], "Operation failed");
 }
+
+#[test]
+fn estimated_zero_and_reported_zero_costs_keep_distinct_provenance_without_double_counting() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-cost", None));
+    let mut offset = 0;
+    let mut emit = |collector: &mut SpanCollector, event| {
+        collector.record(&observation(offset, 1_000 + offset, event));
+        offset += 1;
+    };
+    emit(&mut collector, AgentEvent::RunStarted { run_id: RunId::new("run-cost"), thread_id: None });
+    emit(&mut collector, AgentEvent::ModelStarted { call_id: CallId::new("reported"), model: "model-a".into() });
+    emit(&mut collector, AgentEvent::ModelCompleted { call_id: CallId::new("reported"), started_at_ms: None, usage: Some(Usage { charged_amount: Some(ChargedAmount::usd_micros(0)), ..Default::default() }), input: None, output: None });
+    emit(&mut collector, AgentEvent::CostRecorded { cost: crate::cost::CostTotals { total_cost: 9.0, ..Default::default() } });
+    emit(&mut collector, AgentEvent::ModelStarted { call_id: CallId::new("estimated"), model: "model-b".into() });
+    emit(&mut collector, AgentEvent::ModelCompleted { call_id: CallId::new("estimated"), started_at_ms: None, usage: Some(Usage::default()), input: None, output: None });
+    emit(&mut collector, AgentEvent::CostRecorded { cost: crate::cost::CostTotals::default() });
+
+    let generations: Vec<_> = collector.spans().iter().filter(|span| span.kind == SpanKind::Generation).collect();
+    assert_eq!(generations[0].attributes["gen_ai.usage.cost"], 0.0);
+    assert_eq!(generations[0].attributes["gen_ai.cost.source"], "provider_reported");
+    assert_eq!(generations[1].attributes["gen_ai.usage.cost"], 0.0);
+    assert_eq!(generations[1].attributes["gen_ai.cost.source"], "estimated");
+    assert_eq!(collector.spans()[0].attributes["gen_ai.usage.cost"], 0.0);
+}
+
+#[test]
+fn observation_replay_ignores_duplicate_offsets_and_other_run_streams() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-offset", None));
+    collector.record(&observation(4, 10, AgentEvent::RunStarted { run_id: RunId::new("run-1"), thread_id: None }));
+    collector.record(&observation(4, 20, AgentEvent::RunFailed { run_id: RunId::new("run-1"), error: "duplicate".into(), outcome: None }));
+    let mut other_run = observation(5, 30, AgentEvent::RunFailed { run_id: RunId::new("run-2"), error: "other".into(), outcome: None });
+    other_run.run_id = RunId::new("run-2");
+    collector.record(&other_run);
+    assert_eq!(collector.spans().len(), 1);
+    assert_eq!(collector.spans()[0].end_unix_ms, None);
+    assert_eq!(collector.spans()[0].start_unix_ms, 10);
+}
+
+#[test]
+fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    let outcomes = [
+        (TerminalOutcome::new(TerminalReason::Cancelled, "user data"), SpanStatus::Unset, "cancelled"),
+        (TerminalOutcome::new(TerminalReason::LimitReached(None), "limit"), SpanStatus::Unset, "stopped"),
+        (TerminalOutcome::new(TerminalReason::Timeout, "deadline"), SpanStatus::Error, "failed"),
+    ];
+    for (outcome, status, label) in outcomes {
+        let mut collector = SpanCollector::new(TraceContext::new("trace-terminal", None));
+        collector.record_event(&AgentEvent::RunStarted { run_id: RunId::new("run-terminal"), thread_id: None }, 0);
+        collector.record_event(&AgentEvent::RunCompleted { run_id: RunId::new("run-terminal"), outcome: Some(outcome) }, 5);
+        assert_eq!(collector.spans()[0].status, status);
+        assert_eq!(collector.spans()[0].attributes["turn.outcome"], label);
+        if label == "cancelled" || label == "stopped" {
+            assert_eq!(collector.spans()[0].attributes["observation.level"], "WARNING", "{label}");
+        }
+    }
+}
