@@ -10,7 +10,7 @@
 //! long-standing OpenHuman host format so models already prompted for it behave
 //! identically after the crate cutover.
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use tinyinference_llm::message::{ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
