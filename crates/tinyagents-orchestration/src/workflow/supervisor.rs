@@ -75,6 +75,9 @@ impl WorkflowRunSupervisor {
         let generation = {
             let mut registry = self.registry.lock().expect("workflow registry poisoned");
             registry.next_generation = registry.next_generation.wrapping_add(1);
+            if let Some(previous) = registry.current.get(&run_id) {
+                previous.token.cancel();
+            }
             let generation = Generation {
                 id: registry.next_generation,
                 token: CancellationToken::new(),

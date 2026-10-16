@@ -6,8 +6,8 @@ fn stale_generation_cannot_cancel_its_resumed_successor() {
     let first = supervisor.start("run", |_| async {}, |_| {});
     let second = supervisor.resume("run", |_| async {}, |_| {});
 
+    assert!(first.cancellation_token().is_cancelled());
     assert!(!supervisor.stop_generation(&first));
-    assert!(!first.cancellation_token().is_cancelled());
     assert!(!second.cancellation_token().is_cancelled());
     assert!(supervisor.stop_generation(&second));
     assert!(second.cancellation_token().is_cancelled());
