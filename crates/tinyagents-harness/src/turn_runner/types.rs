@@ -479,7 +479,12 @@ where
         let queue = self.queues.lock().await.get(&key).cloned();
         match queue {
             Some(queue) => queue.status().await,
-            None => QueueStatus::default(),
+            None => QueueStatus {
+                steers: 0,
+                followups: 0,
+                collects: 0,
+                total: 0,
+            },
         }
     }
 
