@@ -312,9 +312,9 @@ async fn accepted_followup_is_dispatched_as_a_fresh_turn_after_primary_finishes(
     release.notify_one();
     started.notified().await;
     assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
-    assert_eq!(ingress.0.lock().unwrap().len(), 8);
     release.notify_one();
     primary.await.unwrap().unwrap();
+    assert_eq!(ingress.0.lock().unwrap().len(), 8);
 
     assert_eq!(events.terminal.lock().unwrap().len(), 2);
 }
@@ -414,14 +414,12 @@ async fn failed_generation_is_retired_before_a_slow_terminal_callback() {
 
     let mut late = request(QueueDisposition::Steer, false);
     late.request_id = "late-steer".into();
-    assert!(matches!(
-        runner.run(late).await,
-        Err(TurnRunnerError::Failed(_))
-    ));
-    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let late_result = runner.run(late).await;
 
     events.release_terminal.notify_one();
     assert!(matches!(first.await.unwrap(), Err(TurnRunnerError::Failed(_))));
+    assert!(matches!(late_result, Err(TurnRunnerError::Failed(_))));
+    assert_eq!(host.runs.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
 #[derive(Default)]
