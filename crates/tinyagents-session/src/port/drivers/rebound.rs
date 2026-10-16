@@ -301,6 +301,28 @@ impl TranscriptLocator for LiveTranscriptLocator {
         // against the backend it was opened on.
         self.0.snapshot().transcripts.open_stem(stem, seed)
     }
+    fn head_generation(&self, session: &SessionRef) -> SessionRef {
+        self.0.snapshot().transcripts.head_generation(session)
+    }
+    fn session_exists(&self, session: &SessionRef) -> bool {
+        self.0.snapshot().transcripts.session_exists(session)
+    }
+    fn session_chain(&self, session: &SessionRef) -> Vec<SessionRef> {
+        self.0.snapshot().transcripts.session_chain(session)
+    }
+    fn read_session_transcript(&self, session: &SessionRef) -> Option<Arc<dyn TranscriptRead>> {
+        self.0
+            .snapshot()
+            .transcripts
+            .read_session_transcript(session)
+    }
+    fn open_session(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<Arc<dyn TranscriptHistory>> {
+        self.0.snapshot().transcripts.open_session(session, seed)
+    }
     fn adopt_legacy(
         &self,
         session: &SessionRef,
@@ -323,6 +345,42 @@ impl TranscriptLocator for LiveTranscriptLocator {
             .snapshot()
             .transcripts
             .append_interrupted_partial(thread, agent, partial, request)
+    }
+    fn begin_generation(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        self.0
+            .snapshot()
+            .transcripts
+            .begin_generation(session, seed)
+    }
+    fn begin_generation_from_baseline(
+        &self,
+        session: &SessionRef,
+        seed: TranscriptMeta,
+        baseline: &[crate::transcript::TranscriptMessage],
+    ) -> anyhow::Result<(SessionRef, Arc<dyn TranscriptHistory>)> {
+        self.0
+            .snapshot()
+            .transcripts
+            .begin_generation_from_baseline(session, seed, baseline)
+    }
+    fn truncate_into_next_generation(
+        &self,
+        session: &SessionRef,
+        cut: crate::transcript::TruncateCut,
+        seed: TranscriptMeta,
+    ) -> anyhow::Result<(
+        SessionRef,
+        Arc<dyn TranscriptHistory>,
+        Vec<crate::transcript::TranscriptMessage>,
+    )> {
+        self.0
+            .snapshot()
+            .transcripts
+            .truncate_into_next_generation(session, cut, seed)
     }
 }
 
