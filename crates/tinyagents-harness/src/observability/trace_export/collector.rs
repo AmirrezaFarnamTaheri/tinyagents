@@ -29,6 +29,41 @@ struct CallStart {
     first_text_ms: Option<u64>,
 }
 
+/// Product metadata available at a model-call boundary but not carried by
+/// provider-neutral harness events.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GenerationEnrichment {
+    /// Provider identifier chosen by the host, when known.
+    pub provider_id: Option<String>,
+    /// Host pricing rates in USD per million tokens, when known.
+    pub pricing: Option<GenerationPricing>,
+    /// Host-side estimated cost. Native provider-reported charges and costs
+    /// already recorded by the harness remain authoritative.
+    pub estimated_cost_usd: Option<f64>,
+}
+
+/// Host pricing basis attached to a generation span.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GenerationPricing {
+    /// Uncached input price in USD per million tokens.
+    pub input_per_mtok_usd: Option<f64>,
+    /// Cached input price in USD per million tokens.
+    pub cached_input_per_mtok_usd: Option<f64>,
+    /// Output price in USD per million tokens.
+    pub output_per_mtok_usd: Option<f64>,
+}
+
+/// Failure to enrich a generation span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum GenerationEnrichmentError {
+    /// No generation exists for this exact run and call identity.
+    #[error("generation not found for the given run and call IDs")]
+    GenerationNotFound,
+    /// The supplied estimated cost or price is negative or not finite.
+    #[error("generation pricing and estimated cost must be finite and non-negative")]
+    InvalidPricing,
+}
+
 /// Folds native harness observations into a trace span tree.
 ///
 /// Create one collector per root run, call [`record`](Self::record) with
@@ -103,7 +138,7 @@ impl SpanCollector {
         }
         self.last_offsets
             .insert(run_id.to_owned(), observation.offset);
-        self.current_run_id = Some(run_id.to_owned());
+        let previous_run_id = self.current_run_id.replace(run_id.to_owned());
         if !self.run_roots.contains_key(run_id) {
             let index = if observation.parent_run_id.is_some() {
                 let parent_id = observation
@@ -121,7 +156,8 @@ impl SpanCollector {
             };
             self.run_roots.insert(run_id.to_owned(), index);
         }
-        self.record_event(&observation.event, observation.ts_ms);
+        self.fold_event(&observation.event, observation.ts_ms);
+        self.current_run_id = previous_run_id;
     }
 
     /// Folds a live event using the caller's observation timestamp.
@@ -130,14 +166,29 @@ impl SpanCollector {
     /// events should be passed through [`Self::record`] so lineage and scoped
     /// call IDs are preserved.
     pub fn record_event(&mut self, event: &AgentEvent, timestamp_ms: u64) {
+        let previous_run_id = self.current_run_id.take();
+        let root_run_id = self
+            .root_run_id
+            .clone()
+            .or_else(|| self.context.run_id.clone())
+            .or_else(|| match event {
+                AgentEvent::RunStarted { run_id, .. } => Some(run_id.as_str().to_owned()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "root".into());
+        self.root_run_id.get_or_insert_with(|| root_run_id.clone());
+        self.current_run_id = Some(root_run_id);
+        self.fold_event(event, timestamp_ms);
+        self.current_run_id = previous_run_id;
+    }
+
+    fn fold_event(&mut self, event: &AgentEvent, timestamp_ms: u64) {
         if self.finished {
             return;
         }
         self.last_activity_ms = self.last_activity_ms.max(timestamp_ms);
         match event {
-            AgentEvent::RunStarted { run_id, .. } => {
-                self.current_run_id.get_or_insert_with(|| run_id.as_str().to_owned());
-                self.root_run_id.get_or_insert_with(|| run_id.as_str().to_owned());
+            AgentEvent::RunStarted { .. } => {
                 self.ensure_run_root(timestamp_ms);
             }
             AgentEvent::ModelStarted { call_id, model } => {
@@ -489,11 +540,11 @@ impl SpanCollector {
                 if let Some(charge) = usage.charged_amount {
                     let prior = self.spans[root]
                         .attributes
-                        .get("gen_ai.usage.cost")
+                        .get("gen_ai.usage.cost_usd")
                         .and_then(Value::as_f64)
                         .unwrap_or(0.0);
                     self.spans[root].attributes.insert(
-                        "gen_ai.usage.cost".into(),
+                        "gen_ai.usage.cost_usd".into(),
                         json_f64(prior + charge.micros as f64 / 1_000_000.0),
                     );
                     self.spans[root]
@@ -512,7 +563,7 @@ impl SpanCollector {
                     if !provider_reported {
                         self.spans[generation]
                             .attributes
-                            .insert("gen_ai.usage.cost".into(), json_f64(amount));
+                            .insert("gen_ai.usage.cost_usd".into(), json_f64(amount));
                         self.spans[generation]
                             .attributes
                             .insert("gen_ai.cost.source".into(), json_str("estimated"));
@@ -530,7 +581,7 @@ impl SpanCollector {
                             .to_owned();
                         let prior = self.spans[parent]
                             .attributes
-                            .get("gen_ai.usage.cost")
+                            .get("gen_ai.usage.cost_usd")
                             .and_then(Value::as_f64)
                             .unwrap_or(0.0);
                         let addition = if source == "provider_reported" {
@@ -540,7 +591,7 @@ impl SpanCollector {
                         };
                         self.spans[parent]
                             .attributes
-                            .insert("gen_ai.usage.cost".into(), json_f64(prior + addition));
+                            .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + addition));
                         self.spans[parent]
                             .attributes
                             .insert("gen_ai.cost.source".into(), json_str(&source));
@@ -559,25 +610,68 @@ impl SpanCollector {
         }
     }
 
-    /// Adds host-owned provider, pricing, or other per-call metadata to the
-    /// generation identified by its native run and call IDs.
+    /// Adds host-owned provider and pricing metadata to the generation
+    /// identified by its native run and call IDs.
     ///
     /// This intentionally does not infer values from the model name. It lets a
     /// host enrich a generation after the native observations have been folded
-    /// without implementing a second event state machine. Returns `false` if
-    /// the collector has not seen that generation.
+    /// without implementing a second event state machine. Native provider
+    /// charges and costs recorded by the harness remain authoritative over
+    /// the optional host estimate; a new estimate is rolled up exactly once.
     pub fn enrich_generation(
         &mut self,
         run_id: &RunId,
         call_id: &CallId,
-        attributes: impl IntoIterator<Item = (String, Value)>,
-    ) -> bool {
+        enrichment: GenerationEnrichment,
+    ) -> Result<(), GenerationEnrichmentError> {
         let key = format!("{}\0{}", run_id.as_str(), call_id.as_str());
-        let Some(index) = self.generation_by_call.get(&key).copied() else {
-            return false;
-        };
-        self.spans[index].attributes.extend(attributes);
-        true
+        let index = self
+            .generation_by_call
+            .get(&key)
+            .copied()
+            .ok_or(GenerationEnrichmentError::GenerationNotFound)?;
+        let pricing_values = enrichment
+            .pricing
+            .iter()
+            .flat_map(|pricing| [
+                ("gen_ai.pricing.input_per_mtok_usd", pricing.input_per_mtok_usd),
+                ("gen_ai.pricing.cached_input_per_mtok_usd", pricing.cached_input_per_mtok_usd),
+                ("gen_ai.pricing.output_per_mtok_usd", pricing.output_per_mtok_usd),
+            ]);
+        if pricing_values.clone().any(|(_, value)| value.is_some_and(|v| !v.is_finite() || v < 0.0))
+            || enrichment.estimated_cost_usd.is_some_and(|v| !v.is_finite() || v < 0.0)
+        {
+            return Err(GenerationEnrichmentError::InvalidPricing);
+        }
+        if let Some(provider) = enrichment.provider_id {
+            self.spans[index]
+                .attributes
+                .insert("gen_ai.provider".into(), json_str(&provider));
+        }
+        for (key, value) in pricing_values {
+            if let Some(value) = value {
+                self.spans[index].attributes.insert(key.into(), json_f64(value));
+            }
+        }
+        if let Some(estimate) = enrichment.estimated_cost_usd {
+            let has_authoritative_cost = self.spans[index]
+                .attributes
+                .contains_key("gen_ai.usage.cost_usd");
+            if !has_authoritative_cost {
+                self.spans[index].attributes.insert("gen_ai.usage.cost_usd".into(), json_f64(estimate));
+                self.spans[index].attributes.insert("gen_ai.cost.source".into(), json_str("estimated"));
+                if let Some(parent) = self.spans[index]
+                    .parent_span_id
+                    .as_deref()
+                    .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
+                {
+                    let prior = self.spans[parent].attributes.get("gen_ai.usage.cost_usd").and_then(Value::as_f64).unwrap_or(0.0);
+                    self.spans[parent].attributes.insert("gen_ai.usage.cost_usd".into(), json_f64(prior + estimate));
+                    self.spans[parent].attributes.insert("gen_ai.cost.source".into(), json_str("estimated"));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Closes open spans deterministically. Missing terminal events are marked
@@ -701,7 +795,7 @@ impl SpanCollector {
                 );
                 if let Some(cost) = cost {
                     span.attributes
-                        .insert("gen_ai.usage.cost".into(), json_f64(cost));
+                        .insert("gen_ai.usage.cost_usd".into(), json_f64(cost));
                 }
             }
             if let Some(delta) = call.first_delta_ms {
@@ -760,12 +854,12 @@ impl SpanCollector {
             if let Some(cost) = cost {
                 let prior = parent
                     .attributes
-                    .get("gen_ai.usage.cost")
+                    .get("gen_ai.usage.cost_usd")
                     .and_then(Value::as_f64)
                     .unwrap_or(0.0);
                 parent
                     .attributes
-                    .insert("gen_ai.usage.cost".into(), json_f64(prior + cost));
+                    .insert("gen_ai.usage.cost_usd".into(), json_f64(prior + cost));
                 parent
                     .attributes
                     .insert("gen_ai.cost.source".into(), json_str("provider_reported"));

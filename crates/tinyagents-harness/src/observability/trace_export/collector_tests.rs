@@ -116,7 +116,7 @@ fn observations_fold_generation_usage_ttft_and_run_lifecycle() {
         generation.attributes["gen_ai.cost.source"],
         "provider_reported"
     );
-    assert_eq!(generation.attributes["gen_ai.usage.cost"], 0.00025);
+    assert_eq!(generation.attributes["gen_ai.usage.cost_usd"], 0.00025);
     assert_eq!(generation.input.as_ref().unwrap()[0]["content"], "question");
     assert_eq!(spans[0].status, SpanStatus::Ok);
 }
@@ -300,14 +300,14 @@ fn estimated_zero_and_reported_zero_costs_keep_distinct_provenance_without_doubl
         .iter()
         .filter(|span| span.kind == SpanKind::Generation)
         .collect();
-    assert_eq!(generations[0].attributes["gen_ai.usage.cost"], 0.0);
+    assert_eq!(generations[0].attributes["gen_ai.usage.cost_usd"], 0.0);
     assert_eq!(
         generations[0].attributes["gen_ai.cost.source"],
         "provider_reported"
     );
-    assert_eq!(generations[1].attributes["gen_ai.usage.cost"], 0.0);
+    assert_eq!(generations[1].attributes["gen_ai.usage.cost_usd"], 0.0);
     assert_eq!(generations[1].attributes["gen_ai.cost.source"], "estimated");
-    assert_eq!(collector.spans()[0].attributes["gen_ai.usage.cost"], 0.0);
+    assert_eq!(collector.spans()[0].attributes["gen_ai.usage.cost_usd"], 0.0);
 }
 
 #[test]
@@ -747,10 +747,10 @@ fn own_usage_is_cumulative_while_child_generations_roll_up_only_to_the_child_spa
         .unwrap();
     assert_eq!(root.attributes["gen_ai.usage.input_tokens"], 3);
     assert_eq!(root.attributes["gen_ai.usage.output_tokens"], 4);
-    assert_eq!(root.attributes["gen_ai.usage.cost"], 0.0001);
+    assert_eq!(root.attributes["gen_ai.usage.cost_usd"], 0.0001);
     assert_eq!(child.attributes["gen_ai.usage.input_tokens"], 10);
     assert_eq!(child.attributes["gen_ai.usage.output_tokens"], 2);
-    assert_eq!(child.attributes["gen_ai.usage.cost"], 0.25);
+    assert_eq!(child.attributes["gen_ai.usage.cost_usd"], 0.25);
     assert_eq!(child.attributes["gen_ai.cost.source"], "estimated");
 }
 
@@ -885,7 +885,7 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
     for (name, expected_cost) in [("subagent.child-a", 0.25), ("subagent.child-b", 0.75)] {
         let child = child_spans.iter().find(|span| span.name == name).unwrap();
         assert_eq!(child.attributes["gen_ai.usage.input_tokens"], 10);
-        assert_eq!(child.attributes["gen_ai.usage.cost"], expected_cost);
+        assert_eq!(child.attributes["gen_ai.usage.cost_usd"], expected_cost);
         let generation = collector
             .spans()
             .iter()
@@ -898,6 +898,6 @@ fn concurrent_child_runs_scope_call_ids_and_cost_to_their_exact_lineage() {
             generation.parent_span_id.as_deref(),
             Some(child.span_id.as_str())
         );
-        assert_eq!(generation.attributes["gen_ai.usage.cost"], expected_cost);
+        assert_eq!(generation.attributes["gen_ai.usage.cost_usd"], expected_cost);
     }
 }
