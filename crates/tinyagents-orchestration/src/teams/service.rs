@@ -576,7 +576,7 @@ impl<L: TeamLedger> TeamService<L> {
             Err(error) => {
                 return Err(error.context("mark team member running"));
             }
-        }
+        };
 
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {
