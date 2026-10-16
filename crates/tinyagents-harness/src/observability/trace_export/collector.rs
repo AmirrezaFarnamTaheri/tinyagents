@@ -23,7 +23,6 @@ const UNSTREAMED_DELTA_WINDOW_MS: u64 = 100;
 struct CallStart {
     index: usize,
     started_at_ms: u64,
-    model: String,
     parent_index: usize,
     first_delta_ms: Option<u64>,
     first_text_ms: Option<u64>,
@@ -102,7 +101,6 @@ impl SpanCollector {
                         index,
                         parent_index: parent,
                         started_at_ms: timestamp_ms,
-                        model: model.clone(),
                         first_delta_ms: None,
                         first_text_ms: None,
                     },
@@ -123,9 +121,14 @@ impl SpanCollector {
                 input,
                 output,
             } => {
-                if let Some(call) = self.open_models.remove(call_id.as_str()) {
-                    self.finish_model(call, *started_at_ms, usage.as_ref(), input.as_ref(), output.as_ref(), timestamp_ms);
-                }
+                let call = self.open_models.remove(call_id.as_str()).unwrap_or_else(|| {
+                    let parent = self.active_parent(timestamp_ms);
+                    let mut attrs = BTreeMap::new();
+                    attrs.insert("gen_ai.request.model".into(), json_str("unknown"));
+                    let (index, _) = self.open_span(SpanKind::Generation, "llm.unknown".into(), Some(parent), started_at_ms.unwrap_or(timestamp_ms), attrs);
+                    CallStart { index, parent_index: parent, started_at_ms: started_at_ms.unwrap_or(timestamp_ms), first_delta_ms: None, first_text_ms: None }
+                });
+                self.finish_model(call, *started_at_ms, usage.as_ref(), input.as_ref(), output.as_ref(), timestamp_ms);
             }
             AgentEvent::ModelFailed {
                 call_id,
@@ -141,7 +144,7 @@ impl SpanCollector {
                 }
             }
             AgentEvent::ToolStarted { call_id, tool_name, input, parent_call_id } => {
-                let parent = parent_call_id
+                let parent = parent_call_id.as_ref()
                     .and_then(|id| self.open_tools.get(id.as_str()).copied())
                     .unwrap_or_else(|| self.active_parent(timestamp_ms));
                 let mut attrs = BTreeMap::new();
