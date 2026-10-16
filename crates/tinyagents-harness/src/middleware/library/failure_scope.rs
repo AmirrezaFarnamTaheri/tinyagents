@@ -93,6 +93,7 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
         &self,
         ctx: &RunContext<Ctx>,
         invocation: &ToolInvocationIdentity,
+        call: &ToolCall,
         scope: &FailureScope,
         result: &ToolResult,
     ) -> FailureAssessment;
@@ -155,7 +156,7 @@ pub struct FailureScopeMiddleware<Ctx: Send + Sync> {
     halt_summary: HaltSummarySlot,
     policy: Arc<dyn FailureScopePolicy<Ctx>>,
     identical_threshold: usize,
-    calls: Mutex<HashMap<(u64, String), FailureScope>>,
+    calls: Mutex<HashMap<(u64, String), (ToolCall, FailureScope)>>,
     runs: Mutex<HashMap<u64, Arc<RunFailureState>>>,
     nudges: EphemeralInstructionQueue,
 }
@@ -231,11 +232,12 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         &self,
         ctx: &mut RunContext<Ctx>,
         invocation: &ToolInvocationIdentity,
+        call: ToolCall,
         scope: FailureScope,
         result: &ToolResult,
     ) {
         let tool = invocation.tool_name();
-        let assessment = self.policy.assess(ctx, invocation, &scope, result);
+        let assessment = self.policy.assess(ctx, invocation, &call, &scope, result);
         let run = self.run_state(ctx.instance_id());
         let step = run.step.fetch_add(1, Ordering::SeqCst) + 1;
         let argument_key = format!("{}\u{1f}{}", scope.argument_fingerprint, scope.scope);
@@ -376,7 +378,7 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         self.calls
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert((ctx.instance_id(), call.id.to_string()), scope);
+            .insert((ctx.instance_id(), call.id.to_string()), (call.clone(), scope));
         Ok(())
     }
 
@@ -387,16 +389,21 @@ impl<Ctx: Send + Sync> Middleware<(), Ctx> for FailureScopeMiddleware<Ctx> {
         invocation: &ToolInvocationIdentity,
         result: &mut ToolResult,
     ) -> Result<()> {
-        let scope = self
+        let (call, scope) = self
             .calls
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&(ctx.instance_id(), invocation.call_id().to_string()))
-            .unwrap_or_else(|| FailureScope {
-                argument_fingerprint: String::new(),
-                scope: invocation.tool_name().to_owned(),
+            .unwrap_or_else(|| {
+                (
+                    ToolCall::new(invocation.call_id(), invocation.tool_name(), serde_json::Value::Null),
+                    FailureScope {
+                        argument_fingerprint: String::new(),
+                        scope: invocation.tool_name().to_owned(),
+                    },
+                )
             });
-        self.observe(ctx, invocation, scope, result);
+        self.observe(ctx, invocation, call, scope, result);
         Ok(())
     }
 
