@@ -655,7 +655,8 @@ impl SpanCollector {
             .attributes
             .get("gen_ai.cost.source")
             .and_then(Value::as_str)
-            .unwrap_or("unreported");
+            .unwrap_or("unreported")
+            .to_owned();
         self.spans[index]
             .attributes
             .insert("gen_ai.usage.cost_usd".into(), json_f64(amount));
