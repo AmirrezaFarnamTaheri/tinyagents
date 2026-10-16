@@ -79,9 +79,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx>
         next: ModelHandler<'_, State, Ctx>,
     ) -> crate::error::Result<MiddlewareModelOutcome> {
         let outcome = next.run(ctx, state, request).await?;
-        let MiddlewareModelOutcome::Response(response) = outcome else {
-            return Ok(outcome);
-        };
+        let response = outcome.into_response();
         if let Some(resolved) = response.resolved_model.as_ref()
             && resolved.name != self.primary
         {
@@ -127,9 +125,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelMiddleware<State, Ctx> for Usage
         next: ModelHandler<'_, State, Ctx>,
     ) -> crate::error::Result<MiddlewareModelOutcome> {
         let outcome = next.run(ctx, state, request).await?;
-        let MiddlewareModelOutcome::Response(response) = outcome else {
-            return Ok(outcome);
-        };
+        let response = outcome.into_response();
         (self.carry)(&response);
         Ok(MiddlewareModelOutcome::from(response))
     }
