@@ -68,6 +68,19 @@ pub enum ToolHookDecision {
     AdditionalContext(String),
 }
 
+impl From<super::command::HookOutput> for ToolHookDecision {
+    fn from(output: super::command::HookOutput) -> Self {
+        use super::command::HookPermission;
+        match output.permission {
+            Some(HookPermission::Deny) => Self::Deny(output.agent_message.or(output.user_message).unwrap_or_else(|| "denied by hook".into())),
+            Some(HookPermission::Ask) => Self::Ask(output.agent_message.or(output.user_message).unwrap_or_else(|| "approval requested by hook".into())),
+            _ if output.updated_input.is_some() => Self::UpdatedInput(output.updated_input.expect("checked")),
+            _ if output.additional_context.is_some() => Self::AdditionalContext(output.additional_context.expect("checked")),
+            _ => Self::Allow,
+        }
+    }
+}
+
 /// Typed callback around tool execution.
 #[async_trait]
 pub trait ToolHook: Send + Sync {
@@ -148,5 +161,49 @@ where Ctx: HookIdentity + Send + Sync {
             event.arguments = event.arguments.clone();
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl ToolHook for crate::command::HookEngine {
+    fn name(&self) -> &str { "command_hooks" }
+
+    async fn before_tool_decision(&self, context: &ToolHookContext) -> ToolHookDecision {
+        let input = crate::command::context::build_input(
+            crate::command::HookEvent::PreToolUse,
+            crate::command::context::TurnIdentity {
+                conversation_id: context.session_id.clone(),
+                session_id: context.session_id.clone(),
+                agent_id: context.agent_id.clone(),
+                cwd: context.cwd.as_ref().map(|path| path.display().to_string()),
+                ..Default::default()
+            },
+            crate::command::HookPayload::Tool(crate::command::ToolPayload {
+                tool_name: context.tool_name.clone(),
+                tool_input: context.arguments.clone(),
+                tool_use_id: context.call_id.clone(),
+                ..Default::default()
+            }),
+        );
+        self.dispatch(crate::command::HookEvent::PreToolUse, input).await.output.into()
+    }
+
+    async fn after_tool_context(&self, context: &ToolHookContext) -> Option<String> {
+        let event = if context.success == Some(false) { crate::command::HookEvent::PostToolUseFailure } else { crate::command::HookEvent::PostToolUse };
+        let input = crate::command::context::build_input(
+            event,
+            crate::command::context::TurnIdentity {
+                conversation_id: context.session_id.clone(),
+                session_id: context.session_id.clone(),
+                agent_id: context.agent_id.clone(),
+                cwd: context.cwd.as_ref().map(|path| path.display().to_string()),
+                ..Default::default()
+            },
+            crate::command::HookPayload::Tool(crate::command::ToolPayload {
+                tool_name: context.tool_name.clone(), tool_input: context.arguments.clone(), tool_use_id: context.call_id.clone(),
+                tool_output: context.output.clone(), duration_ms: context.duration_ms, error_message: context.error.clone(), ..Default::default()
+            }),
+        );
+        self.dispatch(event, input).await.output.additional_context
     }
 }

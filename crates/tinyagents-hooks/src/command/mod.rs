@@ -49,4 +49,4 @@ pub use engine::{HookEngine, HookOutcome};
 pub use environment::{
     CommandOutput, CommandRequest, CommandSpawner, HookEnvironment, PromptEvaluator, ShellFactory,
 };
-pub use types::{HookEvent, HookInput, HookOutput, HookPayload, HookPermission};
+pub use types::{HookEvent, HookInput, HookOutput, HookPayload, HookPermission, ToolPayload};
