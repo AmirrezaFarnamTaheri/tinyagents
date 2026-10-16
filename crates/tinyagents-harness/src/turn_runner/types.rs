@@ -734,11 +734,13 @@ where
             active.remove(&key);
         }
         drop(active);
-        self.parallel_active.lock().await.remove(&(
+        let parallel_key = (
             request.scope.clone(),
             request.thread_id.clone(),
             request.request_id.clone(),
-        ));
+        );
+        self.parallel_active.lock().await.remove(&parallel_key);
+        self.parallel_queues.lock().await.remove(&parallel_key);
     }
 
     async fn fail<T>(&self, request: &TurnRequest<P>, error: String) -> Result<T, TurnRunnerError> {
