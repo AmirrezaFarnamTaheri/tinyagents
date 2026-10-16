@@ -149,7 +149,10 @@ async fn run_command(
 
     let output = match &environment.command_spawner {
         Some(spawner) => {
-            tracing::debug!("[hooks] {} running through the host spawner", definition.label());
+            tracing::debug!(
+                "[hooks] {} running through the host spawner",
+                definition.label()
+            );
             let request = CommandRequest {
                 command: definition.command.clone(),
                 cwd: definition
