@@ -41,8 +41,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 use tinystoragedrivers_core::{
-    DocumentStore, DocumentStoreExt, EXPIRES_FIELD, Filter, Precondition, Query, Repo, Versioned,
-    WriteOptions,
+    DocumentStore, DocumentStoreExt, EXPIRES_FIELD, Filter, Precondition, Query, Repo,
+    StorageError, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -223,7 +223,7 @@ impl DriverNamespacedStore {
         let expires = expiry_at(now, Some(minutes));
         let refreshed = self
             .repo(expires)?
-            .update(&id, |current| Ok(current))
+            .update(&id, Ok::<_, StorageError>)
             .await
             .map_err(map_error)?;
         if refreshed.is_none() {

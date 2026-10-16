@@ -79,7 +79,7 @@ impl From<&HarnessRunStatus> for RunStatusRecord {
             active_model_call: status.active_model_call.clone(),
             active_tool_calls: status.active_tool_calls.clone(),
             last_event_id: status.last_event_id.clone(),
-            usage: status.usage.clone(),
+            usage: status.usage,
             cost: status.cost,
             started_ms: to_ms(status.started_at),
             updated_ms: to_ms(status.updated_at),
