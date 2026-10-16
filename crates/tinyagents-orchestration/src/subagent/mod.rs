@@ -54,7 +54,8 @@ pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
 pub use policy::{SubAgentBudget, SubAgentPolicy};
 pub use result_policy::{
-    AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, truncate_head_tail,
+    AppliedResult, ArtifactStore, ResultOverflow, ResultPolicy, is_safe_task_id,
+    truncate_head_tail,
 };
 pub use role::{
     FLEET_TOOLS, FleetToolSet, SUBAGENT_JOBS_TOOL, SUBAGENT_MESSAGE_TOOL, SubagentRole,

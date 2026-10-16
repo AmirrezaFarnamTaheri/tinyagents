@@ -1757,10 +1757,13 @@ async fn driver_custom_scope_resolver_sees_the_task_keys_root_run_id() {
         })
         .with_scope_key(|cfg| format!("root:{}", cfg.lineage.root_run_id.as_str())),
     );
-    let child_of = |parent: &str| async move {
-        let mut config = RunConfig::new(parent);
+    let child_of = |parent: &str| {
+        let parent = parent.to_owned();
+        async move {
+        let mut config = RunConfig::new(parent.clone());
         config.lineage.root_run_id = tinyagents_harness::ids::RunId::new("tree-root");
-        request_with_parent(parent, RunContext::new(config, String::new())).await
+        request_with_parent(&parent, RunContext::new(config, String::new())).await
+        }
     };
 
     driver

@@ -20,6 +20,19 @@ use super::ArtifactReference;
 
 const LOG_PREFIX: &str = "[subagent-result-policy]";
 
+/// Whether `task_id` can be used as a single filename component.
+///
+/// The allow-list intentionally accepts only ids minted by this harness or
+/// short test labels, so path separators, dots and encoded traversal forms are
+/// rejected before a host joins the id to a storage directory.
+pub fn is_safe_task_id(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id.len() <= 128
+        && task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
 /// What to do with output longer than [`ResultPolicy::max_chars`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

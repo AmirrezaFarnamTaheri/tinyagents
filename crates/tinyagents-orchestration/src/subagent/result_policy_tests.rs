@@ -34,6 +34,17 @@ fn a_cap_smaller_than_the_marker_hard_cuts_within_the_cap() {
     assert_eq!((out.as_str(), omitted), ("", 11));
 }
 
+#[test]
+fn task_ids_are_safe_single_filename_components() {
+    for safe in ["sub-123", "subsess_ab12", "short_test"] {
+        assert!(is_safe_task_id(safe), "{safe}");
+    }
+    let too_long = "x".repeat(129);
+    for unsafe_id in ["", "../escape", "a/b", "a\\b", ".", "naïve", &too_long] {
+        assert!(!is_safe_task_id(unsafe_id), "{unsafe_id}");
+    }
+}
+
 #[tokio::test]
 async fn the_default_policy_changes_nothing() {
     let applied = ResultPolicy::default()
