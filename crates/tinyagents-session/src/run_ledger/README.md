@@ -64,10 +64,12 @@ crate root as `session::run_ledger::`.
 - `upsert_agent_team_task` / `get_agent_team_task` / `list_agent_team_tasks`
   — CRUD for `AgentTeamTask`.
 - `claim_agent_team_task` / `complete_agent_team_task` /
-  `release_agent_team_task` / `release_agent_team_task_if_claimed` — the
+  `complete_agent_team_task_if_claimed` / `release_agent_team_task` /
+  `release_agent_team_task_if_claimed` — the
   claim/completion protocol: an atomic compare-and-swap claim, a quality-gated
   completion, and an explicit release for a member that abandons a task without
-  shutting down. Conditional release fences cleanup by its claim token.
+  shutting down. Conditional completion and release fence worker operations by
+  their claim token.
 
 ### Restart recovery classification (`recovery.rs`)
 
