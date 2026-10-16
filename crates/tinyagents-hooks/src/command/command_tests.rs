@@ -356,16 +356,54 @@ async fn lifecycle_entrypoints_dispatch_configured_hooks_and_apply_decisions() {
           "subagentStop":[{"command":"./hook.sh"}],
           "sessionEnd":[{"command":"./hook.sh"}]
         }}"#,
-        Some(("hook.sh", "#!/bin/sh\necho '{\"permission\":\"deny\",\"user_message\":\"blocked\",\"additional_context\":\"session context\",\"followup_message\":\"parent followup\"}'\n")),
+        Some((
+            "hook.sh",
+            "#!/bin/sh\necho '{\"permission\":\"deny\",\"user_message\":\"blocked\",\"additional_context\":\"session context\",\"followup_message\":\"parent followup\"}'\n",
+        )),
     );
-    engine.install(config::load(&host(), None, Some(dir.path()))).await;
-    let identity = TurnIdentity { session_id: Some("session-lifecycle".into()), conversation_id: Some("thread-1".into()), ..Default::default() };
+    engine
+        .install(config::load(&host(), None, Some(dir.path())))
+        .await;
+    let identity = TurnIdentity {
+        session_id: Some("session-lifecycle".into()),
+        conversation_id: Some("thread-1".into()),
+        ..Default::default()
+    };
 
-    assert_eq!(engine.session_started(identity.clone(), Some("cli".into())).await.as_deref(), Some("session context"));
-    assert_eq!(engine.prompt_submitted(identity.clone(), "hello", Vec::new()).await, PromptVerdict::Block("blocked".into()));
-    assert_eq!(engine.pre_compact(identity.clone(), "auto", Some(75.0), Some(20)).await.as_deref(), Some("blocked"));
-    assert!(engine.subagent_starting(identity.clone(), "worker", "task").await.unwrap_err().contains("blocked"));
-    assert_eq!(engine.subagent_stopped(identity.clone(), "worker", "task", "completed", Some(10)).await.as_deref(), Some("parent followup"));
+    assert_eq!(
+        engine
+            .session_started(identity.clone(), Some("cli".into()))
+            .await
+            .as_deref(),
+        Some("session context")
+    );
+    assert_eq!(
+        engine
+            .prompt_submitted(identity.clone(), "hello", Vec::new())
+            .await,
+        PromptVerdict::Block("blocked".into())
+    );
+    assert_eq!(
+        engine
+            .pre_compact(identity.clone(), "auto", Some(75.0), Some(20))
+            .await
+            .as_deref(),
+        Some("blocked")
+    );
+    assert!(
+        engine
+            .subagent_starting(identity.clone(), "worker", "task")
+            .await
+            .unwrap_err()
+            .contains("blocked")
+    );
+    assert_eq!(
+        engine
+            .subagent_stopped(identity.clone(), "worker", "task", "completed", Some(10))
+            .await
+            .as_deref(),
+        Some("parent followup")
+    );
     engine.session_ended(identity, "completed", Some(100)).await;
 }
 
