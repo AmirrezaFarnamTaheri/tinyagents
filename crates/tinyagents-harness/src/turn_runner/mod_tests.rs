@@ -1513,13 +1513,19 @@ impl TurnHost for FloodProgressHost {
         _queue: Arc<RunQueue<TurnRequest>>,
         progress: tokio::sync::mpsc::Sender<TurnSignal>,
     ) -> Result<TurnResult, String> {
+        let sender = progress.clone();
+        tokio::spawn(async move {
+            while sender
+                .send(TurnSignal::Progress(Box::new(
+                    crate::progress::AgentProgress::TurnStarted,
+                )))
+                .await
+                .is_ok()
+            {}
+        });
         self.started.notify_one();
-        loop {
-            tokio::select! {
-                _ = cancellation.cancelled() => return Err("cancelled".into()),
-                sent = progress.send(TurnSignal::Progress(Box::new(crate::progress::AgentProgress::TurnStarted))) => sent.map_err(|error| error.to_string())?,
-            }
-        }
+        cancellation.cancelled().await;
+        Err("cancelled".into())
     }
     async fn checkin(&self, _request: &TurnRequest) {}
     async fn cancel_children(&self, _request: &TurnRequest) {}
@@ -1549,8 +1555,8 @@ async fn cancellation_during_grounded_close_prevents_persisting_completion() {
         let runner = runner.clone();
         tokio::spawn(async move { runner.run(turn).await })
     };
-    let close_started_at = tokio::time::Instant::now();
     summary.started.notified().await;
+    let close_started_at = tokio::time::Instant::now();
     assert!(runner.cancel(&scope, "thread-a", Some("request-a")).await);
     assert!(matches!(
         run.await.unwrap(),
