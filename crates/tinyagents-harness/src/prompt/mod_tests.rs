@@ -12,9 +12,18 @@ use tinyinference_llm::model::ModelProfile;
 fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
     struct Section(&'static str, PromptTier);
     impl DynamicPromptSection<String> for Section {
-        fn name(&self) -> &str { self.0 }
+        fn name(&self) -> &str {
+            self.0
+        }
         fn render(&self, context: &String) -> Result<Vec<TieredPromptPart>> {
-            Ok(vec![TieredPromptPart::new(self.1, if self.1 == PromptTier::Stable { "fixed" } else { context })])
+            Ok(vec![TieredPromptPart::new(
+                self.1,
+                if self.1 == PromptTier::Stable {
+                    "fixed"
+                } else {
+                    context
+                },
+            )])
         }
     }
 
@@ -24,7 +33,10 @@ fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
     composer.push(Section("context", PromptTier::Context));
     let first = composer.build(&"project A".to_string()).unwrap();
     let second = composer.build(&"project B".to_string()).unwrap();
-    assert_eq!(first.parts[0], (PromptTier::Stable, "fixed\n\n".to_string()));
+    assert_eq!(
+        first.parts[0],
+        (PromptTier::Stable, "fixed\n\n".to_string())
+    );
     assert_eq!(first.parts[0], second.parts[0]);
     assert_eq!(first.parts[1].1, "project A\n\n");
     assert_eq!(second.parts[1].1, "project B\n\n");
@@ -44,16 +56,26 @@ fn prompt_tier_order_is_deterministic_and_each_section_renders_once() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Counted(AtomicUsize);
     impl DynamicPromptSection<()> for Counted {
-        fn name(&self) -> &str { "counted" }
+        fn name(&self) -> &str {
+            "counted"
+        }
         fn render(&self, _: &()) -> Result<Vec<TieredPromptPart>> {
             self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![TieredPromptPart::new(PromptTier::Context, "context"), TieredPromptPart::new(PromptTier::Stable, "stable")])
+            Ok(vec![
+                TieredPromptPart::new(PromptTier::Context, "context"),
+                TieredPromptPart::new(PromptTier::Stable, "stable"),
+            ])
         }
     }
     let section = std::sync::Arc::new(Counted(AtomicUsize::new(0)));
     let mut composer = PromptComposer::new();
     composer.push(section.clone());
-    composer.push(|_: &()| Ok(vec![TieredPromptPart::new(PromptTier::Volatile, "volatile")]));
+    composer.push(|_: &()| {
+        Ok(vec![TieredPromptPart::new(
+            PromptTier::Volatile,
+            "volatile",
+        )])
+    });
     let a = composer.build(&()).unwrap();
     let b = composer.build(&()).unwrap();
     assert_eq!(section.0.load(Ordering::SeqCst), 2);

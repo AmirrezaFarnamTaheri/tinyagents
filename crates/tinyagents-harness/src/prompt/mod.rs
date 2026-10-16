@@ -54,12 +54,18 @@ pub struct PromptComposer<C> {
 }
 
 impl<C> Default for PromptComposer<C> {
-    fn default() -> Self { Self { sections: Vec::new() } }
+    fn default() -> Self {
+        Self {
+            sections: Vec::new(),
+        }
+    }
 }
 
 impl<C> PromptComposer<C> {
     /// Creates an empty prompt composer.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Adds a section. Sections render once per call to [`Self::build`].
     pub fn push(&mut self, section: impl DynamicPromptSection<C> + 'static) -> &mut Self {
@@ -81,22 +87,42 @@ impl<C> PromptComposer<C> {
         let mut text = String::new();
         let mut breakpoints = Vec::new();
         let mut parts = Vec::new();
-        for tier in [PromptTier::Stable, PromptTier::Context, PromptTier::Volatile] {
+        for tier in [
+            PromptTier::Stable,
+            PromptTier::Context,
+            PromptTier::Volatile,
+        ] {
             let bucket = &buckets[tier_index(tier)];
-            if bucket.is_empty() { continue; }
+            if bucket.is_empty() {
+                continue;
+            }
             let rendered = format!("{}\n\n", bucket.join("\n\n"));
             text.push_str(&rendered);
             parts.push((tier, rendered));
-            if tier != PromptTier::Volatile { breakpoints.push(text.len()); }
+            if tier != PromptTier::Volatile {
+                breakpoints.push(text.len());
+            }
         }
-        if breakpoints.last() == Some(&text.len()) { breakpoints.pop(); }
-        if !text.is_empty() { text = format!("{}\n", text.trim_end()); }
-        Ok(TieredPrompt { text, breakpoints, parts })
+        if breakpoints.last() == Some(&text.len()) {
+            breakpoints.pop();
+        }
+        if !text.is_empty() {
+            text = format!("{}\n", text.trim_end());
+        }
+        Ok(TieredPrompt {
+            text,
+            breakpoints,
+            parts,
+        })
     }
 }
 
 fn tier_index(tier: PromptTier) -> usize {
-    match tier { PromptTier::Stable => 0, PromptTier::Context => 1, PromptTier::Volatile => 2 }
+    match tier {
+        PromptTier::Stable => 0,
+        PromptTier::Context => 1,
+        PromptTier::Volatile => 2,
+    }
 }
 
 /// Renders supplied sections in order without product prompt selection.

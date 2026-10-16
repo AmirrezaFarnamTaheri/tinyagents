@@ -23,7 +23,9 @@ pub struct AgentsMdContent {
 
 impl AgentsMdContent {
     /// Whether either layer contains non-whitespace text.
-    pub fn is_empty(&self) -> bool { self.global.is_none() && self.local.is_none() }
+    pub fn is_empty(&self) -> bool {
+        self.global.is_none() && self.local.is_none()
+    }
 }
 
 /// Loads one `AGENTS.md` from `dir` if the host's path check accepts it.
@@ -31,17 +33,17 @@ impl AgentsMdContent {
 /// Missing, unreadable, non-regular, empty, over-policy, and rejected files
 /// are skipped without surfacing their content in errors or logs. The
 /// validator receives `(candidate_file, allowed_root)`.
-pub fn load_agents_md(
-    dir: &Path,
-    validate_path: impl Fn(&Path, &Path) -> bool,
-) -> Option<String> {
+pub fn load_agents_md(dir: &Path, validate_path: impl Fn(&Path, &Path) -> bool) -> Option<String> {
     let path = dir.join(AGENTS_MD_FILENAME);
     let file = open_no_follow(&path).ok()?;
     if !file.metadata().ok()?.is_file() || !validate_path(&path, dir) {
         return None;
     }
     let mut bytes = Vec::new();
-    if Take::take(file, MAX_AGENTS_MD_READ_BYTES).read_to_end(&mut bytes).is_err() {
+    if Take::take(file, MAX_AGENTS_MD_READ_BYTES)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
         return None;
     }
     let value = String::from_utf8_lossy(&bytes);
@@ -57,7 +59,9 @@ pub fn load_agents_md_layers(
     enabled: bool,
     validate_path: impl Fn(&Path, &Path) -> bool + Copy,
 ) -> AgentsMdContent {
-    if !enabled { return AgentsMdContent::default(); }
+    if !enabled {
+        return AgentsMdContent::default();
+    }
     let global = load_agents_md(workspace_dir, validate_path);
     let local = if paths_equal(workspace_dir, action_dir) {
         None
@@ -87,7 +91,10 @@ fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
 fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "symlink refused"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "symlink refused",
+        ));
     }
     std::fs::File::open(path)
 }

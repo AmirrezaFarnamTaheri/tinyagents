@@ -180,7 +180,10 @@ pub struct TieredPromptPart {
 impl TieredPromptPart {
     /// Creates a prompt slice for `tier`.
     pub fn new(tier: PromptTier, content: impl Into<String>) -> Self {
-        Self { tier, content: content.into() }
+        Self {
+            tier,
+            content: content.into(),
+        }
     }
 }
 
@@ -199,15 +202,21 @@ impl<C, F> DynamicPromptSection<C> for F
 where
     F: Fn(&C) -> crate::Result<Vec<TieredPromptPart>> + Send + Sync,
 {
-    fn name(&self) -> &str { "dynamic" }
-    fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>> { self(context) }
+    fn name(&self) -> &str {
+        "dynamic"
+    }
+    fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>> {
+        self(context)
+    }
 }
 
 impl<C, T> DynamicPromptSection<C> for std::sync::Arc<T>
 where
     T: DynamicPromptSection<C> + ?Sized,
 {
-    fn name(&self) -> &str { (**self).name() }
+    fn name(&self) -> &str {
+        (**self).name()
+    }
     fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>> {
         (**self).render(context)
     }

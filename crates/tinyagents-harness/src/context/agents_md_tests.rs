@@ -52,7 +52,14 @@ fn rejects_missing_empty_invalid_paths_and_symlinked_instruction_files() {
 #[test]
 fn instruction_read_is_bounded_in_bytes() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join(AGENTS_MD_FILENAME), vec![b'x'; MAX_AGENTS_MD_READ_BYTES as usize + 100]).unwrap();
-    let loaded = load_agents_md(root.path(), |candidate, allowed| candidate.starts_with(allowed)).unwrap();
+    std::fs::write(
+        root.path().join(AGENTS_MD_FILENAME),
+        vec![b'x'; MAX_AGENTS_MD_READ_BYTES as usize + 100],
+    )
+    .unwrap();
+    let loaded = load_agents_md(root.path(), |candidate, allowed| {
+        candidate.starts_with(allowed)
+    })
+    .unwrap();
     assert_eq!(loaded.len(), MAX_AGENTS_MD_READ_BYTES as usize);
 }
