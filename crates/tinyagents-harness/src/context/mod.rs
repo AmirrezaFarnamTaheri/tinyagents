@@ -34,11 +34,13 @@
 //! ```
 
 mod depth;
+mod agents_md;
 mod host_ext;
 mod stats;
 mod types;
 
 pub use depth::{current_run_depth, with_run_depth};
+pub use agents_md::{AgentsMdContent, load_agents_md, load_agents_md_layers, AGENTS_MD_FILENAME, MAX_AGENTS_MD_READ_BYTES};
 pub use host_ext::HostExtensions;
 pub use stats::*;
 pub use types::*;
