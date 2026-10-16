@@ -899,7 +899,6 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     let spawned_value = serde_json::from_str::<Value>(&spawned.output()).unwrap();
     let task_id = spawned_value["task_id"].as_str().unwrap().to_owned();
     assert_ne!(task_id, "pause-then-continue");
-    assert!(persistence.pause.lock().unwrap().is_some());
 
     let wait = SubAgentJobsTool::new(jobs.clone())
         .with_fixed_action(SubAgentJobAction::Await)
@@ -919,6 +918,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     .unwrap();
     let paused_value = serde_json::from_str::<Value>(&paused.output()).unwrap();
     assert_eq!(paused_value["status"], "awaiting_input");
+    assert!(persistence.pause.lock().unwrap().is_some());
     let public_id = jobs.driver_job_for_task("pause-then-continue", "durable-parent-session").unwrap();
     assert!(!jobs.get(public_id.as_str()).unwrap().status.is_terminal());
     assert!(jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
