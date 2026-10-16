@@ -217,6 +217,15 @@ type ThreadLockKey = (ScopeKey, String);
 type ThreadLocks = Mutex<HashMap<ThreadLockKey, Weak<Mutex<()>>>>;
 type QueueMap<P> = Mutex<HashMap<ThreadLockKey, Arc<RunQueue<TurnRequest<P>>>>>;
 
+fn queue_lane(disposition: QueueDisposition) -> Option<QueueLane> {
+    match disposition {
+        QueueDisposition::Steer => Some(QueueLane::Steer),
+        QueueDisposition::Followup => Some(QueueLane::Followup),
+        QueueDisposition::Collect => Some(QueueLane::Collect),
+        QueueDisposition::Interrupt | QueueDisposition::Parallel => None,
+    }
+}
+
 /// Reusable turn lifecycle coordinator, parameterized entirely by host ports.
 pub struct TurnRunner<H, I, R, E, F, S, P = serde_json::Value> {
     host: Arc<H>,
