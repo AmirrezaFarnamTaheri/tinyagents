@@ -13,6 +13,7 @@ use tinyagents_harness::ids::new_call_id;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinytools::Tool;
 
 pub(super) struct PanickingModel;
 
@@ -360,4 +361,115 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     let job = jobs.get(job_id.as_str()).unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
     assert!(job.incomplete_kind.is_none() && job.output.is_none());
+}
+
+#[tokio::test]
+async fn named_job_alias_uses_configured_operation_and_identifier_fields() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    let schema = json!({
+        "type": "object",
+        "required": ["task_id"],
+        "properties": {"task_id": {"type": "string"}}
+    });
+    let tool = SubAgentJobsTool::new(jobs.clone())
+        .with_tool_name("list_subagents")
+        .with_parameters(schema.clone())
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_fields("task_id", "subagent_session_id");
+
+    assert_eq!(tool.name(), "list_subagents");
+    assert_eq!(tool.parameters_schema(), schema);
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task_id": job_id.as_str(), "action": "cancel"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("alias queries the requested job");
+    let returned: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(returned["id"], job_id.as_str());
+    assert_eq!(
+        jobs.get_owned(job_id.as_str(), parent.instance_id())
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Queued,
+        "the caller cannot replace a configured query with a cancel action"
+    );
+}
+
+#[tokio::test]
+async fn fixed_job_alias_rejects_missing_identifiers_and_defaults_stay_compatible() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let alias = SubAgentJobsTool::new(jobs.clone())
+        .with_tool_name("cancel_subagent")
+        .with_fixed_action(SubAgentJobAction::Cancel)
+        .with_identifier_fields("task_id", "subagent_session_id");
+    let missing = ToolDispatch::<(), ()>::execute(
+        &alias,
+        &(),
+        new_call_id(),
+        json!({"action": "query"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await;
+    assert!(
+        missing.is_err(),
+        "fixed cancel still requires its mapped task id"
+    );
+
+    let default_jobs = SubAgentJobsTool::new(jobs);
+    assert_eq!(default_jobs.name(), "subagent_jobs");
+    assert_eq!(
+        default_jobs.parameters_schema()["properties"]["action"]["enum"],
+        json!(["query", "cancel", "close", "await"])
+    );
+    let default_message = SubAgentMessageTool::new(SubAgentJobRegistry::new());
+    assert_eq!(default_message.name(), "subagent_message");
+    assert_eq!(
+        default_message.parameters_schema()["properties"]["job_id"]["type"],
+        "string"
+    );
+}
+
+#[tokio::test]
+async fn named_message_alias_routes_mapped_id_and_message_fields() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, steering) = jobs.create("worker", parent.instance_id());
+    let schema = json!({
+        "type": "object",
+        "required": ["task_id", "text"],
+        "properties": {
+            "task_id": {"type": "string"},
+            "text": {"type": "string"}
+        }
+    });
+    let tool = SubAgentMessageTool::new(jobs)
+        .with_tool_name("steer_subagent")
+        .with_parameters(schema.clone())
+        .with_argument_fields("task_id", "session_id", "text", "request_key");
+    assert_eq!(tool.name(), "steer_subagent");
+    assert_eq!(tool.parameters_schema(), schema);
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task_id": job_id.as_str(), "text": "focus on the test"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("alias sends the mapped message");
+    let returned: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(returned["job_id"], job_id.as_str());
+    assert_eq!(returned["status"], "message_queued");
+    assert_eq!(steering.pending(), 1);
 }

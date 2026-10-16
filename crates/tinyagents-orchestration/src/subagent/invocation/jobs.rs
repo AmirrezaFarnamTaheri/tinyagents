@@ -35,6 +35,70 @@ type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>)
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
 
+/// A fixed operation for a host-named alias of [`SubAgentJobsTool`].
+///
+/// The default tool continues to read its `action` argument. Hosts that keep
+/// separate model-facing operations can bind one action while supplying the
+/// existing tool name and schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubAgentJobAction {
+    /// Read one job or list jobs when no identifier is supplied.
+    Query,
+    /// Cancel one owned live job.
+    Cancel,
+    /// Close one owned durable session.
+    Close,
+    /// Wait for one job, or for all jobs when no identifier is supplied.
+    Await,
+}
+
+impl SubAgentJobAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Cancel => "cancel",
+            Self::Close => "close",
+            Self::Await => "await",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct JobArgumentNames {
+    action: String,
+    job_id: String,
+    session_id: String,
+}
+
+impl Default for JobArgumentNames {
+    fn default() -> Self {
+        Self {
+            action: "action".into(),
+            job_id: "job_id".into(),
+            session_id: "session_id".into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MessageArgumentNames {
+    job_id: String,
+    session_id: String,
+    message: String,
+    request_id: String,
+}
+
+impl Default for MessageArgumentNames {
+    fn default() -> Self {
+        Self {
+            job_id: "job_id".into(),
+            session_id: "session_id".into(),
+            message: "message".into(),
+            request_id: "request_id".into(),
+        }
+    }
+}
+
 /// Settles an inline job if its tool future is dropped (tool timeout, parent
 /// stream drop) or unwinds from a panic before the result is recorded.
 /// Call [`Self::disarm`] once the result has been written.
@@ -490,6 +554,10 @@ pub struct SubAgentJobsTool {
     jobs: SubAgentJobRegistry,
     sessions: Option<SessionOverlay>,
     tasks: Option<TaskOverlay>,
+    tool_name: String,
+    parameters: Option<Value>,
+    fixed_action: Option<SubAgentJobAction>,
+    argument_names: JobArgumentNames,
 }
 
 impl SubAgentJobsTool {
@@ -499,7 +567,41 @@ impl SubAgentJobsTool {
             jobs,
             sessions: None,
             tasks: None,
+            tool_name: "subagent_jobs".into(),
+            parameters: None,
+            fixed_action: None,
+            argument_names: JobArgumentNames::default(),
         }
+    }
+
+    /// Uses a host-facing name while retaining this tool's typed job logic.
+    pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
+        self.tool_name = name.into();
+        self
+    }
+
+    /// Uses a host-facing schema for a named operation alias.
+    pub fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = Some(parameters);
+        self
+    }
+
+    /// Binds this alias to one operation, so its schema need not expose the
+    /// generic `action` field.
+    pub fn with_fixed_action(mut self, action: SubAgentJobAction) -> Self {
+        self.fixed_action = Some(action);
+        self
+    }
+
+    /// Maps host schema identifier fields to the generic job/session fields.
+    pub fn with_identifier_fields(
+        mut self,
+        job_id: impl Into<String>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.argument_names.job_id = job_id.into();
+        self.argument_names.session_id = session_id.into();
+        self
     }
 
     /// Overlays durable sessions in list/query and enables durable close.
@@ -527,7 +629,7 @@ impl SubAgentJobsTool {
 #[async_trait]
 impl Tool for SubAgentJobsTool {
     fn name(&self) -> &str {
-        "subagent_jobs"
+        &self.tool_name
     }
 
     fn description(&self) -> &str {
@@ -535,7 +637,7 @@ impl Tool for SubAgentJobsTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        json!({
+        self.parameters.clone().unwrap_or_else(|| json!({
             "type": "object",
             "properties": {
                 "job_id": { "type": "string" },
@@ -545,7 +647,7 @@ impl Tool for SubAgentJobsTool {
                     "description": "`query` reads a job/session or lists work; `cancel` stops a live job; `close` prevents a durable session from being reused; `await` waits for the named live job."
                 }
             }
-        })
+        }))
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -571,15 +673,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         let object = args
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("arguments must be an object"))?;
-        match object
-            .get("action")
-            .filter(|value| !value.is_null())
-            .map(Value::as_str)
-        {
+        let action = match self.fixed_action {
+            Some(action) => Some(Some(action.as_str())),
+            None => object
+                .get(&self.argument_names.action)
+                .filter(|value| !value.is_null())
+                .map(Value::as_str),
+        };
+        match action {
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
                 let job_id = object
-                    .get("job_id")
+                    .get(&self.argument_names.job_id)
                     .and_then(Value::as_str)
                     .ok_or_else(|| {
                         anyhow::anyhow!("job_id must be a string for action `cancel`")
@@ -589,7 +694,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(Some("close")) => {
                 let id = object
-                    .get("job_id")
+                    .get(&self.argument_names.job_id)
                     .and_then(Value::as_str)
                     .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
                 let (sessions, key) = self
@@ -607,7 +712,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 ));
             }
             Some(Some("await")) => {
-                let Some(id) = object.get("job_id").and_then(Value::as_str) else {
+                let Some(id) = object
+                    .get(&self.argument_names.job_id)
+                    .and_then(Value::as_str)
+                else {
                     let mut tombstones = Vec::new();
                     for job in self.jobs.list_owned(parent.instance_id()) {
                         let job = self
@@ -680,7 +788,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
-        if let Some(value) = object.get("job_id") {
+        if let Some(value) = object.get(&self.argument_names.job_id) {
             let job_id = value
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("job_id must be a string when provided"))?;
@@ -749,6 +857,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
 pub struct SubAgentMessageTool {
     jobs: SubAgentJobRegistry,
     sessions: Option<SessionOverlay>,
+    tool_name: String,
+    parameters: Option<Value>,
+    argument_names: MessageArgumentNames,
 }
 
 impl SubAgentMessageTool {
@@ -757,7 +868,39 @@ impl SubAgentMessageTool {
         Self {
             jobs,
             sessions: None,
+            tool_name: "subagent_message".into(),
+            parameters: None,
+            argument_names: MessageArgumentNames::default(),
         }
+    }
+
+    /// Uses a host-facing name while retaining this tool's typed message logic.
+    pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
+        self.tool_name = name.into();
+        self
+    }
+
+    /// Uses a host-facing schema for a named steering alias.
+    pub fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = Some(parameters);
+        self
+    }
+
+    /// Maps host schema fields to the generic job/session and message fields.
+    pub fn with_argument_fields(
+        mut self,
+        job_id: impl Into<String>,
+        session_id: impl Into<String>,
+        message: impl Into<String>,
+        request_id: impl Into<String>,
+    ) -> Self {
+        self.argument_names = MessageArgumentNames {
+            job_id: job_id.into(),
+            session_id: session_id.into(),
+            message: message.into(),
+            request_id: request_id.into(),
+        };
+        self
     }
 
     /// Enables steering a live durable session by its session id.
@@ -774,7 +917,7 @@ impl SubAgentMessageTool {
 #[async_trait]
 impl Tool for SubAgentMessageTool {
     fn name(&self) -> &str {
-        "subagent_message"
+        &self.tool_name
     }
 
     fn description(&self) -> &str {
@@ -782,7 +925,7 @@ impl Tool for SubAgentMessageTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        json!({
+        self.parameters.clone().unwrap_or_else(|| json!({
             "type": "object",
             "properties": {
                 "job_id": { "type": "string", "description": "Live job id. Use session_id for a durable reusable session." },
@@ -795,7 +938,7 @@ impl Tool for SubAgentMessageTool {
             },
             "required": ["message"],
             "oneOf": [{"required":["job_id"]},{"required":["session_id"]}]
-        })
+        }))
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
@@ -818,7 +961,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         _options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<ToolResult> {
-        let job_id = if let Some(session_id) = args.get("session_id").and_then(Value::as_str) {
+        let job_id = if let Some(session_id) = args
+            .get(&self.argument_names.session_id)
+            .and_then(Value::as_str)
+        {
             let (sessions, key) = self
                 .sessions
                 .as_ref()
@@ -832,16 +978,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .current_task_id
                 .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?
         } else {
-            args.get("job_id")
+            args.get(&self.argument_names.job_id)
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("job_id or session_id must be a string"))?
                 .to_owned()
         };
         let message = args
-            .get("message")
+            .get(&self.argument_names.message)
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("message must be a string"))?;
-        let request_id = match args.get("request_id") {
+        let request_id = match args.get(&self.argument_names.request_id) {
             None | Some(Value::Null) => None,
             Some(value) => {
                 let id = value
