@@ -76,11 +76,30 @@ fn does_not_confuse_brackets_inside_strings() {
 #[test]
 fn last_object_parser_prefers_the_last_fenced_object_and_repairs_commas() {
     let (value, repair) = parse_lenient_last_object(
-        "first {\"id\": 1}\n```json\n{\"id\": 2,}\n```\nlast {\"id\": 3}",
+        "```json\n{\"id\": 1}\n```\n```JSON\n{\"id\": 2,}\n```\nlast {\"id\": 3}",
     )
     .expect("the final fenced object parses");
     assert_eq!(value, json!({ "id": 2 }));
     assert!(repair.is_repaired());
+}
+
+#[test]
+fn last_object_parser_handles_escaped_braces_unicode_and_incomplete_fences() {
+    let (value, repair) = parse_lenient_last_object(
+        r#"```json
+{"id":1}
+```
+```json
+{"id":2,"text":"escaped \" quote and } { brace — ✓",}
+```
+```json
+{"id":3
+"#,
+    )
+    .expect("the last complete fenced object is still available");
+    assert_eq!(value["id"], 2);
+    assert_eq!(value["text"], "escaped \" quote and } { brace — ✓");
+    assert_eq!(repair, JsonRepair::TrailingComma);
 }
 
 #[test]

@@ -128,26 +128,64 @@ fn failure_backoff_saturates_at_the_cap_and_failure_limit() {
 }
 
 #[test]
-fn reset_invalidates_a_stale_guard_and_success_resets_the_streak() {
+fn reset_invalidates_a_stale_drop_without_releasing_a_new_attempt() {
     let breaker = PersistentFailoverBreaker::<String>::new(PersistentFailoverBreakerConfig {
         base_backoff_ms: 1,
         max_backoff_ms: 10,
         failure_limit: 2,
     });
-    let mut old = breaker.try_acquire("key".into(), 0).unwrap();
+    let old = breaker.try_acquire("key".into(), 0).unwrap();
     breaker.reset(&"key".to_owned());
     let mut current = breaker.try_acquire("key".into(), 0).unwrap();
-    assert!(old.record_failure(0).is_none());
     drop(old);
     assert!(matches!(
         breaker.try_acquire("key".into(), 1),
         Err(BreakerRejection::InFlight)
     ));
-    current.record_success();
-    let mut after_success = breaker.try_acquire("key".into(), 0).unwrap();
-    let failure = after_success.record_failure(0).unwrap();
+    let failure = current.record_failure(0).unwrap();
     assert_eq!(failure.failure_count, 1);
     assert_eq!(failure.next_attempt_ms, 1);
+}
+
+#[test]
+fn stale_success_cannot_reset_or_release_a_new_attempt() {
+    let breaker = PersistentFailoverBreaker::<String>::default();
+    let mut old = breaker.try_acquire("key".into(), 0).unwrap();
+    breaker.reset(&"key".to_owned());
+    let mut current = breaker.try_acquire("key".into(), 0).unwrap();
+    old.record_success();
+    assert!(matches!(
+        breaker.try_acquire("key".into(), 0),
+        Err(BreakerRejection::InFlight)
+    ));
+    let failure = current.record_failure(0).unwrap();
+    assert_eq!(failure.failure_count, 1);
+}
+
+#[test]
+fn success_resets_a_nonzero_failure_streak() {
+    let breaker = PersistentFailoverBreaker::<String>::new(PersistentFailoverBreakerConfig {
+        base_backoff_ms: 5,
+        max_backoff_ms: 20,
+        failure_limit: 3,
+    });
+    let failure = breaker
+        .try_acquire("key".into(), 0)
+        .unwrap()
+        .record_failure(0)
+        .unwrap();
+    assert_eq!(failure.failure_count, 1);
+    let mut successful = breaker
+        .try_acquire("key".into(), failure.next_attempt_ms)
+        .unwrap();
+    successful.record_success();
+    let after_success = breaker
+        .try_acquire("key".into(), failure.next_attempt_ms)
+        .unwrap()
+        .record_failure(failure.next_attempt_ms)
+        .unwrap();
+    assert_eq!(after_success.failure_count, 1);
+    assert_eq!(after_success.next_attempt_ms, failure.next_attempt_ms + 5);
 }
 
 #[test]
