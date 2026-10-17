@@ -21,6 +21,7 @@ mod reconcile;
 mod recovery;
 mod runtime;
 mod status;
+mod storage;
 mod store;
 mod store_registry;
 mod tool;
@@ -41,6 +42,7 @@ pub use recovery::{
     build_restart_recovery_note, recovery_children,
 };
 pub use runtime::DetachedTaskRegistry;
+pub use storage::storage_schema;
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,

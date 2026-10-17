@@ -155,3 +155,30 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
         .unwrap();
     assert_eq!(other.calls.load(Ordering::SeqCst), 2);
 }
+
+/// The v2 shape: a `harness.embedding_cache` document under
+/// `Key::of([signature, key as 16 hex digits])`, stamped schema 2.
+#[tokio::test]
+async fn vectors_are_harness_embedding_cache_documents_keyed_by_signature_and_key() {
+    let documents = docs(&MemoryStorage::new(), "local");
+    let cache = DriverEmbeddingCache::new(Arc::clone(&documents));
+    cache
+        .store("sig/with/slashes", &[(0xAB, vec![1.0, 2.0])])
+        .await
+        .unwrap();
+    let row = documents
+        .get(
+            "harness.embedding_cache",
+            "sig%2Fwith%2Fslashes/00000000000000ab",
+        )
+        .await
+        .unwrap()
+        .expect("the id is Key::of([signature, hex])");
+    assert_eq!(
+        row.doc,
+        serde_json::json!({"sig": "sig/with/slashes", "key": "00000000000000ab", "vector": [1.0, 2.0]})
+    );
+    assert_eq!(row.meta.schema, 2);
+    let found = cache.load("sig/with/slashes", &[0xAB]).await.unwrap();
+    assert_eq!(found[&0xAB], vec![1.0, 2.0]);
+}

@@ -56,6 +56,18 @@ impl DocumentStore for ProbeDocs {
     ) -> Result<tinystoragedrivers_core::Version, StorageError> {
         self.inner.put(collection, id, doc, precondition).await
     }
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        precondition: tinystoragedrivers_core::Precondition,
+        options: tinystoragedrivers_core::WriteOptions,
+    ) -> Result<tinystoragedrivers_core::Version, StorageError> {
+        self.inner
+            .put_with(collection, id, doc, precondition, options)
+            .await
+    }
     async fn delete(
         &self,
         collection: &str,
@@ -127,12 +139,6 @@ impl StorageBackend for ProbeBackend {
             scoped.blobs().clone(),
         ))
     }
-    fn database(&self, name: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-        Ok(Arc::new(Self {
-            inner: self.inner.database(name)?,
-            observed: self.observed.clone(),
-        }))
-    }
 }
 
 async fn prepared() -> (Arc<dyn StorageBackend>, Arc<Observations>) {
@@ -160,10 +166,13 @@ async fn prepared() -> (Arc<dyn StorageBackend>, Arc<Observations>) {
 #[tokio::test]
 async fn validation_only_conformance_never_attempts_schema_declaration() {
     let (backend, observed) = prepared().await;
-    let provider =
-        DriverSessionStores::new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
-            .unwrap()
-            .recover_on_open(true);
+    let provider = DriverSessionStores::new_with_schema_admission(
+        backend,
+        tinystoragedrivers_core::Scope::local(),
+        SchemaAdmission::ValidateOnly,
+    )
+    .unwrap()
+    .recover_on_open(true);
     session_store_conformance(&provider).await;
     session_store_isolation_conformance(&provider).await;
     assert_eq!(observed.declarations.load(Ordering::SeqCst), 0);
@@ -180,9 +189,12 @@ async fn validation_only_conformance_never_attempts_schema_declaration() {
 async fn validation_only_refusals_keep_native_sources_and_retry_without_caching() {
     use std::error::Error;
     let (backend, observed) = prepared().await;
-    let provider =
-        DriverSessionStores::new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
-            .unwrap();
+    let provider = DriverSessionStores::new_with_schema_admission(
+        backend,
+        tinystoragedrivers_core::Scope::local(),
+        SchemaAdmission::ValidateOnly,
+    )
+    .unwrap();
     for (refusal, kind) in [
         (
             1,
@@ -210,7 +222,7 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
 async fn explicit_actor_factory_selects_validation_without_changing_original_provider() {
     let (backend, observed) = prepared().await;
     let original = Arc::new(
-        DriverSessionStores::new(backend.clone())
+        DriverSessionStores::new(backend.clone(), tinystoragedrivers_core::Scope::local())
             .unwrap()
             .recover_on_open(true),
     );
@@ -237,7 +249,8 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         storage.prepare_schema().await.unwrap();
         let scoped = storage.for_scope(&Scope::local()).unwrap();
         let mut specs = DriverSessionStores::collection_specs();
-        let required = specs.pop().unwrap();
+        let at = specs.iter().position(|spec| spec.name == "tsd.kv").unwrap();
+        let required = specs.remove(at);
         for spec in specs {
             scoped.documents().ensure_collection(&spec).await.unwrap();
         }
@@ -248,6 +261,7 @@ async fn validation_only_missing_or_incompatible_schema_refuses_before_recovery_
         }
         let provider = DriverSessionStores::new_with_schema_admission(
             storage.existing_schema().unwrap(),
+            tinystoragedrivers_core::Scope::local(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -283,6 +297,7 @@ async fn legacy_actor_factory_inherits_validation_policy_without_declaring_schem
     let original: Arc<dyn SessionStoreProvider> = Arc::new(
         DriverSessionStores::new_with_schema_admission(
             backend.clone(),
+            tinystoragedrivers_core::Scope::local(),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -314,9 +329,12 @@ async fn validation_only_provider_ledger_uses_prepared_schema_without_declaratio
         inner: storage.existing_schema().unwrap(),
         observed: observed.clone(),
     });
-    let provider =
-        DriverSessionStores::new_with_schema_admission(backend, SchemaAdmission::ValidateOnly)
-            .unwrap();
+    let provider = DriverSessionStores::new_with_schema_admission(
+        backend,
+        tinystoragedrivers_core::Scope::local(),
+        SchemaAdmission::ValidateOnly,
+    )
+    .unwrap();
     let ledger = provider.run_ledger_for_agent("alice").unwrap().unwrap();
     let result = ledger
         .list_recent_run_events(&crate::run_ledger::RunEventListRequest {

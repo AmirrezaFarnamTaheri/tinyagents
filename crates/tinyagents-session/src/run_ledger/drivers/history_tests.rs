@@ -250,7 +250,7 @@ async fn age_session(ledger: &DriverRunLedger, id: &str, ended: Option<chrono::D
         .put(
             HIST_SESSIONS,
             &found.id,
-            history::session_doc(&session).unwrap(),
+            storage::encode(&session).unwrap(),
             Precondition::Version(found.version),
         )
         .await
@@ -268,7 +268,7 @@ async fn count(ledger: &DriverRunLedger, collection: &str) -> u64 {
 
 async fn retention_removes_only_what_is_stale(backend: &dyn StorageBackend) {
     let ledger = ledger_on(backend, "retention");
-    let cutoff = Utc::now();
+    let cutoff = now();
     for id in ["old", "recent", "live"] {
         ledger
             .record_session_start(start(id, "agent", "Agent"))
@@ -363,10 +363,10 @@ async fn tool_call_and_event_pruning_respect_the_cutoff() {
         .unwrap();
     call(&ledger, "s", "alpha").await;
     call(&ledger, "s", "beta").await;
-    let after = Utc::now() + Duration::seconds(5);
+    let after = now() + Duration::seconds(5);
     assert_eq!(
         ledger
-            .prune_tool_calls_before(Utc::now() - Duration::days(1))
+            .prune_tool_calls_before(now() - Duration::days(1))
             .await
             .unwrap(),
         0
@@ -391,7 +391,7 @@ async fn tool_call_and_event_pruning_respect_the_cutoff() {
     }
     assert_eq!(
         ledger
-            .prune_run_events_before(Utc::now() - Duration::days(1))
+            .prune_run_events_before(now() - Duration::days(1))
             .await
             .unwrap(),
         0
@@ -444,8 +444,8 @@ async fn apply_retention_reports_every_family_it_removed() {
         })
         .await
         .unwrap();
-    let cutoff = Utc::now() + Duration::seconds(5);
-    age_session(&ledger, "old", Some(Utc::now() - Duration::days(1))).await;
+    let cutoff = now() + Duration::seconds(5);
+    age_session(&ledger, "old", Some(now() - Duration::days(1))).await;
     let report = ledger.apply_retention(cutoff).await.unwrap();
     // The cascade removes `old`'s call with it; `live`'s call is only aged out.
     assert_eq!(
@@ -480,7 +480,7 @@ async fn reindex_restores_missing_rows_and_drops_stale_ones() {
     ledger
         .scoped
         .documents()
-        .delete(HIST_FTS, &message_fts_id(id), Precondition::None)
+        .delete(HIST_FTS, &message_fts_id(id).unwrap(), Precondition::None)
         .await
         .unwrap();
     ledger
@@ -489,13 +489,9 @@ async fn reindex_restores_missing_rows_and_drops_stale_ones() {
         .put(
             HIST_FTS,
             "stale-row",
-            history::fts_doc(&history::FtsRow {
-                session_id: "ghost".into(),
-                agent_name: String::new(),
-                content: "phantom".into(),
-                tool_name: String::new(),
-            })
-            .unwrap(),
+            serde_json::json!({
+                "session_id": "ghost", "agent_name": "", "content": "phantom", "tool_name": ""
+            }),
             Precondition::None,
         )
         .await

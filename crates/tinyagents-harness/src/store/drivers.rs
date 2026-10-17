@@ -9,24 +9,29 @@
 //!
 //! # Layout
 //!
-//! - [`DriverStore`] keeps every harness namespace in one document collection
-//!   (default [`DriverStore::DEFAULT_COLLECTION`]). Each entry is a document
-//!   `{ "ns": <namespace>, "key": <key>, "value": <value> }`, so a namespace
-//!   or key may hold any characters and `list` is an indexed query on `ns`.
+//! - [`DriverStore`] is a view of the shared `tsd.kv` primitive: every harness
+//!   namespace is a `Kv` namespace of the store's *owner* (default
+//!   [`DriverStore::DEFAULT_OWNER`], `harness`). An entry is the document
+//!   `{ "owner", "ns", "key", "value" }` under `Key::of([owner, ns, key])`, so
+//!   a namespace or key may hold any characters, `list` is an indexed query,
+//!   and the stored value is the caller's JSON unchanged. Stores of different
+//!   owners (the session crate's key-value store is one) share the collection
+//!   without meeting.
 //! - [`DriverAppendStore`] maps each harness stream to the driver stream
-//!   `<len>:<prefix><stream>`, the prefix empty when there is none. The
-//!   length is always written, so no two `(prefix, stream)` pairs, prefixed
-//!   or not, ever address one stream. Offsets are the
-//!   driver's dense offsets, which already match the [`AppendStore`]
-//!   contract.
+//!   `<prefix><stream>`, the prefix empty when there is none. The run journal
+//!   uses the prefix [`DriverAppendStore::JOURNAL_PREFIX`]
+//!   (`harness.journal/`), so a run's stream is `harness.journal/<run id>`.
+//!   Offsets are the driver's dense offsets, which already match the
+//!   [`AppendStore`] contract. [`AppendStore::seal`] seals the driver stream,
+//!   which a reader cannot tell from an open one.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
+use tinystoragedrivers_core::primitives::{self, Kv};
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Precondition,
-    Query, StorageError, StreamStore,
+    CollectionSpec, DocumentStore, ErrorKind, StorageError, StreamStore,
 };
 use tokio::sync::OnceCell;
 
@@ -43,65 +48,67 @@ pub(crate) fn map_error(error: StorageError) -> TinyAgentsError {
     }
 }
 
-/// A harness [`Store`] over a driver [`DocumentStore`].
+/// A harness [`Store`] over the `tsd.kv` primitive of a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
 pub struct DriverStore {
     docs: Arc<dyn DocumentStore>,
-    collection: String,
+    owner: String,
     declared: Arc<OnceCell<()>>,
     schema_admission: SchemaAdmission,
 }
 
 impl DriverStore {
-    /// The collection used by [`DriverStore::new`].
-    pub const DEFAULT_COLLECTION: &'static str = "harness_store";
+    /// The owner used by [`DriverStore::new`].
+    pub const DEFAULT_OWNER: &'static str = "harness";
 
-    /// Store harness namespaces in [`Self::DEFAULT_COLLECTION`].
+    /// Store harness namespaces under the owner [`Self::DEFAULT_OWNER`].
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
-        Self::with_collection(docs, Self::DEFAULT_COLLECTION)
+        Self::with_owner(docs, Self::DEFAULT_OWNER)
     }
 
-    /// Store harness namespaces in `collection`, so several independent
-    /// harness stores can share one backend.
-    pub fn with_collection(docs: Arc<dyn DocumentStore>, collection: impl Into<String>) -> Self {
-        Self::with_collection_and_schema_admission(docs, collection, SchemaAdmission::Declare)
+    /// Store namespaces under `owner`, so independent stores (the harness's
+    /// and the session crate's, say) can share one backend.
+    pub fn with_owner(docs: Arc<dyn DocumentStore>, owner: impl Into<String>) -> Self {
+        Self::with_owner_and_schema_admission(docs, owner, SchemaAdmission::Declare)
     }
 
     /// Store namespaces with an immutable schema policy and a fresh admission cache.
-    pub fn with_collection_and_schema_admission(
+    pub fn with_owner_and_schema_admission(
         docs: Arc<dyn DocumentStore>,
-        collection: impl Into<String>,
+        owner: impl Into<String>,
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
             docs,
-            collection: collection.into(),
+            owner: owner.into(),
             declared: Arc::new(OnceCell::new()),
             schema_admission,
         }
     }
 
-    /// The declaration required by a store using `collection`.
+    /// The declaration required by every store: the shared `tsd.kv` collection.
     ///
-    /// Trusted hosts can prepare it before issuing actor handles. Returning a
-    /// declaration grants no access and does not initialize the backend.
-    pub fn collection_spec(collection: impl Into<String>) -> CollectionSpec {
-        CollectionSpec::new(collection).index(IndexSpec::new("by_ns", ["ns"]))
+    /// Trusted hosts can prepare it before issuing actor handles
+    /// (`Registry::prepare` declares it too). Returning a declaration grants no
+    /// access and does not initialize the backend.
+    pub fn collection_spec() -> CollectionSpec {
+        primitives::collection_specs()
+            .into_iter()
+            .find(|spec| spec.name == primitives::KV)
+            .expect("the primitives always declare tsd.kv")
     }
 
-    /// The document id of `key` in `namespace`. The namespace is
-    /// length-prefixed so `("a/b", "c")` and `("a", "b/c")` never collide.
-    fn id(namespace: &str, key: &str) -> String {
-        format!("{}:{namespace}/{key}", namespace.len())
+    /// The `Kv` namespace `namespace` of this store's owner.
+    fn kv(&self, namespace: &str) -> Result<Kv> {
+        Kv::ns(&self.docs, self.owner.clone(), namespace).map_err(map_error)
     }
 
-    /// Declare the collection (with its `ns` index) once per handle.
+    /// Declare the collection (with its index) once per handle.
     async fn declared(&self) -> Result<()> {
         self.declared
             .get_or_try_init(|| async {
-                let spec = Self::collection_spec(self.collection.clone());
                 self.schema_admission
-                    .admit(self.docs.as_ref(), &spec)
+                    .admit(self.docs.as_ref(), &Self::collection_spec())
                     .await
                     .map_err(map_error)
             })
@@ -114,24 +121,16 @@ impl DriverStore {
 impl Store for DriverStore {
     async fn get(&self, namespace: &str, key: &str) -> Result<Option<Value>> {
         self.declared().await?;
-        let found = self
-            .docs
-            .get(&self.collection, &Self::id(namespace, key))
+        self.kv(namespace)?
+            .get::<Value>(key)
             .await
-            .map_err(map_error)?;
-        Ok(found.and_then(|mut stored| stored.doc.get_mut("value").map(Value::take)))
+            .map_err(map_error)
     }
 
     async fn put(&self, namespace: &str, key: &str, value: Value) -> Result<()> {
         self.declared().await?;
-        let doc = json!({ "ns": namespace, "key": key, "value": value });
-        self.docs
-            .put(
-                &self.collection,
-                &Self::id(namespace, key),
-                doc,
-                Precondition::None,
-            )
+        self.kv(namespace)?
+            .put(key, &value)
             .await
             .map(|_| ())
             .map_err(map_error)
@@ -139,12 +138,8 @@ impl Store for DriverStore {
 
     async fn delete(&self, namespace: &str, key: &str) -> Result<()> {
         self.declared().await?;
-        self.docs
-            .delete(
-                &self.collection,
-                &Self::id(namespace, key),
-                Precondition::None,
-            )
+        self.kv(namespace)?
+            .delete(key)
             .await
             .map(|_| ())
             .map_err(map_error)
@@ -152,21 +147,13 @@ impl Store for DriverStore {
 
     async fn list(&self, namespace: &str) -> Result<Vec<String>> {
         self.declared().await?;
-        let query = Query::filter(Filter::eq("ns", namespace));
-        let found = self
-            .docs
-            .query_all(&self.collection, &query)
+        Ok(self
+            .kv(namespace)?
+            .list::<Value>("")
             .await
-            .map_err(map_error)?;
-        Ok(found
+            .map_err(map_error)?
             .into_iter()
-            .filter_map(|stored| {
-                stored
-                    .doc
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
+            .map(|(key, _)| key)
             .collect())
     }
 }
@@ -179,14 +166,24 @@ pub struct DriverAppendStore {
 }
 
 impl DriverAppendStore {
-    /// Map each harness stream `s` to the driver stream `0:s`.
+    /// The prefix of the run journal's streams (`harness.journal/<run id>`),
+    /// the stream family [`crate::storage_schema`] declares.
+    pub const JOURNAL_PREFIX: &'static str = "harness.journal/";
+
+    /// Map each harness stream `s` to the driver stream `s`.
     pub fn new(streams: Arc<dyn StreamStore>) -> Self {
         Self::with_prefix(streams, "")
     }
 
-    /// Map each harness stream to `<len>:<prefix><stream>`, so several
-    /// independent append stores can share one backend. The prefix length is
-    /// part of the name, so `("a", "bc")` and `("ab", "c")` stay apart.
+    /// The store of the run journal: each run's stream is
+    /// `harness.journal/<run id>`.
+    pub fn journal(streams: Arc<dyn StreamStore>) -> Self {
+        Self::with_prefix(streams, Self::JOURNAL_PREFIX)
+    }
+
+    /// Map each harness stream to `<prefix><stream>`, so several independent
+    /// append stores can share one backend. The caller picks prefixes that
+    /// cannot run into each other (end each with a separator such as `/`).
     pub fn with_prefix(streams: Arc<dyn StreamStore>, prefix: impl Into<String>) -> Self {
         Self {
             streams,
@@ -195,7 +192,7 @@ impl DriverAppendStore {
     }
 
     fn name(&self, stream: &str) -> String {
-        format!("{}:{}{stream}", self.prefix.len(), self.prefix)
+        format!("{}{stream}", self.prefix)
     }
 }
 
@@ -254,6 +251,28 @@ impl AppendStore for DriverAppendStore {
             .len(&self.name(stream))
             .await
             .map_err(map_error)
+    }
+
+    async fn seal(&self, stream: &str) -> Result<()> {
+        let name = self.name(stream);
+        match self.streams.seal(&name).await {
+            Ok(outcome) => {
+                tracing::debug!(
+                    stream = %name,
+                    base = outcome.base,
+                    len = outcome.len,
+                    blob_bytes = outcome.blob_bytes,
+                    "[store] sealed stream"
+                );
+                Ok(())
+            }
+            // Nothing was ever appended: there is nothing to close.
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                tracing::debug!(stream = %name, "[store] seal skipped: no such stream");
+                Ok(())
+            }
+            Err(error) => Err(map_error(error)),
+        }
     }
 }
 

@@ -12,7 +12,7 @@ async fn refuses_corruption(change: impl FnOnce(&mut Value)) {
     }
     drop(writer);
     let current = store.load("same").await.unwrap().unwrap();
-    let key = pending::AppendIntent::key(&current.id, &current.doc.incarnation);
+    let key = pending::AppendIntent::key("same", &current.doc.incarnation).unwrap();
     let row = store
         .docs
         .get(PENDING_COLLECTION, &key)
@@ -43,7 +43,7 @@ async fn refuses_corruption(change: impl FnOnce(&mut Value)) {
             .message_count,
         0
     );
-    let stream = DriverConversationStore::stream(&current.id, &current.doc.incarnation);
+    let stream = current.doc.stream().unwrap();
     assert_eq!(store.streams.len(&stream).await.unwrap(), 0);
     let retained = store
         .docs
@@ -58,25 +58,24 @@ async fn refuses_corruption(change: impl FnOnce(&mut Value)) {
 #[tokio::test]
 async fn foreign_or_malformed_pending_identity_cannot_append_or_publish() {
     for (field, value) in [
-        ("thread_id", "foreign-thread"),
-        ("incarnation", "foreign-incarnation"),
-        ("token", "not-an-attempt-uuid"),
-        ("schema", "2"),
-        ("offset", "00"),
+        ("thread_id", json!("foreign-thread")),
+        ("incarnation", json!("foreign-incarnation")),
+        ("token", json!("not-an-attempt-uuid")),
+        ("schema", json!("1")),
+        ("offset", json!("2")),
+        ("offset", json!(9)),
     ] {
-        refuses_corruption(|body| body[field] = json!(value)).await;
+        refuses_corruption(|body| body[field] = value.clone()).await;
     }
 }
 
 #[tokio::test]
 async fn pending_record_cannot_silently_normalize_missing_message_metadata() {
     refuses_corruption(|body| {
-        let mut record: Value = serde_json::from_str(body["record"].as_str().unwrap()).unwrap();
-        record["message"]
+        body["record"]
             .as_object_mut()
             .unwrap()
-            .remove("extraMetadata");
-        body["record"] = json!(serde_json::to_string(&record).unwrap());
+            .remove("extra_metadata");
     })
     .await;
 }

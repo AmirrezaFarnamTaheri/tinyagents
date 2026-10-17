@@ -27,8 +27,8 @@ serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
-tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0", optional = true }
-tinystoragedrivers-mongodb = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0", optional = true }
+tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
+tinystoragedrivers-mongodb = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", optional = true }
 tinyagents-session = { path = "../../crates/tinyagents-session", features = ["storage-drivers"], optional = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", optional = true }
 
