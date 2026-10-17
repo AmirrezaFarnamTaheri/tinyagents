@@ -16,6 +16,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
+use super::GenerationEnrichment;
 use crate::cost::CostTotals;
 use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, HarnessPhase, RunId, ThreadId};
 use tinyinference_llm::message::MessageDelta;
@@ -94,6 +95,18 @@ pub enum AgentEvent {
         /// exporter can render the completion in a generation's Output panel.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
+    },
+
+    /// Content-free provider, pricing, and estimate metadata for one call.
+    ///
+    /// Hosts emit this after the facts are known. It may precede
+    /// [`AgentEvent::ModelCompleted`] in durable observations; the trace
+    /// collector retains it only while that exact call is still open.
+    GenerationEnriched {
+        /// Call identity, scoped by the enclosing observation's run.
+        call_id: CallId,
+        /// Validated host metadata for this model generation.
+        enrichment: GenerationEnrichment,
     },
 
     /// The agent loop fixed the run's **pre-middleware** tool surface: how
@@ -1031,6 +1044,16 @@ pub enum AgentEvent {
         outcome: Option<crate::terminal::TerminalOutcome>,
     },
 
+    /// The host durably committed the result of a run.
+    ///
+    /// This follows a terminal event and allows exporters to extend an
+    /// already-closed run span to include host persistence, without changing
+    /// its terminal status or inventing an outcome.
+    RunFinalized {
+        /// Identity of the run whose host-side persistence finished.
+        run_id: RunId,
+    },
+
     /// A completed turn was stopped early by a typed harness stop cause.
     ///
     /// This may be emitted after `RunCompleted`; the run identity and lineage
@@ -1079,6 +1102,7 @@ impl AgentEvent {
             AgentEvent::ModelStarted { .. } => "model.started",
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
+            AgentEvent::GenerationEnriched { .. } => "generation.enriched",
             AgentEvent::ControlApplied { .. } => "control.applied",
             AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
             AgentEvent::ToolSearched { .. } => "tool.searched",
@@ -1143,6 +1167,7 @@ impl AgentEvent {
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
+            AgentEvent::RunFinalized { .. } => "run.finalized",
             AgentEvent::TurnStopped { .. } => "turn.stopped",
         }
     }

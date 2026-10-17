@@ -1221,6 +1221,436 @@ fn failed_child_run_keeps_its_typed_error_on_the_child_span() {
 }
 
 #[test]
+fn child_failure_overrides_parent_acknowledgement_without_changing_end_time() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    let mut collector = SpanCollector::new(
+        TraceContext::new("trace-child-ack-race", None).with_capture_content(true),
+    );
+    for obs in [
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            0,
+            10,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("parent"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            1,
+            11,
+            AgentEvent::SubAgentRunStarted {
+                name: "researcher".into(),
+                depth: 1,
+                run_id: RunId::new("child"),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            0,
+            12,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("child"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            2,
+            20,
+            AgentEvent::SubAgentRunCompleted {
+                run_id: RunId::new("child"),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            1,
+            20,
+            AgentEvent::RunFailed {
+                run_id: RunId::new("child"),
+                error: "child provider failed".into(),
+                outcome: Some(TerminalOutcome::new(
+                    TerminalReason::ToolFailed,
+                    "child provider failed",
+                )),
+            },
+        ),
+    ] {
+        collector.record(&obs);
+    }
+
+    let child = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .expect("linked child span");
+    assert_eq!(child.status, SpanStatus::Error);
+    assert_eq!(child.end_unix_ms, Some(20));
+    assert_eq!(child.attributes["error.message"], "child provider failed");
+}
+
+#[test]
+fn durable_generation_enrichment_applies_before_or_after_model_completion() {
+    let provider_and_pricing = GenerationEnrichment {
+        provider_id: Some("openhuman".into()),
+        pricing: Some(GenerationPricing {
+            input_per_mtok_usd: Some(0.25),
+            cached_input_per_mtok_usd: None,
+            output_per_mtok_usd: Some(1.0),
+        }),
+        estimated_cost_usd: None,
+    };
+    let estimate = GenerationEnrichment {
+        estimated_cost_usd: Some(0.4),
+        ..Default::default()
+    };
+
+    for enrich_before_completion in [true, false] {
+        let mut collector =
+            SpanCollector::new(TraceContext::new("trace-generation-enrichment", None));
+        let mut observations = vec![
+            observation_in_run(
+                "run",
+                None,
+                "run",
+                0,
+                1,
+                AgentEvent::RunStarted {
+                    run_id: RunId::new("run"),
+                    thread_id: None,
+                },
+            ),
+            observation_in_run(
+                "run",
+                None,
+                "run",
+                1,
+                2,
+                AgentEvent::ModelStarted {
+                    call_id: CallId::new("same-call"),
+                    model: "model-x".into(),
+                },
+            ),
+        ];
+        let provider_metadata = observation_in_run(
+            "run",
+            None,
+            "run",
+            if enrich_before_completion { 2 } else { 3 },
+            if enrich_before_completion { 3 } else { 5 },
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("same-call"),
+                enrichment: provider_and_pricing.clone(),
+            },
+        );
+        let estimate_metadata = observation_in_run(
+            "run",
+            None,
+            "run",
+            if enrich_before_completion { 3 } else { 4 },
+            if enrich_before_completion { 3 } else { 6 },
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("same-call"),
+                enrichment: estimate.clone(),
+            },
+        );
+        let completed = observation_in_run(
+            "run",
+            None,
+            "run",
+            if enrich_before_completion { 4 } else { 2 },
+            4,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("same-call"),
+                started_at_ms: Some(2),
+                usage: Some(Usage {
+                    charged_amount: Some(ChargedAmount::usd_micros(0)),
+                    ..Usage::new(3, 2)
+                }),
+                input: None,
+                output: None,
+            },
+        );
+        if enrich_before_completion {
+            observations.push(provider_metadata);
+            observations.push(estimate_metadata);
+            observations.push(completed);
+        } else {
+            observations.push(completed);
+            observations.push(provider_metadata);
+            observations.push(estimate_metadata);
+        }
+        for obs in observations {
+            collector.record(&obs);
+        }
+
+        let generation = collector
+            .spans()
+            .iter()
+            .find(|span| span.kind == SpanKind::Generation)
+            .expect("model generation");
+        assert_eq!(generation.attributes["gen_ai.provider"], "openhuman");
+        assert_eq!(
+            generation.attributes["gen_ai.pricing.input_per_mtok_usd"],
+            0.25
+        );
+        assert_eq!(generation.attributes["gen_ai.usage.cost_usd"], 0.0);
+        assert_eq!(
+            generation.attributes["gen_ai.cost.source"],
+            "provider_reported"
+        );
+    }
+}
+
+#[test]
+fn run_finalized_extends_a_terminal_root_without_changing_its_outcome() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-run-finalized", None));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("run"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        1,
+        10,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("run"),
+            outcome: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        2,
+        20,
+        AgentEvent::RunFinalized {
+            run_id: RunId::new("run"),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        2,
+        25,
+        AgentEvent::RunFinalized {
+            run_id: RunId::new("run"),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        3,
+        50,
+        AgentEvent::RunFinalized {
+            run_id: RunId::new("wrong-run"),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        4,
+        15,
+        AgentEvent::RunFinalized {
+            run_id: RunId::new("run"),
+        },
+    ));
+
+    let root = &collector.spans()[0];
+    assert_eq!(root.end_unix_ms, Some(20));
+    assert_eq!(root.status, SpanStatus::Ok);
+    assert_eq!(root.attributes["turn.outcome"], "completed");
+}
+
+#[test]
+fn run_finalized_without_a_terminal_event_does_not_invent_success() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-finalized-open", None));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("run"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        1,
+        20,
+        AgentEvent::RunFinalized {
+            run_id: RunId::new("run"),
+        },
+    ));
+    collector.finish(30);
+
+    let root = &collector.spans()[0];
+    assert_eq!(root.end_unix_ms, Some(30));
+    assert_eq!(root.status, SpanStatus::Unset);
+    assert!(!root.attributes.contains_key("turn.outcome"));
+    assert_eq!(root.attributes["force_closed"], true);
+}
+
+#[test]
+fn run_finalization_closes_orphaned_work_at_commit_time_and_stays_run_scoped() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-run-finalization", None));
+    for obs in [
+        observation_in_run(
+            "root",
+            None,
+            "root",
+            0,
+            10,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("root"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "root",
+            None,
+            "root",
+            1,
+            11,
+            AgentEvent::SubAgentRunStarted {
+                name: "child".into(),
+                depth: 1,
+                run_id: RunId::new("child"),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("root"),
+            "root",
+            0,
+            12,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("child"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("root"),
+            "root",
+            1,
+            15,
+            AgentEvent::ToolStarted {
+                call_id: CallId::new("orphan-tool"),
+                tool_name: "lookup".into(),
+                input: None,
+                parent_call_id: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("root"),
+            "root",
+            2,
+            18,
+            AgentEvent::RunCompleted {
+                run_id: RunId::new("child"),
+                outcome: None,
+            },
+        ),
+        observation_in_run(
+            "root",
+            None,
+            "root",
+            2,
+            20,
+            AgentEvent::RunCompleted {
+                run_id: RunId::new("root"),
+                outcome: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("root"),
+            "root",
+            3,
+            28,
+            AgentEvent::RunFinalized {
+                run_id: RunId::new("child"),
+            },
+        ),
+        observation_in_run(
+            "root",
+            None,
+            "root",
+            3,
+            29,
+            AgentEvent::SubAgentRunCompleted {
+                run_id: RunId::new("child"),
+            },
+        ),
+        observation_in_run(
+            "root",
+            None,
+            "root",
+            4,
+            30,
+            AgentEvent::RunFinalized {
+                run_id: RunId::new("root"),
+            },
+        ),
+    ] {
+        collector.record(&obs);
+    }
+    collector.finish(1_000);
+
+    let spans = collector.spans();
+    let root = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Turn)
+        .expect("root run span");
+    let child = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .expect("child run span");
+    let tool = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Tool)
+        .expect("orphaned child tool");
+    assert_eq!(root.end_unix_ms, Some(30));
+    assert_eq!(root.status, SpanStatus::Ok);
+    assert_eq!(root.attributes["turn.outcome"], "completed");
+    assert_eq!(child.end_unix_ms, Some(29));
+    assert_eq!(child.status, SpanStatus::Ok);
+    assert_eq!(tool.end_unix_ms, Some(28));
+    assert_eq!(tool.attributes["force_closed"], true);
+    assert_eq!(tool.attributes["observation.level"], "WARNING");
+}
+
+#[test]
 fn typed_turn_stop_enriches_a_completed_run_without_extending_its_timestamp() {
     use crate::terminal::{TerminalOutcome, TerminalReason};
     use crate::turn_stop::{TurnFailureClass, TurnStop};
@@ -2394,6 +2824,21 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         "cache-run",
         3,
         4,
+        AgentEvent::GenerationEnriched {
+            call_id: call_id.clone(),
+            enrichment: GenerationEnrichment {
+                provider_id: Some("managed".into()),
+                estimated_cost_usd: Some(0.25),
+                ..Default::default()
+            },
+        },
+    ));
+    collector.record(&observation_in_run(
+        "cache-run",
+        None,
+        "cache-run",
+        4,
+        5,
         AgentEvent::CacheHit {
             call_id: call_id.clone(),
             key: "opaque-cache-key".into(),
@@ -2403,8 +2848,8 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         "cache-run",
         None,
         "cache-run",
-        4,
         5,
+        6,
         AgentEvent::ModelCompleted {
             call_id,
             started_at_ms: Some(1),
@@ -2434,6 +2879,7 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
     );
     assert_eq!(generation.attributes["gen_ai.cache.hit"], true);
     assert_eq!(generation.attributes["gen_ai.cost.source"], "cached");
+    assert_eq!(generation.attributes["gen_ai.provider"], "managed");
     assert_eq!(generation.attributes["gen_ai.usage.input_tokens"], 50);
     assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
     assert!(!iteration.attributes.contains_key("gen_ai.usage.cost_usd"));

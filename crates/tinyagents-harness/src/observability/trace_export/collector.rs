@@ -8,9 +8,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Value, json};
 
-use crate::events::AgentEvent;
+use crate::events::{AgentEvent, is_valid_provider_id};
 use crate::ids::{CallId, RunId};
 use crate::observability::AgentObservation;
+
+pub use crate::events::{GenerationEnrichment, GenerationPricing};
 
 use super::serialize::{
     MAX_ERROR_MESSAGE_CHARS, capture_model_content, json_f64, json_str, json_u64,
@@ -26,30 +28,6 @@ struct CallStart {
     started_at_ms: u64,
     first_delta_ms: Option<u64>,
     first_text_ms: Option<u64>,
-}
-
-/// Product metadata available at a model-call boundary but not carried by
-/// provider-neutral harness events.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct GenerationEnrichment {
-    /// Provider identifier chosen by the host, when known.
-    pub provider_id: Option<String>,
-    /// Host pricing rates in USD per million tokens, when known.
-    pub pricing: Option<GenerationPricing>,
-    /// Host-side estimated cost. Native provider-reported charges and costs
-    /// already recorded by the harness remain authoritative.
-    pub estimated_cost_usd: Option<f64>,
-}
-
-/// Host pricing basis attached to a generation span.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct GenerationPricing {
-    /// Uncached input price in USD per million tokens.
-    pub input_per_mtok_usd: Option<f64>,
-    /// Cached input price in USD per million tokens.
-    pub cached_input_per_mtok_usd: Option<f64>,
-    /// Output price in USD per million tokens.
-    pub output_per_mtok_usd: Option<f64>,
 }
 
 /// Failure to enrich a generation span.
@@ -89,6 +67,7 @@ pub struct SpanCollector {
     current_turns: HashMap<String, u32>,
     open_iterations: HashMap<String, usize>,
     pending_turn_stops: HashMap<String, (u32, crate::turn_stop::TurnStop)>,
+    pending_generation_enrichment: HashMap<String, GenerationEnrichment>,
     last_generation: HashMap<String, usize>,
     last_activity_ms: u64,
     first_input_recorded: bool,
@@ -120,6 +99,7 @@ impl SpanCollector {
             current_turns: HashMap::new(),
             open_iterations: HashMap::new(),
             pending_turn_stops: HashMap::new(),
+            pending_generation_enrichment: HashMap::new(),
             last_generation: HashMap::new(),
             last_activity_ms: 0,
             first_input_recorded: false,
@@ -229,10 +209,11 @@ impl SpanCollector {
                     timestamp_ms,
                     attrs,
                 );
-                self.generation_by_call
-                    .insert(self.scoped_id(call_id.as_str()), index);
+                let call_key = self.scoped_id(call_id.as_str());
+                self.pending_generation_enrichment.remove(&call_key);
+                self.generation_by_call.insert(call_key.clone(), index);
                 if let Some(previous) = self.open_models.insert(
-                    self.scoped_id(call_id.as_str()),
+                    call_key,
                     CallStart {
                         index,
                         started_at_ms: timestamp_ms,
@@ -284,7 +265,7 @@ impl SpanCollector {
                     }
                 });
                 self.generation_by_call
-                    .entry(call_key)
+                    .entry(call_key.clone())
                     .or_insert(call.index);
                 let completed_index = call.index;
                 let cached_usage = usage.as_ref().filter(|_| cache_hit).map(|usage| {
@@ -311,6 +292,10 @@ impl SpanCollector {
                     self.spans[completed_index]
                         .attributes
                         .insert("gen_ai.cost.source".into(), json_str("cached"));
+                }
+                if let Some(enrichment) = self.pending_generation_enrichment.remove(&call_key) {
+                    let run_id = RunId::new(self.active_run_id());
+                    let _ = self.enrich_generation(&run_id, call_id, enrichment);
                 }
                 self.last_generation
                     .insert(self.active_run_id(), completed_index);
@@ -349,6 +334,8 @@ impl SpanCollector {
                 self.close_span(call.index, timestamp_ms, SpanStatus::Error);
                 self.put_error(call.index, error);
                 self.spans[call.index].start_unix_ms = start;
+                self.pending_generation_enrichment
+                    .remove(&self.scoped_id(call_id.as_str()));
             }
             AgentEvent::ToolStarted {
                 call_id,
@@ -601,6 +588,21 @@ impl SpanCollector {
                         .insert("gen_ai.cost.source".into(), json_str("provider_reported"));
                 }
             }
+            AgentEvent::GenerationEnriched {
+                call_id,
+                enrichment,
+            } => {
+                let key = self.scoped_id(call_id.as_str());
+                if self.open_models.contains_key(&key) {
+                    self.pending_generation_enrichment
+                        .entry(key)
+                        .and_modify(|pending| merge_generation_enrichment(pending, enrichment))
+                        .or_insert_with(|| enrichment.clone());
+                } else {
+                    let run_id = RunId::new(self.active_run_id());
+                    let _ = self.enrich_generation(&run_id, call_id, enrichment.clone());
+                }
+            }
             AgentEvent::CostRecorded { cost } => {
                 let amount = cost.total_cost;
                 if let Some(generation) = self.last_generation.get(&self.active_run_id()).copied() {
@@ -634,6 +636,11 @@ impl SpanCollector {
                 self.close_open_iteration(timestamp_ms, failed_iteration_status(outcome.as_ref()));
                 self.close_failed_run(outcome.as_ref(), error, timestamp_ms);
                 self.apply_pending_turn_stop();
+            }
+            AgentEvent::RunFinalized { run_id } => {
+                if run_id.as_str() == self.active_run_id() {
+                    self.finalize_run(run_id, timestamp_ms);
+                }
             }
             AgentEvent::TurnStarted { turn } => {
                 self.current_turns.insert(self.active_run_id(), *turn);
@@ -796,7 +803,10 @@ impl SpanCollector {
         {
             return Err(GenerationEnrichmentError::InvalidPricing);
         }
-        if let Some(provider) = enrichment.provider_id {
+        if let Some(provider) = enrichment
+            .provider_id
+            .filter(|provider| is_valid_provider_id(provider))
+        {
             self.spans[index]
                 .attributes
                 .insert("gen_ai.provider".into(), json_str(&provider));
@@ -822,6 +832,47 @@ impl SpanCollector {
             }
         }
         Ok(())
+    }
+
+    fn finalize_run(&mut self, run_id: &RunId, at: u64) {
+        let run_key = run_id.as_str();
+        let prefix = format!("{run_key}\0");
+
+        let open_model_keys: Vec<_> = self
+            .open_models
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in open_model_keys {
+            if let Some(call) = self.open_models.remove(&key) {
+                self.force_close_span(call.index, at);
+            }
+        }
+
+        let open_tool_keys: Vec<_> = self
+            .open_tools
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for key in open_tool_keys {
+            if let Some(index) = self.open_tools.remove(&key) {
+                self.force_close_span(index, at);
+            }
+        }
+
+        if let Some(index) = self.open_iterations.remove(run_key) {
+            self.force_close_span(index, at);
+        }
+        self.pending_generation_enrichment
+            .retain(|key, _| !key.starts_with(&prefix));
+
+        if let Some(root) = self.run_roots.get(run_key).copied()
+            && let Some(end) = self.spans[root].end_unix_ms
+        {
+            self.spans[root].end_unix_ms = Some(end.max(at));
+        }
     }
 
     fn set_generation_cost(&mut self, index: usize, amount: f64, source: &str) {
@@ -1315,6 +1366,8 @@ impl SpanCollector {
         at: u64,
     ) {
         use crate::terminal::TerminalReason;
+        let root = self.ensure_run_root(at);
+        let prior_end = self.spans[root].end_unix_ms;
 
         // Reuse the generic terminal projection for typed cancellation, stops,
         // and failures. A RunFailed event is authoritative if it contradicts
@@ -1323,12 +1376,24 @@ impl SpanCollector {
             && outcome.reason != TerminalReason::Completed
         {
             self.close_terminal_outcome(Some(outcome), Some(error), at);
+            self.override_closed_failed_run_status(root, prior_end, Some(outcome));
             return;
         }
 
         self.close_root(at, SpanStatus::Error, "failed");
-        let root = self.ensure_run_root(at);
         self.put_error(root, error);
+        self.override_closed_failed_run_status(root, prior_end, outcome);
+    }
+
+    fn override_closed_failed_run_status(
+        &mut self,
+        root: usize,
+        prior_end: Option<u64>,
+        outcome: Option<&crate::terminal::TerminalOutcome>,
+    ) {
+        if prior_end.is_some() {
+            self.spans[root].status = failed_iteration_status(outcome);
+        }
     }
 
     fn put_error(&mut self, index: usize, error: &str) {
@@ -1340,6 +1405,38 @@ impl SpanCollector {
         self.spans[index]
             .attributes
             .insert("error.message".into(), json_str(&message));
+    }
+}
+
+fn merge_generation_enrichment(
+    current: &mut GenerationEnrichment,
+    incoming: &GenerationEnrichment,
+) {
+    if incoming.provider_id.is_some() {
+        current.provider_id.clone_from(&incoming.provider_id);
+    }
+    if let Some(incoming_pricing) = &incoming.pricing {
+        let pricing = current
+            .pricing
+            .get_or_insert_with(GenerationPricing::default);
+        if incoming_pricing.input_per_mtok_usd.is_some() {
+            pricing
+                .input_per_mtok_usd
+                .clone_from(&incoming_pricing.input_per_mtok_usd);
+        }
+        if incoming_pricing.cached_input_per_mtok_usd.is_some() {
+            pricing
+                .cached_input_per_mtok_usd
+                .clone_from(&incoming_pricing.cached_input_per_mtok_usd);
+        }
+        if incoming_pricing.output_per_mtok_usd.is_some() {
+            pricing
+                .output_per_mtok_usd
+                .clone_from(&incoming_pricing.output_per_mtok_usd);
+        }
+    }
+    if incoming.estimated_cost_usd.is_some() {
+        current.estimated_cost_usd = incoming.estimated_cost_usd;
     }
 }
 
