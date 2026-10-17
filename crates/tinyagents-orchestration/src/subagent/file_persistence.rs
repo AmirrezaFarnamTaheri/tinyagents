@@ -77,6 +77,18 @@ impl FileSubagentPersistence {
         self.read_index(task_id)
     }
 
+    /// Returns the terminal outcome persisted for a key, if one exists.
+    ///
+    /// This synchronous accessor is useful to hosts that need to inspect a
+    /// committed terminal result from a synchronous cancellation path.
+    pub fn terminal_outcome(
+        &self,
+        key: &SubagentTaskKey,
+    ) -> Result<Option<SubagentOutcome>, SubagentError> {
+        let _lock = self.key_lock(key)?;
+        Ok(self.read_terminal(key)?.map(|record| record.outcome))
+    }
+
     fn directory(&self) -> PathBuf {
         self.root.join("lifecycle")
     }
@@ -306,8 +318,7 @@ impl SubagentPersistence for FileSubagentPersistence {
         &self,
         key: &SubagentTaskKey,
     ) -> Result<Option<SubagentOutcome>, SubagentError> {
-        let _lock = self.key_lock(key)?;
-        Ok(self.read_terminal(key)?.map(|record| record.outcome))
+        self.terminal_outcome(key)
     }
 
     async fn load(&self, key: &SubagentTaskKey) -> Result<Option<SubagentResume>, SubagentError> {
