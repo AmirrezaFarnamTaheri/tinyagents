@@ -10,7 +10,9 @@
 //! configuration structs.
 
 use tinyinference_llm::message::Message;
-use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ToolChoice};
+use tinyinference_llm::model::{
+    ChatModel, ModelRequest, ModelResponse, ModelStreamItem, ToolChoice,
+};
 use tinyinference_llm::usage::Usage;
 use tinytools_agent::dialect::{DialectResponse, ToolDialect};
 
@@ -308,18 +310,43 @@ pub struct RequiredOutputRepairConfig<'a> {
 }
 
 /// Per-request options shared by grounded close and required-output repair.
+/// Kind of close request whose terminal result is being observed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseRequestKind {
+    /// Candidate close response, including a retry after validation failure.
+    Generation,
+    /// Separate verification request for a candidate.
+    Verification,
+    /// Required-output contract repair request.
+    RequiredOutputRepair,
+}
+
+/// Per-request host settings shared by grounded close and required repair.
+///
+/// The `*_with_options` entry points use streaming calls; legacy entry points
+/// continue to use `ChatModel::invoke`.
 pub struct CloseRequestOptions<'a> {
+    /// Model id or registry alias to set on each request.
+    pub model: Option<&'a str>,
+    /// Sampling temperature to set on each request.
+    pub temperature: Option<f64>,
     /// Maximum number of output tokens for every request in the operation.
     pub max_output_tokens: Option<u32>,
-    /// Observe each completed provider response before validation or retry.
-    pub on_response: Option<&'a mut (dyn FnMut(&ModelResponse) + Send)>,
+    /// Observe each request's terminal completion before validation or retry.
+    /// `Some(response)` means the model completed; `None` means the request
+    /// failed or its stream ended without a completed response. The callback
+    /// is not called for a timeout, a dropped request, or a zero time budget.
+    pub on_call_completed:
+        Option<&'a mut (dyn FnMut(CloseRequestKind, Option<&ModelResponse>) + Send)>,
 }
 
 impl Default for CloseRequestOptions<'_> {
     fn default() -> Self {
         Self {
+            model: None,
+            temperature: None,
             max_output_tokens: None,
-            on_response: None,
+            on_call_completed: None,
         }
     }
 }
@@ -340,27 +367,47 @@ where
     R: Fn(CloseViolation) -> String,
     F: FnOnce() -> String,
 {
-    grounded_close_with_options(
+    grounded_close_impl(
         model,
         state,
         dialect,
         config,
         CloseRequestOptions::default(),
+        false,
     )
     .await
 }
 
 /// Ask, screen, verify, and repair with per-request host options.
 ///
-/// The response callback runs immediately after each successful model call,
-/// before the harness inspects its text or decides whether another request is
-/// needed. It is not called for a failed or timed-out request.
+/// This options entry point uses `ChatModel::stream`, retaining buffered text
+/// deltas when a completed response has empty text. The callback runs once on
+/// terminal completion or failure, before validation; it is not called when a
+/// request times out or is dropped.
 pub async fn grounded_close_with_options<State, M, V, R, F>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
     config: GroundedCloseConfig<'_, V, R, F>,
+    options: CloseRequestOptions<'_>,
+) -> CloseOutput
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+    V: for<'reply> Fn(&'reply str) -> String,
+    R: Fn(CloseViolation) -> String,
+    F: FnOnce() -> String,
+{
+    grounded_close_impl(model, state, dialect, config, options, true).await
+}
+
+async fn grounded_close_impl<State, M, V, R, F>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    config: GroundedCloseConfig<'_, V, R, F>,
     mut options: CloseRequestOptions<'_>,
+    stream: bool,
 ) -> CloseOutput
 where
     M: ChatModel<State> + ?Sized,
@@ -384,6 +431,8 @@ where
             &prompt,
             remaining,
             &mut options,
+            CloseRequestKind::Generation,
+            stream,
         )
         .await
         else {
@@ -412,6 +461,8 @@ where
                 &verify_prompt,
                 remaining,
                 &mut options,
+                CloseRequestKind::Verification,
+                stream,
             )
             .await
             {
@@ -456,23 +507,42 @@ where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
-    repair_required_output_with_options(
+    repair_required_output_impl(
         model,
         state,
         dialect,
         config,
         CloseRequestOptions::default(),
+        false,
     )
     .await
 }
 
 /// Repair required output using host-supplied per-request options.
+///
+/// This options entry point uses `ChatModel::stream`, retaining buffered text
+/// deltas when a completed response has empty text.
 pub async fn repair_required_output_with_options<State, M>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
     config: RequiredOutputRepairConfig<'_>,
+    options: CloseRequestOptions<'_>,
+) -> Option<RequiredOutputRepair>
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+{
+    repair_required_output_impl(model, state, dialect, config, options, true).await
+}
+
+async fn repair_required_output_impl<State, M>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    config: RequiredOutputRepairConfig<'_>,
     mut options: CloseRequestOptions<'_>,
+    stream: bool,
 ) -> Option<RequiredOutputRepair>
 where
     M: ChatModel<State> + ?Sized,
@@ -491,6 +561,8 @@ where
         config.repair_instruction,
         None,
         &mut options,
+        CloseRequestKind::RequiredOutputRepair,
+        stream,
     )
     .await;
     let (candidate, usage, has_tool_call) = attempted.unwrap_or_default();
@@ -524,11 +596,15 @@ async fn completion<State, M>(
     prompt: &str,
     timeout: Option<std::time::Duration>,
     options: &mut CloseRequestOptions<'_>,
+    kind: CloseRequestKind,
+    stream_mode: bool,
 ) -> Option<(String, Vec<Usage>, bool)>
 where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
+    use futures::StreamExt;
+
     if timeout.is_some_and(|limit| limit.is_zero()) {
         return None;
     }
@@ -537,18 +613,66 @@ where
     let mut request = ModelRequest::new(messages)
         .with_tools(Vec::new())
         .with_tool_choice(ToolChoice::None);
+    request.model = options.model.map(str::to_owned);
+    request.temperature = options.temperature;
     request.max_tokens = options.max_output_tokens;
-    let response = match timeout {
-        Some(timeout) => tokio::time::timeout(timeout, model.invoke(state, request))
-            .await
-            .ok()?
-            .ok()?,
-        None => model.invoke(state, request).await.ok()?,
+    let (response, buffered_text) = if stream_mode {
+        let consume_stream = async {
+            let mut stream = model.stream(state, request).await.ok()?;
+            let mut buffered_text = String::new();
+            loop {
+                match stream.next().await {
+                    Some(ModelStreamItem::MessageDelta(delta)) => {
+                        buffered_text.push_str(&delta.text)
+                    }
+                    Some(ModelStreamItem::Completed(response)) => {
+                        return Some((response, buffered_text));
+                    }
+                    Some(
+                        ModelStreamItem::Failed(_)
+                        | ModelStreamItem::ProviderFailed(_)
+                        | ModelStreamItem::Deferred(_),
+                    )
+                    | None => return None,
+                    Some(_) => {}
+                }
+            }
+        };
+        let result = match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, consume_stream).await.ok(),
+            None => Some(consume_stream.await),
+        };
+        match result {
+            Some(Some((response, buffered_text))) => {
+                if let Some(on_call_completed) = options.on_call_completed.as_mut() {
+                    on_call_completed(kind, Some(&response));
+                }
+                (response, buffered_text)
+            }
+            Some(None) => {
+                if let Some(on_call_completed) = options.on_call_completed.as_mut() {
+                    on_call_completed(kind, None);
+                }
+                return None;
+            }
+            None => return None,
+        }
+    } else {
+        let response = match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, model.invoke(state, request))
+                .await
+                .ok()?
+                .ok()?,
+            None => model.invoke(state, request).await.ok()?,
+        };
+        (response, String::new())
     };
-    if let Some(on_response) = options.on_response.as_mut() {
-        on_response(&response);
-    }
-    let text = response.text().to_owned();
+    let response_text = response.text();
+    let text = if response_text.is_empty() {
+        buffered_text
+    } else {
+        response_text.to_owned()
+    };
     let has_tool_call = !response.message.tool_calls.is_empty()
         || !dialect
             .parse_response(&DialectResponse {

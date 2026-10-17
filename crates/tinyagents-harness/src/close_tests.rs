@@ -42,6 +42,37 @@ impl ChatModel<()> for ScriptedModel {
     }
 }
 
+struct StreamScriptedModel {
+    responses: Mutex<VecDeque<Vec<ModelStreamItem>>>,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+
+#[async_trait]
+impl ChatModel<()> for StreamScriptedModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        Err(tinyinference_llm::Error::Unsupported(
+            "stream-only test model".into(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelStream> {
+        self.requests.lock().unwrap().push(request);
+        let items = self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("scripted stream");
+        Ok(tinyinference_llm::model::ModelStream::new(Box::pin(
+            futures::stream::iter(items),
+        )))
+    }
+}
+
 fn scripted_model(answers: &[&str]) -> ScriptedModel {
     ScriptedModel {
         answers: Arc::new(Mutex::new(answers.iter().map(|s| s.to_string()).collect())),
@@ -96,7 +127,7 @@ fn legacy_and_options_close_futures_remain_send() {
             reply_already_streamed: false,
         },
     ));
-    let mut callback = |_response: &ModelResponse| {};
+    let mut callback = |_kind: CloseRequestKind, _response: Option<&ModelResponse>| {};
     assert_send(repair_required_output_with_options(
         &model,
         &(),
@@ -109,8 +140,10 @@ fn legacy_and_options_close_futures_remain_send() {
             reply_already_streamed: false,
         },
         CloseRequestOptions {
+            model: None,
+            temperature: None,
             max_output_tokens: Some(32),
-            on_response: Some(&mut callback),
+            on_call_completed: Some(&mut callback),
         },
     ));
 }
@@ -257,7 +290,12 @@ async fn grounded_close_disables_tools_and_accepts_a_verified_answer() {
 async fn close_options_apply_output_cap_and_report_each_full_response_before_validation() {
     let model = scripted_model(&["Initial answer", "REJECT", "Repaired answer", "ACCEPT"]);
     let mut observed_charges = Vec::new();
-    let mut on_response = |response: &ModelResponse| {
+    let mut on_response = |kind: CloseRequestKind, response: Option<&ModelResponse>| {
+        assert!(matches!(
+            kind,
+            CloseRequestKind::Generation | CloseRequestKind::Verification
+        ));
+        let response = response.expect("successful call response");
         let raw_charge = response
             .raw
             .as_ref()
@@ -285,8 +323,10 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
             deterministic_fallback: || "fallback".to_owned(),
         },
         CloseRequestOptions {
+            model: Some("host-close-model"),
+            temperature: Some(0.25),
             max_output_tokens: Some(37),
-            on_response: Some(&mut on_response),
+            on_call_completed: Some(&mut on_response),
         },
     )
     .await;
@@ -301,11 +341,71 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
     );
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 4);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.max_tokens == Some(37))
+    assert!(requests.iter().all(|request| request.max_tokens == Some(37)
+        && request.model.as_deref() == Some("host-close-model")
+        && request.temperature == Some(0.25)));
+}
+
+#[tokio::test]
+async fn close_options_use_buffered_stream_text_when_completed_response_text_is_empty() {
+    let model = StreamScriptedModel {
+        responses: Mutex::new(VecDeque::from([
+            vec![
+                ModelStreamItem::Started,
+                ModelStreamItem::MessageDelta(tinyinference_llm::message::MessageDelta::text(
+                    "Buffered answer",
+                )),
+                ModelStreamItem::Completed(ModelResponse::assistant("")),
+            ],
+            vec![
+                ModelStreamItem::Started,
+                ModelStreamItem::MessageDelta(tinyinference_llm::message::MessageDelta::text(
+                    "ACCEPT",
+                )),
+                ModelStreamItem::Completed(ModelResponse::assistant("ACCEPT")),
+            ],
+        ])),
+        requests: Mutex::new(Vec::new()),
+    };
+    let mut kinds = Vec::new();
+    let mut on_call_completed = |kind: CloseRequestKind, response: Option<&ModelResponse>| {
+        assert!(response.is_some());
+        kinds.push(kind);
+    };
+    let output = grounded_close_with_options(
+        &model,
+        &(),
+        &NativeDialect,
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close",
+            verification_prompt: |reply: &str| format!("verify {reply}"),
+            repair_instruction: |violation| format!("repair {violation:?}"),
+            harness_phrases: &[],
+            budget: None,
+            deterministic_fallback: || "fallback".to_owned(),
+        },
+        CloseRequestOptions {
+            model: Some("stream-close-model"),
+            temperature: Some(0.4),
+            max_output_tokens: Some(33),
+            on_call_completed: Some(&mut on_call_completed),
+        },
+    )
+    .await;
+
+    assert_eq!(output.text, "Buffered answer");
+    assert_eq!(
+        kinds,
+        [CloseRequestKind::Generation, CloseRequestKind::Verification]
     );
+    let requests = model.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request.model.as_deref() == Some("stream-close-model")
+            && request.temperature == Some(0.4)
+            && request.max_tokens == Some(33)
+    }));
 }
 
 #[tokio::test]
@@ -344,7 +444,12 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
 
     let model = CompleteThenFail::default();
     let mut observed = Vec::new();
-    let mut on_response = |response: &ModelResponse| {
+    let mut observed_kinds = Vec::new();
+    let mut on_response = |kind: CloseRequestKind, response: Option<&ModelResponse>| {
+        observed_kinds.push((kind, response.is_some()));
+        let Some(response) = response else {
+            return;
+        };
         observed.push(
             response
                 .usage
@@ -372,8 +477,10 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
             deterministic_fallback: || "fallback".to_owned(),
         },
         CloseRequestOptions {
+            model: None,
+            temperature: None,
             max_output_tokens: Some(21),
-            on_response: Some(&mut on_response),
+            on_call_completed: Some(&mut on_response),
         },
     )
     .await;
@@ -381,6 +488,14 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
     assert_eq!(output.text, "fallback");
     assert_eq!(output.usage.len(), 1);
     assert_eq!(observed, [987]);
+    assert_eq!(
+        observed_kinds,
+        [
+            (CloseRequestKind::Generation, true),
+            (CloseRequestKind::Verification, false),
+            (CloseRequestKind::Generation, false),
+        ]
+    );
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert!(
@@ -429,7 +544,9 @@ async fn completed_close_usage_survives_a_pending_verifier_timeout() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let observed_by_callback = Arc::clone(&observed);
     let task = tokio::spawn(async move {
-        let mut on_response = move |response: &ModelResponse| {
+        let mut on_response = move |kind: CloseRequestKind, response: Option<&ModelResponse>| {
+            assert_eq!(kind, CloseRequestKind::Generation);
+            let response = response.expect("completed call response");
             observed_by_callback.lock().unwrap().push(
                 response
                     .usage
@@ -451,8 +568,10 @@ async fn completed_close_usage_survives_a_pending_verifier_timeout() {
                 deterministic_fallback: || "fallback".to_owned(),
             },
             CloseRequestOptions {
+                model: None,
+                temperature: None,
                 max_output_tokens: Some(22),
-                on_response: Some(&mut on_response),
+                on_call_completed: Some(&mut on_response),
             },
         )
         .await
@@ -521,7 +640,11 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
     let contract = crate::config::RequiredOutput::new("summary");
     let model = scripted_model(&["{\"summary\":\"repaired\"}"]);
     let mut observed_responses = 0;
-    let mut on_response = |_response: &ModelResponse| observed_responses += 1;
+    let mut on_response = |kind: CloseRequestKind, response: Option<&ModelResponse>| {
+        assert_eq!(kind, CloseRequestKind::RequiredOutputRepair);
+        assert!(response.is_some());
+        observed_responses += 1;
+    };
     let repaired = repair_required_output_with_options(
         &model,
         &(),
@@ -534,8 +657,10 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
             reply_already_streamed: false,
         },
         CloseRequestOptions {
+            model: None,
+            temperature: None,
             max_output_tokens: Some(19),
-            on_response: Some(&mut on_response),
+            on_call_completed: Some(&mut on_response),
         },
     )
     .await
