@@ -207,8 +207,9 @@ orchestration depends on graph).
 - **Result policy.** `ResultPolicy { max_chars, max_bytes, overflow: Truncate | Artifact,
   schema }` (builders; `artifact_store` is a host `ArtifactStore` callback, the
   orchestration layer owns no store). `max_chars` caps returned text and
-  `max_bytes` measures full UTF-8 bytes with a strict `>` boundary. `Truncate`
-  keeps head and tail around `[… N chars omitted …]`; it never truncates bytes.
+  `max_bytes` measures full UTF-8 bytes with a strict `>` boundary under
+  `Artifact`; it has no effect under `Truncate`. `Truncate` keeps head and tail
+  around `[… N chars omitted …]`; it never truncates bytes.
   `Artifact` stores the full output when either configured limit is exceeded and
   returns the path-free reference. A byte-only trigger leaves returned text
   unchanged; with no store, character overflow falls back to truncation and a

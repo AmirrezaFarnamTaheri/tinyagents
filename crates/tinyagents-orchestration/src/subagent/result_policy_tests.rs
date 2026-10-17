@@ -128,11 +128,11 @@ async fn byte_overflow_uses_strict_utf8_byte_boundaries() {
 }
 
 #[tokio::test]
-async fn byte_overflow_and_character_overflow_store_once_before_capping() {
+async fn character_overflow_stores_once_when_byte_limit_is_not_exceeded() {
     let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
     let full = "é0123456789";
     let applied = ResultPolicy::new()
-        .with_max_bytes(1)
+        .with_max_bytes(100)
         .with_max_chars(6)
         .with_overflow(ResultOverflow::Artifact)
         .with_artifact_store(store.clone())
@@ -140,7 +140,10 @@ async fn byte_overflow_and_character_overflow_store_once_before_capping() {
         .await;
 
     assert_eq!(applied.artifact.as_ref().unwrap().id, "artifact-1");
-    assert_eq!(applied.omitted_chars, full.chars().count() - applied.text.chars().count());
+    assert_eq!(
+        applied.omitted_chars,
+        full.chars().count() - applied.text.chars().count()
+    );
     assert!(applied.text.chars().count() <= 6);
     assert_eq!(
         store.0.lock().unwrap().as_slice(),
@@ -160,7 +163,72 @@ async fn byte_overflow_without_a_store_keeps_text_and_reports_the_store_error() 
     assert_eq!(applied.text, full);
     assert_eq!(applied.omitted_chars, 0);
     assert!(applied.artifact.is_none());
-    assert!(applied.artifact_error.unwrap().contains("no artifact store"));
+    assert!(
+        applied
+            .artifact_error
+            .unwrap()
+            .contains("no artifact store")
+    );
+}
+
+struct FailingStore;
+
+#[async_trait::async_trait]
+impl ArtifactStore for FailingStore {
+    async fn store(&self, _task_id: &str, _content: &str) -> Result<ArtifactReference, String> {
+        Err("disk unavailable".to_owned())
+    }
+}
+
+#[tokio::test]
+async fn byte_overflow_store_failure_preserves_full_or_character_capped_text() {
+    let store = Arc::new(FailingStore);
+    let full = "0123456789";
+    let byte_only = ResultPolicy::new()
+        .with_max_bytes(2)
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store.clone())
+        .apply("t", full, None)
+        .await;
+    assert_eq!(byte_only.text, full);
+    assert_eq!(byte_only.omitted_chars, 0);
+    assert!(byte_only.artifact.is_none());
+    assert!(
+        byte_only
+            .artifact_error
+            .unwrap()
+            .contains("disk unavailable")
+    );
+
+    let capped = ResultPolicy::new()
+        .with_max_bytes(2)
+        .with_max_chars(4)
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store)
+        .apply("t", full, None)
+        .await;
+    assert!(capped.text.chars().count() <= 4);
+    assert!(capped.omitted_chars > 0);
+    assert!(capped.artifact.is_none());
+    assert!(capped.artifact_error.unwrap().contains("disk unavailable"));
+}
+
+#[tokio::test]
+async fn zero_byte_threshold_is_strict_and_active_only_for_artifact_overflow() {
+    let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
+    let policy = ResultPolicy::new()
+        .with_max_bytes(0)
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store.clone());
+    assert!(policy.is_active());
+    let empty = policy.apply("t", "", None).await;
+    assert!(empty.artifact.is_none());
+    assert!(store.0.lock().unwrap().is_empty());
+
+    let nonempty = policy.apply("t", "x", None).await;
+    assert_eq!(nonempty.artifact.as_ref().unwrap().id, "artifact-1");
+    assert_eq!(nonempty.text, "x");
+    assert_eq!(store.0.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
