@@ -226,6 +226,7 @@ where
     name: String,
     description: String,
     parameters: Value,
+    resumable: bool,
 }
 
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
@@ -245,6 +246,7 @@ where
             name: "delegate_graph".into(),
             description: "Plan, execute, and review delegated work.".into(),
             parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
+            resumable: false,
         }
     }
 
@@ -263,6 +265,12 @@ where
     /// Supplies a host-owned schema, including dynamic target enums.
     pub fn with_parameters(mut self, parameters: Value) -> Self {
         self.parameters = parameters;
+        self
+    }
+
+    /// Enables durable classify-and-resume execution for checkpointed threads.
+    pub fn with_resumable_execution(mut self) -> Self {
+        self.resumable = true;
         self
     }
 }

@@ -199,3 +199,78 @@ async fn graph_alias_keeps_host_declaration_and_routes_arguments_to_stage_worker
             .all(|(agent, revisions, _)| agent == "planner" && *revisions == 3)
     );
 }
+
+#[tokio::test]
+async fn resumable_delegation_restarts_at_the_pending_stage() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tinyagents_graph::{DelegationState, checkpoint::InMemoryCheckpointer};
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let checkpointer = std::sync::Arc::new(InMemoryCheckpointer::<DelegationState>::new());
+    let fail_execute_once = std::sync::Arc::new(AtomicBool::new(true));
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let make_tool = || {
+        let cp = checkpointer.clone();
+        let fail = fail_execute_once.clone();
+        let calls = calls.clone();
+        DelegationTool::<(), (), _, _>::new(
+            move |_, _, _| DelegationConfig {
+                checkpointer: Some(cp.clone()),
+                thread_id: Some("durable-delegation".into()),
+                ..DelegationConfig::default()
+            },
+            move |_, stage, _| {
+                let fail = fail.clone();
+                let calls = calls.clone();
+                async move {
+                    calls.lock().unwrap().push(stage);
+                    if stage == DelegationStage::Execute
+                        && fail.swap(false, Ordering::SeqCst)
+                    {
+                        return Err("simulated process interruption".into());
+                    }
+                    Ok(DelegationStageOutput::done(if stage == DelegationStage::Review {
+                        "APPROVE"
+                    } else {
+                        "completed"
+                    }))
+                }
+            },
+        )
+        .with_resumable_execution()
+    };
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let first = make_tool();
+    assert!(ToolDispatch::<(), ()>::execute(
+        &first,
+        &(),
+        new_call_id(),
+        json!({"task":"resume me"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .is_err());
+
+    // A new dispatcher models a host process starting from the persisted graph.
+    let restarted = make_tool();
+    assert!(ToolDispatch::<(), ()>::execute(
+        &restarted,
+        &(),
+        new_call_id(),
+        json!({"task":"resume me"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .is_ok());
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.iter().filter(|&&stage| stage == DelegationStage::Plan).count(), 1);
+    assert_eq!(calls.iter().filter(|&&stage| stage == DelegationStage::Execute).count(), 2);
+}
