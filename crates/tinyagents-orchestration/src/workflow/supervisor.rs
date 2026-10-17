@@ -303,6 +303,25 @@ impl WorkflowRunSupervisor {
         true
     }
 
+    /// Snapshot the current generation handle for `run_id`, if one is
+    /// registered.
+    ///
+    /// The returned handle may become stale immediately after this call. It is
+    /// safe to use with [`Self::stop_generation`]: that method checks the
+    /// generation identity and will not cancel a replacement. This snapshot
+    /// does not make a durable lifecycle transition atomic with the registry.
+    pub fn current_handle(&self, run_id: &str) -> Option<WorkflowRunHandle> {
+        let registry = self.registry.lock().expect("workflow registry poisoned");
+        registry
+            .current
+            .get(run_id)
+            .map(|generation| WorkflowRunHandle {
+                run_id: Arc::from(run_id),
+                generation: generation.id,
+                token: generation.token.clone(),
+            })
+    }
+
     /// Returns whether `handle` still identifies the current generation.
     /// Stopping a generation cancels it but leaves it current until it is
     /// finished or dropped; replacement and completion make it non-current.

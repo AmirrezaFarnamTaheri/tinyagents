@@ -118,6 +118,68 @@ fn old_handle_is_not_current_after_replacement_and_stop_keeps_current_identity()
 }
 
 #[test]
+fn current_handle_snapshot_cannot_cancel_a_replacement() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let pending = Arc::new(std::sync::Mutex::new(Vec::<
+        Pin<Box<dyn Future<Output = ()> + Send>>,
+    >::new()));
+    let first_pending = pending.clone();
+    let second_pending = pending.clone();
+
+    assert!(supervisor.current_handle("run").is_none());
+    supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            first_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
+    let snapshot = supervisor.current_handle("run").unwrap();
+    assert!(supervisor.is_current(&snapshot));
+
+    let replacement = supervisor.resume(
+        "run",
+        |_| async {},
+        move |future| {
+            second_pending.lock().unwrap().push(Box::pin(future));
+        },
+    );
+    assert!(!supervisor.stop_generation(&snapshot));
+    assert!(!replacement.cancellation_token().is_cancelled());
+    assert!(supervisor.is_current(&replacement));
+
+    pending.lock().unwrap().clear();
+    assert!(supervisor.current_handle("run").is_none());
+}
+
+#[test]
+fn current_handle_tracks_stopped_and_finished_generations() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let pending = Arc::new(std::sync::Mutex::new(
+        None::<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    ));
+    let slot = pending.clone();
+    let handle = supervisor.start(
+        "run",
+        |_| async {},
+        move |future| {
+            *slot.lock().unwrap() = Some(Box::pin(future));
+        },
+    );
+
+    let snapshot = supervisor.current_handle("run").unwrap();
+    assert_eq!(snapshot.generation, handle.generation);
+    assert!(supervisor.current_handle("other-run").is_none());
+    assert!(supervisor.stop_generation(&snapshot));
+    let stopped = supervisor.current_handle("run").unwrap();
+    assert!(stopped.cancellation_token().is_cancelled());
+    assert!(supervisor.is_current(&stopped));
+    assert!(supervisor.finish(&snapshot));
+    assert!(supervisor.current_handle("run").is_none());
+    pending.lock().unwrap().take();
+}
+
+#[test]
 fn ready_drive_clears_its_generation_while_future_is_retained() {
     let supervisor = WorkflowRunSupervisor::default();
     let pending = Arc::new(std::sync::Mutex::new(
