@@ -64,6 +64,8 @@ fn tombstone_collected_completion(
 
 /// Resolves a task id or durable worker session id to a resume reference,
 /// preferring a live registry entry and then consulting the persistent ledger.
+/// Live ownership and registry errors are authoritative; durable fallback is
+/// attempted only when live task and session lookup both report `Unknown`.
 pub fn resolve_detached_or_durable<M>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     store: &dyn TaskStore,
