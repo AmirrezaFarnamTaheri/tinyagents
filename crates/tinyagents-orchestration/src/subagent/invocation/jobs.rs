@@ -784,9 +784,13 @@ impl SubAgentJobRegistry {
         }
     }
 
-    /// Returns this run's jobs in stable id order.
-    fn list_owned(&self, owner: impl ToString) -> Vec<SubAgentJob> {
-        Self::sorted(self.tasks.snapshots(Some(&owner.to_string())))
+    /// Returns this run's jobs while preserving detached-registry failures.
+    fn try_list_owned(&self, owner: impl ToString) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+        let snapshots = self
+            .tasks
+            .snapshots(Some(&owner.to_string()))
+            .map_err(registry_failure)?;
+        Ok(Self::sorted(Ok(snapshots)))
     }
 
     pub(crate) async fn wait_owned(
@@ -1318,7 +1322,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             Some(Some("await")) => {
                 let Some(id) = identifier else {
                     let mut tombstones = Vec::new();
-                    for job in self.jobs.list_owned(&owner) {
+                    for job in self.jobs.try_list_owned(&owner)? {
                         let job = self.jobs.wait_owned(job.id.as_str(), &owner).await?;
                         if job.status.is_terminal() {
                             tombstones.push(serde_json::to_value(job)?);
@@ -1537,7 +1541,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
         } else {
             let mut rows = self
                 .jobs
-                .list_owned(&owner)
+                .try_list_owned(&owner)?
                 .into_iter()
                 .map(|job| {
                     serde_json::to_value(job).map(|mut v| {

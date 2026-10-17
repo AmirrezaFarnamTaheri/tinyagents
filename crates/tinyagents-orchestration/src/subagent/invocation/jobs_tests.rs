@@ -39,6 +39,38 @@ async fn opted_in_control_tools_keep_task_registry_faults_fatal() {
         Some(SubAgentJobError::Registry(_))
     ));
 
+    let list = SubAgentJobsTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &list,
+        &(),
+        CallId::new("list"),
+        json!({}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a poisoned task registry is a real list failure");
+    assert!(matches!(
+        error.downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::Registry(_))
+    ));
+
+    let await_all = SubAgentJobsTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &await_all,
+        &(),
+        CallId::new("await-all"),
+        json!({"action": "await"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a poisoned task registry is a real await-all failure");
+    assert!(matches!(
+        error.downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::Registry(_))
+    ));
+
     let cancel = SubAgentJobsTool::new(jobs.clone()).recover_selector_errors();
     let error = ToolDispatch::<(), ()>::execute(
         &cancel,
