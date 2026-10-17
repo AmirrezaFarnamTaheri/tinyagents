@@ -1589,28 +1589,61 @@ fn generation_enrichment_is_run_scoped_replay_safe_and_validated_at_projection()
     let spans = collector.spans();
     let parent_generation = spans
         .iter()
-        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-parent")
+        .find(|span| {
+            span.kind == SpanKind::Generation
+                && span.attributes["gen_ai.request.model"] == "model-parent"
+        })
         .expect("parent generation");
     let child_generation = spans
         .iter()
-        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-child")
+        .find(|span| {
+            span.kind == SpanKind::Generation
+                && span.attributes["gen_ai.request.model"] == "model-child"
+        })
         .expect("child generation");
     let invalid_generation = spans
         .iter()
-        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-invalid")
+        .find(|span| {
+            span.kind == SpanKind::Generation
+                && span.attributes["gen_ai.request.model"] == "model-invalid"
+        })
         .expect("invalid enrichment generation");
-    assert_eq!(parent_generation.attributes["gen_ai.provider"], "parent-provider");
+    assert_eq!(
+        parent_generation.attributes["gen_ai.provider"],
+        "parent-provider"
+    );
     assert_eq!(parent_generation.attributes["gen_ai.usage.cost_usd"], 0.1);
-    assert_eq!(child_generation.attributes["gen_ai.provider"], "child-provider");
+    assert_eq!(
+        child_generation.attributes["gen_ai.provider"],
+        "child-provider"
+    );
     assert_eq!(child_generation.attributes["gen_ai.usage.cost_usd"], 0.2);
-    assert!(!child_generation.attributes["gen_ai.provider"].to_string().contains("replayed-provider"));
-    assert!(!invalid_generation.attributes.contains_key("gen_ai.provider"));
-    assert!(!invalid_generation.attributes.contains_key("gen_ai.pricing.input_per_mtok_usd"));
-    assert!(!invalid_generation.attributes.contains_key("gen_ai.usage.cost_usd"));
-    assert!(spans.iter().all(|span| !span
-        .attributes
-        .values()
-        .any(|value| value.to_string().contains("user-secret"))));
+    assert!(
+        !child_generation.attributes["gen_ai.provider"]
+            .to_string()
+            .contains("replayed-provider")
+    );
+    assert!(
+        !invalid_generation
+            .attributes
+            .contains_key("gen_ai.provider")
+    );
+    assert!(
+        !invalid_generation
+            .attributes
+            .contains_key("gen_ai.pricing.input_per_mtok_usd")
+    );
+    assert!(
+        !invalid_generation
+            .attributes
+            .contains_key("gen_ai.usage.cost_usd")
+    );
+    assert!(spans.iter().all(|span| {
+        !span
+            .attributes
+            .values()
+            .any(|value| value.to_string().contains("user-secret"))
+    }));
 }
 
 #[test]
