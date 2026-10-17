@@ -668,7 +668,7 @@ where
         (response, String::new())
     };
     let response_text = response.text();
-    let text = if response_text.is_empty() {
+    let text = if stream_mode && response_text.trim().is_empty() {
         buffered_text
     } else {
         response_text.to_owned()

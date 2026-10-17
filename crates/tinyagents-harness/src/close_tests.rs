@@ -347,7 +347,7 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
 }
 
 #[tokio::test]
-async fn close_options_use_buffered_stream_text_when_completed_response_text_is_empty() {
+async fn close_options_use_buffered_text_when_completed_response_is_empty_or_whitespace() {
     let model = StreamScriptedModel {
         responses: Mutex::new(VecDeque::from([
             vec![
@@ -355,7 +355,7 @@ async fn close_options_use_buffered_stream_text_when_completed_response_text_is_
                 ModelStreamItem::MessageDelta(tinyinference_llm::message::MessageDelta::text(
                     "Buffered answer",
                 )),
-                ModelStreamItem::Completed(ModelResponse::assistant("")),
+                ModelStreamItem::Completed(ModelResponse::assistant(" \n ")),
             ],
             vec![
                 ModelStreamItem::Started,
