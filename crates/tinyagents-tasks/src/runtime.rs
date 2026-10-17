@@ -19,9 +19,8 @@ use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::steering::{RecentRequestIds, SteeringHandle};
 
 use crate::{
-    CancelledDetachedTask, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskBatchWaitError, DetachedTaskBatchWaitItem, DetachedTaskWaitOutcome,
-    SteeringRegistry,
+    CancelledDetachedTask, DetachedTaskBatchWaitError, DetachedTaskBatchWaitItem,
+    DetachedTaskRegistryError, DetachedTaskSnapshot, DetachedTaskWaitOutcome, SteeringRegistry,
 };
 
 struct DetachedTaskEntry<Metadata, Status> {
@@ -373,22 +372,36 @@ where
         task_ids: &[TaskId],
         owner_id: &str,
         timeout: Option<Duration>,
-    ) -> std::result::Result<Vec<DetachedTaskBatchWaitItem<Metadata, Status>>, DetachedTaskBatchWaitError> {
+    ) -> std::result::Result<
+        Vec<DetachedTaskBatchWaitItem<Metadata, Status>>,
+        DetachedTaskBatchWaitError,
+    > {
         let deadline = timeout.map(|duration| Instant::now() + duration);
         let mut results = Vec::with_capacity(task_ids.len());
         for task_id in task_ids {
             let metadata = match self.metadata_for(task_id, owner_id) {
                 Ok(metadata) => metadata,
-                Err(error) => return Err(DetachedTaskBatchWaitError { task_id: *task_id, error }),
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
             };
-            let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            let remaining =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
             match self.wait_until(task_id, owner_id, remaining).await {
                 Ok(outcome) => results.push(DetachedTaskBatchWaitItem {
-                    task_id: *task_id,
+                    task_id: task_id.clone(),
                     metadata,
                     outcome,
                 }),
-                Err(error) => return Err(DetachedTaskBatchWaitError { task_id: *task_id, error }),
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
             }
         }
         Ok(results)
@@ -400,7 +413,9 @@ where
         owner_id: &str,
     ) -> std::result::Result<Metadata, DetachedTaskRegistryError> {
         let guard = self.lock()?;
-        let entry = guard.get(task_id).ok_or(DetachedTaskRegistryError::Unknown)?;
+        let entry = guard
+            .get(task_id)
+            .ok_or(DetachedTaskRegistryError::Unknown)?;
         if entry.owner_id != owner_id {
             return Err(DetachedTaskRegistryError::NotOwned);
         }

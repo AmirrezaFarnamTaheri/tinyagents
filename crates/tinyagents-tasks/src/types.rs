@@ -538,7 +538,7 @@ pub struct DetachedTaskBatchWaitItem<Metadata, Status> {
 }
 
 /// A batch wait stopped at the first task that could not be waited on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DetachedTaskBatchWaitError {
     /// Task whose wait failed. Later task ids were not inspected or pruned.
     pub task_id: TaskId,

@@ -83,6 +83,11 @@ impl CompletionRouter {
         }
     }
 
+    /// Returns the persistence store backing this router.
+    pub fn store(&self) -> Arc<dyn CompletionStore> {
+        Arc::clone(&self.store)
+    }
+
     /// Replaces the formatter (the host's own wording).
     pub fn with_formatter(mut self, formatter: Arc<dyn CompletionFormatter>) -> Self {
         self.formatter = formatter;

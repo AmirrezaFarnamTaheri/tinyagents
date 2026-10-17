@@ -105,6 +105,162 @@ async fn start_member_runs_and_completes_claimed_task() {
 }
 
 #[tokio::test]
+async fn started_callback_fires_after_claim_before_executor_finishes() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let executor = HangingExecutor(entered.clone());
+    let worker_service = service.clone();
+    let team_id = team.team.id.clone();
+    let task_id = task.id.clone();
+    let member_id = member.id.clone();
+    let worker = tokio::spawn(async move {
+        worker_service
+            .start_member_with_started(
+                &team_id,
+                &task_id,
+                &member_id,
+                &executor,
+                false,
+                |started| {
+                    let _ = started_tx.send(started);
+                },
+            )
+            .await
+    });
+
+    let started = started_rx.await.unwrap();
+    assert!(!started.run_id.is_empty());
+    assert_eq!(started.task.id, task.id);
+    assert_eq!(started.member.member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(
+        started.member.run_id.as_deref(),
+        Some(started.run_id.as_str())
+    );
+    assert!(
+        started
+            .member
+            .worker_thread_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("team-worker-"))
+    );
+    let durable = service.get_team(&team.team.id).unwrap().unwrap();
+    assert_eq!(
+        durable.members[0].run_id.as_deref(),
+        Some(started.run_id.as_str())
+    );
+    assert_eq!(durable.tasks[0].status, AgentTeamTaskStatus::InProgress);
+    entered.notified().await;
+    assert!(!worker.is_finished());
+    worker.abort();
+    let _ = worker.await;
+    let released = service.get_team(&team.team.id).unwrap().unwrap();
+    assert_eq!(
+        released.members[0].member_status,
+        AgentTeamMemberStatus::Idle
+    );
+    assert_eq!(released.tasks[0].status, AgentTeamTaskStatus::Todo);
+}
+
+#[tokio::test]
+async fn start_member_exposes_claim_conflicts_as_typed_errors() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    service
+        .claim_task(&team.team.id, &task.id, &member.id, "existing-claim")
+        .unwrap();
+
+    let error = service
+        .start_member_with_started(
+            &team.team.id,
+            &task.id,
+            &member.id,
+            &FixedExecutor(Ok(vec![])),
+            false,
+            |_| panic!("claim conflict must not notify the host as started"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<TeamMemberStartError>(),
+        Some(TeamMemberStartError::AlreadyClaimed { task_id }) if task_id == &task.id
+    ));
+}
+
+#[tokio::test]
+async fn started_callback_unwind_releases_its_claim_and_idles_the_member() {
+    let dir = TempDir::new().unwrap();
+    let service = service(&dir);
+    let team = service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let task = service
+        .assign_task(&team.team.id, "write", None, Some(&member.id), &[])
+        .unwrap();
+    let worker_service = service.clone();
+    let team_id = team.team.id.clone();
+    let task_id = task.id.clone();
+    let member_id = member.id.clone();
+    let worker = tokio::spawn(async move {
+        worker_service
+            .start_member_with_started(
+                &team_id,
+                &task_id,
+                &member_id,
+                &FixedExecutor(Ok(vec![])),
+                false,
+                |_| panic!("observer panic"),
+            )
+            .await
+    });
+    assert!(worker.await.unwrap_err().is_panic());
+
+    let after = service.get_team(&team.team.id).unwrap().unwrap();
+    assert_eq!(after.members[0].member_status, AgentTeamMemberStatus::Idle);
+    assert_eq!(after.tasks[0].status, AgentTeamTaskStatus::Todo);
+}
+
+#[tokio::test]
 async fn start_member_releases_task_and_idles_member_on_executor_failure() {
     let dir = TempDir::new().unwrap();
     let service = service(&dir);

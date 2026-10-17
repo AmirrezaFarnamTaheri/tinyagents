@@ -172,6 +172,146 @@ async fn detached_registry_enforces_owner_and_waits_for_terminal_status() {
 }
 
 #[tokio::test]
+async fn batch_wait_preserves_order_and_metadata_when_pruning_terminal_entries() {
+    let registry = runtime_registry();
+    let ids = [TaskId::new("batch-first"), TaskId::new("batch-second")];
+    let (first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "one".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "two".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+    first_tx
+        .send(RuntimeStatus::Completed("first".into()))
+        .unwrap();
+    second_tx
+        .send(RuntimeStatus::Completed("second".into()))
+        .unwrap();
+
+    let items = registry
+        .wait_many(&ids, "owner", Some(std::time::Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.task_id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.metadata.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_)))
+    );
+    assert_eq!(registry.len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn batch_wait_stops_at_first_error_without_touching_later_ids() {
+    let registry = runtime_registry();
+    let later = TaskId::new("batch-later");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            later.clone(),
+            "owner",
+            "later".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let error = registry
+        .wait_many(
+            &[TaskId::new("missing"), later.clone()],
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.task_id, TaskId::new("missing"));
+    assert_eq!(error.error, DetachedTaskRegistryError::Unknown);
+    assert_eq!(
+        registry.snapshot(&later, "owner").unwrap().metadata,
+        "later"
+    );
+}
+
+#[tokio::test]
+async fn unbounded_batch_wait_resumes_until_terminal_and_timeout_can_be_retried() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("batch-retry");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "owner",
+            "retry".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let timed_out = registry
+        .wait_many(
+            std::slice::from_ref(&task_id),
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        timed_out[0].outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    ));
+    assert_eq!(registry.len().unwrap(), 1);
+
+    let waiter_registry = registry.clone();
+    let waiter_id = task_id.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(&[waiter_id], "owner", None)
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    let completed = waiter.await.unwrap();
+    assert!(matches!(
+        completed[0].outcome,
+        DetachedTaskWaitOutcome::Terminal(RuntimeStatus::Completed(_))
+    ));
+    assert_eq!(completed[0].metadata, "retry");
+    assert!(registry.is_empty().unwrap());
+}
+
+#[tokio::test]
 async fn detached_registry_remembers_steer_request_ids_per_task() {
     let registry = runtime_registry();
     let (first, rx_first, cancel_first, join_first) = detached_handles();

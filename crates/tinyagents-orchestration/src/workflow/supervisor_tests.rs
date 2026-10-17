@@ -71,6 +71,53 @@ fn dropping_unpolled_drive_clears_its_generation() {
 }
 
 #[test]
+fn handle_aware_start_installs_current_handle_before_spawning_fast_future() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let mut observed = None;
+    let returned = supervisor.start_scoped_with_handle(
+        "run",
+        |_| async {},
+        |future| future,
+        |future| future,
+        |handle, future| {
+            assert!(supervisor.is_current(&handle));
+            drop(future);
+            observed = Some(handle);
+        },
+    );
+
+    assert_eq!(observed.unwrap().generation, returned.generation);
+    assert!(!supervisor.is_current(&returned));
+}
+
+#[test]
+fn old_handle_is_not_current_after_replacement_and_stop_keeps_current_identity() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let old = supervisor.start("run", |_| async {}, drop);
+    let pending = Arc::new(std::sync::Mutex::new(
+        None::<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    ));
+    let pending_slot = pending.clone();
+    let current = supervisor.resume_scoped_with_handle(
+        "run",
+        |_| async {},
+        |future| future,
+        |future| future,
+        |handle, future| {
+            assert!(supervisor.is_current(&handle));
+            *pending_slot.lock().unwrap() = Some(Box::pin(future));
+        },
+    );
+
+    assert!(!supervisor.is_current(&old));
+    assert!(supervisor.is_current(&current));
+    assert!(supervisor.stop_generation(&current));
+    assert!(supervisor.is_current(&current));
+    pending.lock().unwrap().take();
+    assert!(!supervisor.is_current(&current));
+}
+
+#[test]
 fn ready_drive_clears_its_generation_while_future_is_retained() {
     let supervisor = WorkflowRunSupervisor::default();
     let pending = Arc::new(std::sync::Mutex::new(

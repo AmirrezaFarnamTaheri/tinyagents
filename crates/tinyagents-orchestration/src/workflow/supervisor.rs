@@ -141,13 +141,9 @@ impl WorkflowRunSupervisor {
         OriginFuture: Future<Output = ()> + Send + 'static,
         Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
-        self.start_scoped_with_handle(
-            run_id,
-            make_future,
-            root_parent,
-            origin,
-            |_, future| spawn(future),
-        )
+        self.start_scoped_with_handle(run_id, make_future, root_parent, origin, |_, future| {
+            spawn(future)
+        })
     }
 
     /// Start a drive and pass its installed handle to the host before it can
@@ -247,13 +243,9 @@ impl WorkflowRunSupervisor {
         OriginFuture: Future<Output = ()> + Send + 'static,
         Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
-        self.resume_scoped_with_handle(
-            run_id,
-            make_future,
-            root_parent,
-            origin,
-            |_, future| spawn(future),
-        )
+        self.resume_scoped_with_handle(run_id, make_future, root_parent, origin, |_, future| {
+            spawn(future)
+        })
     }
 
     /// Resume a drive and provide its installed handle before scheduling it.

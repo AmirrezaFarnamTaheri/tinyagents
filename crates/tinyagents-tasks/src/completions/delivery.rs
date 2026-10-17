@@ -111,9 +111,9 @@ impl CompletionDelivery {
     pub async fn deliver_once_with_error<B, F, D, Fut, E, U>(
         &self,
         target: DeliveryTarget<'_>,
-        is_busy: B,
+        mut is_busy: B,
         admitted: F,
-        deliver: D,
+        mut deliver: D,
         mut write_undelivered: U,
     ) -> DeliveryOutcome
     where
@@ -144,9 +144,9 @@ impl CompletionDelivery {
     pub async fn recover_on_boot<B, F, D, Fut, E, U>(
         &self,
         target: DeliveryTarget<'_>,
-        mut is_busy: B,
+        is_busy: B,
         admitted: F,
-        mut deliver: D,
+        deliver: D,
         mut write_undelivered: U,
     ) -> DeliveryOutcome
     where
@@ -155,7 +155,7 @@ impl CompletionDelivery {
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
         E: std::fmt::Display,
-        U: FnMut(&[CompletionRecord], &str),
+        U: FnMut(&[CompletionRecord]),
     {
         self.recover_on_boot_with_error(target, is_busy, admitted, deliver, move |records, _| {
             write_undelivered(records)

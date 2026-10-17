@@ -40,6 +40,7 @@ async fn delivery_claims_a_batch_and_acknowledges_it() {
         ))
         .await
         .unwrap();
+    let leases = ThreadDeliveryLeases::default();
     let delivery = CompletionDelivery::new(
         CompletionDeliveryConfig {
             debounce: Duration::ZERO,
@@ -49,7 +50,7 @@ async fn delivery_claims_a_batch_and_acknowledges_it() {
             max_busy_polls: 0,
             batch_size: 8,
         },
-        ThreadDeliveryLeases::default(),
+        leases.clone(),
     );
     let mut delivered = Vec::new();
     let outcome = delivery
@@ -112,6 +113,112 @@ async fn failed_delivery_releases_for_retry_and_reports_give_up() {
         }
     );
     assert_eq!(gave_up[0].task_id, "a");
+}
+
+#[tokio::test]
+async fn error_aware_delivery_reports_the_final_error_while_holding_the_lease() {
+    let router =
+        CompletionRouter::new(Arc::new(InMemoryCompletionStore::new())).with_max_attempts(2);
+    router
+        .record(CompletionRecord::new(
+            "retry-final-error",
+            "parent",
+            "worker",
+            CompletionStatus::Failed,
+            CompletionResult::default(),
+        ))
+        .await
+        .unwrap();
+    let leases = ThreadDeliveryLeases::default();
+    let delivery = CompletionDelivery::new(
+        CompletionDeliveryConfig {
+            debounce: Duration::ZERO,
+            recovery_delay: Duration::ZERO,
+            retry_backoff: Duration::ZERO,
+            busy_poll: Duration::ZERO,
+            max_busy_polls: 0,
+            batch_size: 8,
+        },
+        leases.clone(),
+    );
+    let mut attempts = 0;
+    let mut notification = None;
+    let outcome = delivery
+        .deliver_once_with_error(
+            target(&router),
+            || false,
+            || true,
+            |_| {
+                attempts += 1;
+                let error = if attempts == 1 {
+                    "transient"
+                } else {
+                    "final reason"
+                };
+                async move { Err::<(), _>(error) }
+            },
+            |records, reason| {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].task_id, "retry-final-error");
+                assert_eq!(reason, "final reason");
+                assert!(leases.try_acquire("thread").is_none());
+                notification = Some(reason.to_owned());
+            },
+        )
+        .await;
+
+    assert_eq!(attempts, 2);
+    assert_eq!(notification.as_deref(), Some("final reason"));
+    assert!(matches!(
+        outcome,
+        DeliveryOutcome::Failed { gave_up: 1, .. }
+    ));
+}
+
+#[tokio::test]
+async fn error_aware_boot_recovery_reports_the_last_failure() {
+    let router =
+        CompletionRouter::new(Arc::new(InMemoryCompletionStore::new())).with_max_attempts(1);
+    router
+        .record(CompletionRecord::new(
+            "boot-final-error",
+            "parent",
+            "worker",
+            CompletionStatus::Failed,
+            CompletionResult::default(),
+        ))
+        .await
+        .unwrap();
+    let delivery = CompletionDelivery::new(
+        CompletionDeliveryConfig {
+            debounce: Duration::ZERO,
+            recovery_delay: Duration::ZERO,
+            retry_backoff: Duration::ZERO,
+            busy_poll: Duration::ZERO,
+            max_busy_polls: 0,
+            batch_size: 8,
+        },
+        ThreadDeliveryLeases::default(),
+    );
+    let mut reason = None;
+    let outcome = delivery
+        .recover_on_boot_with_error(
+            target(&router),
+            || false,
+            || true,
+            |_| async { Err::<(), _>("boot delivery failed") },
+            |records, error| {
+                assert_eq!(records[0].task_id, "boot-final-error");
+                reason = Some(error.to_owned());
+            },
+        )
+        .await;
+
+    assert!(matches!(
+        outcome,
+        DeliveryOutcome::Failed { gave_up: 1, .. }
+    ));
+    assert_eq!(reason.as_deref(), Some("boot delivery failed"));
 }
 
 #[test]
