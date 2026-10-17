@@ -525,7 +525,10 @@ fn failed_child_run_keeps_its_typed_error_on_the_child_span() {
     ));
 
     let spans = collector.spans();
-    let parent = spans.iter().find(|span| span.kind == SpanKind::Run).unwrap();
+    let parent = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Turn)
+        .unwrap();
     let child = spans
         .iter()
         .find(|span| span.kind == SpanKind::Subagent)

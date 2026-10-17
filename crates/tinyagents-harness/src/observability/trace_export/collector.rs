@@ -1094,7 +1094,7 @@ impl SpanCollector {
             }
             _ => {
                 self.close_root(at, SpanStatus::Error, "failed");
-                if let Some(root) = self.root {
+                if let Some(root) = self.run_roots.get(&self.active_run_id()).copied() {
                     self.put_error(
                         root,
                         terminal_error_message(
@@ -1148,10 +1148,12 @@ fn terminal_error_message<'a>(
     fallback_error: Option<&'a str>,
     fallback_message: &'a str,
 ) -> &'a str {
-    if !outcome_message.is_empty() {
+    if !outcome_message.trim().is_empty() {
         outcome_message
     } else {
-        fallback_error.unwrap_or(fallback_message)
+        fallback_error
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or(fallback_message)
     }
 }
 
