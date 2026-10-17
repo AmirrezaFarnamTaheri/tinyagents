@@ -49,13 +49,17 @@ pub enum WaitError {
 
 /// Owner identities for detached tasks that use different live and durable
 /// namespaces, such as a tenant-qualified live registry and a parent-session
-/// scoped durable ledger.
+/// scoped durable ledger. Callers must also provide a task store scoped to the
+/// correct tenant/workspace: `durable_parent_session` is the raw
+/// product-facing parent identity, not profile authorization and not a key
+/// suitable for selecting or sharing a store across tenants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DetachedSubagentOwners<'a> {
     /// Registry owner key used to authorize live task operations.
     pub live_owner: &'a str,
     /// Raw parent session used to authorize durable ledger operations and
-    /// preserve the product-facing parent identity.
+    /// preserve the product-facing parent identity. This does not authorize a
+    /// tenant/workspace store; callers must scope that store independently.
     pub durable_parent_session: &'a str,
 }
 
