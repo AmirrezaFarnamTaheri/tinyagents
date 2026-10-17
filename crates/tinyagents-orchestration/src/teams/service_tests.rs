@@ -178,22 +178,32 @@ async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
         Some(TeamMemberStartError::AlreadyActive { member_id, current_task_id })
             if member_id == &member.id && current_task_id.as_deref() == Some(first_task.id.as_str())
     ));
-    assert!(!loser_callback_called, "denied admission must not report Started");
+    assert!(
+        !loser_callback_called,
+        "denied admission must not report Started"
+    );
     assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
     let after = first_service.get_team(&team.team.id).unwrap().unwrap();
-    assert_eq!(after.members[0].member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(
+        after.members[0].member_status,
+        AgentTeamMemberStatus::Active
+    );
     assert_eq!(
         after.members[0].current_task_id.as_deref(),
         Some(first_task.id.as_str())
     );
-    assert!(after.members[0]
-        .worker_thread_id
-        .as_deref()
-        .is_some_and(|id| id.starts_with("team-worker-")));
-    assert!(after.members[0]
-        .run_id
-        .as_deref()
-        .is_some_and(|id| id.starts_with("team-run-")));
+    assert!(
+        after.members[0]
+            .worker_thread_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("team-worker-"))
+    );
+    assert!(
+        after.members[0]
+            .run_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("team-run-"))
+    );
     let first_after = after
         .tasks
         .iter()

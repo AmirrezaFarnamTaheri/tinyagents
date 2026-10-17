@@ -504,17 +504,26 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
 
     assert_eq!(router.max_attempts(), 2);
     assert!(Arc::ptr_eq(router.formatter(), &formatter));
-    assert_eq!(destination.get("pending").unwrap().state, CompletionState::Pending);
+    assert_eq!(
+        destination.get("pending").unwrap().state,
+        CompletionState::Pending
+    );
     assert_eq!(destination.get("pending").unwrap().attempts, 1);
-    assert_eq!(destination.get("delivered").unwrap().state, CompletionState::Delivered);
-    assert_eq!(destination.get("tombstoned").unwrap().state, CompletionState::Tombstoned);
-    assert_eq!(destination.get("gave-up").unwrap().state, CompletionState::GaveUp);
+    assert_eq!(
+        destination.get("delivered").unwrap().state,
+        CompletionState::Delivered
+    );
+    assert_eq!(
+        destination.get("tombstoned").unwrap().state,
+        CompletionState::Tombstoned
+    );
+    assert_eq!(
+        destination.get("gave-up").unwrap().state,
+        CompletionState::GaveUp
+    );
     assert!(destination.get("target-only").is_some());
     assert_eq!(
-        destination
-            .get("\u{1}parent-cancelled:q")
-            .unwrap()
-            .state,
+        destination.get("\u{1}parent-cancelled:q").unwrap().state,
         CompletionState::Tombstoned
     );
 }
@@ -634,9 +643,11 @@ fn a_failed_store_migration_keeps_the_original_store_and_lease() {
         fail_from: std::sync::atomic::AtomicUsize::new(0),
     });
     let destination_port: Arc<dyn CompletionStore> = destination;
-    assert!(router
-        .replace_store_if_current(&source_port, destination_port)
-        .is_err());
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
     assert!(Arc::ptr_eq(&router.store(), &source_port));
     assert!(router.pull("p", 1).unwrap().is_empty());
 }
@@ -649,9 +660,11 @@ fn a_source_enumeration_error_does_not_replace_the_store() {
     let source_port: Arc<dyn CompletionStore> = source;
     let router = CompletionRouter::new(source_port.clone());
     let destination_port: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
-    assert!(router
-        .replace_store_if_current(&source_port, destination_port)
-        .is_err());
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
     assert!(Arc::ptr_eq(&router.store(), &source_port));
 }
 

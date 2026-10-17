@@ -60,9 +60,12 @@ fn decode(record: &Value) -> Option<CompletionRecord> {
 }
 
 fn decode_strict(record: Option<&Value>) -> Result<CompletionRecord> {
-    let value = record.ok_or_else(|| TinyAgentsError::Storage("completion store row has no record".into()))?;
+    let value = record
+        .ok_or_else(|| TinyAgentsError::Storage("completion store row has no record".into()))?;
     serde_json::from_value(value.clone()).map_err(|error| {
-        TinyAgentsError::Storage(format!("completion store contains unreadable record: {error}"))
+        TinyAgentsError::Storage(format!(
+            "completion store contains unreadable record: {error}"
+        ))
     })
 }
 

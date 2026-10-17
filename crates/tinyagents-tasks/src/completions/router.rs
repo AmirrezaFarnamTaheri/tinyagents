@@ -117,10 +117,14 @@ impl CompletionRouter {
     ) -> Result<CompletionStoreReplaceOutcome> {
         let mut state = self.lock()?;
         if !Arc::ptr_eq(&state.store, expected) {
-            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(&state.store)));
+            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(
+                &state.store,
+            )));
         }
         if Arc::ptr_eq(&state.store, &replacement) {
-            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(&state.store)));
+            return Ok(CompletionStoreReplaceOutcome::Current(Arc::clone(
+                &state.store,
+            )));
         }
         let records = state.store.try_list(None)?;
         for record in records {
@@ -356,7 +360,9 @@ impl CompletionRouter {
             }
             Some(_) => TombstoneOutcome::AlreadyFinal,
             None => {
-                state.store.put(&CompletionRecord::tombstone_stub(task_id))?;
+                state
+                    .store
+                    .put(&CompletionRecord::tombstone_stub(task_id))?;
                 TombstoneOutcome::Reserved
             }
         };
@@ -390,9 +396,9 @@ impl CompletionRouter {
     /// Lets completions for `parent_key` through again after
     /// [`Self::cancel_parent`] (a stopped thread that the user reopened).
     pub fn resume_parent(&self, parent_key: &str) {
-        let result = self
-            .lock()
-            .and_then(|state| Self::set_parent_marker(&state, parent_key, CompletionState::Delivered));
+        let result = self.lock().and_then(|state| {
+            Self::set_parent_marker(&state, parent_key, CompletionState::Delivered)
+        });
         if let Err(error) = result {
             tracing::warn!(parent_key = %parent_key, error = %error, "{LOG_PREFIX} could not resume parent");
         }
@@ -406,12 +412,17 @@ impl CompletionRouter {
     }
 
     fn parent_cancelled(state: &RouterState, parent_key: &str) -> bool {
-        state.store
+        state
+            .store
             .get(&Self::parent_marker_id(parent_key))
             .is_some_and(|m| m.state == CompletionState::Tombstoned)
     }
 
-    fn set_parent_marker(router: &RouterState, parent_key: &str, state: CompletionState) -> Result<()> {
+    fn set_parent_marker(
+        router: &RouterState,
+        parent_key: &str,
+        state: CompletionState,
+    ) -> Result<()> {
         let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
         marker.state = state;
         router.store.put(&marker)

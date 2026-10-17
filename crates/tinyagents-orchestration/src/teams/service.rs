@@ -15,11 +15,10 @@ use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
 use tinyagents_session::run_ledger::{
-    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember, AgentTeamMemberStatus,
-    AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskStatus,
-    AgentTeamMemberRunAdmission, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
-    CompletionOutcome, RunEvent,
-    RunEventAppend, RunEventListRequest, RunLedgerStore,
+    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
+    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
+    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
+    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
 use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
@@ -169,7 +168,9 @@ pub trait TeamLedger: Send + Sync {
         run_id: &str,
     ) -> Result<AgentTeamMemberRunAdmission> {
         let _ = (team_id, member_id, task_id, worker_thread_id, run_id);
-        Err(anyhow!("atomic team member admission is unsupported by this ledger"))
+        Err(anyhow!(
+            "atomic team member admission is unsupported by this ledger"
+        ))
     }
     /// Marks a running member idle after its worker finishes.
     fn mark_member_idle(
@@ -762,8 +763,10 @@ impl<L: TeamLedger> TeamService<L> {
                     current_task_id: member.current_task_id,
                 }));
             }
-            Ok(AgentTeamMemberRunAdmission::NotAdmissible(_)
-            | AgentTeamMemberRunAdmission::Missing) => {
+            Ok(
+                AgentTeamMemberRunAdmission::NotAdmissible(_)
+                | AgentTeamMemberRunAdmission::Missing,
+            ) => {
                 return Err(anyhow!(TeamError::UnknownMember {
                     member_id: member_id.to_owned(),
                 }));
