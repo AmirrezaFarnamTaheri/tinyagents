@@ -190,6 +190,174 @@ fn durable_session_id_resolves_to_task_metadata_after_restart() {
     );
 }
 
+#[test]
+fn qualified_live_owner_can_resolve_a_raw_parent_durable_session() {
+    let store = InMemoryTaskStore::new();
+    spawn(&store, "task-raw-parent", "parent-a", "raw-parent-worker");
+
+    // The live key may be tenant-qualified while durable parentSession remains
+    // the raw product parent. This calls the existing one-owner API to pin the
+    // behavior gap before exercising the additive split-owner API.
+    let owners = DetachedSubagentOwners::new("tenant-a::parent-a", "parent-a");
+    let resolved =
+        resolve_detached_or_durable_with_owners(&registry(), &store, "raw-parent-worker", owners)
+            .unwrap();
+    assert_eq!(resolved.task_id, "task-raw-parent");
+}
+
+#[tokio::test]
+async fn qualified_foreign_live_owner_is_denied_even_when_raw_parent_matches() {
+    let store = InMemoryTaskStore::new();
+    spawn(
+        &store,
+        "shared-raw-parent-task",
+        "parent-a",
+        "shared-session",
+    );
+    let registry = registry();
+    let (_status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+    let task = tokio::spawn(std::future::pending::<()>());
+    registry
+        .register(
+            TaskId::new("shared-raw-parent-task"),
+            "tenant-a::parent-a",
+            Metadata {
+                agent: "researcher".into(),
+                session: Some("shared-session".into()),
+            },
+            status_rx,
+            CancellationToken::new(),
+            task.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        resolve_detached_or_durable_with_owners(
+            &registry,
+            &store,
+            "shared-raw-parent-task",
+            DetachedSubagentOwners::new("tenant-b::parent-a", "parent-a"),
+        )
+        .unwrap_err(),
+        WaitError::NotOwned
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn wait_after_restart_uses_raw_durable_parent_with_qualified_live_owner() {
+    let store = InMemoryTaskStore::new();
+    spawn(
+        &store,
+        "raw-parent-finished",
+        "parent-a",
+        "raw-parent-finished-session",
+    );
+    record_status(
+        &store,
+        "raw-parent-finished",
+        &DetachedSubagentStatus::Completed {
+            output: "done".into(),
+            iterations: 1,
+        },
+    )
+    .unwrap();
+    let completion_store = InMemoryCompletionStore::new();
+    let completions = CompletionRouter::new(Arc::new(completion_store.clone()));
+
+    let outcome = wait_detached_or_durable_with_owners(
+        &registry(),
+        &store,
+        &completions,
+        "raw-parent-finished",
+        DetachedSubagentOwners::new("tenant-a::parent-a", "parent-a"),
+        Duration::ZERO,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        WaitOutcome::Terminal(DetachedSubagentStatus::Completed { output, .. }) if output == "done"
+    ));
+    assert_eq!(
+        completion_store.get("raw-parent-finished").unwrap().state,
+        tinyagents_tasks::CompletionState::Tombstoned
+    );
+}
+
+#[test]
+fn cancel_after_restart_uses_raw_parent_and_returns_raw_parent_metadata() {
+    let store = InMemoryTaskStore::new();
+    spawn(
+        &store,
+        "raw-parent-cancel",
+        "parent-a",
+        "raw-parent-cancel-session",
+    );
+    let completion_store = InMemoryCompletionStore::new();
+    let completions = CompletionRouter::new(Arc::new(completion_store.clone()));
+
+    let outcome = cancel_detached_or_durable_with_owners(
+        &registry(),
+        &store,
+        &completions,
+        "raw-parent-cancel",
+        DetachedSubagentOwners::new("tenant-a::parent-a", "parent-a"),
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        CancelDetachedOutcome::Cancelled { metadata }
+            if metadata.parent_session == "parent-a"
+                && metadata.task_id == "raw-parent-cancel"
+    ));
+    assert_eq!(
+        store.get(&TaskId::new("raw-parent-cancel")).unwrap().status,
+        OrchestrationTaskStatus::Cancelled
+    );
+    assert_eq!(
+        completion_store.get("raw-parent-cancel").unwrap().state,
+        tinyagents_tasks::CompletionState::Tombstoned
+    );
+}
+
+#[tokio::test]
+async fn wait_all_threads_split_owners_through_deadline_recovery() {
+    let store = InMemoryTaskStore::new();
+    spawn(&store, "raw-parent-done-a", "parent-a", "session-a");
+    spawn(&store, "raw-parent-done-b", "parent-a", "session-b");
+    for task_id in ["raw-parent-done-a", "raw-parent-done-b"] {
+        record_status(
+            &store,
+            task_id,
+            &DetachedSubagentStatus::Completed {
+                output: task_id.into(),
+                iterations: 1,
+            },
+        )
+        .unwrap();
+    }
+    let completions = CompletionRouter::new(Arc::new(InMemoryCompletionStore::new()));
+    let task_ids = vec!["raw-parent-done-a".into(), "raw-parent-done-b".into()];
+
+    let results = wait_all_detached_with_owners(
+        &registry(),
+        &store,
+        &completions,
+        &task_ids,
+        DetachedSubagentOwners::new("tenant-a::parent-a", "parent-a"),
+        Duration::ZERO,
+    )
+    .await;
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|item| matches!(
+        &item.result,
+        Ok(WaitOutcome::Terminal(
+            DetachedSubagentStatus::Completed { .. }
+        ))
+    )));
+}
+
 #[tokio::test]
 async fn live_foreign_task_id_is_not_hidden_by_empty_profile_store() {
     let registry = registry();

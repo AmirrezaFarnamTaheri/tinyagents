@@ -17,7 +17,8 @@ use super::roster::{
 };
 use super::status::wait_detached;
 use super::types::{
-    DetachedSubagentStatus, SubagentIdentity, SubagentResumeRef, WaitError, WaitOutcome,
+    DetachedSubagentOwners, DetachedSubagentStatus, SubagentIdentity, SubagentResumeRef, WaitError,
+    WaitOutcome,
 };
 
 /// Waits on a live task first, then reads its durable record when the runtime
@@ -33,13 +34,36 @@ pub async fn wait_detached_or_durable<M>(
 where
     M: Clone + Send + Sync + 'static,
 {
-    match wait_detached(registry, task_id, owner, timeout).await {
+    wait_detached_or_durable_with_owners(
+        registry,
+        store,
+        completions,
+        task_id,
+        DetachedSubagentOwners::same(owner),
+        timeout,
+    )
+    .await
+}
+
+/// Waits using separate live-registry and durable-ledger ownership identities.
+pub async fn wait_detached_or_durable_with_owners<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    store: &dyn TaskStore,
+    completions: &CompletionRouter,
+    task_id: &str,
+    owners: DetachedSubagentOwners<'_>,
+    timeout: Duration,
+) -> Result<WaitOutcome, WaitError>
+where
+    M: Clone + Send + Sync + 'static,
+{
+    match wait_detached(registry, task_id, owners.live_owner, timeout).await {
         Ok(outcome) => {
             tombstone_collected_completion(completions, task_id, &outcome)?;
             Ok(outcome)
         }
         Err(WaitError::Unknown) => {
-            let record = subagent_record_for_task(store, task_id, owner)?;
+            let record = subagent_record_for_task(store, task_id, owners.durable_parent_session)?;
             let outcome = record_to_wait_outcome(record);
             tombstone_collected_completion(completions, task_id, &outcome)?;
             Ok(outcome)
@@ -75,13 +99,31 @@ pub fn resolve_detached_or_durable<M>(
 where
     M: SubagentIdentity + Clone + Send + Sync + 'static,
 {
-    match resume_ref_for_task(registry, id_or_session, owner) {
+    resolve_detached_or_durable_with_owners(
+        registry,
+        store,
+        id_or_session,
+        DetachedSubagentOwners::same(owner),
+    )
+}
+
+/// Resolves a live task or durable record using separate ownership identities.
+pub fn resolve_detached_or_durable_with_owners<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    store: &dyn TaskStore,
+    id_or_session: &str,
+    owners: DetachedSubagentOwners<'_>,
+) -> Result<SubagentResumeRef, WaitError>
+where
+    M: SubagentIdentity + Clone + Send + Sync + 'static,
+{
+    match resume_ref_for_task(registry, id_or_session, owners.live_owner) {
         Ok(resolved) => return Ok(resolved),
         Err(WaitError::Unknown) => {}
         Err(error) => return Err(error),
     }
-    match task_id_for_session(registry, id_or_session, owner) {
-        Ok(task_id) => match resume_ref_for_task(registry, &task_id, owner) {
+    match task_id_for_session(registry, id_or_session, owners.live_owner) {
+        Ok(task_id) => match resume_ref_for_task(registry, &task_id, owners.live_owner) {
             Ok(resolved) => return Ok(resolved),
             // The entry may have finished and been pruned between session
             // lookup and snapshot. Durable recovery is appropriate only now
@@ -93,7 +135,7 @@ where
         Err(error) => return Err(error),
     }
 
-    let direct = subagent_record_for_task(store, id_or_session, owner);
+    let direct = subagent_record_for_task(store, id_or_session, owners.durable_parent_session);
     let record = match direct {
         Ok(record) => record,
         Err(WaitError::NotOwned) => return Err(WaitError::NotOwned),
@@ -101,9 +143,9 @@ where
             let task_id = task_id_for_session_in_records(
                 super::ledger::list_subagent_records(store),
                 id_or_session,
-                owner,
+                owners.durable_parent_session,
             )?;
-            subagent_record_for_task(store, &task_id, owner)?
+            subagent_record_for_task(store, &task_id, owners.durable_parent_session)?
         }
         Err(error) => return Err(error),
     };
@@ -153,17 +195,39 @@ pub fn cancel_detached_or_durable<M>(
 where
     M: SubagentIdentity + Clone + Send + Sync + 'static,
 {
-    match registry.cancel(&TaskId::new(task_id), owner) {
+    cancel_detached_or_durable_with_owners(
+        registry,
+        store,
+        completions,
+        task_id,
+        DetachedSubagentOwners::same(owner),
+    )
+}
+
+/// Cancels using separate live-registry and durable-ledger ownership identities.
+/// Cancellation metadata retains the raw durable parent session.
+pub fn cancel_detached_or_durable_with_owners<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    store: &dyn TaskStore,
+    completions: &CompletionRouter,
+    task_id: &str,
+    owners: DetachedSubagentOwners<'_>,
+) -> Result<CancelDetachedOutcome, WaitError>
+where
+    M: SubagentIdentity + Clone + Send + Sync + 'static,
+{
+    match registry.cancel(&TaskId::new(task_id), owners.live_owner) {
         Ok(cancelled) => {
             if cancelled.status.finished_outcome().is_some() {
                 completions
                     .tombstone(task_id)
                     .map_err(|_| WaitError::Unknown)?;
-                let record = subagent_record_for_task(store, task_id, owner)?;
+                let record =
+                    subagent_record_for_task(store, task_id, owners.durable_parent_session)?;
                 return Ok(CancelDetachedOutcome::AlreadyFinished {
                     metadata: CancelledSubagentMetadata {
                         task_id: task_id.to_string(),
-                        parent_session: owner.to_string(),
+                        parent_session: owners.durable_parent_session.to_string(),
                         agent_id: cancelled.metadata.agent_id().to_string(),
                         subagent_session_id: cancelled
                             .metadata
@@ -180,7 +244,7 @@ where
             Ok(CancelDetachedOutcome::Cancelled {
                 metadata: CancelledSubagentMetadata {
                     task_id: task_id.to_string(),
-                    parent_session: owner.to_string(),
+                    parent_session: owners.durable_parent_session.to_string(),
                     agent_id: cancelled.metadata.agent_id().to_string(),
                     subagent_session_id: cancelled
                         .metadata
@@ -192,13 +256,17 @@ where
         Err(DetachedTaskRegistryError::NotOwned) => Err(WaitError::NotOwned),
         Err(DetachedTaskRegistryError::LockPoisoned) => Err(WaitError::RegistryPoisoned),
         Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::AlreadyDone) => {
-            let record = subagent_record_for_task(store, task_id, owner)?;
+            let record = subagent_record_for_task(store, task_id, owners.durable_parent_session)?;
             if record.is_terminal() {
                 completions
                     .tombstone(task_id)
                     .map_err(|_| WaitError::Unknown)?;
                 Ok(CancelDetachedOutcome::AlreadyFinished {
-                    metadata: durable_cancel_metadata(task_id, owner, &record),
+                    metadata: durable_cancel_metadata(
+                        task_id,
+                        owners.durable_parent_session,
+                        &record,
+                    ),
                     outcome: record_to_wait_outcome(record),
                 })
             } else {
@@ -207,7 +275,11 @@ where
                     .map_err(|_| WaitError::Unknown)?;
                 record_cancelled(store, task_id).map_err(|_| WaitError::Unknown)?;
                 Ok(CancelDetachedOutcome::Cancelled {
-                    metadata: durable_cancel_metadata(task_id, owner, &record),
+                    metadata: durable_cancel_metadata(
+                        task_id,
+                        owners.durable_parent_session,
+                        &record,
+                    ),
                 })
             }
         }
@@ -250,12 +322,42 @@ pub async fn wait_all_detached<M>(
 where
     M: Clone + Send + Sync + 'static,
 {
+    wait_all_detached_with_owners(
+        registry,
+        store,
+        completions,
+        task_ids,
+        DetachedSubagentOwners::same(owner),
+        timeout,
+    )
+    .await
+}
+
+/// Waits for multiple child tasks with separate live and durable owner keys.
+pub async fn wait_all_detached_with_owners<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    store: &dyn TaskStore,
+    completions: &CompletionRouter,
+    task_ids: &[String],
+    owners: DetachedSubagentOwners<'_>,
+    timeout: Duration,
+) -> Vec<WaitAllItem>
+where
+    M: Clone + Send + Sync + 'static,
+{
     let deadline = Instant::now() + timeout;
     let mut results = Vec::with_capacity(task_ids.len());
     for task_id in task_ids {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let result =
-            wait_detached_or_durable(registry, store, completions, task_id, owner, remaining).await;
+        let result = wait_detached_or_durable_with_owners(
+            registry,
+            store,
+            completions,
+            task_id,
+            owners,
+            remaining,
+        )
+        .await;
         results.push(WaitAllItem {
             task_id: task_id.clone(),
             result,
@@ -264,12 +366,12 @@ where
             // Later records are still read from the durable ledger with zero
             // wait, so already-settled children remain visible after deadline.
             for task_id in &task_ids[results.len()..] {
-                let result = wait_detached_or_durable(
+                let result = wait_detached_or_durable_with_owners(
                     registry,
                     store,
                     completions,
                     task_id,
-                    owner,
+                    owners,
                     Duration::ZERO,
                 )
                 .await;
