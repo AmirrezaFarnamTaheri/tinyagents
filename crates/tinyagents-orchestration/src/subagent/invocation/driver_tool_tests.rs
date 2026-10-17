@@ -371,6 +371,72 @@ async fn background_request_with_delivery_target_returns_task_reference() {
     assert_eq!(value["task_id"], "worker-task");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn awaited_background_completion_commits_before_jobs_become_terminal() {
+    let jobs = SubAgentJobRegistry::new();
+    let callback_started = Arc::new(tokio::sync::Notify::new());
+    let release_callback = Arc::new(tokio::sync::Semaphore::new(0));
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "awaited-completion-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("awaited-completion-task".into()),
+    )
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(Arc::new(|_| "parent-owner".to_owned()))
+    .with_async_completion_handler({
+        let callback_started = callback_started.clone();
+        let release_callback = release_callback.clone();
+        move |_target, result| {
+            assert!(result.is_ok());
+            let callback_started = callback_started.clone();
+            let release_callback = release_callback.clone();
+            async move {
+                callback_started.notify_one();
+                release_callback.acquire().await.unwrap().forget();
+            }
+        }
+    });
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let accepted = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("call-await-completion"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let job_id = serde_json::from_str::<Value>(&accepted.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut waiter = Box::pin(jobs.wait_owned(&job_id, "parent-owner"));
+    tokio::select! {
+        biased;
+        result = &mut waiter => panic!("wait observed terminal status before host completion commit: {result:?}"),
+        _ = callback_started.notified() => {},
+    }
+    assert_eq!(jobs.get_owned(&job_id, "parent-owner").unwrap().status, SubAgentJobStatus::Running);
+    release_callback.add_permits(1);
+    assert_eq!(waiter.await.unwrap().status, SubAgentJobStatus::Completed);
+}
+
 #[test]
 fn subagent_driver_alias_preserves_host_name_description_and_schema() {
     let schema = json!({
