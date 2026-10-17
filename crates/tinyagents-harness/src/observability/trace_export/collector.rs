@@ -601,14 +601,25 @@ impl SpanCollector {
             } => {
                 if enrichment.validate().is_ok() {
                     let key = self.scoped_id(call_id.as_str());
+                    let mut projected = enrichment.clone();
+                    if self
+                        .generation_by_call
+                        .get(&key)
+                        .is_some_and(|index| self.spans[*index].status == SpanStatus::Error)
+                    {
+                        // A late host enrichment may retain provider and rate
+                        // metadata on a failed generation, but cannot imply a
+                        // completed-call charge.
+                        projected.estimated_cost_usd = None;
+                    }
                     if self.open_models.contains_key(&key) {
                         self.pending_generation_enrichment
                             .entry(key)
-                            .and_modify(|pending| merge_generation_enrichment(pending, enrichment))
-                            .or_insert_with(|| enrichment.clone());
+                            .and_modify(|pending| merge_generation_enrichment(pending, &projected))
+                            .or_insert(projected);
                     } else {
                         let run_id = RunId::new(self.active_run_id());
-                        let _ = self.enrich_generation(&run_id, call_id, enrichment.clone());
+                        let _ = self.enrich_generation(&run_id, call_id, projected);
                     }
                 }
             }

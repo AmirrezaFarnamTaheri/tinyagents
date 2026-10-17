@@ -1648,81 +1648,91 @@ fn generation_enrichment_is_run_scoped_replay_safe_and_validated_at_projection()
 
 #[test]
 fn generation_enrichment_before_model_failure_keeps_metadata_without_estimated_spend() {
-    let mut collector = SpanCollector::new(
-        TraceContext::new("trace-failed-enrichment", None).with_capture_content(true),
-    );
-    collector.record(&observation_in_run(
-        "run",
-        None,
-        "run",
-        0,
-        10,
-        AgentEvent::RunStarted {
-            run_id: RunId::new("run"),
-            thread_id: None,
-        },
-    ));
-    collector.record(&observation_in_run(
-        "run",
-        None,
-        "run",
-        1,
-        11,
-        AgentEvent::ModelStarted {
-            call_id: CallId::new("failed-call"),
-            model: "model-x".into(),
-        },
-    ));
-    collector.record(&observation_in_run(
-        "run",
-        None,
-        "run",
-        2,
-        12,
-        AgentEvent::GenerationEnriched {
-            call_id: CallId::new("failed-call"),
-            enrichment: GenerationEnrichment {
-                provider_id: Some("managed".into()),
-                pricing: Some(GenerationPricing {
-                    input_per_mtok_usd: Some(0.3),
-                    ..Default::default()
-                }),
-                estimated_cost_usd: Some(0.5),
+    for enrich_before_failure in [true, false] {
+        let mut collector = SpanCollector::new(
+            TraceContext::new("trace-failed-enrichment", None).with_capture_content(true),
+        );
+        collector.record(&observation_in_run(
+            "run",
+            None,
+            "run",
+            0,
+            10,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("run"),
+                thread_id: None,
             },
-        },
-    ));
-    collector.record(&observation_in_run(
-        "run",
-        None,
-        "run",
-        3,
-        20,
-        AgentEvent::ModelFailed {
-            call_id: CallId::new("failed-call"),
-            model: "model-x".into(),
-            started_at_ms: Some(11),
-            attempts: Some(1),
-            error: "provider unavailable".into(),
-        },
-    ));
+        ));
+        let enrichment = observation_in_run(
+            "run",
+            None,
+            "run",
+            if enrich_before_failure { 2 } else { 4 },
+            if enrich_before_failure { 12 } else { 21 },
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("failed-call"),
+                enrichment: GenerationEnrichment {
+                    provider_id: Some("managed".into()),
+                    pricing: Some(GenerationPricing {
+                        input_per_mtok_usd: Some(0.3),
+                        ..Default::default()
+                    }),
+                    estimated_cost_usd: Some(0.5),
+                },
+            },
+        );
+        let started = observation_in_run(
+            "run",
+            None,
+            "run",
+            1,
+            11,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("failed-call"),
+                model: "model-x".into(),
+            },
+        );
+        let failed = observation_in_run(
+            "run",
+            None,
+            "run",
+            3,
+            20,
+            AgentEvent::ModelFailed {
+                call_id: CallId::new("failed-call"),
+                model: "model-x".into(),
+                started_at_ms: Some(11),
+                attempts: Some(1),
+                error: "provider unavailable".into(),
+            },
+        );
+        collector.record(&started);
+        if enrich_before_failure {
+            collector.record(&enrichment);
+            collector.record(&failed);
+        } else {
+            collector.record(&failed);
+            collector.record(&enrichment);
+        }
 
-    let generation = collector
-        .spans()
-        .iter()
-        .find(|span| span.kind == SpanKind::Generation)
-        .expect("failed model generation");
-    assert_eq!(generation.status, SpanStatus::Error);
-    assert_eq!(generation.end_unix_ms, Some(20));
-    assert_eq!(
-        generation.attributes["error.message"],
-        "provider unavailable"
-    );
-    assert_eq!(generation.attributes["gen_ai.provider"], "managed");
-    assert_eq!(
-        generation.attributes["gen_ai.pricing.input_per_mtok_usd"],
-        0.3
-    );
-    assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
+        let generation = collector
+            .spans()
+            .iter()
+            .find(|span| span.kind == SpanKind::Generation)
+            .expect("failed model generation");
+        assert_eq!(generation.status, SpanStatus::Error);
+        assert_eq!(generation.end_unix_ms, Some(20));
+        assert_eq!(
+            generation.attributes["error.message"],
+            "provider unavailable"
+        );
+        assert_eq!(generation.attributes["gen_ai.provider"], "managed");
+        assert_eq!(
+            generation.attributes["gen_ai.pricing.input_per_mtok_usd"],
+            0.3
+        );
+        assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
+    }
 }
 
 #[test]
