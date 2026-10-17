@@ -265,10 +265,33 @@ pub fn deterministic_final_summary(
 /// Matching normalizes case and whitespace and requires at least 24 chars, so
 /// short common phrases do not spuriously reject a reply.
 pub fn quotes_harness_instruction(candidate: &str, phrases: &[&str]) -> bool {
+    quotes_harness_instruction_with_minimum(candidate, phrases, 24)
+}
+
+/// Normalize host-provided directive sources and return spans with enough
+/// words to serve as quote-detection needles.
+///
+/// Sources are split on sentence periods and newlines, lowercased, and
+/// whitespace-collapsed before filtering. Hosts own the directive text and
+/// select the minimum word count appropriate to their policy.
+pub fn harness_instruction_needles(sources: &[&str], minimum_words: usize) -> Vec<String> {
+    sources
+        .iter()
+        .flat_map(|source| source.split(['.', '\n']))
+        .map(normalize)
+        .filter(|span| span.split_whitespace().count() >= minimum_words)
+        .collect()
+}
+
+fn quotes_harness_instruction_with_minimum(
+    candidate: &str,
+    phrases: &[&str],
+    minimum_chars: usize,
+) -> bool {
     let candidate = normalize(candidate);
     phrases.iter().any(|phrase| {
         let phrase = normalize(phrase);
-        phrase.chars().count() >= 24 && candidate.contains(&phrase)
+        phrase.chars().count() >= minimum_chars && candidate.contains(&phrase)
     })
 }
 
@@ -332,6 +355,10 @@ pub struct CloseRequestOptions<'a> {
     pub temperature: Option<f64>,
     /// Maximum number of output tokens for every request in the operation.
     pub max_output_tokens: Option<u32>,
+    /// Minimum normalized phrase length checked by grounded close.
+    /// Defaults to 24 Unicode characters for compatibility with the legacy
+    /// quote guard. Hosts that prefilter needles by word count may lower it.
+    pub minimum_harness_phrase_chars: usize,
     /// Observe each request's terminal completion before validation or retry.
     /// `Some(response)` means the model completed; `None` means the request
     /// failed or its stream ended without a completed response. The callback
@@ -346,9 +373,30 @@ impl Default for CloseRequestOptions<'_> {
             model: None,
             temperature: None,
             max_output_tokens: None,
+            minimum_harness_phrase_chars: 24,
             on_call_completed: None,
         }
     }
+}
+
+/// Placement of a deterministic required-output block after an unusable
+/// repair response.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RequiredOutputFallbackPlacement {
+    /// Preserve the TinyAgents legacy order: reply, then synthesized block.
+    #[default]
+    Append,
+    /// Put the block before an unstreamed reply, as some hosts require.
+    /// Already-streamed replies always receive the block as a suffix.
+    Prepend,
+}
+
+/// Request settings and fallback placement for required-output repair.
+pub struct RequiredOutputRepairOptions<'a> {
+    /// Model-call settings and completion observer.
+    pub request: CloseRequestOptions<'a>,
+    /// Where to place a deterministic block when the model repair is unusable.
+    pub fallback_placement: RequiredOutputFallbackPlacement,
 }
 
 /// Ask, screen, separately verify, and repair at most once. Every call uses a
@@ -446,7 +494,11 @@ where
         let candidate = candidate.trim().to_owned();
         let violation = if candidate.is_empty() || has_tool_call {
             Some(CloseViolation::NoReply)
-        } else if quotes_harness_instruction(&candidate, config.harness_phrases) {
+        } else if quotes_harness_instruction_with_minimum(
+            &candidate,
+            config.harness_phrases,
+            options.minimum_harness_phrase_chars,
+        ) {
             Some(CloseViolation::QuotedInstruction)
         } else {
             let verify_prompt = (config.verification_prompt)(&candidate);
@@ -513,6 +565,7 @@ where
         dialect,
         config,
         CloseRequestOptions::default(),
+        RequiredOutputFallbackPlacement::Append,
         false,
     )
     .await
@@ -533,7 +586,41 @@ where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
-    repair_required_output_impl(model, state, dialect, config, options, true).await
+    repair_required_output_with_repair_options(
+        model,
+        state,
+        dialect,
+        config,
+        RequiredOutputRepairOptions {
+            request: options,
+            fallback_placement: RequiredOutputFallbackPlacement::Append,
+        },
+    )
+    .await
+}
+
+/// Repair required output with request and fallback-placement options.
+pub async fn repair_required_output_with_repair_options<State, M>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    config: RequiredOutputRepairConfig<'_>,
+    options: RequiredOutputRepairOptions<'_>,
+) -> Option<RequiredOutputRepair>
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+{
+    repair_required_output_impl(
+        model,
+        state,
+        dialect,
+        config,
+        options.request,
+        options.fallback_placement,
+        true,
+    )
+    .await
 }
 
 async fn repair_required_output_impl<State, M>(
@@ -542,6 +629,7 @@ async fn repair_required_output_impl<State, M>(
     dialect: &dyn ToolDialect,
     config: RequiredOutputRepairConfig<'_>,
     mut options: CloseRequestOptions<'_>,
+    fallback_placement: RequiredOutputFallbackPlacement,
     stream: bool,
 ) -> Option<RequiredOutputRepair>
 where
@@ -578,6 +666,8 @@ where
         format!("{}\n\n{block}", config.reply)
     } else if usable {
         candidate
+    } else if fallback_placement == RequiredOutputFallbackPlacement::Prepend {
+        format!("{}\n\n{}", synthesize_block(config.contract), config.reply)
     } else {
         format!("{}\n\n{}", config.reply, synthesize_block(config.contract))
     };

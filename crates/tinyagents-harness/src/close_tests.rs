@@ -143,6 +143,7 @@ fn legacy_and_options_close_futures_remain_send() {
             model: None,
             temperature: None,
             max_output_tokens: Some(32),
+            minimum_harness_phrase_chars: 24,
             on_call_completed: Some(&mut callback),
         },
     ));
@@ -243,6 +244,54 @@ fn harness_quote_matching_normalizes_whitespace_but_ignores_short_phrases() {
 }
 
 #[test]
+fn harness_needles_split_normalize_and_filter_by_host_word_count() {
+    assert_eq!(
+        harness_instruction_needles(&["One TWO. short\nThree FOUR Five"], 3),
+        ["three four five"]
+    );
+    let needle = harness_instruction_needles(&["a b c d e f g h i j"], 10);
+    assert_eq!(needle, ["a b c d e f g h i j"]);
+    assert!(!quotes_harness_instruction(
+        "a b c d e f g h i j",
+        &["a b c d e f g h i j"]
+    ));
+    assert!(quotes_harness_instruction_with_minimum(
+        "a b c d e f g h i j",
+        &needle.iter().map(String::as_str).collect::<Vec<_>>(),
+        1,
+    ));
+}
+
+#[tokio::test]
+async fn options_quote_threshold_catches_short_prefiltered_host_needles() {
+    let needles = harness_instruction_needles(&["a b c d e f g h i j"], 10);
+    let phrase_refs = needles.iter().map(String::as_str).collect::<Vec<_>>();
+    let model = scripted_model(&["a b c d e f g h i j", "safe answer", "ACCEPT"]);
+    let output = grounded_close_with_options(
+        &model,
+        &(),
+        &NativeDialect,
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close",
+            verification_prompt: |reply: &str| format!("verify {reply}"),
+            repair_instruction: |violation| format!("repair {violation:?}"),
+            harness_phrases: &phrase_refs,
+            budget: None,
+            deterministic_fallback: || "fallback".to_owned(),
+        },
+        CloseRequestOptions {
+            minimum_harness_phrase_chars: 1,
+            ..CloseRequestOptions::default()
+        },
+    )
+    .await;
+
+    assert_eq!(output.text, "safe answer");
+    assert_eq!(model.requests.lock().unwrap().len(), 3);
+}
+
+#[test]
 fn result_truncation_respects_unicode_character_boundaries() {
     assert_eq!(truncate_chars("  你好世界  ", 2), "你好… [truncated]");
 }
@@ -326,6 +375,7 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
             model: Some("host-close-model"),
             temperature: Some(0.25),
             max_output_tokens: Some(37),
+            minimum_harness_phrase_chars: 24,
             on_call_completed: Some(&mut on_response),
         },
     )
@@ -389,6 +439,7 @@ async fn close_options_use_buffered_text_when_completed_response_is_empty_or_whi
             model: Some("stream-close-model"),
             temperature: Some(0.4),
             max_output_tokens: Some(33),
+            minimum_harness_phrase_chars: 24,
             on_call_completed: Some(&mut on_call_completed),
         },
     )
@@ -480,6 +531,7 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
             model: None,
             temperature: None,
             max_output_tokens: Some(21),
+            minimum_harness_phrase_chars: 24,
             on_call_completed: Some(&mut on_response),
         },
     )
@@ -571,6 +623,7 @@ async fn completed_close_usage_survives_a_pending_verifier_timeout() {
                 model: None,
                 temperature: None,
                 max_output_tokens: Some(22),
+                minimum_harness_phrase_chars: 24,
                 on_call_completed: Some(&mut on_response),
             },
         )
@@ -660,6 +713,7 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
             model: None,
             temperature: None,
             max_output_tokens: Some(19),
+            minimum_harness_phrase_chars: 24,
             on_call_completed: Some(&mut on_response),
         },
     )
@@ -690,5 +744,62 @@ async fn required_output_repair_replaces_or_appends_and_synthesizes_when_invalid
     assert_eq!(
         invalid.requests.lock().unwrap()[0].tool_choice,
         ToolChoice::None
+    );
+}
+
+#[tokio::test]
+async fn required_output_repair_preserves_host_placement_for_invalid_unstreamed_reply() {
+    let contract = crate::config::RequiredOutput::new("summary");
+    let model = scripted_model(&["not structured output"]);
+    let repaired = repair_required_output_with_repair_options(
+        &model,
+        &(),
+        &NativeDialect,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "original reply",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: false,
+        },
+        RequiredOutputRepairOptions {
+            request: CloseRequestOptions::default(),
+            fallback_placement: RequiredOutputFallbackPlacement::Prepend,
+        },
+    )
+    .await
+    .expect("missing output triggers repair");
+
+    assert!(!repaired.model_repaired);
+    assert_eq!(repaired.text, "{\"summary\":\"\"}\n\noriginal reply");
+}
+
+#[tokio::test]
+async fn required_output_repair_keeps_valid_streamed_repair_as_suffix() {
+    let contract = crate::config::RequiredOutput::new("summary");
+    let model = scripted_model(&["{\"summary\":\"repaired\"}"]);
+    let repaired = repair_required_output_with_repair_options(
+        &model,
+        &(),
+        &NativeDialect,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "already streamed",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: true,
+        },
+        RequiredOutputRepairOptions {
+            request: CloseRequestOptions::default(),
+            fallback_placement: RequiredOutputFallbackPlacement::Prepend,
+        },
+    )
+    .await
+    .expect("missing output triggers repair");
+
+    assert!(repaired.model_repaired);
+    assert_eq!(
+        repaired.text,
+        "already streamed\n\n{\"summary\":\"repaired\"}"
     );
 }
