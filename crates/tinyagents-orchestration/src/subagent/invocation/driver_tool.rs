@@ -50,8 +50,7 @@ type CompletionCallback =
     dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync;
 type AsyncCompletionCallback = dyn Fn(
         String,
-        Result<crate::subagent::SubagentOutcome, String>,
-        bool,
+        Result<crate::subagent::SubagentRunResult, String>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>
     + Send
     + Sync;
@@ -214,8 +213,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         mut self,
         handler: impl Fn(
                 String,
-                Result<crate::subagent::SubagentOutcome, String>,
-                bool,
+                Result<crate::subagent::SubagentRunResult, String>,
             ) -> Fut
             + Send
             + Sync
@@ -224,8 +222,8 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.async_completion = Some(Arc::new(move |target, result, emit_host_effects| {
-            Box::pin(handler(target, result, emit_host_effects))
+        self.async_completion = Some(Arc::new(move |target, result| {
+            Box::pin(handler(target, result))
         }));
         self
     }
@@ -317,12 +315,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
-                        let emit_host_effects = result.should_emit_host_effects();
                         if let Some(completion) = async_completion {
                             completion(
                                 completion_target.clone(),
-                                Ok(result.outcome.clone()),
-                                emit_host_effects,
+                                Ok(result.clone()),
                             )
                             .await;
                         }
