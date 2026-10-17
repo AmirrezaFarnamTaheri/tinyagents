@@ -10,7 +10,34 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_runtime::ToolSnapshot;
 use tinyinference_llm::message::Message;
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
+use tinyinference_llm::tool::ToolCall;
+
+struct CloseCorrectionModel(std::sync::atomic::AtomicUsize);
+
+#[async_trait]
+impl ChatModel<()> for CloseCorrectionModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        let call = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call < 2 {
+            let id = if call == 0 {
+                "foreign-session"
+            } else {
+                "owned-session"
+            };
+            let mut response = ModelResponse::assistant("");
+            response.message.tool_calls.push(ToolCall::new(
+                format!("close-{call}"),
+                "subagent_jobs",
+                json!({"action": "close", "job_id": id}),
+            ));
+            Ok(response)
+        } else {
+            Ok(ModelResponse::assistant("finished"))
+        }
+    }
+}
 
 struct Planner;
 
@@ -173,6 +200,241 @@ impl SubagentSessionStore for SingleSessionStore {
         session.latest_error = Some(error);
         Ok(true)
     }
+}
+
+fn selector_test_session() -> DurableSubagentSession {
+    DurableSubagentSession {
+        subagent_session_id: "owned-session".into(),
+        parent_session: "durable-parent".into(),
+        parent_thread_id: None,
+        worker_thread_id: None,
+        agent_id: "worker".into(),
+        display_name: None,
+        model: None,
+        sandbox_mode: "none".into(),
+        action_root: None,
+        task_key: "task".into(),
+        lifecycle_key: None,
+        task_title: "Task".into(),
+        current_task_id: Some("task".into()),
+        status: DurableSubagentStatus::Running,
+        reusable: true,
+        latest_history: None,
+        latest_error: None,
+        created_at: "created".into(),
+        updated_at: "updated".into(),
+        last_used_at: "used".into(),
+    }
+}
+
+#[tokio::test]
+async fn model_can_correct_foreign_durable_close_and_continue_to_owned_close() {
+    let session = Arc::new(std::sync::Mutex::new(selector_test_session()));
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_sessions(Arc::new(SingleSessionStore(session.clone())), |_| {
+            "durable-parent".into()
+        })
+        .recover_selector_errors();
+    let model = Arc::new(CloseCorrectionModel(std::sync::atomic::AtomicUsize::new(0)));
+    let mut harness = AgentHarness::new();
+    harness.register_model("script", model.clone());
+    harness.register_tool_dispatch(Arc::new(jobs));
+
+    let run = harness
+        .invoke(
+            &(),
+            (),
+            RunConfig::new("selector-recovery"),
+            vec![Message::user("close the session")],
+        )
+        .await
+        .expect("the parent run should continue after correcting a foreign selector");
+
+    assert_eq!(model.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+    assert!(
+        run.messages
+            .iter()
+            .any(|message| message.text().contains("finished"))
+    );
+    let closed = session.lock().unwrap();
+    assert_eq!(closed.status, DurableSubagentStatus::Closed);
+    assert!(!closed.reusable);
+}
+
+#[tokio::test]
+async fn selector_misses_remain_fatal_by_default() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new()).with_sessions(
+        Arc::new(SingleSessionStore(Arc::new(std::sync::Mutex::new(
+            selector_test_session(),
+        )))),
+        |_| "durable-parent".into(),
+    );
+    let parent = RunContext::new(RunConfig::new("selector-default"), ());
+    let error = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        CallId::new("close"),
+        json!({"action": "close", "job_id": "foreign-session"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("default jobs tools retain fatal dispatch behavior");
+
+    assert!(
+        error
+            .to_string()
+            .contains("durable subagent session not found")
+    );
+}
+
+struct FailingSessionGet;
+
+#[async_trait]
+impl SubagentSessionStore for FailingSessionGet {
+    async fn list_for_parent(
+        &self,
+        _: &str,
+        _: Option<&str>,
+    ) -> std::result::Result<Vec<DurableSubagentSession>, SubagentError> {
+        Ok(Vec::new())
+    }
+
+    async fn get(
+        &self,
+        _: &str,
+    ) -> std::result::Result<Option<DurableSubagentSession>, SubagentError> {
+        Err(SubagentError::Persistence("read failed".into()))
+    }
+
+    async fn upsert_running(
+        &self,
+        _: SubagentSessionUpsert,
+    ) -> std::result::Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        unreachable!("selector test does not create sessions")
+    }
+
+    async fn close(&self, _: &str) -> std::result::Result<bool, SubagentError> {
+        unreachable!("selector test does not close sessions")
+    }
+
+    async fn mark_finished(
+        &self,
+        _: &str,
+        _: &str,
+        _: DurableSubagentStatus,
+        _: Vec<Message>,
+    ) -> std::result::Result<bool, SubagentError> {
+        unreachable!("selector test does not update sessions")
+    }
+
+    async fn mark_failed(
+        &self,
+        _: &str,
+        _: &str,
+        _: String,
+    ) -> std::result::Result<bool, SubagentError> {
+        unreachable!("selector test does not update sessions")
+    }
+}
+
+struct FailingSessionClose(SingleSessionStore);
+
+#[async_trait]
+impl SubagentSessionStore for FailingSessionClose {
+    async fn list_for_parent(
+        &self,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> std::result::Result<Vec<DurableSubagentSession>, SubagentError> {
+        self.0
+            .list_for_parent(parent_session, parent_thread_id)
+            .await
+    }
+
+    async fn get(
+        &self,
+        id: &str,
+    ) -> std::result::Result<Option<DurableSubagentSession>, SubagentError> {
+        self.0.get(id).await
+    }
+
+    async fn upsert_running(
+        &self,
+        upsert: SubagentSessionUpsert,
+    ) -> std::result::Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        self.0.upsert_running(upsert).await
+    }
+
+    async fn close(&self, _: &str) -> std::result::Result<bool, SubagentError> {
+        Err(SubagentError::Persistence("close failed".into()))
+    }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> std::result::Result<bool, SubagentError> {
+        self.0.mark_finished(id, task_id, status, history).await
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> std::result::Result<bool, SubagentError> {
+        self.0.mark_failed(id, task_id, error).await
+    }
+}
+
+#[tokio::test]
+async fn recoverable_selector_policy_does_not_hide_session_store_errors() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_sessions(Arc::new(FailingSessionGet), |_| "durable-parent".into())
+        .recover_selector_errors();
+    let parent = RunContext::new(RunConfig::new("selector-store-error"), ());
+    let error = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        CallId::new("close"),
+        json!({"action": "close", "job_id": "foreign-session"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("storage failures remain fatal with selector recovery enabled");
+
+    assert!(error.to_string().contains("read failed"));
+    assert!(error.downcast_ref::<TinyAgentsError>().is_none());
+}
+
+#[tokio::test]
+async fn recoverable_selector_policy_does_not_hide_close_persistence_errors() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_sessions(
+            Arc::new(FailingSessionClose(SingleSessionStore(Arc::new(
+                std::sync::Mutex::new(selector_test_session()),
+            )))),
+            |_| "durable-parent".into(),
+        )
+        .recover_selector_errors();
+    let parent = RunContext::new(RunConfig::new("selector-close-error"), ());
+    let error = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        CallId::new("close"),
+        json!({"action": "close", "job_id": "owned-session"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("close persistence failures remain fatal with selector recovery enabled");
+
+    assert!(error.to_string().contains("close failed"));
+    assert!(error.downcast_ref::<TinyAgentsError>().is_none());
 }
 
 #[async_trait]
