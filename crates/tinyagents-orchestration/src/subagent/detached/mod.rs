@@ -43,7 +43,9 @@ pub use ledger::{
 };
 pub use ops::{
     CancelDetachedOutcome, CancelledSubagentMetadata, WaitAllItem, cancel_detached_or_durable,
-    resolve_detached_or_durable, wait_all_detached, wait_detached_or_durable,
+    cancel_detached_or_durable_with_owners, resolve_detached_or_durable,
+    resolve_detached_or_durable_with_owners, wait_all_detached, wait_all_detached_with_owners,
+    wait_detached_or_durable, wait_detached_or_durable_with_owners,
 };
 pub use roster::{
     resume_ref_for_task, resume_ref_from_record, snapshot_for_owner, task_id_for_session,
@@ -55,8 +57,8 @@ pub use steer::{
     queue_lane_name, steer_detached, steer_detached_with_request_id, steering_command_for_lane,
 };
 pub use types::{
-    DetachedSubagentStatus, FinishedOutcome, SpawnedSubagent, SubagentIdentity, SubagentResumeRef,
-    SubagentSnapshot, WaitError, WaitOutcome,
+    DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome, SpawnedSubagent,
+    SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitError, WaitOutcome,
 };
 
 #[cfg(test)]
