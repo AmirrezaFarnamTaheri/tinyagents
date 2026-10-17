@@ -1087,15 +1087,25 @@ impl SpanCollector {
 
     fn close_root(&mut self, at: u64, status: SpanStatus, outcome: &str) {
         let root = self.ensure_run_root(at);
-        self.spans[root]
-            .attributes
-            .insert("turn.outcome".into(), json_str(outcome));
+        let attrs = &mut self.spans[root].attributes;
+        let replacing_typed_stop = attrs.contains_key("turn.stop_turn") && outcome != "stopped";
+        attrs.insert("turn.outcome".into(), json_str(outcome));
+        if replacing_typed_stop {
+            attrs.remove("turn.stop_turn");
+            attrs.remove("turn.stop_kind");
+            attrs.remove("turn.stop_class");
+            attrs.remove("turn.stop_operation");
+            attrs.remove("turn.stop_limit");
+            attrs.remove("observation.level");
+            attrs.remove("observation.status_message");
+        }
         if status == SpanStatus::Error {
-            self.spans[root]
-                .attributes
-                .insert("error".into(), Value::Bool(true));
+            attrs.insert("error".into(), Value::Bool(true));
         }
         self.close_span(root, at, status);
+        if replacing_typed_stop {
+            self.spans[root].status = status;
+        }
     }
 
     fn close_completed_run(&mut self, outcome: Option<&crate::terminal::TerminalOutcome>, at: u64) {

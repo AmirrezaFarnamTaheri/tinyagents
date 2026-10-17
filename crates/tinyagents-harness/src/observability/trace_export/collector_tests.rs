@@ -839,6 +839,61 @@ fn turn_stop_never_overrides_native_failure_cancellation_or_timeout() {
 }
 
 #[test]
+fn later_native_failure_replaces_typed_stop_enrichment() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use crate::turn_stop::TurnStop;
+
+    let mut collector = SpanCollector::new(TraceContext::new("trace-late-failure", None));
+    collector.record(&observation(
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("run-late-failure"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation(
+        1,
+        20,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("run-late-failure"),
+            outcome: Some(TerminalOutcome::new(TerminalReason::Completed, "done")),
+        },
+    ));
+    collector.record(&observation(
+        2,
+        30,
+        AgentEvent::TurnStopped {
+            turn: 2,
+            stop: TurnStop::wind_down(),
+        },
+    ));
+    assert_eq!(collector.spans()[0].end_unix_ms, Some(20));
+
+    collector.record(&observation(
+        3,
+        40,
+        AgentEvent::RunFailed {
+            run_id: RunId::new("run-late-failure"),
+            error: "late failure".into(),
+            outcome: Some(TerminalOutcome::new(
+                TerminalReason::ToolFailed,
+                "late failure",
+            )),
+        },
+    ));
+
+    let root = &collector.spans()[0];
+    assert_eq!(root.status, SpanStatus::Error);
+    assert_eq!(root.attributes["turn.outcome"], "failed");
+    assert_eq!(root.attributes["error.message"], "late failure");
+    assert_eq!(root.end_unix_ms, Some(40));
+    assert!(!root.attributes.contains_key("turn.stop_kind"));
+    assert!(!root.attributes.contains_key("observation.level"));
+    assert!(!root.attributes.contains_key("observation.status_message"));
+}
+
+#[test]
 fn turn_stop_projection_sanitizes_public_operation_fields() {
     use crate::turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};
 
