@@ -39,6 +39,16 @@ impl TeamMemberExecutor for HangingExecutor {
     }
 }
 
+struct CountingExecutor(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl TeamMemberExecutor for CountingExecutor {
+    async fn execute(&self, _: &AgentTeamMember, _: &AgentTeamTask) -> Result<Vec<String>> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(vec!["unexpected second execution".into()])
+    }
+}
+
 struct PausedExecutor {
     entered: Arc<tokio::sync::Notify>,
     resume: Arc<tokio::sync::Notify>,
@@ -102,6 +112,89 @@ async fn start_member_runs_and_completes_claimed_task() {
         service.ledger().list_members(&team.team.id).unwrap()[0].member_status,
         AgentTeamMemberStatus::Idle
     );
+}
+
+#[tokio::test]
+async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
+    let dir = TempDir::new().unwrap();
+    // Independent handles prove the admission fence is durable and shared,
+    // rather than a mutex local to one TeamService instance.
+    let first_service = service(&dir);
+    let second_service = service(&dir);
+    let team = first_service
+        .create_team(
+            "lead",
+            None,
+            None,
+            &[NewMember {
+                name: "alice".into(),
+                agent_id: None,
+            }],
+        )
+        .unwrap();
+    let member = &team.members[0];
+    let first_task = first_service
+        .assign_task(&team.team.id, "first", None, Some(&member.id), &[])
+        .unwrap();
+    let second_task = first_service
+        .assign_task(&team.team.id, "second", None, Some(&member.id), &[])
+        .unwrap();
+
+    let first_entered = Arc::new(tokio::sync::Notify::new());
+    let first_entered_for_worker = Arc::clone(&first_entered);
+    let first_worker_service = first_service.clone();
+    let first_team_id = team.team.id.clone();
+    let first_task_id = first_task.id.clone();
+    let member_id = member.id.clone();
+    let first_worker = tokio::spawn(async move {
+        first_worker_service
+            .start_member(
+                &first_team_id,
+                &first_task_id,
+                &member_id,
+                &HangingExecutor(first_entered_for_worker),
+                false,
+            )
+            .await
+    });
+    first_entered.notified().await;
+
+    let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let second = second_service
+        .start_member(
+            &team.team.id,
+            &second_task.id,
+            &member.id,
+            &CountingExecutor(Arc::clone(&executions)),
+            false,
+        )
+        .await;
+
+    assert!(second.is_err(), "an active member must reject a second task");
+    assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let after = first_service.get_team(&team.team.id).unwrap().unwrap();
+    assert_eq!(after.members[0].member_status, AgentTeamMemberStatus::Active);
+    assert_eq!(
+        after.members[0].current_task_id.as_deref(),
+        Some(first_task.id.as_str())
+    );
+    let first_after = after
+        .tasks
+        .iter()
+        .find(|task| task.id == first_task.id)
+        .unwrap();
+    let second_after = after
+        .tasks
+        .iter()
+        .find(|task| task.id == second_task.id)
+        .unwrap();
+    assert_eq!(first_after.status, AgentTeamTaskStatus::InProgress);
+    assert!(first_after.claim_token.is_some());
+    assert_eq!(second_after.status, AgentTeamTaskStatus::Todo);
+    assert!(second_after.claim_token.is_none());
+
+    first_worker.abort();
+    assert!(first_worker.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

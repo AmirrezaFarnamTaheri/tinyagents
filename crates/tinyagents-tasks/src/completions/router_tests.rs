@@ -424,6 +424,54 @@ async fn release_makes_an_abandoned_claim_claimable_again() {
 }
 
 #[tokio::test]
+async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
+    use crate::completions::CompletionRouterPool;
+
+    let source_store = Arc::new(InMemoryCompletionStore::new());
+    let source_router = Arc::new(CompletionRouter::new(source_store.clone()));
+    source_router
+        .record(record("leased", "p").with_notify_mode(NotifyMode::Off))
+        .await
+        .unwrap();
+    let claimed = source_router.pull("p", 1).unwrap();
+    assert_eq!(ids(&claimed), ["leased"]);
+    assert_eq!(claimed[0].attempts, 1);
+
+    // This is the host's previous fallback/reopen path: copy records into a
+    // new store, construct a new router, and replace the pool entry.
+    let replacement_store = Arc::new(InMemoryCompletionStore::new());
+    for record in source_store.list(None) {
+        replacement_store.put(&record).unwrap();
+    }
+    let pool = CompletionRouterPool::new({
+        let source_router = Arc::clone(&source_router);
+        move |_| Arc::clone(&source_router)
+    });
+    let cached = pool.get_or_open(&"scope").unwrap();
+    assert!(Arc::ptr_eq(&cached, &source_router));
+    let replacement = Arc::new(CompletionRouter::new(replacement_store.clone()));
+    assert!(matches!(
+        pool.replace_if_current(&"scope", &source_router, Arc::clone(&replacement))
+            .unwrap(),
+        crate::completions::CompletionRouterReplaceOutcome::Replaced(_)
+    ));
+
+    let duplicate_claim = replacement.pull("p", 1).unwrap();
+    let old_ack = source_router.mark_delivered(&["leased"]).unwrap();
+    let replacement_record = replacement_store.get("leased").unwrap();
+    assert!(
+        duplicate_claim.is_empty(),
+        "a lease made before migration must suppress another claim"
+    );
+    assert_eq!(old_ack, 1);
+    assert_eq!(
+        replacement_record.state,
+        CompletionState::Delivered,
+        "the outstanding claim's acknowledgement must update the new store"
+    );
+}
+
+#[tokio::test]
 async fn recovery_note_skips_pull_only_and_leased_records() {
     let router = router();
     router
