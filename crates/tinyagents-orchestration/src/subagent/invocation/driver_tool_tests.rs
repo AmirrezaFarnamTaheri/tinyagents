@@ -446,8 +446,7 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
                 callback_started.notify_one();
                 release_callback.acquire().await.unwrap().forget();
             }
-        },
-        |_| None,
+        }
     });
     let parent = RunContext::new(RunConfig::new("parent"), ());
 
@@ -1229,6 +1228,7 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     let driver = blocking_driver(started.clone(), release.clone(), calls.clone());
     let parent = RunContext::new(RunConfig::new("cancel-parent"), ());
     let key = SubagentTaskKey::from_context(&parent, "cancel-task", None);
+    let request_key = key.clone();
     let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = Arc::new(|_| "parent-a".into());
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new(
@@ -1246,8 +1246,8 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
     }))
-    .with_driver(driver, {
-        let key = key.clone();
+    .with_driver(
+        driver,
         move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
@@ -1255,14 +1255,15 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
             SubagentRequest::fresh_from_parent(
                 parent,
                 child,
-                key.task_id.clone(),
+                request_key.task_id.clone(),
                 (),
                 args["prompt"].as_str().unwrap_or_default(),
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }
-    });
+        },
+        |_| None,
+    );
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
