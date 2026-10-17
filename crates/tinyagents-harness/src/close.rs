@@ -344,6 +344,10 @@ pub enum CloseRequestKind {
     RequiredOutputRepair,
 }
 
+/// Callback receiving the terminal outcome of one close-related model call.
+pub type CloseCallObserver<'a> =
+    &'a mut (dyn FnMut(CloseRequestKind, Option<&ModelResponse>) + Send);
+
 /// Per-request host settings shared by grounded close and required repair.
 ///
 /// The `*_with_options` entry points use streaming calls; legacy entry points
@@ -363,8 +367,7 @@ pub struct CloseRequestOptions<'a> {
     /// `Some(response)` means the model completed; `None` means the request
     /// failed or its stream ended without a completed response. The callback
     /// is not called for a timeout, a dropped request, or a zero time budget.
-    pub on_call_completed:
-        Option<&'a mut (dyn FnMut(CloseRequestKind, Option<&ModelResponse>) + Send)>,
+    pub on_call_completed: Option<CloseCallObserver<'a>>,
 }
 
 impl Default for CloseRequestOptions<'_> {
@@ -475,12 +478,14 @@ where
             model,
             state,
             dialect,
-            config.history,
-            &prompt,
-            remaining,
-            &mut options,
-            CloseRequestKind::Generation,
-            stream,
+            CompletionCall {
+                history: config.history,
+                prompt: &prompt,
+                timeout: remaining,
+                options: &mut options,
+                kind: CloseRequestKind::Generation,
+                stream_mode: stream,
+            },
         )
         .await
         else {
@@ -509,12 +514,14 @@ where
                 model,
                 state,
                 dialect,
-                &[],
-                &verify_prompt,
-                remaining,
-                &mut options,
-                CloseRequestKind::Verification,
-                stream,
+                CompletionCall {
+                    history: &[],
+                    prompt: &verify_prompt,
+                    timeout: remaining,
+                    options: &mut options,
+                    kind: CloseRequestKind::Verification,
+                    stream_mode: stream,
+                },
             )
             .await
             {
@@ -645,12 +652,14 @@ where
         model,
         state,
         dialect,
-        config.history,
-        config.repair_instruction,
-        None,
-        &mut options,
-        CloseRequestKind::RequiredOutputRepair,
-        stream,
+        CompletionCall {
+            history: config.history,
+            prompt: config.repair_instruction,
+            timeout: None,
+            options: &mut options,
+            kind: CloseRequestKind::RequiredOutputRepair,
+            stream_mode: stream,
+        },
     )
     .await;
     let (candidate, usage, has_tool_call) = attempted.unwrap_or_default();
@@ -678,22 +687,35 @@ where
     })
 }
 
+struct CompletionCall<'call, 'options> {
+    history: &'call [Message],
+    prompt: &'call str,
+    timeout: Option<std::time::Duration>,
+    options: &'call mut CloseRequestOptions<'options>,
+    kind: CloseRequestKind,
+    stream_mode: bool,
+}
+
 async fn completion<State, M>(
     model: &M,
     state: &State,
     dialect: &dyn ToolDialect,
-    history: &[Message],
-    prompt: &str,
-    timeout: Option<std::time::Duration>,
-    options: &mut CloseRequestOptions<'_>,
-    kind: CloseRequestKind,
-    stream_mode: bool,
+    call: CompletionCall<'_, '_>,
 ) -> Option<(String, Vec<Usage>, bool)>
 where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
     use futures::StreamExt;
+
+    let CompletionCall {
+        history,
+        prompt,
+        timeout,
+        options,
+        kind,
+        stream_mode,
+    } = call;
 
     if timeout.is_some_and(|limit| limit.is_zero()) {
         return None;
