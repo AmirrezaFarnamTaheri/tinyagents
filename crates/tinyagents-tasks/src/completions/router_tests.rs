@@ -574,6 +574,32 @@ struct FailingList {
     inner: InMemoryCompletionStore,
 }
 
+struct BlockingTryList {
+    inner: InMemoryCompletionStore,
+    entered: Arc<std::sync::Barrier>,
+    resume: Arc<std::sync::Barrier>,
+}
+
+impl CompletionStore for BlockingTryList {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        self.inner.get(task_id)
+    }
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+    fn try_list(
+        &self,
+        parent_key: Option<&str>,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        self.entered.wait();
+        self.resume.wait();
+        Ok(self.inner.list(parent_key))
+    }
+}
+
 impl CompletionStore for FailingList {
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.get(task_id)
@@ -627,6 +653,51 @@ fn a_source_enumeration_error_does_not_replace_the_store() {
         .replace_store_if_current(&source_port, destination_port)
         .is_err());
     assert!(Arc::ptr_eq(&router.store(), &source_port));
+}
+
+#[test]
+fn a_record_racing_store_migration_is_not_lost() {
+    let source = Arc::new(BlockingTryList {
+        inner: InMemoryCompletionStore::new(),
+        entered: Arc::new(std::sync::Barrier::new(2)),
+        resume: Arc::new(std::sync::Barrier::new(2)),
+    });
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = Arc::new(CompletionRouter::new(source_port.clone()));
+    source.put(&record("before", "p")).unwrap();
+    let destination = Arc::new(InMemoryCompletionStore::new());
+    let destination_port: Arc<dyn CompletionStore> = destination.clone();
+
+    let migrating_router = Arc::clone(&router);
+    let migrating_source = Arc::clone(&source_port);
+    let migrating_destination = Arc::clone(&destination_port);
+    let migration = std::thread::spawn(move || {
+        migrating_router
+            .replace_store_if_current(&migrating_source, migrating_destination)
+            .unwrap()
+    });
+    source.entered.wait();
+
+    let recording_router = Arc::clone(&router);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let record_task = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        started_tx.send(()).unwrap();
+        runtime.block_on(recording_router.record(record("during", "p")))
+    });
+    started_rx.recv().unwrap();
+    source.resume.wait();
+
+    assert!(matches!(
+        migration.join().unwrap(),
+        CompletionStoreReplaceOutcome::Replaced(_)
+    ));
+    record_task.join().unwrap().unwrap();
+    assert!(destination.get("before").is_some());
+    assert!(destination.get("during").is_some());
 }
 
 #[tokio::test]
