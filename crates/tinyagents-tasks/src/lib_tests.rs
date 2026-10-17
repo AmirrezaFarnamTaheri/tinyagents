@@ -311,6 +311,69 @@ async fn unbounded_batch_wait_resumes_until_terminal_and_timeout_can_be_retried(
     assert!(registry.is_empty().unwrap());
 }
 
+#[tokio::test(start_paused = true)]
+async fn batch_wait_uses_one_finite_deadline_for_every_child() {
+    let registry = runtime_registry();
+    let ids = [
+        TaskId::new("shared-deadline-first"),
+        TaskId::new("shared-deadline-second"),
+    ];
+    let (_first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (_second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "first".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "second".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+
+    let waiter_registry = registry.clone();
+    let waiter_ids = ids.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(
+                &waiter_ids,
+                "owner",
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        waiter.is_finished(),
+        "second child must not receive a fresh timeout budget"
+    );
+    let outcomes = waiter.await.unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|item| matches!(
+        item.outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    )));
+    assert_eq!(
+        registry.len().unwrap(),
+        2,
+        "timeout must leave both entries available"
+    );
+}
+
 #[tokio::test]
 async fn detached_registry_remembers_steer_request_ids_per_task() {
     let registry = runtime_registry();
