@@ -73,11 +73,22 @@ pub fn resolve_detached_or_durable<M>(
 where
     M: SubagentIdentity + Clone + Send + Sync + 'static,
 {
-    if let Ok(resolved) = resume_ref_for_task(registry, id_or_session, owner) {
-        return Ok(resolved);
+    match resume_ref_for_task(registry, id_or_session, owner) {
+        Ok(resolved) => return Ok(resolved),
+        Err(WaitError::Unknown) => {}
+        Err(error) => return Err(error),
     }
-    if let Ok(task_id) = task_id_for_session(registry, id_or_session, owner) {
-        return resume_ref_for_task(registry, &task_id, owner);
+    match task_id_for_session(registry, id_or_session, owner) {
+        Ok(task_id) => match resume_ref_for_task(registry, &task_id, owner) {
+            Ok(resolved) => return Ok(resolved),
+            // The entry may have finished and been pruned between session
+            // lookup and snapshot. Durable recovery is appropriate only now
+            // that neither live lookup can resolve the task.
+            Err(WaitError::Unknown) => {}
+            Err(error) => return Err(error),
+        },
+        Err(WaitError::Unknown) => {}
+        Err(error) => return Err(error),
     }
 
     let direct = subagent_record_for_task(store, id_or_session, owner);

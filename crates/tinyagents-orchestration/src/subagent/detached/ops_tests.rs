@@ -190,6 +190,144 @@ fn durable_session_id_resolves_to_task_metadata_after_restart() {
     );
 }
 
+#[tokio::test]
+async fn live_foreign_task_id_is_not_hidden_by_empty_profile_store() {
+    let registry = registry();
+    let store = InMemoryTaskStore::new();
+    let (_status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+    let task = tokio::spawn(std::future::pending::<()>());
+    registry
+        .register(
+            TaskId::new("foreign-live-task"),
+            "parent-a",
+            Metadata {
+                agent: "researcher".into(),
+                session: Some("foreign-worker-session".into()),
+            },
+            status_rx,
+            CancellationToken::new(),
+            task.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        resolve_detached_or_durable(&registry, &store, "foreign-live-task", "parent-b")
+            .unwrap_err(),
+        WaitError::NotOwned
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn live_foreign_session_id_is_not_hidden_by_empty_profile_store() {
+    let registry = registry();
+    let store = InMemoryTaskStore::new();
+    let (_status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+    let task = tokio::spawn(std::future::pending::<()>());
+    registry
+        .register(
+            TaskId::new("foreign-session-task"),
+            "parent-a",
+            Metadata {
+                agent: "researcher".into(),
+                session: Some("foreign-session-id".into()),
+            },
+            status_rx,
+            CancellationToken::new(),
+            task.abort_handle(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        resolve_detached_or_durable(&registry, &store, "foreign-session-id", "parent-b")
+            .unwrap_err(),
+        WaitError::NotOwned
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn owned_live_task_and_session_resolution_precede_durable_records() {
+    let store = InMemoryTaskStore::new();
+    spawn(
+        &store,
+        "durable-shadow",
+        "parent-a",
+        "shared-worker-session",
+    );
+    record_status(
+        &store,
+        "durable-shadow",
+        &DetachedSubagentStatus::Completed {
+            output: "old durable result".into(),
+            iterations: 1,
+        },
+    )
+    .unwrap();
+
+    let registry = registry();
+    let (_status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+    let task = tokio::spawn(std::future::pending::<()>());
+    registry
+        .register(
+            TaskId::new("live-task"),
+            "parent-a",
+            Metadata {
+                agent: "live-researcher".into(),
+                session: Some("shared-worker-session".into()),
+            },
+            status_rx,
+            CancellationToken::new(),
+            task.abort_handle(),
+        )
+        .unwrap();
+
+    let by_task = resolve_detached_or_durable(&registry, &store, "live-task", "parent-a").unwrap();
+    let by_session =
+        resolve_detached_or_durable(&registry, &store, "shared-worker-session", "parent-a")
+            .unwrap();
+    assert_eq!(by_task.task_id, "live-task");
+    assert_eq!(by_task.agent_id, "live-researcher");
+    assert_eq!(by_session.task_id, "live-task");
+    assert_eq!(by_session.agent_id, "live-researcher");
+    task.abort();
+}
+
+#[tokio::test]
+async fn exact_live_task_id_precedes_a_colliding_live_session_id() {
+    let registry = registry();
+    let store = InMemoryTaskStore::new();
+    let mut tasks = Vec::new();
+    for (task_id, session_id, agent_id) in [
+        ("collision", "first-session", "first-agent"),
+        ("other-task", "collision", "second-agent"),
+    ] {
+        let (_status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+        let task = tokio::spawn(std::future::pending::<()>());
+        registry
+            .register(
+                TaskId::new(task_id),
+                "parent-a",
+                Metadata {
+                    agent: agent_id.into(),
+                    session: Some(session_id.into()),
+                },
+                status_rx,
+                CancellationToken::new(),
+                task.abort_handle(),
+            )
+            .unwrap();
+        tasks.push(task);
+    }
+
+    let resolved = resolve_detached_or_durable(&registry, &store, "collision", "parent-a").unwrap();
+    assert_eq!(resolved.task_id, "collision");
+    assert_eq!(resolved.agent_id, "first-agent");
+    for task in tasks {
+        task.abort();
+    }
+}
+
 #[test]
 fn durable_cancel_settles_running_task_and_keeps_cancelled_metadata() {
     let store = InMemoryTaskStore::new();
