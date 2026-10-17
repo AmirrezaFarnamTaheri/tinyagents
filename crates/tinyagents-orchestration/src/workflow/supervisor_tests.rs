@@ -436,8 +436,10 @@ fn with_current_skips_stale_callback_and_serializes_current_callback() {
     let replacement_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let done = replacement_done.clone();
     let held_replacement = held.clone();
+    let (replacement_attempted_tx, replacement_attempted_rx) = std::sync::mpsc::channel();
     let supervisor_for_replacement = supervisor.clone();
     let replacement_thread = std::thread::spawn(move || {
+        replacement_attempted_tx.send(()).unwrap();
         let replacement = supervisor_for_replacement.start(
             "run",
             |_| futures::future::pending(),
@@ -447,6 +449,8 @@ fn with_current_skips_stale_callback_and_serializes_current_callback() {
         replacement
     });
 
+    replacement_attempted_rx.recv().unwrap();
+    assert!(matches!(supervisor.registry.try_lock(), Err(std::sync::TryLockError::WouldBlock)));
     assert!(!replacement_done.load(std::sync::atomic::Ordering::SeqCst));
     release_callback.wait();
     assert_eq!(callback_thread.join().unwrap(), Some(()));
