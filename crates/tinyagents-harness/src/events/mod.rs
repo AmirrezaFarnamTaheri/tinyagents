@@ -38,7 +38,6 @@ pub mod ordered_sender;
 pub use call_dedupe::{CallDedupe, IterationCursor, advance_iteration};
 pub use cap_pauser::{CapPauser, PauseRecorder};
 pub use compaction_log::log_compacted;
-pub(crate) use generation_enrichment::is_valid_provider_id;
 pub use generation_enrichment::{GenerationEnrichment, GenerationPricing};
 pub use ordered_sender::{DEFAULT_MAX_OVERFLOW, OrderedSender, SendFailure};
 pub use types::*;

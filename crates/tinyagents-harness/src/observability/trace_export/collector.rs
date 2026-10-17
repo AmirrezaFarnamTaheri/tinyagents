@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{Value, json};
 
-use crate::events::{AgentEvent, is_valid_provider_id};
+use crate::events::AgentEvent;
 use crate::ids::{CallId, RunId};
 use crate::observability::AgentObservation;
 
@@ -334,8 +334,15 @@ impl SpanCollector {
                 self.close_span(call.index, timestamp_ms, SpanStatus::Error);
                 self.put_error(call.index, error);
                 self.spans[call.index].start_unix_ms = start;
-                self.pending_generation_enrichment
-                    .remove(&self.scoped_id(call_id.as_str()));
+                let key = self.scoped_id(call_id.as_str());
+                if let Some(mut enrichment) = self.pending_generation_enrichment.remove(&key) {
+                    // Provider and price metadata remain useful for a failed
+                    // generation, but no host estimate represents a charge
+                    // unless the generation completed.
+                    enrichment.estimated_cost_usd = None;
+                    let run_id = RunId::new(self.active_run_id());
+                    let _ = self.enrich_generation(&run_id, call_id, enrichment);
+                }
             }
             AgentEvent::ToolStarted {
                 call_id,
@@ -592,15 +599,17 @@ impl SpanCollector {
                 call_id,
                 enrichment,
             } => {
-                let key = self.scoped_id(call_id.as_str());
-                if self.open_models.contains_key(&key) {
-                    self.pending_generation_enrichment
-                        .entry(key)
-                        .and_modify(|pending| merge_generation_enrichment(pending, enrichment))
-                        .or_insert_with(|| enrichment.clone());
-                } else {
-                    let run_id = RunId::new(self.active_run_id());
-                    let _ = self.enrich_generation(&run_id, call_id, enrichment.clone());
+                if enrichment.validate().is_ok() {
+                    let key = self.scoped_id(call_id.as_str());
+                    if self.open_models.contains_key(&key) {
+                        self.pending_generation_enrichment
+                            .entry(key)
+                            .and_modify(|pending| merge_generation_enrichment(pending, enrichment))
+                            .or_insert_with(|| enrichment.clone());
+                    } else {
+                        let run_id = RunId::new(self.active_run_id());
+                        let _ = self.enrich_generation(&run_id, call_id, enrichment.clone());
+                    }
                 }
             }
             AgentEvent::CostRecorded { cost } => {
@@ -803,10 +812,7 @@ impl SpanCollector {
         {
             return Err(GenerationEnrichmentError::InvalidPricing);
         }
-        if let Some(provider) = enrichment
-            .provider_id
-            .filter(|provider| is_valid_provider_id(provider))
-        {
+        if let Some(provider) = enrichment.provider_id {
             self.spans[index]
                 .attributes
                 .insert("gen_ai.provider".into(), json_str(&provider));
@@ -868,10 +874,12 @@ impl SpanCollector {
         self.pending_generation_enrichment
             .retain(|key, _| !key.starts_with(&prefix));
 
-        if let Some(root) = self.run_roots.get(run_key).copied()
-            && let Some(end) = self.spans[root].end_unix_ms
-        {
-            self.spans[root].end_unix_ms = Some(end.max(at));
+        if let Some(root) = self.run_roots.get(run_key).copied() {
+            if let Some(end) = self.spans[root].end_unix_ms {
+                self.spans[root].end_unix_ms = Some(end.max(at));
+            } else {
+                self.force_close_span(root, at);
+            }
         }
     }
 

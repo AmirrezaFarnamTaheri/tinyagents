@@ -56,7 +56,7 @@ impl<'de> Deserialize<'de> for GenerationEnrichment {
 }
 
 impl GenerationEnrichment {
-    fn validate(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self
             .provider_id
             .as_deref()
@@ -69,6 +69,9 @@ impl GenerationEnrichment {
             .is_some_and(|amount| !valid_usd(amount))
         {
             return Err("estimated_cost_usd must be finite and non-negative");
+        }
+        if let Some(pricing) = &self.pricing {
+            pricing.validate()?;
         }
         Ok(())
     }
