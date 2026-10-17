@@ -290,6 +290,44 @@ impl SubagentPersistence for Persistence {
     }
 }
 
+struct TerminalReplayPersistence(SubagentOutcome);
+
+#[async_trait]
+impl SubagentPersistence for TerminalReplayPersistence {
+    async fn load_terminal(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(Some(self.0.clone()))
+    }
+    async fn load(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentResume>, SubagentError> {
+        Ok(None)
+    }
+    async fn load_pause(
+        &self,
+        _: &SubagentTaskKey,
+    ) -> std::result::Result<Option<SubagentOutcome>, SubagentError> {
+        Ok(None)
+    }
+    async fn save_pause(
+        &self,
+        _: PersistedSubagentPause,
+    ) -> std::result::Result<SubagentPausePersistenceDisposition, SubagentError> {
+        Ok(SubagentPausePersistenceDisposition::Existing)
+    }
+    async fn record_terminal(
+        &self,
+        _: &SubagentTaskKey,
+        _: &SubagentOutcome,
+        _: Option<&SubagentResume>,
+    ) -> std::result::Result<SubagentTerminalPersistenceDisposition, SubagentError> {
+        Ok(SubagentTerminalPersistenceDisposition::Existing)
+    }
+}
+
 #[tokio::test]
 async fn background_request_without_delivery_target_runs_inline() {
     let tool = DriverSubAgentTool::new(
@@ -400,7 +438,7 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
     .with_async_completion_handler({
         let callback_started = callback_started.clone();
         let release_callback = release_callback.clone();
-        move |_target, result, _emit_host_effects| {
+        move |_target, result| {
             assert!(result.is_ok());
             let callback_started = callback_started.clone();
             let release_callback = release_callback.clone();
@@ -435,6 +473,92 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
     assert_eq!(jobs.get_owned(&job_id, "parent-owner").unwrap().status, SubAgentJobStatus::Running);
     release_callback.add_permits(1);
     assert_eq!(waiter.await.unwrap().status, SubAgentJobStatus::Completed);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_terminal() {
+    let jobs = SubAgentJobRegistry::new();
+    let callback_started = Arc::new(tokio::sync::Notify::new());
+    let release_callback = Arc::new(tokio::sync::Semaphore::new(0));
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let driver = Arc::new(
+        SubagentDriver::new(SubagentCapabilities {
+            planner: Some(Arc::new(Planner)),
+            executor: Some(Arc::new(Executor)),
+            persistence: Some(Arc::new(TerminalReplayPersistence(
+                SubagentOutcome::completed("replayed-task", "durable result"),
+            ))),
+        })
+        .unwrap(),
+    );
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "replayed-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("replayed-task".into()),
+    )
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(Arc::new(|_| "replay-owner".to_owned()))
+    .with_async_completion_handler({
+        let callback_started = callback_started.clone();
+        let release_callback = release_callback.clone();
+        let observed = observed.clone();
+        move |_target, result| {
+            let callback_started = callback_started.clone();
+            let release_callback = release_callback.clone();
+            let observed = observed.clone();
+            async move {
+                *observed.lock().unwrap() = result.ok();
+                callback_started.notify_one();
+                release_callback.acquire().await.unwrap().forget();
+            }
+        }
+    });
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+
+    let accepted = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("call-replayed-completion"),
+        json!({"input":"do work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let job_id = serde_json::from_str::<Value>(&accepted.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    callback_started.notified().await;
+    tokio::select! {
+        biased;
+        result = jobs.wait_owned(&job_id, "replay-owner") => {
+            panic!("replayed job became terminal before host repair: {result:?}");
+        }
+        _ = tokio::task::yield_now() => {}
+    }
+    let result = observed.lock().unwrap().clone().unwrap();
+    assert_eq!(result.disposition, SubagentPersistenceDisposition::TerminalExisting);
+    assert_eq!(result.outcome.output, "durable result");
+    release_callback.add_permits(1);
+    assert_eq!(
+        jobs.wait_owned(&job_id, "replay-owner").await.unwrap().status,
+        SubAgentJobStatus::Completed
+    );
 }
 
 #[test]

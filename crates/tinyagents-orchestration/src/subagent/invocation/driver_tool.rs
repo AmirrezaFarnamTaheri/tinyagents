@@ -315,7 +315,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
-                        if let Some(completion) = async_completion {
+                        if result.disposition
+                            != crate::subagent::SubagentPersistenceDisposition::ObserverCancelled
+                            && let Some(completion) = async_completion
+                        {
                             completion(
                                 completion_target.clone(),
                                 Ok(result.clone()),
@@ -337,7 +340,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     Err(error) => {
                         let error = error.to_string();
                         if let Some(completion) = async_completion {
-                            completion(completion_target.clone(), Err(error.clone()), true).await;
+                            completion(completion_target.clone(), Err(error.clone())).await;
                         }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Err(error.clone()));
