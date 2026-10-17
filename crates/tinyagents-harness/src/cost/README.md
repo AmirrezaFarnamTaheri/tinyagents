@@ -27,6 +27,10 @@ aggregation logic at every recursion boundary.
 - [`roll_up_subagent_usage`] (`types.rs`) — folds parent and nested child usage
   once by run identity, preserving token counts, cached-token subset semantics,
   child details and cost certainty across replayed completion rows.
+- [`UsageContribution`] and [`roll_up_inclusive_subagent_usage`] (`types.rs`)
+  — totals-only rollup for hosts whose flat child entries already include
+  descendant usage. Each entry is counted once without identity inference or
+  recursion; token sums saturate and cost certainty is retained.
 
 ## Files
 

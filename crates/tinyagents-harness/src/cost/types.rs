@@ -125,6 +125,62 @@ pub struct UsageRollup {
     pub subagents: Vec<SubagentUsage>,
 }
 
+/// Token and cost usage for a run whose delegated usage is already included.
+///
+/// This totals-only value is for hosts that record finalized, inclusive
+/// sub-agent entries without exposing run identity or a child tree. Each
+/// contribution passed to [`roll_up_inclusive_subagent_usage`] is counted
+/// once as supplied; callers must not pass both an inclusive parent and its
+/// descendants as separate contributions.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UsageContribution {
+    /// Input tokens consumed by the run, including its descendants.
+    pub input_tokens: u64,
+    /// Output tokens consumed by the run, including its descendants.
+    pub output_tokens: u64,
+    /// Cached input tokens, a subset of `input_tokens`.
+    pub cached_input_tokens: u64,
+    /// Cost for the run, including its descendants, with certainty retained.
+    pub cost: CostTally,
+}
+
+/// Rolls already-inclusive child usage into a root contribution.
+///
+/// Every supplied child contribution is added exactly once. This function
+/// does not deduplicate, recurse, or infer relationships between entries;
+/// each child's totals already include any descendants. Token sums saturate
+/// at `u64::MAX`, cached tokens remain a subset, and [`CostTally::merge`]
+/// preserves known amounts and the least certain cost source.
+pub fn roll_up_inclusive_subagent_usage(
+    root: UsageContribution,
+    children: impl IntoIterator<Item = UsageContribution>,
+) -> UsageContribution {
+    let mut result = root;
+    for child in children {
+        merge_usage_totals(
+            &mut result.input_tokens,
+            &mut result.output_tokens,
+            &mut result.cached_input_tokens,
+            &mut result.cost,
+            child,
+        );
+    }
+    result
+}
+
+fn merge_usage_totals(
+    input_tokens: &mut u64,
+    output_tokens: &mut u64,
+    cached_input_tokens: &mut u64,
+    cost: &mut CostTally,
+    contribution: UsageContribution,
+) {
+    *input_tokens = input_tokens.saturating_add(contribution.input_tokens);
+    *output_tokens = output_tokens.saturating_add(contribution.output_tokens);
+    *cached_input_tokens = cached_input_tokens.saturating_add(contribution.cached_input_tokens);
+    cost.merge(contribution.cost);
+}
+
 /// Rolls child usage into one run while ignoring duplicate/replayed completion
 /// rows by run identity. Each child carries only its own spend; descendants
 /// stay nested so an aggregate child plus a separate grandchild row cannot be
@@ -150,12 +206,18 @@ pub fn roll_up_subagent_usage(
         if !seen.insert(child.run_id.clone()) {
             return;
         }
-        result.input_tokens = result.input_tokens.saturating_add(child.input_tokens);
-        result.output_tokens = result.output_tokens.saturating_add(child.output_tokens);
-        result.cached_input_tokens = result
-            .cached_input_tokens
-            .saturating_add(child.cached_input_tokens);
-        result.cost.merge(child.cost);
+        merge_usage_totals(
+            &mut result.input_tokens,
+            &mut result.output_tokens,
+            &mut result.cached_input_tokens,
+            &mut result.cost,
+            UsageContribution {
+                input_tokens: child.input_tokens,
+                output_tokens: child.output_tokens,
+                cached_input_tokens: child.cached_input_tokens,
+                cost: child.cost,
+            },
+        );
         let descendants = child.children.clone();
         result.subagents.push(SubagentUsage {
             children: Vec::new(),

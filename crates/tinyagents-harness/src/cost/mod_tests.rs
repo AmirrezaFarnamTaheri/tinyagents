@@ -9,6 +9,93 @@ use super::*;
 use crate::cost::ModelPricing;
 use tinyinference_llm::usage::Usage;
 
+fn contribution(
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    known_usd: f64,
+    source: CostSource,
+) -> UsageContribution {
+    UsageContribution {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+        cost: CostTally { known_usd, source },
+    }
+}
+
+#[test]
+fn inclusive_subagent_rollup_preserves_root_when_there_are_no_children() {
+    let root = contribution(10, 20, 4, 0.75, CostSource::Estimated);
+
+    assert_eq!(roll_up_inclusive_subagent_usage(root, []), root);
+}
+
+#[test]
+fn inclusive_subagent_rollup_adds_root_and_each_inclusive_child_once() {
+    let root = contribution(10, 20, 4, 0.75, CostSource::Charged);
+    // These entries already include their own nested usage; the flat API
+    // consumes only these totals and has no child tree to traverse.
+    let inclusive_child = contribution(7, 5, 3, 0.5, CostSource::Charged);
+    let second_child = contribution(11, 2, 8, 0.25, CostSource::Estimated);
+    let result = roll_up_inclusive_subagent_usage(root, [inclusive_child, second_child]);
+
+    assert_eq!(result.input_tokens, 28);
+    assert_eq!(result.output_tokens, 27);
+    assert_eq!(result.cached_input_tokens, 15);
+    assert_eq!(result.cost.known_usd, 1.5);
+    assert_eq!(result.cost.source, CostSource::Estimated);
+    assert_eq!(result.cost.usd(), Some(1.5));
+}
+
+#[test]
+fn inclusive_subagent_rollup_counts_equal_children_without_identity_deduplication() {
+    let child = contribution(7, 5, 3, 0.5, CostSource::Charged);
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(1, 2, 0, 0.25, CostSource::Charged),
+        [child, child],
+    );
+
+    assert_eq!(result.input_tokens, 15);
+    assert_eq!(result.output_tokens, 12);
+    assert_eq!(result.cached_input_tokens, 6);
+    assert_eq!(result.cost.known_usd, 1.25);
+}
+
+#[test]
+fn inclusive_subagent_rollup_saturates_token_totals_and_keeps_cached_as_subset() {
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(
+            u64::MAX - 2,
+            u64::MAX - 1,
+            u64::MAX - 3,
+            1.0,
+            CostSource::Charged,
+        ),
+        [contribution(5, 4, 6, 2.0, CostSource::Charged)],
+    );
+
+    assert_eq!(result.input_tokens, u64::MAX);
+    assert_eq!(result.output_tokens, u64::MAX);
+    assert_eq!(result.cached_input_tokens, u64::MAX);
+    assert_eq!(result.cost.known_usd, 3.0);
+}
+
+#[test]
+fn inclusive_subagent_rollup_retains_known_cost_when_any_source_is_unknown() {
+    let result = roll_up_inclusive_subagent_usage(
+        contribution(1, 2, 0, 0.75, CostSource::Charged),
+        [
+            contribution(3, 4, 1, 0.5, CostSource::Estimated),
+            contribution(5, 6, 2, 0.0, CostSource::Unknown),
+        ],
+    );
+
+    assert_eq!(result.cost.known_usd, 1.25);
+    assert_eq!(result.cost.source, CostSource::Unknown);
+    assert_eq!(result.cost.usd(), None);
+}
+
 fn pricing() -> ModelPricing {
     ModelPricing {
         input_per_token: Some(0.001),
