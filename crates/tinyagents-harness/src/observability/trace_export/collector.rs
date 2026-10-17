@@ -601,10 +601,8 @@ impl SpanCollector {
             AgentEvent::RunCompleted { outcome, .. } => {
                 self.close_completed_run(outcome.as_ref(), timestamp_ms)
             }
-            AgentEvent::RunFailed { error, .. } => {
-                self.close_root(timestamp_ms, SpanStatus::Error, "failed");
-                let root = self.ensure_run_root(timestamp_ms);
-                self.put_error(root, error);
+            AgentEvent::RunFailed { error, outcome, .. } => {
+                self.close_failed_run(outcome.as_ref(), error, timestamp_ms)
             }
             _ => {}
         }
@@ -1087,6 +1085,29 @@ impl SpanCollector {
                 }
             }
         }
+    }
+
+    fn close_failed_run(
+        &mut self,
+        outcome: Option<&crate::terminal::TerminalOutcome>,
+        error: &str,
+        at: u64,
+    ) {
+        use crate::terminal::TerminalReason;
+
+        // Reuse the generic terminal projection for typed cancellation, stops,
+        // and failures. A RunFailed event is authoritative if it contradicts
+        // a typed Completed outcome: never turn a failed run into success.
+        if let Some(outcome) = outcome
+            && outcome.reason != TerminalReason::Completed
+        {
+            self.close_completed_run(Some(outcome), at);
+            return;
+        }
+
+        self.close_root(at, SpanStatus::Error, "failed");
+        let root = self.ensure_run_root(at);
+        self.put_error(root, error);
     }
 
     fn put_error(&mut self, index: usize, error: &str) {

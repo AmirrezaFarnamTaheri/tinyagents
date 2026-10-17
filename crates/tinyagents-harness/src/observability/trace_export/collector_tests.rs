@@ -400,6 +400,51 @@ fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
 }
 
 #[test]
+fn failed_run_preserves_typed_cancellation_and_timeout_outcomes() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    for (reason, expected_status, expected_outcome) in [
+        (TerminalReason::Cancelled, SpanStatus::Unset, "cancelled"),
+        (TerminalReason::Timeout, SpanStatus::Error, "failed"),
+        (TerminalReason::Completed, SpanStatus::Error, "failed"),
+    ] {
+        let context = TraceContext::new("trace-failed-terminal", None).with_capture_content(false);
+        let mut collector = SpanCollector::new(context);
+        collector.record_event(
+            &AgentEvent::RunStarted {
+                run_id: RunId::new("run-failed-terminal"),
+                thread_id: None,
+            },
+            10,
+        );
+        collector.record_event(
+            &AgentEvent::RunFailed {
+                run_id: RunId::new("run-failed-terminal"),
+                error: "private error payload".into(),
+                outcome: Some(TerminalOutcome::new(reason, "private typed message")),
+            },
+            20,
+        );
+
+        let root = &collector.spans()[0];
+        assert_eq!(root.status, expected_status, "{reason:?}");
+        assert_eq!(
+            root.attributes["turn.outcome"], expected_outcome,
+            "{reason:?}"
+        );
+        assert_ne!(root.attributes["turn.outcome"], "completed", "{reason:?}");
+        assert_eq!(
+            root.attributes["error.message"], "Operation failed",
+            "{reason:?}"
+        );
+        assert_eq!(root.end_unix_ms, Some(20), "{reason:?}");
+        if reason == TerminalReason::Cancelled {
+            assert_eq!(root.attributes["observation.level"], "WARNING");
+        }
+    }
+}
+
+#[test]
 fn linked_child_terminal_outcome_survives_parent_lifecycle_completion() {
     use crate::terminal::{TerminalOutcome, TerminalReason};
 
