@@ -1212,7 +1212,87 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     assert_eq!(completed_value["output"], "resumed completion");
     assert_eq!(completed_value["worker_thread_id"], "worker-thread");
     assert_eq!(completed_value["extensions"]["iterations"], 3);
+    assert_eq!(completed_value["extensions"]["task_id"], "pause-then-continue");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = blocking_driver(started.clone(), release.clone(), calls.clone());
+    let parent = RunContext::new(RunConfig::new("cancel-parent"), ());
+    let key = SubagentTaskKey::from_context(&parent, "cancel-task", None);
+    let owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync> = Arc::new(|_| "parent-a".into());
+    let tool = SubAgentTool::new(
+        Arc::new(SubAgent::new(
+            "worker",
+            "worker description",
+            Arc::new(AgentHarness::new()),
+        )),
+        ChildDataPolicy::new(|_: &()| ()),
+    )
+    .with_job_registry(jobs.clone())
+    .with_job_owner_scope(owner_scope)
+    .with_tool_name("spawn_async_subagent")
+    .with_parameters(json!({
+        "type":"object",
+        "required":["agent_id","prompt"],
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"}}
+    }))
+    .with_driver(driver, {
+        let key = key.clone();
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("child-run"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                key.task_id.clone(),
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+            .map(|request| request.with_target("worker"))
+        },
+    });
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-cancellable"),
+        json!({"agent_id":"worker","prompt":"do work"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let public_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    started.notified().await;
+
+    let mut foreign_key = key.clone();
+    foreign_key.parent_run_id.push_str("-foreign");
+    assert_eq!(
+        jobs.cancel_key_owned(&foreign_key, "parent-a").unwrap_err(),
+        SubAgentJobError::NotFound("cancel-task".into())
+    );
+    assert_eq!(
+        jobs.cancel_key_owned(&key, "parent-b").unwrap_err(),
+        SubAgentJobError::NotFound("cancel-task".into())
+    );
+    let requested = jobs.cancel_key_owned(&key, "parent-a").unwrap();
+    assert_eq!(requested.id.as_str(), public_id);
+    assert_eq!(requested.status, SubAgentJobStatus::Running);
+
+    release.add_permits(1);
+    let settled = jobs.wait_owned(&public_id, "parent-a").await.unwrap();
+    assert_eq!(settled.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 fn inline_blocking_alias(
