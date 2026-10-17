@@ -85,6 +85,7 @@ pub struct SpanCollector {
     run_roots: HashMap<String, usize>,
     current_run_id: Option<String>,
     root_run_id: Option<String>,
+    pending_turn_stops: HashMap<String, (u32, crate::turn_stop::TurnStop)>,
     last_generation: HashMap<String, usize>,
     last_activity_ms: u64,
     first_input_recorded: bool,
@@ -112,6 +113,7 @@ impl SpanCollector {
             run_roots: HashMap::new(),
             current_run_id: None,
             root_run_id,
+            pending_turn_stops: HashMap::new(),
             last_generation: HashMap::new(),
             last_activity_ms: 0,
             first_input_recorded: false,
@@ -599,13 +601,88 @@ impl SpanCollector {
                 self.cached_calls.insert(self.scoped_id(call_id.as_str()));
             }
             AgentEvent::RunCompleted { outcome, .. } => {
-                self.close_completed_run(outcome.as_ref(), timestamp_ms)
+                self.close_completed_run(outcome.as_ref(), timestamp_ms);
+                self.apply_pending_turn_stop();
             }
             AgentEvent::RunFailed { error, outcome, .. } => {
-                self.close_failed_run(outcome.as_ref(), error, timestamp_ms)
+                self.close_failed_run(outcome.as_ref(), error, timestamp_ms);
+                self.apply_pending_turn_stop();
+            }
+            AgentEvent::TurnStopped { turn, stop } => {
+                self.record_turn_stop(*turn, stop, timestamp_ms)
             }
             _ => {}
         }
+    }
+
+    fn record_turn_stop(&mut self, turn: u32, stop: &crate::turn_stop::TurnStop, at: u64) {
+        let run_id = self.active_run_id();
+        let stop = stop.sanitized();
+        let root = self
+            .run_roots
+            .get(&run_id)
+            .copied()
+            .unwrap_or_else(|| self.ensure_run_root(at));
+        match self.spans[root]
+            .attributes
+            .get("turn.outcome")
+            .and_then(Value::as_str)
+        {
+            Some("completed" | "stopped") => self.apply_turn_stop(root, turn, &stop),
+            None => {
+                self.pending_turn_stops.insert(run_id, (turn, stop));
+            }
+            Some(_) => {
+                self.pending_turn_stops.remove(&run_id);
+            }
+        }
+    }
+
+    fn apply_pending_turn_stop(&mut self) {
+        let run_id = self.active_run_id();
+        let Some((turn, stop)) = self.pending_turn_stops.remove(&run_id) else {
+            return;
+        };
+        if let Some(root) = self.run_roots.get(&run_id).copied() {
+            self.apply_turn_stop(root, turn, &stop);
+        }
+    }
+
+    fn apply_turn_stop(&mut self, root: usize, turn: u32, stop: &crate::turn_stop::TurnStop) {
+        let terminal_outcome = self.spans[root]
+            .attributes
+            .get("turn.outcome")
+            .and_then(Value::as_str);
+        let can_enrich = match terminal_outcome {
+            Some("completed") => self.spans[root].status == SpanStatus::Ok,
+            Some("stopped") => self.spans[root].status == SpanStatus::Unset,
+            _ => false,
+        };
+        if !can_enrich {
+            return;
+        }
+
+        let stop = stop.sanitized();
+        let message = stop.status_message();
+        let attrs = &mut self.spans[root].attributes;
+        attrs.insert("turn.outcome".into(), json_str("stopped"));
+        attrs.insert("turn.stop_turn".into(), json!(turn));
+        attrs.insert("turn.stop_kind".into(), json_str(stop.kind.as_str()));
+        attrs.remove("turn.stop_limit");
+        if let Some(class) = stop.failure_class.as_ref() {
+            attrs.insert("turn.stop_class".into(), json_str(class.as_str()));
+        } else {
+            attrs.remove("turn.stop_class");
+        }
+        if let Some(operation) = stop.operation.as_deref() {
+            attrs.insert("turn.stop_operation".into(), json_str(operation));
+        } else {
+            attrs.remove("turn.stop_operation");
+        }
+        attrs.insert("observation.level".into(), json_str("WARNING"));
+        attrs.insert("observation.status_message".into(), json_str(&message));
+        attrs.insert("error.message".into(), json_str(&message));
+        self.spans[root].status = SpanStatus::Unset;
     }
 
     /// Adds host-owned provider and pricing metadata to the generation

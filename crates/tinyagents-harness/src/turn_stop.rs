@@ -14,8 +14,13 @@
 //! content-free by construction: a typed breaker cause carries only stable
 //! class and operation identifiers, never the quoted tool output or target.
 
+use serde::de::Error as _;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 /// Which mechanism stopped the turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TurnStopKind {
     /// The repeated-failure / classified-failure breaker halted the run.
     Breaker,
@@ -75,6 +80,60 @@ pub struct TurnStop {
     /// Breaker only: the blocked operation (a tool name), when the note names
     /// one.
     pub operation: Option<String>,
+}
+
+impl Serialize for TurnStop {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let failure_class = self.failure_class.as_ref().map(TurnFailureClass::as_str);
+        let operation = self.operation.as_deref().and_then(identifier_ref);
+        let mut state = serializer.serialize_struct("TurnStop", 3)?;
+        state.serialize_field("kind", &self.kind)?;
+        state.serialize_field("failure_class", &failure_class)?;
+        state.serialize_field("operation", &operation)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TurnStop {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SerializedTurnStop {
+            kind: TurnStopKind,
+            #[serde(default)]
+            failure_class: Option<String>,
+            #[serde(default)]
+            operation: Option<String>,
+        }
+
+        let serialized = SerializedTurnStop::deserialize(deserializer)?;
+        let failure_class = serialized
+            .failure_class
+            .map(|class| {
+                identifier(&class)
+                    .map(TurnFailureClass)
+                    .ok_or_else(|| D::Error::custom("invalid turn-stop failure class"))
+            })
+            .transpose()?;
+        let operation = serialized
+            .operation
+            .map(|operation| {
+                identifier(&operation)
+                    .ok_or_else(|| D::Error::custom("invalid turn-stop operation"))
+            })
+            .transpose()?;
+        Ok(Self {
+            kind: serialized.kind,
+            failure_class,
+            operation,
+        })
+    }
 }
 
 /// The `Incomplete` reason the sub-agent runner reports for an iteration-cap
@@ -190,23 +249,38 @@ impl TurnStop {
             out.push(' ');
             out.push_str(class.as_str());
         }
-        if let Some(operation) = &self.operation {
+        if let Some(operation) = self.operation.as_deref().and_then(identifier_ref) {
             out.push_str(" on ");
             out.push_str(operation);
         }
         out
     }
+
+    /// Returns a copy whose public string field has been reduced to a safe
+    /// machine identifier. Callers may construct `TurnStop` directly because
+    /// its fields are public, so projection boundaries must normalize it.
+    pub(crate) fn sanitized(&self) -> Self {
+        Self {
+            kind: self.kind,
+            failure_class: self.failure_class.clone(),
+            operation: self.operation.as_deref().and_then(identifier),
+        }
+    }
 }
 
 /// Keep only bounded machine identifiers in content-free stop summaries.
 fn identifier(value: &str) -> Option<String> {
+    identifier_ref(value).map(str::to_owned)
+}
+
+fn identifier_ref(value: &str) -> Option<&str> {
     let value = value.trim();
     let valid = !value.is_empty()
         && value.chars().count() <= 64
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'));
-    valid.then(|| value.to_owned())
+    valid.then_some(value)
 }
 
 #[cfg(test)]

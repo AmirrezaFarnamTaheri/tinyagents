@@ -1030,6 +1030,18 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<crate::terminal::TerminalOutcome>,
     },
+
+    /// A completed turn was stopped early by a typed harness stop cause.
+    ///
+    /// This may be emitted after `RunCompleted`; the run identity and lineage
+    /// come from the enclosing observation record. `turn` is the 1-based
+    /// model-attempt ordinal within that run.
+    TurnStopped {
+        /// 1-based model-attempt ordinal for the stopped turn.
+        turn: u32,
+        /// Content-free reason that stopped the turn.
+        stop: crate::turn_stop::TurnStop,
+    },
 }
 
 /// Names the kind of run limit that tripped in an [`AgentEvent::LimitReached`].
@@ -1131,6 +1143,7 @@ impl AgentEvent {
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
+            AgentEvent::TurnStopped { .. } => "turn.stopped",
         }
     }
 }

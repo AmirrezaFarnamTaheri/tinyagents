@@ -542,6 +542,346 @@ fn failed_child_run_keeps_its_typed_error_on_the_child_span() {
 }
 
 #[test]
+fn typed_turn_stop_enriches_a_completed_run_without_extending_its_timestamp() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use crate::turn_stop::{TurnFailureClass, TurnStop};
+
+    let mut collector =
+        SpanCollector::new(TraceContext::new("trace-turn-stop", None).with_capture_content(false));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("run-stop"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        1,
+        20,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("run-stop"),
+            outcome: Some(TerminalOutcome::new(TerminalReason::Completed, "done")),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        2,
+        30,
+        AgentEvent::TurnStopped {
+            turn: 4,
+            stop: TurnStop::breaker_with_cause(
+                "secret note must not leak",
+                TurnFailureClass::new("uncertain_side_effect"),
+                Some("web_answer_tool".into()),
+            ),
+        },
+    ));
+
+    let root = &collector.spans()[0];
+    assert_eq!(root.status, SpanStatus::Unset);
+    assert_eq!(root.end_unix_ms, Some(20));
+    assert_eq!(root.attributes["turn.outcome"], "stopped");
+    assert_eq!(root.attributes["turn.stop_kind"], "breaker");
+    assert_eq!(root.attributes["turn.stop_turn"], 4);
+    assert_eq!(root.attributes["turn.stop_class"], "uncertain_side_effect");
+    assert_eq!(root.attributes["turn.stop_operation"], "web_answer_tool");
+    assert_eq!(
+        root.attributes["observation.status_message"],
+        "stopped: breaker uncertain_side_effect on web_answer_tool"
+    );
+    assert_eq!(
+        root.attributes["error.message"],
+        "stopped: breaker uncertain_side_effect on web_answer_tool"
+    );
+    assert_eq!(root.attributes["observation.level"], "WARNING");
+    assert!(
+        root.attributes
+            .values()
+            .all(|value| !value.to_string().contains("secret note"))
+    );
+}
+
+#[test]
+fn turn_stop_is_run_scoped_and_replay_ignores_duplicate_offsets() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use crate::turn_stop::TurnStop;
+
+    let mut collector = SpanCollector::new(TraceContext::new("trace-run-scoped-stop", None));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("parent"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        1,
+        11,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("same-call"),
+            model: "model".into(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        2,
+        12,
+        AgentEvent::ModelCompleted {
+            call_id: CallId::new("same-call"),
+            started_at_ms: Some(11),
+            usage: None,
+            input: None,
+            output: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        0,
+        13,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("child"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        1,
+        14,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("same-call"),
+            model: "model".into(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        2,
+        15,
+        AgentEvent::ModelCompleted {
+            call_id: CallId::new("same-call"),
+            started_at_ms: Some(14),
+            usage: None,
+            input: None,
+            output: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        3,
+        20,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("parent"),
+            outcome: Some(TerminalOutcome::new(TerminalReason::Completed, "done")),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        4,
+        30,
+        AgentEvent::TurnStopped {
+            turn: 1,
+            stop: TurnStop::breaker("private note", |_| "uncertain_side_effect"),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        4,
+        31,
+        AgentEvent::TurnStopped {
+            turn: 2,
+            stop: TurnStop::wind_down(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        3,
+        19,
+        AgentEvent::TurnStopped {
+            turn: 1,
+            stop: TurnStop::iteration_cap(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        4,
+        25,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("child"),
+            outcome: Some(TerminalOutcome::new(TerminalReason::Completed, "done")),
+        },
+    ));
+
+    let spans = collector.spans();
+    let parent = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Turn)
+        .unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .unwrap();
+    assert_eq!(parent.attributes["turn.stop_kind"], "breaker");
+    assert_eq!(
+        parent.attributes["turn.stop_class"],
+        "uncertain_side_effect"
+    );
+    assert_eq!(parent.attributes["turn.stop_turn"], 1);
+    assert_eq!(parent.end_unix_ms, Some(25));
+    assert_eq!(child.attributes["turn.stop_kind"], "iteration_cap");
+    assert_eq!(child.attributes["turn.stop_turn"], 1);
+    assert_eq!(child.end_unix_ms, Some(25));
+}
+
+#[test]
+fn turn_stop_never_overrides_native_failure_cancellation_or_timeout() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use crate::turn_stop::TurnStop;
+
+    for stop_first in [false, true] {
+        for (reason, expected_status, expected_outcome) in [
+            (TerminalReason::Cancelled, SpanStatus::Unset, "cancelled"),
+            (TerminalReason::Timeout, SpanStatus::Error, "timed_out"),
+            (TerminalReason::ToolFailed, SpanStatus::Error, "failed"),
+        ] {
+            let mut collector = SpanCollector::new(TraceContext::new("trace-stop-authority", None));
+            collector.record(&observation(
+                0,
+                10,
+                AgentEvent::RunStarted {
+                    run_id: RunId::new("run-authority"),
+                    thread_id: None,
+                },
+            ));
+            let stop_offset = if stop_first { 1 } else { 2 };
+            let terminal_offset = if stop_first { 2 } else { 1 };
+            let stop = observation(
+                stop_offset,
+                if stop_first { 11 } else { 30 },
+                AgentEvent::TurnStopped {
+                    turn: 2,
+                    stop: TurnStop::wind_down(),
+                },
+            );
+            let terminal = if reason == TerminalReason::ToolFailed {
+                observation(
+                    terminal_offset,
+                    20,
+                    AgentEvent::RunFailed {
+                        run_id: RunId::new("run-authority"),
+                        error: "failed".into(),
+                        outcome: Some(TerminalOutcome::new(reason, "failed")),
+                    },
+                )
+            } else {
+                observation(
+                    terminal_offset,
+                    20,
+                    AgentEvent::RunCompleted {
+                        run_id: RunId::new("run-authority"),
+                        outcome: Some(TerminalOutcome::new(reason, "terminal")),
+                    },
+                )
+            };
+            if stop_first {
+                collector.record(&stop);
+                collector.record(&terminal);
+            } else {
+                collector.record(&terminal);
+                collector.record(&stop);
+            }
+
+            let root = &collector.spans()[0];
+            assert_eq!(
+                root.status, expected_status,
+                "{reason:?}, stop_first={stop_first}"
+            );
+            assert_eq!(
+                root.attributes["turn.outcome"], expected_outcome,
+                "{reason:?}, stop_first={stop_first}"
+            );
+            assert!(!root.attributes.contains_key("turn.stop_kind"));
+            assert_eq!(root.end_unix_ms, Some(20));
+        }
+    }
+}
+
+#[test]
+fn turn_stop_projection_sanitizes_public_operation_fields() {
+    use crate::turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};
+
+    let secret = "private@example.test/secret";
+    let stop = TurnStop {
+        kind: TurnStopKind::Breaker,
+        failure_class: Some(TurnFailureClass::new(secret)),
+        operation: Some(secret.into()),
+    };
+    let event = AgentEvent::TurnStopped { turn: 1, stop };
+    let encoded = serde_json::to_string(&event).expect("event serialization");
+    assert!(!encoded.contains(secret));
+
+    let mut collector =
+        SpanCollector::new(TraceContext::new("trace-stop-scrub", None).with_capture_content(false));
+    collector.record(&observation(
+        0,
+        10,
+        AgentEvent::RunCompleted {
+            run_id: RunId::new("run-stop-scrub"),
+            outcome: None,
+        },
+    ));
+    collector.record(&observation(
+        1,
+        20,
+        match event {
+            AgentEvent::TurnStopped { stop, .. } => AgentEvent::TurnStopped { turn: 1, stop },
+            _ => unreachable!(),
+        },
+    ));
+    let root = &collector.spans()[0];
+    assert_eq!(root.attributes["turn.stop_class"], "unknown");
+    assert!(!root.attributes.contains_key("turn.stop_operation"));
+    assert!(
+        !root
+            .attributes
+            .values()
+            .any(|value| value.to_string().contains(secret))
+    );
+}
+
+#[test]
 fn linked_child_terminal_outcome_survives_parent_lifecycle_completion() {
     use crate::terminal::{TerminalOutcome, TerminalReason};
 
