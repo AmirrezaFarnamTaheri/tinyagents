@@ -270,6 +270,73 @@ async fn message_request_ids_are_bounded_per_job() {
 }
 
 #[tokio::test]
+async fn message_tool_can_recover_from_a_terminal_job_selector_when_enabled() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    jobs.cancel_owned(job_id.as_str(), parent.instance_id())
+        .expect("the owned job can be cancelled");
+    jobs.mark_result(&job_id, Err(TinyAgentsError::Cancelled));
+
+    let args = json!({"job_id": job_id.as_str(), "message": "please continue"});
+    let recovering = SubAgentMessageTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &recovering,
+        &(),
+        new_call_id(),
+        args.clone(),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a completed job cannot receive a message");
+    assert!(matches!(
+        error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
+
+    let recovering_jobs = SubAgentJobsTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &recovering_jobs,
+        &(),
+        new_call_id(),
+        json!({"action": "cancel", "job_id": job_id.as_str()}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a terminal job cannot be cancelled again");
+    assert!(matches!(
+        error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
+
+    let default = SubAgentMessageTool::new(jobs);
+    let error = ToolDispatch::<(), ()>::execute(
+        &default,
+        &(),
+        new_call_id(),
+        args,
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("default message tools preserve the typed terminal error");
+    assert!(matches!(
+        error.downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::Terminal { .. })
+    ));
+}
+
+#[test]
+fn registry_lock_failures_are_not_selector_denials() {
+    let error =
+        super::jobs::registry_failure(tinyagents_tasks::DetachedTaskRegistryError::LockPoisoned);
+    assert!(matches!(error, SubAgentJobError::Registry(_)));
+    assert!(!super::jobs::is_recoverable_selector_denial(&error));
+}
+
+#[tokio::test]
 async fn terminal_jobs_never_return_to_running() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);

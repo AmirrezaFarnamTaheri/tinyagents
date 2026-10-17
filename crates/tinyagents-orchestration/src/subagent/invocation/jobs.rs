@@ -47,6 +47,19 @@ fn selector_retry(enabled: bool, fallback: &'static str) -> anyhow::Error {
         anyhow::anyhow!(fallback)
     }
 }
+
+pub(super) fn is_recoverable_selector_denial(error: &SubAgentJobError) -> bool {
+    matches!(
+        error,
+        SubAgentJobError::NotFound(_)
+            | SubAgentJobError::Terminal { .. }
+            | SubAgentJobError::Cancelling(_)
+    )
+}
+
+pub(super) fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
+    SubAgentJobError::Registry(error.to_string())
+}
 struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
@@ -712,7 +725,10 @@ impl SubAgentJobRegistry {
                     status: control.status.borrow().status,
                 });
             }
-            Err(_) => return Err(SubAgentJobError::NotFound(job_id.to_owned())),
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+            }
+            Err(error) => return Err(registry_failure(error)),
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
@@ -732,18 +748,25 @@ impl SubAgentJobRegistry {
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
     pub(crate) fn get_owned(&self, job_id: &str, owner: impl ToString) -> Option<SubAgentJob> {
+        self.try_get_owned(job_id, owner).ok().flatten()
+    }
+
+    /// Returns a snapshot for `job_id` when it belongs to `owner`, preserving
+    /// registry failures separately from unknown or foreign identifiers.
+    fn try_get_owned(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+    ) -> Result<Option<SubAgentJob>, SubAgentJobError> {
         match self
             .tasks
             .snapshot(&TaskId::new(job_id), &owner.to_string())
         {
-            Ok(snapshot) => Some(snapshot.status),
-            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => None,
-            Err(error) => {
-                tracing::warn!(
-                    "{LOG_PREFIX} get_owned.registry_error job_id={job_id} error={error}"
-                );
-                None
+            Ok(snapshot) => Ok(Some(snapshot.status)),
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                Ok(None)
             }
+            Err(error) => Err(registry_failure(error)),
         }
     }
 
@@ -771,7 +794,7 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
-        self.get_owned(job_id, owner)
+        self.try_get_owned(job_id, owner)?
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
         let mut status = {
             let controls = self.controls();
@@ -861,11 +884,13 @@ impl SubAgentJobRegistry {
         let control = controls.get(&id).ok_or_else(not_found)?;
         let task_id = TaskId::new(job_id);
         let owner = owner.to_string();
-        let job = self
-            .tasks
-            .snapshot(&task_id, &owner)
-            .map_err(|_| not_found())?
-            .status;
+        let job = match self.tasks.snapshot(&task_id, &owner) {
+            Ok(snapshot) => snapshot.status,
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(not_found());
+            }
+            Err(error) => return Err(registry_failure(error)),
+        };
         if job.status.is_terminal() {
             return Err(SubAgentJobError::Terminal {
                 job_id: job_id.to_owned(),
@@ -1251,7 +1276,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 };
                 let job = match self.jobs.cancel_owned(job_id, &owner) {
                     Ok(job) => job,
-                    Err(SubAgentJobError::NotFound(_)) if self.recover_selector_errors => {
+                    Err(error)
+                        if self.recover_selector_errors
+                            && is_recoverable_selector_denial(&error) =>
+                    {
                         return Err(
                             TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into()
                         );
@@ -1321,24 +1349,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         json!({"collected_tombstones":tombstones,"awaiting_user":awaiting_user}),
                     ));
                 };
-                let bridged_id = if self.jobs.get_owned(id, &owner).is_some() {
+                let bridged_id = if self.jobs.try_get_owned(id, &owner)?.is_some() {
                     Some(id.to_owned())
                 } else if let Some((sessions, key)) = &self.sessions {
-                    sessions
+                    let session = sessions
                         .get(id)
                         .await?
-                        .filter(|session| session.parent_session == key(parent.instance_id()))
-                        .and_then(|session| {
-                            session
-                                .lifecycle_key
-                                .as_ref()
-                                .and_then(|key| self.jobs.driver_job_for_key(key, &owner))
-                                .map(|job_id| job_id.as_str().to_owned())
-                                .or_else(|| {
-                                    let task_id = session.current_task_id?;
-                                    self.jobs.get_owned(&task_id, &owner).map(|_| task_id)
-                                })
-                        })
+                        .filter(|session| session.parent_session == key(parent.instance_id()));
+                    if let Some(session) = session {
+                        if let Some(job_id) = session
+                            .lifecycle_key
+                            .as_ref()
+                            .and_then(|key| self.jobs.driver_job_for_key(key, &owner))
+                        {
+                            Some(job_id.as_str().to_owned())
+                        } else if let Some(task_id) = session.current_task_id {
+                            self.jobs.try_get_owned(&task_id, &owner)?.map(|_| task_id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1358,10 +1390,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                                 .into());
                             }
                             Ok(result) => result?,
-                            Err(_) => self
-                                .jobs
-                                .get_owned(&job_id, &owner)
-                                .ok_or_else(|| SubAgentJobError::NotFound(job_id.clone()))?,
+                            Err(_) => match self.jobs.try_get_owned(&job_id, &owner)? {
+                                Some(job) => job,
+                                None if self.recover_selector_errors => {
+                                    return Err(TinyAgentsError::ModelRetry(
+                                        SELECTOR_RETRY_HINT.to_owned(),
+                                    )
+                                    .into());
+                                }
+                                None => {
+                                    return Err(SubAgentJobError::NotFound(job_id.clone()).into());
+                                }
+                            },
                         }
                     } else {
                         match self.jobs.wait_owned(&job_id, &owner).await {
@@ -1471,7 +1511,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
         }
         if let Some(job_id) = identifier {
-            let job = self.jobs.get_owned(job_id, &owner);
+            let job = self.jobs.try_get_owned(job_id, &owner)?;
             if let Some(job) = job {
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
@@ -1780,17 +1820,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     "durable subagent session has no running task"
                 ));
             };
-            session
+            let driver_job = session
                 .lifecycle_key
                 .as_ref()
                 .and_then(|key| self.jobs.driver_job_for_key(key, &owner))
-                .map(|job_id| job_id.as_str().to_owned())
-                .or_else(|| {
-                    self.jobs
-                        .get_owned(&task_id, &owner)
-                        .map(|_| task_id.clone())
-                })
-                .unwrap_or(task_id)
+                .map(|job_id| job_id.as_str().to_owned());
+            if let Some(job_id) = driver_job {
+                job_id
+            } else {
+                let _ = self.jobs.try_get_owned(&task_id, &owner)?;
+                task_id
+            }
         } else {
             let Some(job_id) = args
                 .get(&self.argument_names.job_id)
@@ -1830,7 +1870,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)
         {
             Ok(duplicate) => duplicate,
-            Err(SubAgentJobError::NotFound(_)) if self.recover_selector_errors => {
+            Err(error)
+                if self.recover_selector_errors && is_recoverable_selector_denial(&error) =>
+            {
                 return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
             }
             Err(error) => return Err(error.into()),
@@ -1856,3 +1898,7 @@ pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
         .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
 type OwnerScope = Arc<dyn Fn(u64) -> String + Send + Sync>;
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;
