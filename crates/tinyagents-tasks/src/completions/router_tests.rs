@@ -512,7 +512,7 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
     assert!(destination.get("target-only").is_some());
     assert_eq!(
         destination
-            .get(&CompletionRouter::parent_marker_id("q"))
+            .get("\u{1}parent-cancelled:q")
             .unwrap()
             .state,
         CompletionState::Tombstoned
