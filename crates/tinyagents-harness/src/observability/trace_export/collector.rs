@@ -85,6 +85,9 @@ pub struct SpanCollector {
     run_roots: HashMap<String, usize>,
     current_run_id: Option<String>,
     root_run_id: Option<String>,
+    observation_root_id: Option<String>,
+    current_turns: HashMap<String, u32>,
+    open_iterations: HashMap<String, usize>,
     pending_turn_stops: HashMap<String, (u32, crate::turn_stop::TurnStop)>,
     last_generation: HashMap<String, usize>,
     last_activity_ms: u64,
@@ -113,6 +116,9 @@ impl SpanCollector {
             run_roots: HashMap::new(),
             current_run_id: None,
             root_run_id,
+            observation_root_id: None,
+            current_turns: HashMap::new(),
+            open_iterations: HashMap::new(),
             pending_turn_stops: HashMap::new(),
             last_generation: HashMap::new(),
             last_activity_ms: 0,
@@ -122,12 +128,25 @@ impl SpanCollector {
         }
     }
 
+    /// Selects the observation view root independently of trace lineage
+    /// metadata.
+    ///
+    /// A host rebasing a child journal can preserve its original parent/root
+    /// IDs in [`TraceContext`] while selecting the child run as the observation
+    /// root. Without this override, observations are filtered against the
+    /// context's `root_run_id` when present.
+    pub fn with_observation_root(mut self, run_id: RunId) -> Self {
+        self.observation_root_id = Some(run_id.as_str().to_owned());
+        self
+    }
+
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
         let run_id = observation.run_id.as_str();
         if self
-            .root_run_id
+            .observation_root_id
             .as_deref()
+            .or(self.root_run_id.as_deref())
             .is_some_and(|root| root != observation.root_run_id.as_str())
         {
             return;
@@ -197,6 +216,9 @@ impl SpanCollector {
                 self.ensure_run_root(timestamp_ms);
             }
             AgentEvent::ModelStarted { call_id, model } => {
+                if let Some(turn) = self.current_turns.get(&self.active_run_id()).copied() {
+                    self.start_iteration(turn, timestamp_ms);
+                }
                 let parent = self.active_parent(timestamp_ms);
                 let mut attrs = BTreeMap::new();
                 attrs.insert("gen_ai.request.model".into(), json_str(model));
@@ -601,12 +623,35 @@ impl SpanCollector {
                 self.cached_calls.insert(self.scoped_id(call_id.as_str()));
             }
             AgentEvent::RunCompleted { outcome, .. } => {
+                self.close_open_iteration(
+                    timestamp_ms,
+                    terminal_iteration_status(outcome.as_ref()),
+                );
                 self.close_completed_run(outcome.as_ref(), timestamp_ms);
                 self.apply_pending_turn_stop();
             }
             AgentEvent::RunFailed { error, outcome, .. } => {
+                self.close_open_iteration(timestamp_ms, SpanStatus::Error);
                 self.close_failed_run(outcome.as_ref(), error, timestamp_ms);
                 self.apply_pending_turn_stop();
+            }
+            AgentEvent::TurnStarted { turn } => {
+                self.current_turns.insert(self.active_run_id(), *turn);
+            }
+            AgentEvent::TurnCompleted { turn, .. } => {
+                let run_id = self.active_run_id();
+                let open_turn = self.open_iterations.get(&run_id).and_then(|index| {
+                    self.spans[*index]
+                        .attributes
+                        .get("agent.iteration")
+                        .and_then(Value::as_u64)
+                });
+                if open_turn == Some(u64::from(*turn)) {
+                    self.close_open_iteration(timestamp_ms, SpanStatus::Ok);
+                }
+                if self.current_turns.get(&run_id) == Some(turn) {
+                    self.current_turns.remove(&run_id);
+                }
             }
             AgentEvent::TurnStopped { turn, stop } => {
                 self.record_turn_stop(*turn, stop, timestamp_ms)
@@ -635,6 +680,27 @@ impl SpanCollector {
             Some(_) => {
                 self.pending_turn_stops.remove(&run_id);
             }
+        }
+    }
+
+    fn start_iteration(&mut self, turn: u32, at: u64) {
+        self.close_open_iteration(at, SpanStatus::Unset);
+        let parent = self.active_parent(at);
+        let is_subagent = self.spans[parent].kind == SpanKind::Subagent;
+        let (kind, prefix) = if is_subagent {
+            (SpanKind::SubagentIteration, "subagent.iteration")
+        } else {
+            (SpanKind::Iteration, "agent.iteration")
+        };
+        let mut attrs = BTreeMap::new();
+        attrs.insert("agent.iteration".into(), json!(turn));
+        let (index, _) = self.open_span(kind, format!("{prefix}#{turn}"), Some(parent), at, attrs);
+        self.open_iterations.insert(self.active_run_id(), index);
+    }
+
+    fn close_open_iteration(&mut self, at: u64, status: SpanStatus) {
+        if let Some(index) = self.open_iterations.remove(&self.active_run_id()) {
+            self.close_span(index, at, status);
         }
     }
 
@@ -1241,6 +1307,15 @@ fn terminal_error_message<'a>(
         fallback_error
             .filter(|message| !message.trim().is_empty())
             .unwrap_or(fallback_message)
+    }
+}
+
+fn terminal_iteration_status(outcome: Option<&crate::terminal::TerminalOutcome>) -> SpanStatus {
+    use crate::terminal::TerminalClass;
+    match outcome.map(|outcome| outcome.reason.class()) {
+        None | Some(TerminalClass::Success) => SpanStatus::Ok,
+        Some(TerminalClass::Cancellation | TerminalClass::Suspended) => SpanStatus::Unset,
+        Some(TerminalClass::Timeout | TerminalClass::Failure) => SpanStatus::Error,
     }
 }
 

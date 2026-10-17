@@ -123,78 +123,368 @@ fn observations_fold_generation_usage_ttft_and_run_lifecycle() {
 
 #[test]
 fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
-    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use crate::observability::trace_export::RunType;
+    use tinyinference_llm::usage::Usage;
 
-    let mut collector = SpanCollector::new(TraceContext::new("trace-iterations", None));
+    let mut parent = SpanCollector::new(TraceContext::new("trace-parent-iterations", None));
     for obs in [
         observation_in_run(
-            "parent",
+            "parent-run",
             None,
-            "parent",
+            "parent-run",
             0,
-            100,
+            1_000,
             AgentEvent::RunStarted {
-                run_id: RunId::new("parent"),
+                run_id: RunId::new("parent-run"),
                 thread_id: None,
             },
         ),
         observation_in_run(
-            "parent",
+            "parent-run",
             None,
-            "parent",
+            "parent-run",
             1,
-            110,
+            1_005,
             AgentEvent::TurnStarted { turn: 1 },
         ),
         observation_in_run(
-            "parent",
+            "parent-run",
             None,
-            "parent",
+            "parent-run",
             2,
-            120,
+            1_010,
             AgentEvent::ModelStarted {
-                call_id: CallId::new("parent-call"),
+                call_id: CallId::new("same-call"),
+                model: "gpt-4".into(),
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            3,
+            1_100,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("same-call"),
+                started_at_ms: Some(1_010),
+                usage: Some(Usage::new(100, 20)),
+                input: None,
+                output: None,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            4,
+            1_105,
+            AgentEvent::TurnCompleted {
+                turn: 1,
+                tool_result_count: 0,
+                tool_call_ids: Vec::new(),
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            5,
+            1_110,
+            AgentEvent::RunCompleted {
+                run_id: RunId::new("parent-run"),
+                outcome: None,
+            },
+        ),
+    ] {
+        parent.record(&obs);
+    }
+
+    let parent_spans = parent.spans();
+    let parent_iteration = parent_spans
+        .iter()
+        .find(|span| span.name == "agent.iteration#1")
+        .expect("parent turn should have an iteration span");
+    let parent_root = parent_spans
+        .iter()
+        .find(|span| span.name == "agent.turn")
+        .expect("parent run root");
+    let parent_generation = parent_spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .expect("parent model generation");
+    assert_eq!(parent_iteration.kind, SpanKind::Iteration);
+    assert_eq!(
+        parent_iteration.parent_span_id.as_deref(),
+        Some(parent_root.span_id.as_str())
+    );
+    assert_eq!(parent_iteration.start_unix_ms, 1_010);
+    assert_eq!(parent_iteration.end_unix_ms, Some(1_105));
+    assert_eq!(parent_iteration.attributes["agent.iteration"], 1);
+    assert_eq!(parent_generation.start_unix_ms, 1_010);
+    assert_eq!(parent_generation.end_unix_ms, Some(1_100));
+
+    let child_context = TraceContext::new("trace-child-iterations", None)
+        .with_run_type(RunType::Subagent)
+        .with_run_lineage(
+            Some("child-run".into()),
+            Some("parent-run".into()),
+            Some("parent-run".into()),
+        );
+    let mut child =
+        SpanCollector::new(child_context).with_observation_root(RunId::new("child-run"));
+    child.record(&observation_in_run(
+        "child-run",
+        None,
+        "unrelated-root",
+        0,
+        1_039,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("child-run"),
+            thread_id: None,
+        },
+    ));
+    for obs in [
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            0,
+            1_040,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("child-run"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            1,
+            1_045,
+            AgentEvent::TurnStarted { turn: 1 },
+        ),
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            2,
+            1_050,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("same-call"),
+                model: "gpt-4-mini".into(),
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            3,
+            1_060,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("same-call"),
+                started_at_ms: Some(1_050),
+                usage: Some(Usage::new(7, 3)),
+                input: None,
+                output: None,
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            4,
+            1_065,
+            AgentEvent::TurnCompleted {
+                turn: 1,
+                tool_result_count: 0,
+                tool_call_ids: Vec::new(),
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            None,
+            "child-run",
+            5,
+            1_070,
+            AgentEvent::RunCompleted {
+                run_id: RunId::new("child-run"),
+                outcome: None,
+            },
+        ),
+    ] {
+        child.record(&obs);
+    }
+    let child_spans = child.spans();
+    let child_iteration = child_spans
+        .iter()
+        .find(|span| span.name == "agent.iteration#1")
+        .expect("rebased child run should have an iteration span");
+    let child_root = child_spans
+        .iter()
+        .find(|span| span.name == "agent.turn")
+        .expect("rebased child run root");
+    let child_generation = child_spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .expect("child model generation");
+    assert_eq!(child_iteration.kind, SpanKind::Iteration);
+    assert_eq!(
+        child_iteration.parent_span_id.as_deref(),
+        Some(child_root.span_id.as_str())
+    );
+    assert_eq!(child_iteration.start_unix_ms, 1_050);
+    assert_eq!(child_iteration.end_unix_ms, Some(1_065));
+    assert_eq!(child_iteration.attributes["agent.iteration"], 1);
+    assert_eq!(child_root.attributes["run.id"], "child-run");
+    assert_eq!(child_root.attributes["parent_run_id"], "parent-run");
+    assert_eq!(child_root.attributes["root_run_id"], "parent-run");
+    assert_eq!(child_generation.start_unix_ms, 1_050);
+    assert_eq!(child_generation.end_unix_ms, Some(1_060));
+
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    let mut interrupted =
+        SpanCollector::new(TraceContext::new("trace-interrupted-iteration", None));
+    for obs in [
+        observation(
+            0,
+            2_000,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("run-1"),
+                thread_id: None,
+            },
+        ),
+        observation(1, 2_005, AgentEvent::TurnStarted { turn: 1 }),
+        observation(
+            2,
+            2_010,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("same-call"),
+                model: "gpt-4".into(),
+            },
+        ),
+        observation(
+            3,
+            2_020,
+            AgentEvent::RunFailed {
+                run_id: RunId::new("run-1"),
+                error: "tool failed".into(),
+                outcome: Some(TerminalOutcome::new(
+                    TerminalReason::ToolFailed,
+                    "tool failed",
+                )),
+            },
+        ),
+    ] {
+        interrupted.record(&obs);
+    }
+    let interrupted_spans = interrupted.spans();
+    let interrupted_iteration = interrupted_spans
+        .iter()
+        .find(|span| span.name == "agent.iteration#1")
+        .expect("interrupted turn should retain its open iteration span");
+    let interrupted_root = interrupted_spans
+        .iter()
+        .find(|span| span.name == "agent.turn")
+        .expect("interrupted run root");
+    assert_eq!(
+        interrupted_iteration.parent_span_id.as_deref(),
+        Some(interrupted_root.span_id.as_str())
+    );
+    assert_eq!(interrupted_iteration.start_unix_ms, 2_010);
+    assert_eq!(interrupted_iteration.end_unix_ms, Some(2_020));
+    assert_eq!(interrupted_iteration.status, SpanStatus::Error);
+}
+
+#[test]
+fn nested_iterations_follow_explicit_subagent_links_with_reused_call_ids() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    use tinyinference_llm::usage::Usage;
+
+    let mut collector = SpanCollector::new(TraceContext::new("trace-nested-iterations", None));
+    for obs in [
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            0,
+            1_000,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("parent-run"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            1,
+            1_005,
+            AgentEvent::TurnStarted { turn: 1 },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            2,
+            1_010,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("shared-call"),
                 model: "parent-model".into(),
             },
         ),
         observation_in_run(
-            "child",
-            Some("parent"),
-            "parent",
-            0,
-            130,
-            AgentEvent::RunStarted {
-                run_id: RunId::new("child"),
-                thread_id: None,
+            "parent-run",
+            None,
+            "parent-run",
+            3,
+            1_020,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("shared-call"),
+                started_at_ms: Some(1_010),
+                usage: Some(Usage::new(10, 2)),
+                input: None,
+                output: None,
             },
         ),
         observation_in_run(
-            "child",
-            Some("parent"),
-            "parent",
-            1,
-            140,
+            "parent-run",
+            None,
+            "parent-run",
+            4,
+            1_030,
+            AgentEvent::SubAgentRunStarted {
+                name: "researcher".into(),
+                depth: 1,
+                run_id: RunId::new("child-run"),
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            Some("parent-run"),
+            "parent-run",
+            0,
+            1_040,
             AgentEvent::TurnStarted { turn: 1 },
         ),
         observation_in_run(
-            "child",
-            Some("parent"),
-            "parent",
-            2,
-            150,
+            "child-run",
+            Some("parent-run"),
+            "parent-run",
+            1,
+            1_045,
             AgentEvent::ModelStarted {
-                call_id: CallId::new("child-call"),
+                call_id: CallId::new("shared-call"),
                 model: "child-model".into(),
             },
         ),
         observation_in_run(
-            "child",
-            Some("parent"),
-            "parent",
-            3,
-            160,
+            "child-run",
+            Some("parent-run"),
+            "parent-run",
+            2,
+            1_050,
             AgentEvent::RunFailed {
-                run_id: RunId::new("child"),
+                run_id: RunId::new("child-run"),
                 error: "child failed".into(),
                 outcome: Some(TerminalOutcome::new(
                     TerminalReason::ToolFailed,
@@ -203,11 +493,11 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
             },
         ),
         observation_in_run(
-            "parent",
+            "parent-run",
             None,
-            "parent",
-            3,
-            170,
+            "parent-run",
+            5,
+            1_060,
             AgentEvent::TurnCompleted {
                 turn: 1,
                 tool_result_count: 0,
@@ -215,13 +505,13 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
             },
         ),
         observation_in_run(
-            "parent",
+            "parent-run",
             None,
-            "parent",
-            4,
-            180,
+            "parent-run",
+            6,
+            1_070,
             AgentEvent::RunCompleted {
-                run_id: RunId::new("parent"),
+                run_id: RunId::new("parent-run"),
                 outcome: None,
             },
         ),
@@ -230,33 +520,45 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
     }
 
     let spans = collector.spans();
-    let parent_iteration = spans
-        .iter()
-        .find(|span| span.name == "agent.iteration#1")
-        .expect("parent turn should have an iteration span");
     let parent_root = spans
         .iter()
         .find(|span| span.name == "agent.turn")
         .expect("parent run root");
-    assert_eq!(parent_iteration.kind, SpanKind::Iteration);
-    assert_eq!(parent_iteration.parent_span_id.as_deref(), Some(parent_root.span_id.as_str()));
-    assert_eq!(parent_iteration.start_unix_ms, 120);
-    assert_eq!(parent_iteration.end_unix_ms, Some(170));
-    assert_eq!(parent_iteration.attributes["agent.iteration"], 1);
+    let parent_iteration = spans
+        .iter()
+        .find(|span| span.name == "agent.iteration#1")
+        .expect("parent iteration");
+    assert_eq!(
+        parent_iteration.parent_span_id.as_deref(),
+        Some(parent_root.span_id.as_str())
+    );
+    assert_eq!(parent_iteration.start_unix_ms, 1_010);
+    assert_eq!(parent_iteration.end_unix_ms, Some(1_060));
 
+    let child_root = spans
+        .iter()
+        .find(|span| span.name == "subagent.researcher")
+        .expect("explicitly linked child run root");
     let child_iteration = spans
         .iter()
         .find(|span| span.name == "subagent.iteration#1")
-        .expect("child turn should have an iteration span");
-    let child_root = spans
-        .iter()
-        .find(|span| span.name == "subagent.child")
-        .expect("child run root");
+        .expect("child iteration");
     assert_eq!(child_iteration.kind, SpanKind::SubagentIteration);
-    assert_eq!(child_iteration.parent_span_id.as_deref(), Some(child_root.span_id.as_str()));
-    assert_eq!(child_iteration.start_unix_ms, 150);
-    assert_eq!(child_iteration.end_unix_ms, Some(160));
-    assert_eq!(child_iteration.attributes["agent.iteration"], 1);
+    assert_eq!(
+        child_iteration.parent_span_id.as_deref(),
+        Some(child_root.span_id.as_str())
+    );
+    assert_eq!(child_iteration.start_unix_ms, 1_045);
+    assert_eq!(child_iteration.end_unix_ms, Some(1_050));
+    assert_eq!(child_iteration.status, SpanStatus::Error);
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span.kind == SpanKind::Generation)
+            .count(),
+        2,
+        "the same call ID in parent and child runs remains separately scoped"
+    );
 }
 
 #[test]
