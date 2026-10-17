@@ -51,6 +51,7 @@ type CompletionCallback =
 type AsyncCompletionCallback = dyn Fn(
         String,
         Result<crate::subagent::SubagentOutcome, String>,
+        bool,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>
     + Send
     + Sync;
@@ -214,6 +215,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         handler: impl Fn(
                 String,
                 Result<crate::subagent::SubagentOutcome, String>,
+                bool,
             ) -> Fut
             + Send
             + Sync
@@ -222,8 +224,8 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.async_completion = Some(Arc::new(move |target, result| {
-            Box::pin(handler(target, result))
+        self.async_completion = Some(Arc::new(move |target, result, emit_host_effects| {
+            Box::pin(handler(target, result, emit_host_effects))
         }));
         self
     }
@@ -315,10 +317,14 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
-                        if result.should_emit_host_effects()
-                            && let Some(completion) = async_completion
-                        {
-                            completion(completion_target.clone(), Ok(result.outcome.clone())).await;
+                        let emit_host_effects = result.should_emit_host_effects();
+                        if let Some(completion) = async_completion {
+                            completion(
+                                completion_target.clone(),
+                                Ok(result.outcome.clone()),
+                                emit_host_effects,
+                            )
+                            .await;
                         }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Ok(result.outcome.clone()));
@@ -335,7 +341,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     Err(error) => {
                         let error = error.to_string();
                         if let Some(completion) = async_completion {
-                            completion(completion_target.clone(), Err(error.clone())).await;
+                            completion(completion_target.clone(), Err(error.clone()), true).await;
                         }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Err(error.clone()));

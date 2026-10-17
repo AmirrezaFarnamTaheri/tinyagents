@@ -400,7 +400,7 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
     .with_async_completion_handler({
         let callback_started = callback_started.clone();
         let release_callback = release_callback.clone();
-        move |_target, result| {
+        move |_target, result, _emit_host_effects| {
             assert!(result.is_ok());
             let callback_started = callback_started.clone();
             let release_callback = release_callback.clone();
