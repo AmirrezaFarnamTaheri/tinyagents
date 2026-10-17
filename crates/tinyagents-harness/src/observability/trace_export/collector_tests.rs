@@ -368,7 +368,7 @@ fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
         (
             TerminalOutcome::new(TerminalReason::Timeout, "deadline"),
             SpanStatus::Error,
-            "failed",
+            "timed_out",
         ),
     ];
     for (outcome, status, label) in outcomes {
@@ -397,6 +397,148 @@ fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
             );
         }
     }
+}
+
+#[test]
+fn failed_run_preserves_typed_cancellation_and_timeout_outcomes() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    for (reason, expected_status, expected_outcome) in [
+        (TerminalReason::Cancelled, SpanStatus::Unset, "cancelled"),
+        (TerminalReason::Timeout, SpanStatus::Error, "timed_out"),
+        (TerminalReason::Completed, SpanStatus::Error, "failed"),
+    ] {
+        let context = TraceContext::new("trace-failed-terminal", None).with_capture_content(false);
+        let mut collector = SpanCollector::new(context);
+        collector.record_event(
+            &AgentEvent::RunStarted {
+                run_id: RunId::new("run-failed-terminal"),
+                thread_id: None,
+            },
+            10,
+        );
+        collector.record_event(
+            &AgentEvent::RunFailed {
+                run_id: RunId::new("run-failed-terminal"),
+                error: "private error payload".into(),
+                outcome: Some(TerminalOutcome::new(reason, "private typed message")),
+            },
+            20,
+        );
+
+        let root = &collector.spans()[0];
+        assert_eq!(root.status, expected_status, "{reason:?}");
+        assert_eq!(
+            root.attributes["turn.outcome"], expected_outcome,
+            "{reason:?}"
+        );
+        assert_ne!(root.attributes["turn.outcome"], "completed", "{reason:?}");
+        assert_eq!(
+            root.attributes["error.message"], "Operation failed",
+            "{reason:?}"
+        );
+        assert_eq!(root.end_unix_ms, Some(20), "{reason:?}");
+        if reason == TerminalReason::Cancelled {
+            assert_eq!(root.attributes["observation.level"], "WARNING");
+        }
+    }
+}
+
+#[test]
+fn failed_timeout_falls_back_to_legacy_error_without_leaking_when_capture_is_off() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    for (capture_content, expected_error) in [
+        (true, "legacy timeout description"),
+        (false, "Operation failed"),
+    ] {
+        let context =
+            TraceContext::new("trace-timeout-fallback", None).with_capture_content(capture_content);
+        let mut collector = SpanCollector::new(context);
+        collector.record_event(
+            &AgentEvent::RunStarted {
+                run_id: RunId::new("run-timeout-fallback"),
+                thread_id: None,
+            },
+            10,
+        );
+        collector.record_event(
+            &AgentEvent::RunFailed {
+                run_id: RunId::new("run-timeout-fallback"),
+                error: "legacy timeout description".into(),
+                outcome: Some(TerminalOutcome::new(TerminalReason::Timeout, "  \n ")),
+            },
+            20,
+        );
+
+        let root = &collector.spans()[0];
+        assert_eq!(root.status, SpanStatus::Error);
+        assert_eq!(root.attributes["turn.outcome"], "timed_out");
+        assert_eq!(root.attributes["error.message"], expected_error);
+        assert_eq!(root.end_unix_ms, Some(20));
+    }
+}
+
+#[test]
+fn failed_child_run_keeps_its_typed_error_on_the_child_span() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    let mut collector = SpanCollector::new(
+        TraceContext::new("trace-child-failure", None).with_capture_content(true),
+    );
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("parent"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        0,
+        11,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("child"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        1,
+        20,
+        AgentEvent::RunFailed {
+            run_id: RunId::new("child"),
+            error: "legacy child failure".into(),
+            outcome: Some(TerminalOutcome::new(
+                TerminalReason::ToolFailed,
+                "typed child failure",
+            )),
+        },
+    ));
+
+    let spans = collector.spans();
+    let parent = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Turn)
+        .unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .unwrap();
+    assert_eq!(parent.status, SpanStatus::Unset);
+    assert!(!parent.attributes.contains_key("turn.outcome"));
+    assert!(!parent.attributes.contains_key("error.message"));
+    assert_eq!(child.status, SpanStatus::Error);
+    assert_eq!(child.attributes["turn.outcome"], "failed");
+    assert_eq!(child.attributes["error.message"], "typed child failure");
 }
 
 #[test]

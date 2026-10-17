@@ -601,10 +601,8 @@ impl SpanCollector {
             AgentEvent::RunCompleted { outcome, .. } => {
                 self.close_completed_run(outcome.as_ref(), timestamp_ms)
             }
-            AgentEvent::RunFailed { error, .. } => {
-                self.close_root(timestamp_ms, SpanStatus::Error, "failed");
-                let root = self.ensure_run_root(timestamp_ms);
-                self.put_error(root, error);
+            AgentEvent::RunFailed { error, outcome, .. } => {
+                self.close_failed_run(outcome.as_ref(), error, timestamp_ms)
             }
             _ => {}
         }
@@ -1024,11 +1022,29 @@ impl SpanCollector {
     }
 
     fn close_completed_run(&mut self, outcome: Option<&crate::terminal::TerminalOutcome>, at: u64) {
+        self.close_terminal_outcome(outcome, None, at);
+    }
+
+    fn close_terminal_outcome(
+        &mut self,
+        outcome: Option<&crate::terminal::TerminalOutcome>,
+        fallback_error: Option<&str>,
+        at: u64,
+    ) {
         use crate::terminal::TerminalReason;
         let Some(outcome) = outcome else {
             self.close_root(at, SpanStatus::Ok, "completed");
             return;
         };
+        if outcome.reason.class() == crate::terminal::TerminalClass::Timeout {
+            self.close_root(at, SpanStatus::Error, "timed_out");
+            let root = self.ensure_run_root(at);
+            self.put_error(
+                root,
+                terminal_error_message(&outcome.message, fallback_error, "Operation timed out"),
+            );
+            return;
+        }
         match outcome.reason {
             TerminalReason::Completed => self.close_root(at, SpanStatus::Ok, "completed"),
             TerminalReason::Cancelled => {
@@ -1039,11 +1055,7 @@ impl SpanCollector {
                         .insert("observation.level".into(), json_str("WARNING"));
                     self.put_error(
                         root,
-                        if outcome.message.is_empty() {
-                            "Run cancelled"
-                        } else {
-                            &outcome.message
-                        },
+                        terminal_error_message(&outcome.message, fallback_error, "Run cancelled"),
                     );
                 }
             }
@@ -1082,11 +1094,41 @@ impl SpanCollector {
             }
             _ => {
                 self.close_root(at, SpanStatus::Error, "failed");
-                if let Some(root) = self.root {
-                    self.put_error(root, &outcome.message);
+                if let Some(root) = self.run_roots.get(&self.active_run_id()).copied() {
+                    self.put_error(
+                        root,
+                        terminal_error_message(
+                            &outcome.message,
+                            fallback_error,
+                            "Operation failed",
+                        ),
+                    );
                 }
             }
         }
+    }
+
+    fn close_failed_run(
+        &mut self,
+        outcome: Option<&crate::terminal::TerminalOutcome>,
+        error: &str,
+        at: u64,
+    ) {
+        use crate::terminal::TerminalReason;
+
+        // Reuse the generic terminal projection for typed cancellation, stops,
+        // and failures. A RunFailed event is authoritative if it contradicts
+        // a typed Completed outcome: never turn a failed run into success.
+        if let Some(outcome) = outcome
+            && outcome.reason != TerminalReason::Completed
+        {
+            self.close_terminal_outcome(Some(outcome), Some(error), at);
+            return;
+        }
+
+        self.close_root(at, SpanStatus::Error, "failed");
+        let root = self.ensure_run_root(at);
+        self.put_error(root, error);
     }
 
     fn put_error(&mut self, index: usize, error: &str) {
@@ -1098,6 +1140,20 @@ impl SpanCollector {
         self.spans[index]
             .attributes
             .insert("error.message".into(), json_str(&message));
+    }
+}
+
+fn terminal_error_message<'a>(
+    outcome_message: &'a str,
+    fallback_error: Option<&'a str>,
+    fallback_message: &'a str,
+) -> &'a str {
+    if !outcome_message.trim().is_empty() {
+        outcome_message
+    } else {
+        fallback_error
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or(fallback_message)
     }
 }
 
