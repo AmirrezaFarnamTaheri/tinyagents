@@ -446,7 +446,8 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
                 callback_started.notify_one();
                 release_callback.acquire().await.unwrap().forget();
             }
-        }
+        },
+        |_| None,
     });
     let parent = RunContext::new(RunConfig::new("parent"), ());
 
@@ -1212,7 +1213,10 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     assert_eq!(completed_value["output"], "resumed completion");
     assert_eq!(completed_value["worker_thread_id"], "worker-thread");
     assert_eq!(completed_value["extensions"]["iterations"], 3);
-    assert_eq!(completed_value["extensions"]["task_id"], "pause-then-continue");
+    assert_eq!(
+        completed_value["extensions"]["task_id"],
+        "pause-then-continue"
+    );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
@@ -1257,7 +1261,7 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
                 None,
             )
             .map(|request| request.with_target("worker"))
-        },
+        }
     });
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
