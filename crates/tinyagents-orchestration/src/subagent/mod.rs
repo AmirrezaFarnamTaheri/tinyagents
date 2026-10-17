@@ -32,18 +32,22 @@ pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservatio
 pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,
-    DetachedCompletionTarget, DetachedSubagentStatus, FinishedOutcome, SpawnedSubagent,
+    DetachedCompletionTarget, DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome,
+    SpawnedSubagent,
     SteerAccess, SteerError, SteerReceipt, SteerRoute, SubagentIdentity, SubagentResumeRef,
     SubagentSnapshot, WaitAllItem, WaitError, WaitOutcome, cancel_detached_or_durable,
     cancel_for_thread, distinct_parent_threads, list_subagent_records, orphaned_subagent_reason,
     queue_lane_name, record_agent_id, record_cancelled, record_detached_completion,
     record_parent_session, record_spawned, record_status, record_subagent_session_id,
-    record_to_wait_outcome, resolve_detached_or_durable, resume_ref_for_task,
+    record_to_wait_outcome, resolve_detached_or_durable, resolve_detached_or_durable_with_owners,
+    resume_ref_for_task,
     resume_ref_from_record, snapshot_for_owner, spawn_status_watcher,
     spawn_status_watcher_with_completions, steer_detached, steer_detached_with_request_id,
     steering_command_for_lane, subagent_record_for_task, task_id_for_session,
-    task_id_for_session_in_records, task_status_label, wait_all_detached, wait_detached,
-    wait_detached_or_durable, wait_error_from_registry,
+    task_id_for_session_in_records, task_status_label, wait_all_detached,
+    wait_all_detached_with_owners, wait_detached, wait_detached_or_durable,
+    wait_detached_or_durable_with_owners, wait_error_from_registry,
+    cancel_detached_or_durable_with_owners,
 };
 pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
