@@ -437,10 +437,10 @@ impl WorkflowRunSupervisor {
         callback: impl FnOnce() -> T,
     ) -> Option<T> {
         let registry = self.registry.lock().expect("workflow registry poisoned");
-        if !registry
+        if registry
             .current
             .get(handle.run_id())
-            .is_some_and(|current| current.id == handle.generation)
+            .is_none_or(|current| current.id != handle.generation)
         {
             return None;
         }

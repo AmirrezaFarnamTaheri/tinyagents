@@ -450,7 +450,10 @@ fn with_current_skips_stale_callback_and_serializes_current_callback() {
     });
 
     replacement_attempted_rx.recv().unwrap();
-    assert!(matches!(supervisor.registry.try_lock(), Err(std::sync::TryLockError::WouldBlock)));
+    assert!(matches!(
+        supervisor.registry.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
     assert!(!replacement_done.load(std::sync::atomic::Ordering::SeqCst));
     release_callback.wait();
     assert_eq!(callback_thread.join().unwrap(), Some(()));
