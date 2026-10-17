@@ -1,6 +1,6 @@
 use super::*;
 use tinyagents_graph::delegation::{DelegationConfig, DelegationStage, DelegationStageOutput};
-use tinytools::ToolExposure;
+use tinytools::{ToolCategory, ToolExposure, ToolResult, ToolScope, ToolTimeout};
 
 #[test]
 fn approval_parser_requires_a_standalone_approve_token() {
@@ -29,6 +29,31 @@ fn multi_target_schema_exposes_only_configured_agents_and_blocking_envelope() {
     assert_eq!(schema["properties"]["blocking"]["type"], "boolean");
     assert_eq!(DELEGATION_MODE_FIELD, SUBAGENT_MODE_FIELD);
     assert_eq!(declaration.exposure(), ToolExposure::Hidden);
+}
+
+#[test]
+fn graph_alias_preserves_host_execution_metadata() {
+    use tinytools::PermissionLevel;
+
+    let declaration = DelegationTool::<(), (), _, _>::new(
+        |_, _, _| DelegationConfig::default(),
+        |_, _, _| async { Ok(DelegationStageOutput::done("unused")) },
+    )
+    .with_metadata(
+        PermissionLevel::Execute,
+        ToolScope::AgentOnly,
+        ToolCategory::Workflow,
+        ToolTimeout::Unbounded,
+    )
+    .tool();
+
+    assert_eq!(declaration.permission_level(), PermissionLevel::Execute);
+    assert_eq!(declaration.scope(), ToolScope::AgentOnly);
+    assert_eq!(declaration.category(), ToolCategory::Workflow);
+    assert_eq!(
+        declaration.timeout_policy(&Value::Null),
+        ToolTimeout::Unbounded
+    );
 }
 
 #[test]
@@ -197,5 +222,269 @@ async fn graph_alias_keeps_host_declaration_and_routes_arguments_to_stage_worker
     assert!(
         seen.iter()
             .all(|(agent, revisions, _)| agent == "planner" && *revisions == 3)
+    );
+}
+
+#[tokio::test]
+async fn resumable_delegation_restarts_at_the_pending_stage() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tinyagents_graph::{DelegationState, checkpoint::InMemoryCheckpointer};
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let checkpointer = std::sync::Arc::new(InMemoryCheckpointer::<DelegationState>::new());
+    let fail_execute_once = std::sync::Arc::new(AtomicBool::new(true));
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let make_tool = || {
+        let cp = checkpointer.clone();
+        let fail = fail_execute_once.clone();
+        let calls = calls.clone();
+        DelegationTool::<(), (), _, _>::new(
+            move |_, _, _| DelegationConfig {
+                checkpointer: Some(cp.clone()),
+                thread_id: Some("durable-delegation".into()),
+                ..DelegationConfig::default()
+            },
+            move |_, stage, _| {
+                let fail = fail.clone();
+                let calls = calls.clone();
+                async move {
+                    calls.lock().unwrap().push(stage);
+                    if stage == DelegationStage::Execute && fail.swap(false, Ordering::SeqCst) {
+                        return Err("simulated process interruption".into());
+                    }
+                    Ok(DelegationStageOutput::done(
+                        if stage == DelegationStage::Review {
+                            "APPROVE"
+                        } else {
+                            "completed"
+                        },
+                    ))
+                }
+            },
+        )
+        .with_resumable_execution()
+    };
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let first = make_tool();
+    assert!(
+        ToolDispatch::<(), ()>::execute(
+            &first,
+            &(),
+            new_call_id(),
+            json!({"task":"resume me"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .is_err()
+    );
+
+    // A new dispatcher models a host process starting from the persisted graph.
+    let restarted = make_tool();
+    assert!(
+        ToolDispatch::<(), ()>::execute(
+            &restarted,
+            &(),
+            new_call_id(),
+            json!({"task":"resume me"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .is_ok()
+    );
+
+    let before = {
+        let calls = calls.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|&&stage| stage == DelegationStage::Plan)
+                .count(),
+            1
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|&&stage| stage == DelegationStage::Execute)
+                .count(),
+            2
+        );
+        calls.len()
+    };
+    let terminal = make_tool();
+    ToolDispatch::<(), ()>::execute(
+        &terminal,
+        &(),
+        new_call_id(),
+        json!({"task":"resume me"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("a terminal checkpoint is returned without rerunning workers");
+    assert_eq!(calls.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn resumable_delegation_projects_pending_approval_and_full_state() {
+    use tinyagents_graph::{
+        DelegationState, checkpoint::InMemoryCheckpointer, stream::CollectingSink,
+    };
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let checkpointer = std::sync::Arc::new(InMemoryCheckpointer::<DelegationState>::new());
+    let event_sink = std::sync::Arc::new(CollectingSink::new());
+    let config_checkpointer = checkpointer.clone();
+    let config_event_sink = event_sink.clone();
+    let tool = DelegationTool::<(), (), _, _>::new(
+        move |_, _, _| DelegationConfig {
+            checkpointer: Some(config_checkpointer.clone()),
+            thread_id: Some("pending-review".into()),
+            require_review_approval: true,
+            event_sink: Some(config_event_sink.clone()),
+            ..DelegationConfig::default()
+        },
+        |_, stage, _| async move {
+            Ok(if stage == DelegationStage::Review {
+                DelegationStageOutput {
+                    text: "APPROVE after the final checks".into(),
+                    approved: true,
+                    prompt: None,
+                }
+            } else {
+                DelegationStageOutput::done("completed")
+            })
+        },
+    )
+    .with_resumable_execution()
+    .with_review_approval_policy(ReviewApprovalPolicy::WorkerOutput)
+    .with_result_projection(|result| match result {
+        Ok(outcome) => ToolResult::success(
+            json!({
+                "final_output": outcome.state.final_output,
+                "approved": outcome.state.approved,
+                "cancelled": outcome.state.cancelled,
+                "revisions": outcome.state.revisions,
+                "reviews": outcome.state.reviews,
+                "pending": outcome.pending.as_ref().map(|pending| json!({
+                    "node": pending.node,
+                    "thread_id": pending.thread_id,
+                    "payload": pending.payload,
+                })),
+            })
+            .to_string(),
+        ),
+        Err(error) => ToolResult::error(error),
+    });
+
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task":"approve durably"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("the durable approval interrupt is a result, not an error");
+    let value: Value = serde_json::from_str(&result.output()).unwrap();
+    assert!(!result.is_error);
+    assert_eq!(value["final_output"], Value::Null);
+    assert_eq!(value["approved"], true);
+    assert_eq!(value["reviews"], json!(["APPROVE after the final checks"]));
+    assert_eq!(value["pending"]["node"], "approval");
+    assert_eq!(value["pending"]["thread_id"], "pending-review");
+    assert!(!event_sink.is_empty());
+}
+
+#[tokio::test]
+async fn resumable_delegation_preserves_caller_cancellation() {
+    use tinyagents_graph::{DelegationState, checkpoint::InMemoryCheckpointer};
+    use tinyagents_harness::{
+        cancel::CancellationToken,
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let checkpointer = std::sync::Arc::new(InMemoryCheckpointer::<DelegationState>::new());
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let config_checkpointer = checkpointer.clone();
+    let config_cancellation = cancellation.clone();
+    let tool = DelegationTool::<(), (), _, _>::new(
+        move |_, _, _| DelegationConfig {
+            checkpointer: Some(config_checkpointer.clone()),
+            thread_id: Some("cancelled-run".into()),
+            cancel: config_cancellation.clone(),
+            ..DelegationConfig::default()
+        },
+        |_, _, _| async { Ok(DelegationStageOutput::done("must not run")) },
+    )
+    .with_resumable_execution()
+    .with_result_projection(|result| match result {
+        Ok(outcome) if outcome.state.cancelled => ToolResult::error("CANCELLED"),
+        Ok(_) => ToolResult::success("unexpected completion"),
+        Err(error) => ToolResult::error(error),
+    });
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task":"cancel before start"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert!(result.is_error);
+    assert_eq!(result.output(), "CANCELLED");
+}
+
+#[tokio::test]
+async fn result_projection_receives_raw_graph_errors() {
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let tool = DelegationTool::<(), (), _, _>::new(
+        |_, _, _| DelegationConfig::default(),
+        |_, _, _| async { Err("worker database unavailable".into()) },
+    )
+    .with_resumable_execution()
+    .with_result_projection(|result| match result {
+        Ok(_) => ToolResult::success("unexpected completion"),
+        Err(error) => ToolResult::error(format!("HOST ERROR: {error}")),
+    });
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task":"surface worker failure"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("the projection formats the graph error as a tool result");
+
+    assert!(result.is_error);
+    assert_eq!(
+        result.output(),
+        "HOST ERROR: delegation graph run failed: model error: worker database unavailable"
     );
 }

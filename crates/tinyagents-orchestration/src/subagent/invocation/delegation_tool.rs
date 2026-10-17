@@ -7,10 +7,13 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_graph::delegation::{
-    DelegationConfig, DelegationStage, DelegationStageOutput, DelegationState, run_delegation,
+    DelegationConfig, DelegationOutcome, DelegationStage, DelegationStageOutput, DelegationState,
+    run_delegation, run_or_resume_delegation,
 };
 use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
-use tinytools::{Tool, ToolExposure, ToolResult};
+use tinytools::{
+    PermissionLevel, Tool, ToolCategory, ToolExposure, ToolResult, ToolScope, ToolTimeout,
+};
 
 use crate::subagent::SUBAGENT_MODE_FIELD;
 
@@ -121,6 +124,7 @@ where
                 "expected_output":{"type":"string"},"citation_requirement":{"type":"string"},
                 "model":{"type":"string"},"blocking":{"type":"boolean","description":"Wait for the target result when true."}
             }}),
+            metadata: None,
             exposure: self.exposure,
         })
     }
@@ -164,6 +168,7 @@ struct DelegationDeclaration {
     name: String,
     description: String,
     parameters: Value,
+    metadata: Option<DelegationToolMetadata>,
     exposure: ToolExposure,
 }
 #[async_trait]
@@ -179,6 +184,22 @@ impl Tool for DelegationDeclaration {
     }
     fn exposure(&self) -> ToolExposure {
         self.exposure
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        self.metadata
+            .map_or(PermissionLevel::ReadOnly, |metadata| metadata.permission)
+    }
+    fn scope(&self) -> ToolScope {
+        self.metadata
+            .map_or(ToolScope::All, |metadata| metadata.scope)
+    }
+    fn category(&self) -> ToolCategory {
+        self.metadata
+            .map_or(ToolCategory::System, |metadata| metadata.category)
+    }
+    fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
+        self.metadata
+            .map_or(ToolTimeout::Inherit, |metadata| metadata.timeout)
     }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         anyhow::bail!("delegation requires typed-parent dispatch")
@@ -213,6 +234,25 @@ pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
 
 type ConfigFactory<State, Ctx> =
     dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync;
+type ResultProjector = dyn Fn(Result<DelegationOutcome, String>) -> ToolResult + Send + Sync;
+
+#[derive(Debug, Clone, Copy)]
+struct DelegationToolMetadata {
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
+}
+
+/// Determines how review-stage approval is interpreted by [`DelegationTool`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewApprovalPolicy {
+    /// Require a standalone `APPROVE` response (the generic default).
+    #[default]
+    StandaloneApprove,
+    /// Trust the approval boolean returned by the host worker.
+    WorkerOutput,
+}
 
 /// Single-target graph delegation tool with an injected worker for each stage.
 pub struct DelegationTool<State, Ctx, Worker, Fut>
@@ -226,6 +266,10 @@ where
     name: String,
     description: String,
     parameters: Value,
+    resumable: bool,
+    review_approval_policy: ReviewApprovalPolicy,
+    result_projector: Option<Arc<ResultProjector>>,
+    metadata: Option<DelegationToolMetadata>,
 }
 
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
@@ -245,6 +289,10 @@ where
             name: "delegate_graph".into(),
             description: "Plan, execute, and review delegated work.".into(),
             parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
+            resumable: false,
+            review_approval_policy: ReviewApprovalPolicy::StandaloneApprove,
+            result_projector: None,
+            metadata: None,
         }
     }
 
@@ -265,6 +313,44 @@ where
         self.parameters = parameters;
         self
     }
+
+    /// Enables durable classify-and-resume execution for checkpointed threads.
+    pub fn with_resumable_execution(mut self) -> Self {
+        self.resumable = true;
+        self
+    }
+
+    /// Selects how the tool interprets the review worker's approval result.
+    pub fn with_review_approval_policy(mut self, policy: ReviewApprovalPolicy) -> Self {
+        self.review_approval_policy = policy;
+        self
+    }
+
+    /// Projects the complete graph outcome or raw graph error into a tool result.
+    pub fn with_result_projection(
+        mut self,
+        project: impl Fn(Result<DelegationOutcome, String>) -> ToolResult + Send + Sync + 'static,
+    ) -> Self {
+        self.result_projector = Some(Arc::new(project));
+        self
+    }
+
+    /// Preserves host authorization and execution metadata on the declaration.
+    pub fn with_metadata(
+        mut self,
+        permission: PermissionLevel,
+        scope: ToolScope,
+        category: ToolCategory,
+        timeout: ToolTimeout,
+    ) -> Self {
+        self.metadata = Some(DelegationToolMetadata {
+            permission,
+            scope,
+            category,
+            timeout,
+        });
+        self
+    }
 }
 
 #[async_trait]
@@ -280,6 +366,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             parameters: self.parameters.clone(),
+            metadata: self.metadata,
             exposure: ToolExposure::Direct,
         })
     }
@@ -294,24 +381,54 @@ where
         if args.get("task").and_then(Value::as_str).is_none() {
             anyhow::bail!("task must be a string");
         }
+        let config = (self.config)(state, parent, &args);
         let worker = Arc::clone(&self.worker);
-        let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
+        let review_approval_policy = self.review_approval_policy;
+        let stage_runner = move |stage, graph| {
             let worker = Arc::clone(&worker);
             let mut stage_args = args.clone();
             stage_args["stage_prompt"] = Value::String(stage_prompt(stage).to_owned());
             async move {
                 let mut output = worker(stage_args, stage, graph).await?;
-                if stage == DelegationStage::Review {
+                if stage == DelegationStage::Review
+                    && review_approval_policy == ReviewApprovalPolicy::StandaloneApprove
+                {
                     output.approved = parse_approval(&output.text);
                 }
                 Ok(output)
             }
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
-        Ok(ToolResult::json(
-            json!({"output":result.final_output,"approved":result.approved,"cancelled":result.cancelled}),
-        ))
+        };
+        let outcome = if self.resumable {
+            run_or_resume_delegation(config, stage_runner).await
+        } else {
+            run_delegation(config, stage_runner)
+                .await
+                .map(|state| DelegationOutcome {
+                    state,
+                    pending: None,
+                })
+        };
+
+        if let Some(project) = &self.result_projector {
+            return Ok(project(outcome));
+        }
+        let outcome = outcome.map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
+        if self.resumable {
+            return Ok(ToolResult::json(json!({
+                "state": outcome.state,
+                "pending": outcome.pending.map(|pending| json!({
+                    "interrupt_id": pending.interrupt_id,
+                    "node": pending.node,
+                    "payload": pending.payload,
+                    "thread_id": pending.thread_id,
+                })),
+            })));
+        }
+        Ok(ToolResult::json(json!({
+            "output": outcome.state.final_output,
+            "approved": outcome.state.approved,
+            "cancelled": outcome.state.cancelled,
+        })))
     }
 }
 

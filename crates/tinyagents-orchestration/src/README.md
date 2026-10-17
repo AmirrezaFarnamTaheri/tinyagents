@@ -26,8 +26,13 @@ on orchestration policy.
   structured task envelope. Its `blocking` field maps to the standard `mode`
   field, and exposure can be set to `Hidden` for host-only tools.
 - `subagent::DelegationTool` runs the graph plan/execute/review cycle through
-  an injected stage worker. Generic stage prompt guidance and the standalone
-  `APPROVE` parser are exported for host workers.
+  an injected stage worker. Its default keeps the one-shot execution and
+  standalone `APPROVE` parser; `with_resumable_execution` opts checkpointed
+  threads into classify-and-resume behavior. Hosts can retain their worker's
+  approval decision with `ReviewApprovalPolicy::WorkerOutput`, project the
+  complete state, pending approval, or graph error into a `ToolResult` through
+  `with_result_projection`, and preserve declaration metadata with
+  `with_metadata`.
 - `parallel::ParallelFanoutTool` composes host task parsing, admission policy,
   asynchronous preflight, branch-context creation, and execution with ordered
   results and explicit rejection records.

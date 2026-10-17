@@ -51,10 +51,11 @@ pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
-    DriverSubAgentTool, MultiTargetDelegationTool, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob,
-    SubAgentJobAction, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
-    SubAgentJobsTool, SubAgentMessageTool, SubAgentMode, SubAgentSession, SubAgentTool,
-    SubagentDriverToolHost, parse_approval, register_subagent_job_tools, review_stage_output,
+    DriverSubAgentTool, MultiTargetDelegationTool, ReviewApprovalPolicy, SUBAGENT_MODE_FIELD,
+    SubAgent, SubAgentJob, SubAgentJobAction, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
+    SubAgentJobStatus, SubAgentJobsTool, SubAgentMessageTool, SubAgentMode, SubAgentSession,
+    SubAgentTool, SubagentDriverToolHost, parse_approval, register_subagent_job_tools,
+    review_stage_output,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
