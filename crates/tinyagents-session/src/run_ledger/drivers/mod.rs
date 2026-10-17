@@ -694,6 +694,44 @@ impl RunLedgerStore for DriverRunLedger {
         .map_err(Into::into)
     }
 
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let now = Utc::now();
+        self.change(
+            MEMBERS,
+            member_id,
+            move |previous: Option<AgentTeamMember>| {
+                let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
+                    return Ok((None, AgentTeamMemberRunAdmission::Missing));
+                };
+                match row.member_status {
+                    AgentTeamMemberStatus::Active => {
+                        Ok((None, AgentTeamMemberRunAdmission::AlreadyActive(row)))
+                    }
+                    AgentTeamMemberStatus::Stopped => {
+                        Ok((None, AgentTeamMemberRunAdmission::NotAdmissible(row)))
+                    }
+                    AgentTeamMemberStatus::Pending | AgentTeamMemberStatus::Idle => {
+                        row.member_status = AgentTeamMemberStatus::Active;
+                        row.current_task_id = Some(task_id.to_owned());
+                        row.worker_thread_id = Some(worker_thread_id.to_owned());
+                        row.run_id = Some(run_id.to_owned());
+                        row.updated_at = now;
+                        Ok((Some(row.clone()), AgentTeamMemberRunAdmission::Started(row)))
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(Into::into)
+    }
+
     async fn mark_agent_team_member_idle(
         &self,
         team_id: &str,

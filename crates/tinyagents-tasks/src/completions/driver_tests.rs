@@ -128,6 +128,36 @@ async fn the_store_keeps_the_latest_record_per_task() {
 }
 
 #[tokio::test]
+async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_them() {
+    use serde_json::json;
+    use tinyagents_harness::driver_ids::hashed_id;
+    use tinystoragedrivers_core::Precondition;
+
+    let storage = MemoryStorage::new();
+    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    store.put(&record("corrupt", "p")).unwrap();
+    store
+        .docs
+        .put(
+            &store.collection,
+            &hashed_id(&["corrupt"]),
+            json!({
+                "taskId": "corrupt",
+                "parentKey": "p",
+                "state": "pending",
+                "updatedAtMs": 1,
+                "record": {"taskId": "corrupt"}
+            }),
+            Precondition::None,
+        )
+        .await
+        .unwrap();
+
+    assert!(store.try_list(None).is_err());
+    assert!(store.list(None).is_empty(), "legacy reads remain lenient");
+}
+
+#[tokio::test]
 async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("completions.sqlite");

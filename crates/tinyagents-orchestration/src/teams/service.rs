@@ -15,10 +15,10 @@ use chrono::Utc;
 use serde_json::json;
 use tinyagents_graph::dag::{DagNode, has_cycle};
 use tinyagents_session::run_ledger::{
-    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember, AgentTeamMemberStatus,
-    AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskStatus,
-    AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome, CompletionOutcome, RunEvent,
-    RunEventAppend, RunEventListRequest, RunLedgerStore,
+    AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember,
+    AgentTeamMemberRunAdmission, AgentTeamMemberStatus, AgentTeamMemberUpsert, AgentTeamStatus,
+    AgentTeamTask, AgentTeamTaskStatus, AgentTeamTaskUpsert, AgentTeamUpsert, ClaimOutcome,
+    CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest, RunLedgerStore,
 };
 use tinystoragedrivers_core::Blocking;
 use uuid::Uuid;
@@ -42,6 +42,13 @@ pub enum TeamMemberStartError {
     Blocked { task_id: String, unmet: Vec<String> },
     /// The task does not exist in the requested team.
     UnknownTask { task_id: String },
+    /// The member already owns another active task.
+    AlreadyActive {
+        /// Member whose active run prevented admission.
+        member_id: String,
+        /// Task currently assigned to that member, if recorded.
+        current_task_id: Option<String>,
+    },
     /// Team/member validation or a ledger operation failed.
     Other(anyhow::Error),
 }
@@ -54,6 +61,9 @@ impl std::fmt::Display for TeamMemberStartError {
                 write!(f, "task dependencies are incomplete: {}", unmet.join(", "))
             }
             Self::UnknownTask { task_id } => write!(f, "unknown task: {task_id}"),
+            Self::AlreadyActive { member_id, .. } => {
+                write!(f, "team member is already active: {member_id}")
+            }
             Self::Other(error) => error.fmt(f),
         }
     }
@@ -138,7 +148,9 @@ pub trait TeamLedger: Send + Sync {
         member_id: &str,
         claim_token: &str,
     ) -> Result<bool>;
-    /// Marks a member as running a task and records its execution identifiers.
+    /// Legacy unconditional member-running setter. It does not reserve against
+    /// another active run; new task admission must use
+    /// [`TeamLedger::try_mark_member_running`].
     fn mark_member_running(
         &self,
         team_id: &str,
@@ -147,6 +159,21 @@ pub trait TeamLedger: Send + Sync {
         worker_thread_id: &str,
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
+    /// Atomically reserves the member for a task. The default fails closed so
+    /// legacy ledgers cannot silently permit overlapping member runs.
+    fn try_mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let _ = (team_id, member_id, task_id, worker_thread_id, run_id);
+        Err(anyhow!(
+            "atomic team member admission is unsupported by this ledger"
+        ))
+    }
     /// Marks a running member idle after its worker finishes.
     fn mark_member_idle(
         &self,
@@ -354,6 +381,28 @@ impl TeamLedger for SessionTeamLedger {
         self.run(async move {
             ledger
                 .mark_agent_team_member_running(&team, &member, &task, &thread, &run)
+                .await
+        })
+    }
+    fn try_mark_member_running(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let (ledger, team, member, task, thread, run) = (
+            Arc::clone(&self.ledger),
+            team_id.to_owned(),
+            member_id.to_owned(),
+            task_id.to_owned(),
+            worker_thread_id.to_owned(),
+            run_id.to_owned(),
+        );
+        self.run(async move {
+            ledger
+                .try_start_agent_team_member(&team, &member, &task, &thread, &run)
                 .await
         })
     }
@@ -670,6 +719,7 @@ impl<L: TeamLedger> TeamService<L> {
         E: TeamMemberExecutor + ?Sized,
         Started: FnOnce(TeamMemberStarted),
     {
+        self.ensure_member(team_id, member_id)?;
         let claim_token = Uuid::new_v4().to_string();
         let claimed = match self.claim_task(team_id, task_id, member_id, &claim_token)? {
             ClaimOutcome::Claimed(task) => *task,
@@ -701,18 +751,30 @@ impl<L: TeamLedger> TeamService<L> {
         };
         let worker_thread_id = format!("team-worker-{}", Uuid::new_v4().simple());
         let run_id = format!("team-run-{}", Uuid::new_v4().simple());
-        cleanup.execution = Some((worker_thread_id.clone(), run_id.clone()));
-        let member = match self.ledger.mark_member_running(
+        let member = match self.ledger.try_mark_member_running(
             team_id,
             member_id,
             task_id,
             &worker_thread_id,
             &run_id,
         ) {
-            Ok(Some(member)) => member,
-            Ok(None) => return Err(anyhow!("unknown team member: {member_id}")),
+            Ok(AgentTeamMemberRunAdmission::Started(member)) => member,
+            Ok(AgentTeamMemberRunAdmission::AlreadyActive(member)) => {
+                return Err(anyhow!(TeamMemberStartError::AlreadyActive {
+                    member_id: member_id.to_owned(),
+                    current_task_id: member.current_task_id,
+                }));
+            }
+            Ok(
+                AgentTeamMemberRunAdmission::NotAdmissible(_)
+                | AgentTeamMemberRunAdmission::Missing,
+            ) => {
+                return Err(anyhow!(TeamError::UnknownMember {
+                    member_id: member_id.to_owned(),
+                }));
+            }
             Err(error) => {
-                return Err(error.context("mark team member running"));
+                return Err(error.context("admit team member run"));
             }
         };
         cleanup.execution = Some((

@@ -312,10 +312,11 @@ pub trait RunLedgerStore: Send + Sync {
         member_id: &str,
     ) -> Result<Option<(AgentTeamMember, Vec<String>)>>;
 
-    /// Mark a member as actively running a task: status → `active`, with the
-    /// current task id and the worker/run identifiers of the spawned agent. Used by
-    /// the live runtime right after it claims a task and dispatches a worker.
-    /// Returns the updated member, or `None` if the member is not in the team.
+    /// Legacy unconditional setter for a member's active task and execution ids.
+    /// It does not verify that the member is pending or idle and can overwrite a
+    /// concurrent active run. New task admission must use
+    /// [`RunLedgerStore::try_start_agent_team_member`]. Returns the updated member,
+    /// or `None` if the member is not in the team.
     async fn mark_agent_team_member_running(
         &self,
         team_id: &str,
@@ -324,6 +325,18 @@ pub trait RunLedgerStore: Send + Sync {
         worker_thread_id: &str,
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
+
+    /// Atomically admit a member to one task execution. Pending and idle
+    /// members become active; active members are returned unchanged, and
+    /// stopped or missing members are not admitted.
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission>;
 
     /// Mark a member idle: status → `idle`, clearing `current_task_id`. The
     /// `worker_thread_id` / `run_id` are intentionally retained as a pointer to the
