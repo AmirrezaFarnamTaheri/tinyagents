@@ -129,26 +129,28 @@ async fn byte_overflow_uses_strict_utf8_byte_boundaries() {
 
 #[tokio::test]
 async fn character_overflow_stores_once_when_byte_limit_is_not_exceeded() {
-    let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
     let full = "é0123456789";
-    let applied = ResultPolicy::new()
-        .with_max_bytes(100)
-        .with_max_chars(6)
-        .with_overflow(ResultOverflow::Artifact)
-        .with_artifact_store(store.clone())
-        .apply("task-both", full, None)
-        .await;
+    for max_bytes in [1, 100] {
+        let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
+        let applied = ResultPolicy::new()
+            .with_max_bytes(max_bytes)
+            .with_max_chars(6)
+            .with_overflow(ResultOverflow::Artifact)
+            .with_artifact_store(store.clone())
+            .apply("task-both", full, None)
+            .await;
 
-    assert_eq!(applied.artifact.as_ref().unwrap().id, "artifact-1");
-    assert_eq!(
-        applied.omitted_chars,
-        full.chars().count() - applied.text.chars().count()
-    );
-    assert!(applied.text.chars().count() <= 6);
-    assert_eq!(
-        store.0.lock().unwrap().as_slice(),
-        &[("task-both".to_owned(), full.to_owned())]
-    );
+        assert_eq!(applied.artifact.as_ref().unwrap().id, "artifact-1");
+        assert_eq!(
+            applied.omitted_chars,
+            full.chars().count() - applied.text.chars().count()
+        );
+        assert!(applied.text.chars().count() <= 6);
+        assert_eq!(
+            store.0.lock().unwrap().as_slice(),
+            &[("task-both".to_owned(), full.to_owned())]
+        );
+    }
 }
 
 #[tokio::test]
