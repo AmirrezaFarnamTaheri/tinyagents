@@ -97,6 +97,51 @@ async fn file_store_scopes_indexes_and_compares_pause_replacements() {
 }
 
 #[tokio::test]
+async fn public_pause_path_locates_scoped_persisted_pause_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileSubagentPersistence::new(dir.path());
+    let base = key("parent", "../../outside/pause");
+    let scoped_keys = [
+        base.clone(),
+        SubagentTaskKey {
+            root_run_id: "other-root".into(),
+            ..base.clone()
+        },
+        SubagentTaskKey {
+            parent_run_id: "other-parent".into(),
+            ..base.clone()
+        },
+        SubagentTaskKey {
+            thread_id: Some("other-thread".into()),
+            ..base
+        },
+    ];
+
+    let mut paths = Vec::new();
+    for (index, task_key) in scoped_keys.iter().enumerate() {
+        let pause = pause(task_key.clone(), SubagentResume::default());
+        let path = store.pause_path(task_key).unwrap();
+        assert!(path.starts_with(store.root()));
+        store.save_pause(pause.clone()).await.unwrap();
+        let persisted: PersistedSubagentPause =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(persisted, pause);
+        assert_eq!(
+            store.load_pause(task_key).await.unwrap(),
+            Some(pause.outcome)
+        );
+        paths.push(path);
+        assert_eq!(paths.len(), index + 1);
+    }
+
+    for left in 0..paths.len() {
+        for right in left + 1..paths.len() {
+            assert_ne!(paths[left], paths[right]);
+        }
+    }
+}
+
+#[tokio::test]
 async fn file_store_reads_legacy_terminal_outcome_records() {
     let dir = tempfile::tempdir().unwrap();
     let store = FileSubagentPersistence::new(dir.path());

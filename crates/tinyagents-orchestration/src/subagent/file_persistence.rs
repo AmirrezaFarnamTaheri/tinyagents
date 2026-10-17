@@ -102,7 +102,12 @@ impl FileSubagentPersistence {
         Self::digest(&task_id)
     }
 
-    fn pause_path(&self, key: &SubagentTaskKey) -> Result<PathBuf, SubagentError> {
+    /// Returns the owner-managed filesystem location for a key's persisted pause record.
+    ///
+    /// The returned path may not exist until a pause is saved. Hosts that need
+    /// to associate external checkpoint data with a pause should use this
+    /// accessor instead of reconstructing the persistence layout.
+    pub fn pause_path(&self, key: &SubagentTaskKey) -> Result<PathBuf, SubagentError> {
         Ok(self
             .directory()
             .join(format!("{}.pause.json", Self::key_id(key)?)))
