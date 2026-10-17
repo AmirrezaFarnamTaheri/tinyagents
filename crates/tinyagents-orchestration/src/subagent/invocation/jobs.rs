@@ -536,7 +536,10 @@ impl SubAgentJobRegistry {
                     control.status.send_modify(|job| {
                         job.output = Some(outcome.output);
                         job.worker_thread_id = outcome.worker_thread_id;
+                        let task_id = outcome.task_id;
                         job.extensions = outcome.extensions;
+                        job.extensions
+                            .insert("task_id".into(), serde_json::Value::String(task_id));
                         job.artifacts = outcome.artifacts;
                         job.schema_error = outcome.schema_error;
                         job.artifact_error = outcome.artifact_error;
@@ -557,7 +560,10 @@ impl SubAgentJobRegistry {
                 Ok(outcome) => {
                     job.output = Some(outcome.output);
                     job.worker_thread_id = outcome.worker_thread_id;
+                    let task_id = outcome.task_id;
                     job.extensions = outcome.extensions;
+                    job.extensions
+                        .insert("task_id".into(), serde_json::Value::String(task_id));
                     job.artifacts = outcome.artifacts;
                     job.schema_error = outcome.schema_error;
                     job.artifact_error = outcome.artifact_error;
@@ -605,6 +611,20 @@ impl SubAgentJobRegistry {
         candidates
             .into_iter()
             .find(|id| self.get_owned(id.as_str(), owner).is_some())
+    }
+
+    /// Requests cooperative cancellation for a driver-backed job identified
+    /// by its full host lifecycle key and owner scope.
+    pub fn cancel_key_owned(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: impl ToString,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
+        let owner = owner.to_string();
+        let id = self
+            .driver_job_for_key(key, &owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(key.task_id.clone()))?;
+        self.cancel_owned(id.as_str(), owner)
     }
 
     /// Points the job link at the attempt that is now running.
