@@ -195,7 +195,9 @@ impl WorkflowRunSupervisor {
     /// is not called. If it succeeds, the previous generation is cancelled and
     /// the new one is installed before the lock is released. Future construction
     /// and spawning happen after the lock is released. Hosts can use this to
-    /// serialize a durable compare-and-set with generation replacement.
+    /// serialize a durable compare-and-set with generation replacement. The
+    /// callback must not call back into this supervisor because the registry
+    /// mutex is not reentrant.
     pub fn start_scoped_with_commit<
         CommitValue,
         CommitError,
@@ -332,7 +334,9 @@ impl WorkflowRunSupervisor {
     ///
     /// The commit, replacement of any previous generation, and installation
     /// of this generation are serialized by the registry lock. Future
-    /// construction and spawning happen after releasing that lock.
+    /// construction and spawning happen after releasing that lock. The commit
+    /// callback must not call back into this supervisor because the registry
+    /// mutex is not reentrant.
     pub fn resume_scoped_with_commit<
         CommitValue,
         CommitError,

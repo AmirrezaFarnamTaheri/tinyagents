@@ -308,6 +308,7 @@ fn transactional_commit_serializes_generation_install_until_commit_finishes() {
     let supervisor_for_start = supervisor.clone();
     let entered_for_commit = commit_entered.clone();
     let release_for_commit = release_commit.clone();
+    let held_new = held.clone();
     let start_thread = std::thread::spawn(move || {
         supervisor_for_start.start_scoped_with_commit(
             "run",
@@ -319,23 +320,25 @@ fn transactional_commit_serializes_generation_install_until_commit_finishes() {
             |_| futures::future::pending(),
             |future| future,
             |future| future,
-            |_, future| drop(future),
+            move |_, future| held_new.lock().unwrap().push(future),
         )
     });
 
     commit_entered.wait();
-    let snapshot_started = Arc::new(std::sync::Barrier::new(2));
-    let snapshot_started_thread = snapshot_started.clone();
+    let (snapshot_attempted_tx, snapshot_attempted_rx) = std::sync::mpsc::channel();
     let supervisor_for_snapshot = supervisor.clone();
     let snapshot_thread = std::thread::spawn(move || {
-        snapshot_started_thread.wait();
+        snapshot_attempted_tx.send(()).unwrap();
         supervisor_for_snapshot.current_handle("run")
     });
-    snapshot_started.wait();
+    snapshot_attempted_rx.recv().unwrap();
 
     // The commit owns the registry lock, so a current-generation snapshot
     // cannot observe a partially committed durable transition.
-    assert!(snapshot_thread.is_finished() == false);
+    assert!(matches!(
+        supervisor.registry.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
     release_commit.wait();
     let (new, ()) = start_thread.join().unwrap().unwrap();
     let snapshot = snapshot_thread.join().unwrap();
@@ -355,6 +358,7 @@ fn losing_transactional_commit_does_not_cancel_a_concurrent_winner() {
         |_| futures::future::pending(),
         move |future| held_old.lock().unwrap().push(future),
     );
+    let held_new = held.clone();
     let gate = Arc::new(std::sync::Barrier::new(2));
     let thread_gate = gate.clone();
     let supervisor_for_loser = supervisor.clone();
@@ -378,7 +382,7 @@ fn losing_transactional_commit_does_not_cancel_a_concurrent_winner() {
         |_| futures::future::pending(),
         |future| future,
         |future| future,
-        |_, future| drop(future),
+        move |_, future| held_new.lock().unwrap().push(future),
     );
 
     assert_eq!(loser.join().unwrap().unwrap_err(), "compare-and-swap lost");
@@ -431,14 +435,16 @@ fn with_current_skips_stale_callback_and_serializes_current_callback() {
 
     let replacement_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let done = replacement_done.clone();
+    let held_replacement = held.clone();
     let supervisor_for_replacement = supervisor.clone();
     let replacement_thread = std::thread::spawn(move || {
-        supervisor_for_replacement.start(
+        let replacement = supervisor_for_replacement.start(
             "run",
             |_| futures::future::pending(),
-            move |future| held.lock().unwrap().push(future),
+            move |future| held_replacement.lock().unwrap().push(future),
         );
         done.store(true, std::sync::atomic::Ordering::SeqCst);
+        replacement
     });
 
     assert!(!replacement_done.load(std::sync::atomic::Ordering::SeqCst));
