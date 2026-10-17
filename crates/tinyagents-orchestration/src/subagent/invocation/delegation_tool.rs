@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_graph::delegation::{
-    DelegationConfig, DelegationStage, DelegationStageOutput, DelegationState, run_delegation,
+    DelegationConfig, DelegationOutcome, DelegationStage, DelegationStageOutput, DelegationState,
+    run_delegation, run_or_resume_delegation,
 };
 use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
 use tinytools::{Tool, ToolExposure, ToolResult};
@@ -213,6 +214,17 @@ pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
 
 type ConfigFactory<State, Ctx> =
     dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync;
+type ResultProjector = dyn Fn(&DelegationOutcome) -> Value + Send + Sync;
+
+/// Determines how review-stage approval is interpreted by [`DelegationTool`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewApprovalPolicy {
+    /// Require a standalone `APPROVE` response (the generic default).
+    #[default]
+    StandaloneApprove,
+    /// Trust the approval boolean returned by the host worker.
+    WorkerOutput,
+}
 
 /// Single-target graph delegation tool with an injected worker for each stage.
 pub struct DelegationTool<State, Ctx, Worker, Fut>
@@ -227,6 +239,8 @@ where
     description: String,
     parameters: Value,
     resumable: bool,
+    review_approval_policy: ReviewApprovalPolicy,
+    result_projector: Option<Arc<ResultProjector>>,
 }
 
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
@@ -247,6 +261,8 @@ where
             description: "Plan, execute, and review delegated work.".into(),
             parameters: json!({"type":"object","properties":{"task":{"type":"string"}},"required":["task"]}),
             resumable: false,
+            review_approval_policy: ReviewApprovalPolicy::StandaloneApprove,
+            result_projector: None,
         }
     }
 
@@ -271,6 +287,21 @@ where
     /// Enables durable classify-and-resume execution for checkpointed threads.
     pub fn with_resumable_execution(mut self) -> Self {
         self.resumable = true;
+        self
+    }
+
+    /// Selects how the tool interprets the review worker's approval result.
+    pub fn with_review_approval_policy(mut self, policy: ReviewApprovalPolicy) -> Self {
+        self.review_approval_policy = policy;
+        self
+    }
+
+    /// Projects the complete graph outcome into the host's model-facing result.
+    pub fn with_result_projection(
+        mut self,
+        project: impl Fn(&DelegationOutcome) -> Value + Send + Sync + 'static,
+    ) -> Self {
+        self.result_projector = Some(Arc::new(project));
         self
     }
 }
@@ -302,24 +333,54 @@ where
         if args.get("task").and_then(Value::as_str).is_none() {
             anyhow::bail!("task must be a string");
         }
+        let config = (self.config)(state, parent, &args);
         let worker = Arc::clone(&self.worker);
-        let result = run_delegation((self.config)(state, parent, &args), move |stage, graph| {
+        let review_approval_policy = self.review_approval_policy;
+        let stage_runner = move |stage, graph| {
             let worker = Arc::clone(&worker);
             let mut stage_args = args.clone();
             stage_args["stage_prompt"] = Value::String(stage_prompt(stage).to_owned());
             async move {
                 let mut output = worker(stage_args, stage, graph).await?;
-                if stage == DelegationStage::Review {
+                if stage == DelegationStage::Review
+                    && review_approval_policy == ReviewApprovalPolicy::StandaloneApprove
+                {
                     output.approved = parse_approval(&output.text);
                 }
                 Ok(output)
             }
-        })
-        .await
+        };
+        let outcome = if self.resumable {
+            run_or_resume_delegation(config, stage_runner).await
+        } else {
+            run_delegation(config, stage_runner)
+                .await
+                .map(|state| DelegationOutcome {
+                    state,
+                    pending: None,
+                })
+        }
         .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
-        Ok(ToolResult::json(
-            json!({"output":result.final_output,"approved":result.approved,"cancelled":result.cancelled}),
-        ))
+
+        if let Some(project) = &self.result_projector {
+            return Ok(ToolResult::json(project(&outcome)));
+        }
+        if self.resumable {
+            return Ok(ToolResult::json(json!({
+                "state": outcome.state,
+                "pending": outcome.pending.map(|pending| json!({
+                    "interrupt_id": pending.interrupt_id,
+                    "node": pending.node,
+                    "payload": pending.payload,
+                    "thread_id": pending.thread_id,
+                })),
+            })));
+        }
+        Ok(ToolResult::json(json!({
+            "output": outcome.state.final_output,
+            "approved": outcome.state.approved,
+            "cancelled": outcome.state.cancelled,
+        })))
     }
 }
 
