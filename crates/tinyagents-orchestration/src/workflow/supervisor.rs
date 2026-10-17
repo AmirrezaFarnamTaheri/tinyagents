@@ -6,6 +6,7 @@
 //! stop a replacement loop.
 
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -174,9 +175,61 @@ impl WorkflowRunSupervisor {
         OriginFuture: Future<Output = ()> + Send + 'static,
         Spawn: FnOnce(WorkflowRunHandle, WorkflowDriveFuture<OriginFuture>),
     {
+        self.start_scoped_with_commit(
+            run_id,
+            || Ok::<_, Infallible>(()),
+            make_future,
+            root_parent,
+            origin,
+            spawn,
+        )
+        .expect("infallible workflow commit")
+        .0
+    }
+
+    /// Commit a host-owned lifecycle transition and install a drive generation
+    /// as one serialized operation.
+    ///
+    /// `commit` runs first while the supervisor registry is locked. If it
+    /// returns an error, the current generation is left unchanged and `spawn`
+    /// is not called. If it succeeds, the previous generation is cancelled and
+    /// the new one is installed before the lock is released. Future construction
+    /// and spawning happen after the lock is released. Hosts can use this to
+    /// serialize a durable compare-and-set with generation replacement. The
+    /// callback must not call back into this supervisor because the registry
+    /// mutex is not reentrant.
+    pub fn start_scoped_with_commit<
+        CommitValue,
+        CommitError,
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        commit: impl FnOnce() -> Result<CommitValue, CommitError>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> Result<(WorkflowRunHandle, CommitValue), CommitError>
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(WorkflowRunHandle, WorkflowDriveFuture<OriginFuture>),
+    {
         let run_id = run_id.into();
-        let generation = {
+        let (generation, handle, commit_value) = {
             let mut registry = self.registry.lock().expect("workflow registry poisoned");
+            let commit_value = commit()?;
             registry.next_generation = registry.next_generation.wrapping_add(1);
             if let Some(previous) = registry.current.get(&run_id) {
                 previous.token.cancel();
@@ -186,12 +239,12 @@ impl WorkflowRunSupervisor {
                 token: CancellationToken::new(),
             };
             registry.current.insert(run_id.clone(), generation.clone());
-            generation
-        };
-        let handle = WorkflowRunHandle {
-            run_id: Arc::from(run_id),
-            generation: generation.id,
-            token: generation.token.clone(),
+            let handle = WorkflowRunHandle {
+                run_id: Arc::from(run_id),
+                generation: generation.id,
+                token: generation.token.clone(),
+            };
+            (generation, handle, commit_value)
         };
         let future = WorkflowDriveFuture {
             future: Box::pin(origin(root_parent(make_future(generation.token)))),
@@ -199,7 +252,7 @@ impl WorkflowRunSupervisor {
             handle: handle.clone(),
         };
         spawn(handle.clone(), future);
-        handle
+        Ok((handle, commit_value))
     }
 
     /// Install a new generation for a resumed run and schedule its drive.
@@ -277,6 +330,44 @@ impl WorkflowRunSupervisor {
         self.start_scoped_with_handle(run_id, make_future, root_parent, origin, spawn)
     }
 
+    /// Resume a drive only after the host's lifecycle commit succeeds.
+    ///
+    /// The commit, replacement of any previous generation, and installation
+    /// of this generation are serialized by the registry lock. Future
+    /// construction and spawning happen after releasing that lock. The commit
+    /// callback must not call back into this supervisor because the registry
+    /// mutex is not reentrant.
+    pub fn resume_scoped_with_commit<
+        CommitValue,
+        CommitError,
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        commit: impl FnOnce() -> Result<CommitValue, CommitError>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> Result<(WorkflowRunHandle, CommitValue), CommitError>
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(WorkflowRunHandle, WorkflowDriveFuture<OriginFuture>),
+    {
+        self.start_scoped_with_commit(run_id, commit, make_future, root_parent, origin, spawn)
+    }
+
     /// Cancel the current generation for `run_id`, if one is scheduled.
     ///
     /// Returns `false` if no generation is registered.
@@ -332,6 +423,28 @@ impl WorkflowRunSupervisor {
             .current
             .get(handle.run_id())
             .is_some_and(|current| current.id == handle.generation)
+    }
+
+    /// Run a callback while `handle` still identifies the installed generation.
+    ///
+    /// The callback runs while the supervisor registry is locked, so a
+    /// replacement cannot be installed between the identity check and the
+    /// callback. The callback must not call back into this supervisor, since
+    /// that would attempt to lock the same non-reentrant mutex.
+    pub fn with_current<T>(
+        &self,
+        handle: &WorkflowRunHandle,
+        callback: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let registry = self.registry.lock().expect("workflow registry poisoned");
+        if registry
+            .current
+            .get(handle.run_id())
+            .is_none_or(|current| current.id != handle.generation)
+        {
+            return None;
+        }
+        Some(callback())
     }
 
     /// Remove a finished generation without disturbing a newer replacement.

@@ -257,7 +257,11 @@ impl CompletionDelivery {
             if !admitted.admitted() {
                 return DeliveryOutcome::Fenced;
             }
-            match deliver(&batch).await {
+            let delivery_result = deliver(&batch).await;
+            if !admitted.admitted() {
+                return DeliveryOutcome::Fenced;
+            }
+            match delivery_result {
                 Ok(()) => {
                     let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
                     match target.router.mark_delivered(&ids) {

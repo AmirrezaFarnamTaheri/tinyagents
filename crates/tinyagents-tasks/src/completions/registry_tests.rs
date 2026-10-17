@@ -86,6 +86,42 @@ fn router_pool_does_not_resurrect_a_router_after_clear() {
     assert!(!Arc::ptr_eq(&reopened, &stale));
 }
 
+#[tokio::test]
+async fn evicting_one_key_preserves_other_cached_routers_and_held_claims() {
+    let pool = CompletionRouterPool::new(|_| {
+        Arc::new(CompletionRouter::new(Arc::new(
+            InMemoryCompletionStore::new(),
+        )))
+    });
+    let removed = pool.get_or_open(&"workspace-a").unwrap();
+    let unrelated = pool.get_or_open(&"workspace-b").unwrap();
+    removed
+        .record(
+            CompletionRecord::new(
+                "held-claim",
+                "parent",
+                "worker",
+                CompletionStatus::Success,
+                CompletionResult::default(),
+            )
+            .with_notify_mode(NotifyMode::Off),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.pull("parent", 1).unwrap().len(), 1);
+
+    let evicted = pool.remove(&"workspace-a").unwrap().unwrap();
+    assert!(Arc::ptr_eq(&evicted, &removed));
+    assert!(pool.get(&"workspace-a").unwrap().is_none());
+    let still_cached = pool.get(&"workspace-b").unwrap().unwrap();
+    assert!(Arc::ptr_eq(&still_cached, &unrelated));
+    assert_eq!(removed.mark_delivered(&["held-claim"]).unwrap(), 1);
+    assert_eq!(
+        removed.store().get("held-claim").unwrap().state,
+        crate::completions::CompletionState::Delivered
+    );
+}
+
 #[test]
 fn concurrent_fallback_replacements_have_one_winner_and_keep_other_keys_isolated() {
     let pool = Arc::new(CompletionRouterPool::new(|_| {

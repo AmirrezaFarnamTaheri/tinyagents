@@ -261,3 +261,203 @@ fn scoped_start_wraps_drive_with_root_parent_then_origin_before_spawning() {
 
     assert_eq!(*scopes.lock().unwrap(), ["root-parent", "origin"]);
 }
+
+#[test]
+fn failed_transactional_start_keeps_previous_generation_and_does_not_spawn() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held_old = held.clone();
+    let old = supervisor.start(
+        "run",
+        |_| futures::future::pending(),
+        move |future| held_old.lock().unwrap().push(future),
+    );
+    let spawned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spawned_flag = spawned.clone();
+
+    let result = supervisor.start_scoped_with_commit(
+        "run",
+        || Err::<(), _>("durable claim rejected"),
+        |_| async {},
+        |future| future,
+        |future| future,
+        move |_, future| {
+            spawned_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(future);
+        },
+    );
+
+    assert_eq!(result.unwrap_err(), "durable claim rejected");
+    assert!(!spawned.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(supervisor.is_current(&old));
+    assert!(!old.cancellation_token().is_cancelled());
+}
+
+#[test]
+fn transactional_commit_serializes_generation_install_until_commit_finishes() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held_old = held.clone();
+    let old = supervisor.start(
+        "run",
+        |_| futures::future::pending(),
+        move |future| held_old.lock().unwrap().push(future),
+    );
+    let commit_entered = Arc::new(std::sync::Barrier::new(2));
+    let release_commit = Arc::new(std::sync::Barrier::new(2));
+    let supervisor_for_start = supervisor.clone();
+    let entered_for_commit = commit_entered.clone();
+    let release_for_commit = release_commit.clone();
+    let held_new = held.clone();
+    let start_thread = std::thread::spawn(move || {
+        supervisor_for_start.start_scoped_with_commit(
+            "run",
+            move || {
+                entered_for_commit.wait();
+                release_for_commit.wait();
+                Ok::<_, ()>(())
+            },
+            |_| futures::future::pending(),
+            |future| future,
+            |future| future,
+            move |_, future| held_new.lock().unwrap().push(future),
+        )
+    });
+
+    commit_entered.wait();
+    let (snapshot_attempted_tx, snapshot_attempted_rx) = std::sync::mpsc::channel();
+    let supervisor_for_snapshot = supervisor.clone();
+    let snapshot_thread = std::thread::spawn(move || {
+        snapshot_attempted_tx.send(()).unwrap();
+        supervisor_for_snapshot.current_handle("run")
+    });
+    snapshot_attempted_rx.recv().unwrap();
+
+    // The commit owns the registry lock, so a current-generation snapshot
+    // cannot observe a partially committed durable transition.
+    assert!(matches!(
+        supervisor.registry.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
+    release_commit.wait();
+    let (new, ()) = start_thread.join().unwrap().unwrap();
+    let snapshot = snapshot_thread.join().unwrap();
+
+    assert!(old.cancellation_token().is_cancelled());
+    assert_eq!(snapshot.unwrap().generation, new.generation);
+    assert!(supervisor.is_current(&new));
+}
+
+#[test]
+fn losing_transactional_commit_does_not_cancel_a_concurrent_winner() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held_old = held.clone();
+    let old = supervisor.start(
+        "run",
+        |_| futures::future::pending(),
+        move |future| held_old.lock().unwrap().push(future),
+    );
+    let held_new = held.clone();
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let thread_gate = gate.clone();
+    let supervisor_for_loser = supervisor.clone();
+    let loser = std::thread::spawn(move || {
+        supervisor_for_loser.start_scoped_with_commit(
+            "run",
+            move || {
+                thread_gate.wait();
+                Err::<(), _>("compare-and-swap lost")
+            },
+            |_| futures::future::pending(),
+            |future| future,
+            |future| future,
+            |_, future| drop(future),
+        )
+    });
+    gate.wait();
+    let winner = supervisor.resume_scoped_with_commit(
+        "run",
+        || Ok::<_, ()>(()),
+        |_| futures::future::pending(),
+        |future| future,
+        |future| future,
+        move |_, future| held_new.lock().unwrap().push(future),
+    );
+
+    assert_eq!(loser.join().unwrap().unwrap_err(), "compare-and-swap lost");
+    let (winner_handle, ()) = winner.unwrap();
+    assert!(old.cancellation_token().is_cancelled());
+    assert!(!winner_handle.cancellation_token().is_cancelled());
+    assert!(supervisor.is_current(&winner_handle));
+}
+
+#[test]
+fn with_current_skips_stale_callback_and_serializes_current_callback() {
+    let supervisor = WorkflowRunSupervisor::default();
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let held_old = held.clone();
+    let old = supervisor.start(
+        "run",
+        |_| futures::future::pending(),
+        move |future| held_old.lock().unwrap().push(future),
+    );
+    let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let called_flag = called.clone();
+    let held_current = held.clone();
+    let current = supervisor.resume(
+        "run",
+        |_| futures::future::pending(),
+        move |future| held_current.lock().unwrap().push(future),
+    );
+
+    assert_eq!(
+        supervisor.with_current(&old, move || {
+            called_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }),
+        None
+    );
+    assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+
+    let callback_entered = Arc::new(std::sync::Barrier::new(2));
+    let release_callback = Arc::new(std::sync::Barrier::new(2));
+    let entered = callback_entered.clone();
+    let release = release_callback.clone();
+    let supervisor_for_callback = supervisor.clone();
+    let handle = current.clone();
+    let callback_thread = std::thread::spawn(move || {
+        supervisor_for_callback.with_current(&handle, move || {
+            entered.wait();
+            release.wait();
+        })
+    });
+    callback_entered.wait();
+
+    let replacement_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = replacement_done.clone();
+    let held_replacement = held.clone();
+    let (replacement_attempted_tx, replacement_attempted_rx) = std::sync::mpsc::channel();
+    let supervisor_for_replacement = supervisor.clone();
+    let replacement_thread = std::thread::spawn(move || {
+        replacement_attempted_tx.send(()).unwrap();
+        let replacement = supervisor_for_replacement.start(
+            "run",
+            |_| futures::future::pending(),
+            move |future| held_replacement.lock().unwrap().push(future),
+        );
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        replacement
+    });
+
+    replacement_attempted_rx.recv().unwrap();
+    assert!(matches!(
+        supervisor.registry.try_lock(),
+        Err(std::sync::TryLockError::WouldBlock)
+    ));
+    assert!(!replacement_done.load(std::sync::atomic::Ordering::SeqCst));
+    release_callback.wait();
+    assert_eq!(callback_thread.join().unwrap(), Some(()));
+    let replacement = replacement_thread.join().unwrap();
+    assert!(current.cancellation_token().is_cancelled());
+    assert!(supervisor.is_current(&replacement));
+}

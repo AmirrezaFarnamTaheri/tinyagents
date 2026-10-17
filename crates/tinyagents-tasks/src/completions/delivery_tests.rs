@@ -277,6 +277,124 @@ async fn recovery_is_fenced_before_claiming_records() {
 }
 
 #[tokio::test]
+async fn losing_fence_during_successful_delivery_skips_ack_and_releases_claim() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let router = CompletionRouter::new(Arc::new(InMemoryCompletionStore::new()));
+    router
+        .record(CompletionRecord::new(
+            "success-fenced",
+            "parent",
+            "worker",
+            CompletionStatus::Success,
+            CompletionResult::default(),
+        ))
+        .await
+        .unwrap();
+    let admitted = Arc::new(AtomicBool::new(true));
+    let delivered = Arc::clone(&admitted);
+    let delivery = CompletionDelivery::new(
+        CompletionDeliveryConfig {
+            debounce: Duration::ZERO,
+            recovery_delay: Duration::ZERO,
+            retry_backoff: Duration::ZERO,
+            busy_poll: Duration::ZERO,
+            max_busy_polls: 0,
+            batch_size: 8,
+        },
+        ThreadDeliveryLeases::default(),
+    );
+
+    let outcome = delivery
+        .deliver_once(
+            target(&router),
+            || false,
+            {
+                let admitted = Arc::clone(&admitted);
+                move || admitted.load(Ordering::SeqCst)
+            },
+            move |_| {
+                let delivered = Arc::clone(&delivered);
+                async move {
+                    delivered.store(false, Ordering::SeqCst);
+                    Ok::<(), &'static str>(())
+                }
+            },
+            |_| panic!("successful delivery does not write undelivered records"),
+        )
+        .await;
+
+    assert_eq!(outcome, DeliveryOutcome::Fenced);
+    let record = router.store().get("success-fenced").unwrap();
+    assert_eq!(record.state, super::CompletionState::Pending);
+    assert_eq!(record.attempts, 1, "only the original claim was counted");
+    let reclaimed = router.claim_pending("parent", 1).unwrap();
+    assert_eq!(reclaimed.len(), 1, "the lost-fence claim was released");
+}
+
+#[tokio::test]
+async fn losing_fence_during_failed_delivery_skips_failure_and_final_writer() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let router =
+        CompletionRouter::new(Arc::new(InMemoryCompletionStore::new())).with_max_attempts(1);
+    router
+        .record(CompletionRecord::new(
+            "error-fenced",
+            "parent",
+            "worker",
+            CompletionStatus::Failed,
+            CompletionResult::default(),
+        ))
+        .await
+        .unwrap();
+    let admitted = Arc::new(AtomicBool::new(true));
+    let delivered = Arc::clone(&admitted);
+    let writes = Arc::new(AtomicUsize::new(0));
+    let writer = Arc::clone(&writes);
+    let delivery = CompletionDelivery::new(
+        CompletionDeliveryConfig {
+            debounce: Duration::ZERO,
+            recovery_delay: Duration::ZERO,
+            retry_backoff: Duration::ZERO,
+            busy_poll: Duration::ZERO,
+            max_busy_polls: 0,
+            batch_size: 8,
+        },
+        ThreadDeliveryLeases::default(),
+    );
+
+    let outcome = delivery
+        .deliver_once_with_error(
+            target(&router),
+            || false,
+            {
+                let admitted = Arc::clone(&admitted);
+                move || admitted.load(Ordering::SeqCst)
+            },
+            move |_| {
+                let delivered = Arc::clone(&delivered);
+                async move {
+                    delivered.store(false, Ordering::SeqCst);
+                    Err::<(), _>("delivery failed")
+                }
+            },
+            move |_, _| {
+                writer.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await;
+
+    assert_eq!(outcome, DeliveryOutcome::Fenced);
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    let record = router.store().get("error-fenced").unwrap();
+    assert_eq!(record.state, super::CompletionState::Pending);
+    assert_eq!(record.attempts, 1, "failure must not add a retry attempt");
+    let reclaimed = router.claim_pending("parent", 1).unwrap();
+    assert_eq!(reclaimed.len(), 1, "the lost-fence claim was released");
+}
+
+#[tokio::test]
 async fn shared_thread_lease_prevents_overlapping_delivery_turns() {
     let router = Arc::new(CompletionRouter::new(Arc::new(
         InMemoryCompletionStore::new(),
