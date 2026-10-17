@@ -543,16 +543,16 @@ async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_termina
         .as_str()
         .unwrap()
         .to_owned();
-    callback_started.notified().await;
     tokio::select! {
         biased;
         result = jobs.wait_owned(&job_id, "replay-owner") => {
             panic!("replayed job became terminal before host repair: {result:?}");
         }
-        _ = tokio::task::yield_now() => {}
+        _ = callback_started.notified() => {}
     }
     let result = observed.lock().unwrap().clone().unwrap();
     assert_eq!(result.disposition, SubagentPersistenceDisposition::TerminalExisting);
+    assert!(!result.should_emit_host_effects());
     assert_eq!(result.outcome.output, "durable result");
     release_callback.add_permits(1);
     assert_eq!(
