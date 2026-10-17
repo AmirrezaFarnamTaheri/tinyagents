@@ -85,6 +85,10 @@ pub struct SpanCollector {
     run_roots: HashMap<String, usize>,
     current_run_id: Option<String>,
     root_run_id: Option<String>,
+    observation_root_id: Option<String>,
+    current_turns: HashMap<String, u32>,
+    open_iterations: HashMap<String, usize>,
+    pending_turn_stops: HashMap<String, (u32, crate::turn_stop::TurnStop)>,
     last_generation: HashMap<String, usize>,
     last_activity_ms: u64,
     first_input_recorded: bool,
@@ -112,6 +116,10 @@ impl SpanCollector {
             run_roots: HashMap::new(),
             current_run_id: None,
             root_run_id,
+            observation_root_id: None,
+            current_turns: HashMap::new(),
+            open_iterations: HashMap::new(),
+            pending_turn_stops: HashMap::new(),
             last_generation: HashMap::new(),
             last_activity_ms: 0,
             first_input_recorded: false,
@@ -120,12 +128,25 @@ impl SpanCollector {
         }
     }
 
+    /// Selects the observation view root independently of trace lineage
+    /// metadata.
+    ///
+    /// A host rebasing a child journal can preserve its original parent/root
+    /// IDs in [`TraceContext`] while selecting the child run as the observation
+    /// root. Without this override, observations are filtered against the
+    /// context's `root_run_id` when present.
+    pub fn with_observation_root(mut self, run_id: RunId) -> Self {
+        self.observation_root_id = Some(run_id.as_str().to_owned());
+        self
+    }
+
     /// Folds one durable observation using its recorded timestamp.
     pub fn record(&mut self, observation: &AgentObservation) {
         let run_id = observation.run_id.as_str();
         if self
-            .root_run_id
+            .observation_root_id
             .as_deref()
+            .or(self.root_run_id.as_deref())
             .is_some_and(|root| root != observation.root_run_id.as_str())
         {
             return;
@@ -195,6 +216,9 @@ impl SpanCollector {
                 self.ensure_run_root(timestamp_ms);
             }
             AgentEvent::ModelStarted { call_id, model } => {
+                if let Some(turn) = self.current_turns.get(&self.active_run_id()).copied() {
+                    self.start_iteration(turn, timestamp_ms);
+                }
                 let parent = self.active_parent(timestamp_ms);
                 let mut attrs = BTreeMap::new();
                 attrs.insert("gen_ai.request.model".into(), json_str(model));
@@ -599,13 +623,132 @@ impl SpanCollector {
                 self.cached_calls.insert(self.scoped_id(call_id.as_str()));
             }
             AgentEvent::RunCompleted { outcome, .. } => {
-                self.close_completed_run(outcome.as_ref(), timestamp_ms)
+                self.close_open_iteration(
+                    timestamp_ms,
+                    terminal_iteration_status(outcome.as_ref()),
+                );
+                self.close_completed_run(outcome.as_ref(), timestamp_ms);
+                self.apply_pending_turn_stop();
             }
             AgentEvent::RunFailed { error, outcome, .. } => {
-                self.close_failed_run(outcome.as_ref(), error, timestamp_ms)
+                self.close_open_iteration(timestamp_ms, failed_iteration_status(outcome.as_ref()));
+                self.close_failed_run(outcome.as_ref(), error, timestamp_ms);
+                self.apply_pending_turn_stop();
+            }
+            AgentEvent::TurnStarted { turn } => {
+                self.current_turns.insert(self.active_run_id(), *turn);
+            }
+            AgentEvent::TurnCompleted { turn, .. } => {
+                let run_id = self.active_run_id();
+                let open_turn = self.open_iterations.get(&run_id).and_then(|index| {
+                    self.spans[*index]
+                        .attributes
+                        .get("agent.iteration")
+                        .and_then(Value::as_u64)
+                });
+                if open_turn == Some(u64::from(*turn)) {
+                    self.close_open_iteration(timestamp_ms, SpanStatus::Ok);
+                }
+                if self.current_turns.get(&run_id) == Some(turn) {
+                    self.current_turns.remove(&run_id);
+                }
+            }
+            AgentEvent::TurnStopped { turn, stop } => {
+                self.record_turn_stop(*turn, stop, timestamp_ms)
             }
             _ => {}
         }
+    }
+
+    fn record_turn_stop(&mut self, turn: u32, stop: &crate::turn_stop::TurnStop, at: u64) {
+        let run_id = self.active_run_id();
+        let stop = stop.sanitized();
+        let root = self
+            .run_roots
+            .get(&run_id)
+            .copied()
+            .unwrap_or_else(|| self.ensure_run_root(at));
+        match self.spans[root]
+            .attributes
+            .get("turn.outcome")
+            .and_then(Value::as_str)
+        {
+            Some("completed" | "stopped") => self.apply_turn_stop(root, turn, &stop),
+            None => {
+                self.pending_turn_stops.insert(run_id, (turn, stop));
+            }
+            Some(_) => {
+                self.pending_turn_stops.remove(&run_id);
+            }
+        }
+    }
+
+    fn start_iteration(&mut self, turn: u32, at: u64) {
+        self.close_open_iteration(at, SpanStatus::Unset);
+        let parent = self.active_parent(at);
+        let is_subagent = self.spans[parent].kind == SpanKind::Subagent;
+        let (kind, prefix) = if is_subagent {
+            (SpanKind::SubagentIteration, "subagent.iteration")
+        } else {
+            (SpanKind::Iteration, "agent.iteration")
+        };
+        let mut attrs = BTreeMap::new();
+        attrs.insert("agent.iteration".into(), json!(turn));
+        let (index, _) = self.open_span(kind, format!("{prefix}#{turn}"), Some(parent), at, attrs);
+        self.open_iterations.insert(self.active_run_id(), index);
+    }
+
+    fn close_open_iteration(&mut self, at: u64, status: SpanStatus) {
+        if let Some(index) = self.open_iterations.remove(&self.active_run_id()) {
+            self.close_span(index, at, status);
+        }
+    }
+
+    fn apply_pending_turn_stop(&mut self) {
+        let run_id = self.active_run_id();
+        let Some((turn, stop)) = self.pending_turn_stops.remove(&run_id) else {
+            return;
+        };
+        if let Some(root) = self.run_roots.get(&run_id).copied() {
+            self.apply_turn_stop(root, turn, &stop);
+        }
+    }
+
+    fn apply_turn_stop(&mut self, root: usize, turn: u32, stop: &crate::turn_stop::TurnStop) {
+        let terminal_outcome = self.spans[root]
+            .attributes
+            .get("turn.outcome")
+            .and_then(Value::as_str);
+        let can_enrich = match terminal_outcome {
+            Some("completed") => self.spans[root].status == SpanStatus::Ok,
+            Some("stopped") => self.spans[root].status == SpanStatus::Unset,
+            _ => false,
+        };
+        if !can_enrich {
+            return;
+        }
+
+        let stop = stop.sanitized();
+        let message = stop.status_message();
+        let attrs = &mut self.spans[root].attributes;
+        attrs.insert("turn.outcome".into(), json_str("stopped"));
+        attrs.insert("turn.stop_turn".into(), json!(turn));
+        attrs.insert("turn.stop_kind".into(), json_str(stop.kind.as_str()));
+        attrs.remove("turn.stop_limit");
+        if let Some(class) = stop.failure_class.as_ref() {
+            attrs.insert("turn.stop_class".into(), json_str(class.as_str()));
+        } else {
+            attrs.remove("turn.stop_class");
+        }
+        if let Some(operation) = stop.operation.as_deref() {
+            attrs.insert("turn.stop_operation".into(), json_str(operation));
+        } else {
+            attrs.remove("turn.stop_operation");
+        }
+        attrs.insert("observation.level".into(), json_str("WARNING"));
+        attrs.insert("observation.status_message".into(), json_str(&message));
+        attrs.insert("error.message".into(), json_str(&message));
+        self.spans[root].status = SpanStatus::Unset;
     }
 
     /// Adds host-owned provider and pricing metadata to the generation
@@ -714,25 +857,69 @@ impl SpanCollector {
                     }
             }
         };
-        if (delta != 0.0 || source != "provider_reported")
-            && let Some(parent) = self.spans[index]
+        let direct_parent = self.spans[index]
+            .parent_span_id
+            .as_deref()
+            .and_then(|id| self.spans.iter().position(|span| span.span_id == id));
+        let mut run_root = direct_parent;
+        while let Some(parent) = run_root {
+            if matches!(self.spans[parent].kind, SpanKind::Turn | SpanKind::Subagent) {
+                break;
+            }
+            run_root = self.spans[parent]
                 .parent_span_id
                 .as_deref()
-                .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
-        {
-            let prior_parent = self.spans[parent]
-                .attributes
-                .get("gen_ai.usage.cost_usd")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            self.spans[parent].attributes.insert(
-                "gen_ai.usage.cost_usd".into(),
-                json_f64((prior_parent + delta).max(0.0)),
-            );
-            self.spans[parent]
-                .attributes
-                .insert("gen_ai.cost.source".into(), json_str(source));
+                .and_then(|id| self.spans.iter().position(|span| span.span_id == id));
         }
+
+        if source == "provider_reported" {
+            if let Some(parent) = direct_parent
+                && matches!(
+                    self.spans[parent].kind,
+                    SpanKind::Iteration | SpanKind::SubagentIteration
+                )
+            {
+                let iteration_delta = amount
+                    - if prior_source == "estimated" {
+                        prior
+                    } else {
+                        0.0
+                    };
+                self.add_cost_delta(parent, iteration_delta, source);
+            }
+            // Run-level provider totals arrive through UsageRecorded. Remove
+            // an earlier estimate here, but do not add this per-call charge to
+            // the run root a second time.
+            if prior_source == "estimated"
+                && let Some(root) = run_root
+            {
+                self.add_cost_delta(root, -prior, source);
+            }
+        } else {
+            if let Some(parent) = direct_parent {
+                self.add_cost_delta(parent, delta, source);
+            }
+            if let Some(root) = run_root
+                && Some(root) != direct_parent
+            {
+                self.add_cost_delta(root, delta, source);
+            }
+        }
+    }
+
+    fn add_cost_delta(&mut self, index: usize, delta: f64, source: &str) {
+        let prior = self.spans[index]
+            .attributes
+            .get("gen_ai.usage.cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        self.spans[index].attributes.insert(
+            "gen_ai.usage.cost_usd".into(),
+            json_f64((prior + delta).max(0.0)),
+        );
+        self.spans[index]
+            .attributes
+            .insert("gen_ai.cost.source".into(), json_str(source));
     }
 
     /// Closes open spans deterministically. Missing terminal events are marked
@@ -926,7 +1113,10 @@ impl SpanCollector {
     }
 
     fn active_parent(&mut self, at: u64) -> usize {
-        self.ensure_run_root(at)
+        self.open_iterations
+            .get(&self.active_run_id())
+            .copied()
+            .unwrap_or_else(|| self.ensure_run_root(at))
     }
 
     fn active_run_id(&self) -> String {
@@ -1010,15 +1200,25 @@ impl SpanCollector {
 
     fn close_root(&mut self, at: u64, status: SpanStatus, outcome: &str) {
         let root = self.ensure_run_root(at);
-        self.spans[root]
-            .attributes
-            .insert("turn.outcome".into(), json_str(outcome));
+        let attrs = &mut self.spans[root].attributes;
+        let replacing_typed_stop = attrs.contains_key("turn.stop_turn") && outcome != "stopped";
+        attrs.insert("turn.outcome".into(), json_str(outcome));
+        if replacing_typed_stop {
+            attrs.remove("turn.stop_turn");
+            attrs.remove("turn.stop_kind");
+            attrs.remove("turn.stop_class");
+            attrs.remove("turn.stop_operation");
+            attrs.remove("turn.stop_limit");
+            attrs.remove("observation.level");
+            attrs.remove("observation.status_message");
+        }
         if status == SpanStatus::Error {
-            self.spans[root]
-                .attributes
-                .insert("error".into(), Value::Bool(true));
+            attrs.insert("error".into(), Value::Bool(true));
         }
         self.close_span(root, at, status);
+        if replacing_typed_stop {
+            self.spans[root].status = status;
+        }
     }
 
     fn close_completed_run(&mut self, outcome: Option<&crate::terminal::TerminalOutcome>, at: u64) {
@@ -1154,6 +1354,25 @@ fn terminal_error_message<'a>(
         fallback_error
             .filter(|message| !message.trim().is_empty())
             .unwrap_or(fallback_message)
+    }
+}
+
+fn terminal_iteration_status(outcome: Option<&crate::terminal::TerminalOutcome>) -> SpanStatus {
+    use crate::terminal::TerminalClass;
+    match outcome.map(|outcome| outcome.reason.class()) {
+        None | Some(TerminalClass::Success) => SpanStatus::Ok,
+        Some(TerminalClass::Cancellation | TerminalClass::Suspended) => SpanStatus::Unset,
+        Some(TerminalClass::Timeout | TerminalClass::Failure) => SpanStatus::Error,
+    }
+}
+
+fn failed_iteration_status(outcome: Option<&crate::terminal::TerminalOutcome>) -> SpanStatus {
+    use crate::terminal::TerminalClass;
+    match outcome.map(|outcome| outcome.reason.class()) {
+        Some(TerminalClass::Cancellation | TerminalClass::Suspended) => SpanStatus::Unset,
+        None | Some(TerminalClass::Success | TerminalClass::Timeout | TerminalClass::Failure) => {
+            SpanStatus::Error
+        }
     }
 }
 

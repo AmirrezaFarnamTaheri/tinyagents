@@ -96,6 +96,30 @@ fn typed_stop_identifiers_reject_free_text_and_paths() {
 }
 
 #[test]
+fn stop_serde_rejects_or_scrubs_untrusted_identifiers() {
+    let secret = "private@example.test/secret";
+    let stop = TurnStop {
+        kind: TurnStopKind::Breaker,
+        failure_class: Some(TurnFailureClass::new(secret)),
+        operation: Some(secret.into()),
+    };
+
+    let encoded = serde_json::to_string(&stop).expect("serialize sanitized stop");
+    assert!(!encoded.contains(secret));
+    assert!(encoded.contains("unknown"));
+    assert!(!stop.status_message().contains(secret));
+
+    for invalid in [
+        format!(r#"{{"kind":"breaker","failure_class":"{secret}"}}"#),
+        format!(r#"{{"kind":"breaker","operation":"{secret}"}}"#),
+    ] {
+        let error = serde_json::from_str::<TurnStop>(&invalid)
+            .expect_err("untrusted identifiers must not deserialize");
+        assert!(!error.to_string().contains(secret));
+    }
+}
+
+#[test]
 fn classify_prefers_breaker_then_wind_down_then_cap() {
     assert_eq!(TurnStop::classify(None, false, false, fallback), None);
     assert_eq!(
