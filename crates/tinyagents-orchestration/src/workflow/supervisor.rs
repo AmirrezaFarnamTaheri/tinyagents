@@ -102,7 +102,13 @@ impl WorkflowRunSupervisor {
         MakeFuture: FnOnce(CancellationToken) -> F,
         Spawn: FnOnce(WorkflowDriveFuture<F>),
     {
-        self.start_scoped(run_id, make_future, |future| future, |future| future, spawn)
+        self.start_scoped_with_handle(
+            run_id,
+            make_future,
+            |future| future,
+            |future| future,
+            |_, future| spawn(future),
+        )
     }
 
     /// Start a drive with explicit host scope wrappers.
@@ -135,6 +141,43 @@ impl WorkflowRunSupervisor {
         OriginFuture: Future<Output = ()> + Send + 'static,
         Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
+        self.start_scoped_with_handle(
+            run_id,
+            make_future,
+            root_parent,
+            origin,
+            |_, future| spawn(future),
+        )
+    }
+
+    /// Start a drive and pass its installed handle to the host before it can
+    /// schedule or poll the future. This lets a host register the generation
+    /// with its durable supervisor before a fast drive can finish.
+    pub fn start_scoped_with_handle<
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> WorkflowRunHandle
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(WorkflowRunHandle, WorkflowDriveFuture<OriginFuture>),
+    {
         let run_id = run_id.into();
         let generation = {
             let mut registry = self.registry.lock().expect("workflow registry poisoned");
@@ -159,7 +202,7 @@ impl WorkflowRunSupervisor {
             supervisor: self.clone(),
             handle: handle.clone(),
         };
-        spawn(future);
+        spawn(handle.clone(), future);
         handle
     }
 
@@ -204,7 +247,42 @@ impl WorkflowRunSupervisor {
         OriginFuture: Future<Output = ()> + Send + 'static,
         Spawn: FnOnce(WorkflowDriveFuture<OriginFuture>),
     {
-        self.start_scoped(run_id, make_future, root_parent, origin, spawn)
+        self.resume_scoped_with_handle(
+            run_id,
+            make_future,
+            root_parent,
+            origin,
+            |_, future| spawn(future),
+        )
+    }
+
+    /// Resume a drive and provide its installed handle before scheduling it.
+    pub fn resume_scoped_with_handle<
+        Drive,
+        MakeFuture,
+        RootScope,
+        RootFuture,
+        OriginScope,
+        OriginFuture,
+        Spawn,
+    >(
+        &self,
+        run_id: impl Into<String>,
+        make_future: MakeFuture,
+        root_parent: RootScope,
+        origin: OriginScope,
+        spawn: Spawn,
+    ) -> WorkflowRunHandle
+    where
+        Drive: Future<Output = ()> + Send + 'static,
+        MakeFuture: FnOnce(CancellationToken) -> Drive,
+        RootScope: FnOnce(Drive) -> RootFuture,
+        RootFuture: Future<Output = ()> + Send + 'static,
+        OriginScope: FnOnce(RootFuture) -> OriginFuture,
+        OriginFuture: Future<Output = ()> + Send + 'static,
+        Spawn: FnOnce(WorkflowRunHandle, WorkflowDriveFuture<OriginFuture>),
+    {
+        self.start_scoped_with_handle(run_id, make_future, root_parent, origin, spawn)
     }
 
     /// Cancel the current generation for `run_id`, if one is scheduled.
@@ -231,6 +309,18 @@ impl WorkflowRunSupervisor {
         }
         current.token.cancel();
         true
+    }
+
+    /// Returns whether `handle` still identifies the current generation.
+    /// Stopping a generation cancels it but leaves it current until it is
+    /// finished or dropped; replacement and completion make it non-current.
+    pub fn is_current(&self, handle: &WorkflowRunHandle) -> bool {
+        self.registry
+            .lock()
+            .expect("workflow registry poisoned")
+            .current
+            .get(handle.run_id())
+            .is_some_and(|current| current.id == handle.generation)
     }
 
     /// Remove a finished generation without disturbing a newer replacement.
