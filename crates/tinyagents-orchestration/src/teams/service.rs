@@ -148,7 +148,9 @@ pub trait TeamLedger: Send + Sync {
         member_id: &str,
         claim_token: &str,
     ) -> Result<bool>;
-    /// Marks a member as running a task and records its execution identifiers.
+    /// Legacy unconditional member-running setter. It does not reserve against
+    /// another active run; new task admission must use
+    /// [`TeamLedger::try_mark_member_running`].
     fn mark_member_running(
         &self,
         team_id: &str,

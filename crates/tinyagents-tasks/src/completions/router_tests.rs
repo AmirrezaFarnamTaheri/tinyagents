@@ -636,11 +636,13 @@ fn a_failed_store_migration_keeps_the_original_store_and_lease() {
     let router = CompletionRouter::new(source_port.clone());
     source.put(&record("leased", "p")).unwrap();
     router.pull("p", 1).unwrap();
+    source.put(&record("second", "p")).unwrap();
+    router.pull("p", 1).unwrap();
 
     let destination = Arc::new(FailingSecondPut {
         inner: InMemoryCompletionStore::new(),
         puts: Default::default(),
-        fail_from: std::sync::atomic::AtomicUsize::new(0),
+        fail_from: std::sync::atomic::AtomicUsize::new(1),
     });
     let destination_port: Arc<dyn CompletionStore> = destination;
     assert!(
