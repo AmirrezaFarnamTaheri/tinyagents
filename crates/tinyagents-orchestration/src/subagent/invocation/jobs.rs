@@ -38,6 +38,15 @@ type SessionOverlay = (
 type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
+const SELECTOR_RETRY_HINT: &str = "The selected subagent job or session is unavailable to this run. Check the identifier and try again.";
+
+fn selector_retry(enabled: bool, fallback: &'static str) -> anyhow::Error {
+    if enabled {
+        TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into()
+    } else {
+        anyhow::anyhow!(fallback)
+    }
+}
 struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
@@ -932,6 +941,7 @@ pub struct SubAgentJobsTool {
     category: ToolCategory,
     timeout: ToolTimeout,
     task_thread_scope: Option<Arc<dyn Fn(u64) -> Option<String> + Send + Sync>>,
+    recover_selector_errors: bool,
 }
 
 impl SubAgentJobsTool {
@@ -954,7 +964,15 @@ impl SubAgentJobsTool {
             category: ToolCategory::System,
             timeout: ToolTimeout::Inherit,
             task_thread_scope: None,
+            recover_selector_errors: false,
         }
+    }
+
+    /// Returns selector misses as model-correctable errors instead of fatal
+    /// tool dispatch failures. Storage and registry failures remain fatal.
+    pub fn recover_selector_errors(mut self) -> Self {
+        self.recover_selector_errors = true;
+        self
     }
 
     /// Uses a host-facing name while retaining this tool's typed job logic.
@@ -1217,29 +1235,53 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .map(Value::as_str),
         };
         if self.require_identifier && identifier.is_none() {
+            if self.recover_selector_errors {
+                return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+            }
             anyhow::bail!("a job or session identifier is required");
         }
         match action {
             None | Some(Some("query")) => {}
             Some(Some("cancel")) => {
-                let job_id = identifier.ok_or_else(|| {
-                    anyhow::anyhow!("job_id must be a string for action `cancel`")
-                })?;
-                let job = self.jobs.cancel_owned(job_id, &owner)?;
+                let Some(job_id) = identifier else {
+                    return Err(selector_retry(
+                        self.recover_selector_errors,
+                        "job_id must be a string for action `cancel`",
+                    ));
+                };
+                let job = match self.jobs.cancel_owned(job_id, &owner) {
+                    Ok(job) => job,
+                    Err(SubAgentJobError::NotFound(_)) if self.recover_selector_errors => {
+                        return Err(
+                            TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into()
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                };
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
             Some(Some("close")) => {
-                let id = identifier
-                    .ok_or_else(|| anyhow::anyhow!("job_id must be a string for action `close`"))?;
+                let Some(id) = identifier else {
+                    return Err(selector_retry(
+                        self.recover_selector_errors,
+                        "job_id must be a string for action `close`",
+                    ));
+                };
                 let (sessions, key) = self
                     .sessions
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
                 let Some(session) = sessions.get(id).await? else {
-                    anyhow::bail!("durable subagent session not found");
+                    return Err(selector_retry(
+                        self.recover_selector_errors,
+                        "durable subagent session not found",
+                    ));
                 };
                 if session.parent_session != key(parent.instance_id()) {
-                    anyhow::bail!("durable subagent session not found");
+                    return Err(selector_retry(
+                        self.recover_selector_errors,
+                        "durable subagent session not found",
+                    ));
                 }
                 return Ok(ToolResult::json(
                     json!({"closed": sessions.close(id).await?}),
@@ -1307,6 +1349,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         match tokio::time::timeout(duration, self.jobs.wait_owned(&job_id, &owner))
                             .await
                         {
+                            Ok(Err(SubAgentJobError::NotFound(_)))
+                                if self.recover_selector_errors =>
+                            {
+                                return Err(TinyAgentsError::ModelRetry(
+                                    SELECTOR_RETRY_HINT.to_owned(),
+                                )
+                                .into());
+                            }
                             Ok(result) => result?,
                             Err(_) => self
                                 .jobs
@@ -1314,7 +1364,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                                 .ok_or_else(|| SubAgentJobError::NotFound(job_id.clone()))?,
                         }
                     } else {
-                        self.jobs.wait_owned(&job_id, &owner).await?
+                        match self.jobs.wait_owned(&job_id, &owner).await {
+                            Ok(job) => job,
+                            Err(SubAgentJobError::NotFound(_)) if self.recover_selector_errors => {
+                                return Err(TinyAgentsError::ModelRetry(
+                                    SELECTOR_RETRY_HINT.to_owned(),
+                                )
+                                .into());
+                            }
+                            Err(error) => return Err(error.into()),
+                        }
                     };
                     return Ok(ToolResult::json(serde_json::to_value(job)?));
                 }
@@ -1404,6 +1463,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         "latest_error": session.latest_error,
                     })));
                 }
+                if self.recover_selector_errors {
+                    return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+                }
                 return Err(SubAgentJobError::NotFound(id.to_owned()).into());
             }
             Some(_) => anyhow::bail!("action must be `query`, `cancel`, `close`, or `await`"),
@@ -1413,15 +1475,22 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             if let Some(job) = job {
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
-            let (sessions, key) = self
-                .sessions
-                .as_ref()
-                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-            let session = sessions
+            let Some((sessions, key)) = self.sessions.as_ref() else {
+                if self.recover_selector_errors {
+                    return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+                }
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()).into());
+            };
+            let Some(session) = sessions
                 .get(job_id)
                 .await?
                 .filter(|session| session.parent_session == key(parent.instance_id()))
-                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+            else {
+                if self.recover_selector_errors {
+                    return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+                }
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()).into());
+            };
             Ok(ToolResult::json(serde_json::to_value(
                 DurableSubagentSessionSummary::from(&session),
             )?))
@@ -1504,6 +1573,7 @@ pub struct SubAgentMessageTool {
     scope: ToolScope,
     category: ToolCategory,
     timeout: ToolTimeout,
+    recover_selector_errors: bool,
 }
 
 impl SubAgentMessageTool {
@@ -1523,7 +1593,15 @@ impl SubAgentMessageTool {
             scope: ToolScope::All,
             category: ToolCategory::System,
             timeout: ToolTimeout::Inherit,
+            recover_selector_errors: false,
         }
+    }
+
+    /// Returns selector misses as model-correctable errors instead of fatal
+    /// tool dispatch failures. Storage and registry failures remain fatal.
+    pub fn recover_selector_errors(mut self) -> Self {
+        self.recover_selector_errors = true;
+        self
     }
 
     /// Uses a host-facing name while retaining this tool's typed message logic.
@@ -1684,14 +1762,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 .sessions
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("durable sessions are not configured"))?;
-            let session = sessions
+            let Some(session) = sessions
                 .get(session_id)
                 .await?
                 .filter(|session| session.parent_session == key(parent.instance_id()))
-                .ok_or_else(|| anyhow::anyhow!("durable subagent session not found"))?;
-            let task_id = session
-                .current_task_id
-                .ok_or_else(|| anyhow::anyhow!("durable subagent session has no running task"))?;
+            else {
+                return Err(selector_retry(
+                    self.recover_selector_errors,
+                    "durable subagent session not found",
+                ));
+            };
+            let Some(task_id) = session.current_task_id else {
+                if self.recover_selector_errors {
+                    return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+                }
+                return Err(anyhow::anyhow!(
+                    "durable subagent session has no running task"
+                ));
+            };
             session
                 .lifecycle_key
                 .as_ref()
@@ -1704,10 +1792,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 })
                 .unwrap_or(task_id)
         } else {
-            args.get(&self.argument_names.job_id)
+            let Some(job_id) = args
+                .get(&self.argument_names.job_id)
                 .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("job_id or session_id must be a string"))?
-                .to_owned()
+            else {
+                return Err(selector_retry(
+                    self.recover_selector_errors,
+                    "job_id or session_id must be a string",
+                ));
+            };
+            job_id.to_owned()
         };
         let message = args
             .get(&self.argument_names.message)
@@ -1731,9 +1825,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 }
             })
         });
-        let duplicate = self
+        let duplicate = match self
             .jobs
-            .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)?;
+            .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)
+        {
+            Ok(duplicate) => duplicate,
+            Err(SubAgentJobError::NotFound(_)) if self.recover_selector_errors => {
+                return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let mut payload = json!({
             "job_id": job_id,
             "status": "message_queued"
