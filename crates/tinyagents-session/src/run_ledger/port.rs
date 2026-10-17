@@ -325,6 +325,18 @@ pub trait RunLedgerStore: Send + Sync {
         run_id: &str,
     ) -> Result<Option<AgentTeamMember>>;
 
+    /// Atomically admit a member to one task execution. Pending and idle
+    /// members become active; active members are returned unchanged, and
+    /// stopped or missing members are not admitted.
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission>;
+
     /// Mark a member idle: status → `idle`, clearing `current_task_id`. The
     /// `worker_thread_id` / `run_id` are intentionally retained as a pointer to the
     /// member's last run for history. Returns the updated member, or `None` if the

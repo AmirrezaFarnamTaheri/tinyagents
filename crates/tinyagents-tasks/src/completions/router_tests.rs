@@ -425,10 +425,9 @@ async fn release_makes_an_abandoned_claim_claimable_again() {
 
 #[tokio::test]
 async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
-    use crate::completions::CompletionRouterPool;
-
     let source_store = Arc::new(InMemoryCompletionStore::new());
-    let source_router = Arc::new(CompletionRouter::new(source_store.clone()));
+    let source_store_port: Arc<dyn CompletionStore> = source_store.clone();
+    let source_router = CompletionRouter::new(source_store_port.clone());
     source_router
         .record(record("leased", "p").with_notify_mode(NotifyMode::Off))
         .await
@@ -437,26 +436,16 @@ async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
     assert_eq!(ids(&claimed), ["leased"]);
     assert_eq!(claimed[0].attempts, 1);
 
-    // This is the host's previous fallback/reopen path: copy records into a
-    // new store, construct a new router, and replace the pool entry.
     let replacement_store = Arc::new(InMemoryCompletionStore::new());
-    for record in source_store.list(None) {
-        replacement_store.put(&record).unwrap();
-    }
-    let pool = CompletionRouterPool::new({
-        let source_router = Arc::clone(&source_router);
-        move |_| Arc::clone(&source_router)
-    });
-    let cached = pool.get_or_open(&"scope").unwrap();
-    assert!(Arc::ptr_eq(&cached, &source_router));
-    let replacement = Arc::new(CompletionRouter::new(replacement_store.clone()));
+    let replacement_port: Arc<dyn CompletionStore> = replacement_store.clone();
     assert!(matches!(
-        pool.replace_if_current(&"scope", &source_router, Arc::clone(&replacement))
+        source_router
+            .replace_store_if_current(&source_store_port, replacement_port)
             .unwrap(),
-        crate::completions::CompletionRouterReplaceOutcome::Replaced(_)
+        CompletionStoreReplaceOutcome::Replaced(_)
     ));
 
-    let duplicate_claim = replacement.pull("p", 1).unwrap();
+    let duplicate_claim = source_router.pull("p", 1).unwrap();
     let old_ack = source_router.mark_delivered(&["leased"]).unwrap();
     let replacement_record = replacement_store.get("leased").unwrap();
     assert!(
@@ -468,6 +457,65 @@ async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
         replacement_record.state,
         CompletionState::Delivered,
         "the outstanding claim's acknowledgement must update the new store"
+    );
+}
+
+#[test]
+fn store_migration_copies_all_states_and_keeps_router_policy() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = CompletionRouter::new(source_port.clone()).with_max_attempts(2);
+    let formatter = Arc::clone(router.formatter());
+
+    source
+        .put(&record("pending", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+
+    source
+        .put(&record("delivered", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+    router.mark_delivered(&["delivered"]).unwrap();
+
+    source
+        .put(&record("tombstoned", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.tombstone("tombstoned").unwrap();
+
+    source
+        .put(&record("gave-up", "p").with_notify_mode(NotifyMode::Off))
+        .unwrap();
+    router.pull("p", 1).unwrap();
+    router.release(&["gave-up"]);
+    router.pull("p", 1).unwrap();
+    router.mark_failed(&["gave-up"]).unwrap();
+    router.cancel_parent("q").unwrap();
+
+    let destination = Arc::new(InMemoryCompletionStore::new());
+    let destination_port: Arc<dyn CompletionStore> = destination.clone();
+    destination.put(&record("target-only", "p")).unwrap();
+    assert!(matches!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .unwrap(),
+        CompletionStoreReplaceOutcome::Replaced(_)
+    ));
+
+    assert_eq!(router.max_attempts(), 2);
+    assert!(Arc::ptr_eq(router.formatter(), &formatter));
+    assert_eq!(destination.get("pending").unwrap().state, CompletionState::Pending);
+    assert_eq!(destination.get("pending").unwrap().attempts, 1);
+    assert_eq!(destination.get("delivered").unwrap().state, CompletionState::Delivered);
+    assert_eq!(destination.get("tombstoned").unwrap().state, CompletionState::Tombstoned);
+    assert_eq!(destination.get("gave-up").unwrap().state, CompletionState::GaveUp);
+    assert!(destination.get("target-only").is_some());
+    assert_eq!(
+        destination
+            .get(&CompletionRouter::parent_marker_id("q"))
+            .unwrap()
+            .state,
+        CompletionState::Tombstoned
     );
 }
 
@@ -520,6 +568,65 @@ impl CompletionStore for FailingSecondPut {
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
+}
+
+struct FailingList {
+    inner: InMemoryCompletionStore,
+}
+
+impl CompletionStore for FailingList {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        self.inner.get(task_id)
+    }
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+    fn try_list(
+        &self,
+        _parent_key: Option<&str>,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        Err(tinyagents_harness::error::TinyAgentsError::Graph(
+            "source enumeration failed".into(),
+        ))
+    }
+}
+
+#[test]
+fn a_failed_store_migration_keeps_the_original_store_and_lease() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = CompletionRouter::new(source_port.clone());
+    source.put(&record("leased", "p")).unwrap();
+    router.pull("p", 1).unwrap();
+
+    let destination = Arc::new(FailingSecondPut {
+        inner: InMemoryCompletionStore::new(),
+        puts: Default::default(),
+        fail_from: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let destination_port: Arc<dyn CompletionStore> = destination;
+    assert!(router
+        .replace_store_if_current(&source_port, destination_port)
+        .is_err());
+    assert!(Arc::ptr_eq(&router.store(), &source_port));
+    assert!(router.pull("p", 1).unwrap().is_empty());
+}
+
+#[test]
+fn a_source_enumeration_error_does_not_replace_the_store() {
+    let source = Arc::new(FailingList {
+        inner: InMemoryCompletionStore::new(),
+    });
+    let source_port: Arc<dyn CompletionStore> = source;
+    let router = CompletionRouter::new(source_port.clone());
+    let destination_port: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    assert!(router
+        .replace_store_if_current(&source_port, destination_port)
+        .is_err());
+    assert!(Arc::ptr_eq(&router.store(), &source_port));
 }
 
 #[tokio::test]

@@ -28,6 +28,7 @@ mod types;
 
 pub use completions::{
     CompletionArtifact, CompletionFormatter, CompletionRecord, CompletionResult, CompletionRouter,
+    CompletionStoreReplaceOutcome,
     CompletionState, CompletionStatus, CompletionStore, DEFAULT_MAX_ATTEMPTS,
     DriverCompletionStore, InMemoryCompletionStore, NeutralCompletionFormatter, NotifyMode,
     RecordOutcome, TombstoneOutcome,

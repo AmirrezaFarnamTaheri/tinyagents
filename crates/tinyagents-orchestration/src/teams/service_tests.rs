@@ -160,17 +160,25 @@ async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
     first_entered.notified().await;
 
     let executions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut loser_callback_called = false;
     let second = second_service
-        .start_member(
+        .start_member_with_started(
             &team.team.id,
             &second_task.id,
             &member.id,
             &CountingExecutor(Arc::clone(&executions)),
             false,
+            |_| loser_callback_called = true,
         )
         .await;
 
-    assert!(second.is_err(), "an active member must reject a second task");
+    let error = second.expect_err("an active member must reject a second task");
+    assert!(matches!(
+        error.downcast_ref::<TeamMemberStartError>(),
+        Some(TeamMemberStartError::AlreadyActive { member_id, current_task_id })
+            if member_id == &member.id && current_task_id.as_deref() == Some(first_task.id.as_str())
+    ));
+    assert!(!loser_callback_called, "denied admission must not report Started");
     assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 0);
     let after = first_service.get_team(&team.team.id).unwrap().unwrap();
     assert_eq!(after.members[0].member_status, AgentTeamMemberStatus::Active);
@@ -178,6 +186,14 @@ async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
         after.members[0].current_task_id.as_deref(),
         Some(first_task.id.as_str())
     );
+    assert!(after.members[0]
+        .worker_thread_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("team-worker-")));
+    assert!(after.members[0]
+        .run_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with("team-run-")));
     let first_after = after
         .tasks
         .iter()

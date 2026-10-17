@@ -38,7 +38,10 @@ pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
     open_driver_completion_store_or_memory,
 };
-pub use router::{CompletionRouter, DEFAULT_MAX_ATTEMPTS, RecordOutcome, TombstoneOutcome};
+pub use router::{
+    CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
+    TombstoneOutcome,
+};
 pub use store::{CompletionStore, InMemoryCompletionStore};
 pub use types::{
     CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,

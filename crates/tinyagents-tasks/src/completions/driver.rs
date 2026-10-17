@@ -59,6 +59,13 @@ fn decode(record: &Value) -> Option<CompletionRecord> {
     }
 }
 
+fn decode_strict(record: Option<&Value>) -> Result<CompletionRecord> {
+    let value = record.ok_or_else(|| TinyAgentsError::Storage("completion store row has no record".into()))?;
+    serde_json::from_value(value.clone()).map_err(|error| {
+        TinyAgentsError::Storage(format!("completion store contains unreadable record: {error}"))
+    })
+}
+
 /// A durable [`CompletionStore`] stored in a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
 pub struct DriverCompletionStore {
@@ -201,6 +208,26 @@ impl CompletionStore for DriverCompletionStore {
         })
         .inspect_err(|error| tracing::warn!(error = %error, "{LOG_PREFIX} list failed"))
         .unwrap_or_default()
+    }
+
+    fn try_list(&self, parent_key: Option<&str>) -> Result<Vec<CompletionRecord>> {
+        let this = self.clone();
+        let parent_key = parent_key.map(str::to_owned);
+        self.run(async move {
+            this.declare().await?;
+            let filter = match &parent_key {
+                Some(parent) => Filter::eq("parentKey", parent.as_str()),
+                None => Filter::default(),
+            };
+            let rows = this
+                .docs
+                .query_all(&this.collection, &Query::filter(filter))
+                .await
+                .map_err(map_error)?;
+            rows.into_iter()
+                .map(|row| decode_strict(row.doc.get("record")))
+                .collect()
+        })
     }
 
     fn compact(&self, retain: Duration) -> Result<usize> {
