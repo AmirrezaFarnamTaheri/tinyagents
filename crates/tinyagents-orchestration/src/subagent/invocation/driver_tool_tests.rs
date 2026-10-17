@@ -1264,7 +1264,6 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
         },
         |_| Some("thread-a".into()),
     );
-    eprintln!("cancel-test: dispatching");
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
         &(),
@@ -1275,16 +1274,13 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     )
     .await
     .unwrap();
-    eprintln!("cancel-test: spawned");
     let public_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    eprintln!("cancel-test: waiting for executor");
     tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
         .await
         .expect("driver executor should start");
-    eprintln!("cancel-test: executor started");
 
     let mut foreign_key = key.clone();
     foreign_key.parent_run_id.push_str("-foreign");
@@ -1297,12 +1293,14 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
         SubAgentJobError::NotFound("cancel-task".into())
     );
     let requested = jobs.cancel_key_owned(&key, "parent-a").unwrap();
-    eprintln!("cancel-test: cancellation requested");
     assert_eq!(requested.id.as_str(), public_id);
     assert_eq!(requested.status, SubAgentJobStatus::Running);
+    assert!(
+        !parent.cancellation.is_cancelled(),
+        "cancelling a child must not cancel its parent run"
+    );
 
     release.add_permits(1);
-    eprintln!("cancel-test: released executor");
     let settled = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         jobs.wait_owned(&public_id, "parent-a"),
