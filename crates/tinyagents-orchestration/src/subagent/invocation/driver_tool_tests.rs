@@ -470,7 +470,10 @@ async fn awaited_background_completion_commits_before_jobs_become_terminal() {
         result = &mut waiter => panic!("wait observed terminal status before host completion commit: {result:?}"),
         _ = callback_started.notified() => {},
     }
-    assert_eq!(jobs.get_owned(&job_id, "parent-owner").unwrap().status, SubAgentJobStatus::Running);
+    assert_eq!(
+        jobs.get_owned(&job_id, "parent-owner").unwrap().status,
+        SubAgentJobStatus::Running
+    );
     release_callback.add_permits(1);
     assert_eq!(waiter.await.unwrap().status, SubAgentJobStatus::Completed);
 }
@@ -551,12 +554,18 @@ async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_termina
         _ = callback_started.notified() => {}
     }
     let result = observed.lock().unwrap().clone().unwrap();
-    assert_eq!(result.disposition, SubagentPersistenceDisposition::TerminalExisting);
+    assert_eq!(
+        result.disposition,
+        SubagentPersistenceDisposition::TerminalExisting
+    );
     assert!(!result.should_emit_host_effects());
     assert_eq!(result.outcome.output, "durable result");
     release_callback.add_permits(1);
     assert_eq!(
-        jobs.wait_owned(&job_id, "replay-owner").await.unwrap().status,
+        jobs.wait_owned(&job_id, "replay-owner")
+            .await
+            .unwrap()
+            .status,
         SubAgentJobStatus::Completed
     );
 }

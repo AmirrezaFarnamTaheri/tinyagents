@@ -4,8 +4,8 @@
 //! construction, durable task identity, and opaque planner options. The driver
 //! then remains the only path that plans, executes, and persists the run.
 
-use std::marker::PhantomData;
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -211,13 +211,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// terminal status should use this seam.
     pub fn with_async_completion_handler<Fut>(
         mut self,
-        handler: impl Fn(
-                String,
-                Result<crate::subagent::SubagentRunResult, String>,
-            ) -> Fut
-            + Send
-            + Sync
-            + 'static,
+        handler: impl Fn(String, Result<crate::subagent::SubagentRunResult, String>) -> Fut
+        + Send
+        + Sync
+        + 'static,
     ) -> Self
     where
         Fut: Future<Output = ()> + Send + 'static,
@@ -319,11 +316,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                             != crate::subagent::SubagentPersistenceDisposition::ObserverCancelled
                             && let Some(completion) = async_completion
                         {
-                            completion(
-                                completion_target.clone(),
-                                Ok(result.clone()),
-                            )
-                            .await;
+                            completion(completion_target.clone(), Ok(result.clone())).await;
                         }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Ok(result.outcome.clone()));
