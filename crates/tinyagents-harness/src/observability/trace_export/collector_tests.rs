@@ -368,7 +368,7 @@ fn terminal_outcomes_distinguish_cancellation_stops_and_failures() {
         (
             TerminalOutcome::new(TerminalReason::Timeout, "deadline"),
             SpanStatus::Error,
-            "failed",
+            "timed_out",
         ),
     ];
     for (outcome, status, label) in outcomes {
@@ -405,7 +405,7 @@ fn failed_run_preserves_typed_cancellation_and_timeout_outcomes() {
 
     for (reason, expected_status, expected_outcome) in [
         (TerminalReason::Cancelled, SpanStatus::Unset, "cancelled"),
-        (TerminalReason::Timeout, SpanStatus::Error, "failed"),
+        (TerminalReason::Timeout, SpanStatus::Error, "timed_out"),
         (TerminalReason::Completed, SpanStatus::Error, "failed"),
     ] {
         let context = TraceContext::new("trace-failed-terminal", None).with_capture_content(false);
@@ -441,6 +441,41 @@ fn failed_run_preserves_typed_cancellation_and_timeout_outcomes() {
         if reason == TerminalReason::Cancelled {
             assert_eq!(root.attributes["observation.level"], "WARNING");
         }
+    }
+}
+
+#[test]
+fn failed_timeout_falls_back_to_legacy_error_without_leaking_when_capture_is_off() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    for (capture_content, expected_error) in [
+        (true, "legacy timeout description"),
+        (false, "Operation failed"),
+    ] {
+        let context =
+            TraceContext::new("trace-timeout-fallback", None).with_capture_content(capture_content);
+        let mut collector = SpanCollector::new(context);
+        collector.record_event(
+            &AgentEvent::RunStarted {
+                run_id: RunId::new("run-timeout-fallback"),
+                thread_id: None,
+            },
+            10,
+        );
+        collector.record_event(
+            &AgentEvent::RunFailed {
+                run_id: RunId::new("run-timeout-fallback"),
+                error: "legacy timeout description".into(),
+                outcome: Some(TerminalOutcome::new(TerminalReason::Timeout, "")),
+            },
+            20,
+        );
+
+        let root = &collector.spans()[0];
+        assert_eq!(root.status, SpanStatus::Error);
+        assert_eq!(root.attributes["turn.outcome"], "timed_out");
+        assert_eq!(root.attributes["error.message"], expected_error);
+        assert_eq!(root.end_unix_ms, Some(20));
     }
 }
 
