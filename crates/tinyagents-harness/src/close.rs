@@ -312,7 +312,7 @@ pub struct CloseRequestOptions<'a> {
     /// Maximum number of output tokens for every request in the operation.
     pub max_output_tokens: Option<u32>,
     /// Observe each completed provider response before validation or retry.
-    pub on_response: Option<&'a mut dyn FnMut(&ModelResponse)>,
+    pub on_response: Option<&'a mut (dyn FnMut(&ModelResponse) + Send)>,
 }
 
 impl Default for CloseRequestOptions<'_> {

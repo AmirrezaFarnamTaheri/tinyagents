@@ -32,6 +32,12 @@ impl ChatModel<()> for ScriptedModel {
             charged_amount: Some(tinyinference_llm::usage::ChargedAmount::usd_micros(1_200)),
             ..Usage::new(11, 3)
         });
+        response.raw = Some(serde_json::json!({
+            "openhuman": {
+                "usage": { "cached_input_tokens": 8 },
+                "billing": { "charged_amount_usd": 0.0012 }
+            }
+        }));
         Ok(response)
     }
 }
@@ -41,6 +47,72 @@ fn scripted_model(answers: &[&str]) -> ScriptedModel {
         answers: Arc::new(Mutex::new(answers.iter().map(|s| s.to_string()).collect())),
         requests: Arc::new(Mutex::new(Vec::new())),
     }
+}
+
+#[test]
+fn legacy_and_options_close_futures_remain_send() {
+    fn assert_send<T: Send>(_: T) {}
+
+    let model = scripted_model(&[]);
+    let contract = crate::config::RequiredOutput::new("summary");
+    assert_send(grounded_close(
+        &model,
+        &(),
+        &NativeDialect,
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close",
+            verification_prompt: |reply: &str| reply.to_owned(),
+            repair_instruction: |_| "repair".to_owned(),
+            harness_phrases: &[],
+            budget: None,
+            deterministic_fallback: || "fallback".to_owned(),
+        },
+    ));
+    assert_send(grounded_close_with_options(
+        &model,
+        &(),
+        &NativeDialect,
+        GroundedCloseConfig {
+            history: &[],
+            initial_prompt: "close",
+            verification_prompt: |reply: &str| reply.to_owned(),
+            repair_instruction: |_| "repair".to_owned(),
+            harness_phrases: &[],
+            budget: None,
+            deterministic_fallback: || "fallback".to_owned(),
+        },
+        CloseRequestOptions::default(),
+    ));
+    assert_send(repair_required_output(
+        &model,
+        &(),
+        &NativeDialect,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "reply",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: false,
+        },
+    ));
+    let mut callback = |_response: &ModelResponse| {};
+    assert_send(repair_required_output_with_options(
+        &model,
+        &(),
+        &NativeDialect,
+        RequiredOutputRepairConfig {
+            history: &[],
+            reply: "reply",
+            contract: &contract,
+            repair_instruction: "repair",
+            reply_already_streamed: false,
+        },
+        CloseRequestOptions {
+            max_output_tokens: Some(32),
+            on_response: Some(&mut callback),
+        },
+    ));
 }
 
 #[test]
@@ -85,14 +157,14 @@ fn configurable_result_renderer_truncates_then_selects_newest_and_preserves_orde
     let options = CloseResultRenderOptions {
         per_result_cap: 2,
         truncation_marker: "… [truncated]",
-        total_budget: 12,
+        total_budget: 45,
         render_block: |result: &CloseToolResult| format!("<{}:{}>", result.name, result.content),
         omitted_notice: |count| format!("omitted:{count}|"),
     };
 
     assert_eq!(
         render_tool_results_with_options(&results, options),
-        "omitted:2|<new:你好… [truncated]>"
+        "omitted:1|<middle:mi… [truncated]><new:你好… [truncated]>"
     );
 }
 
@@ -186,13 +258,18 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
     let model = scripted_model(&["Initial answer", "REJECT", "Repaired answer", "ACCEPT"]);
     let mut observed_charges = Vec::new();
     let mut on_response = |response: &ModelResponse| {
-        observed_charges.push(
-            response
-                .usage
-                .expect("scripted response usage")
-                .charged_amount
-                .expect("provider charge is retained"),
-        );
+        let raw_charge = response
+            .raw
+            .as_ref()
+            .and_then(|raw| raw["openhuman"]["billing"]["charged_amount_usd"].as_f64())
+            .expect("billing extension is retained");
+        let charged_micros = response
+            .usage
+            .expect("scripted response usage")
+            .charged_amount
+            .expect("provider charge is retained")
+            .micros;
+        observed_charges.push((raw_charge, charged_micros));
     };
     let output = grounded_close_with_options(
         &model,
@@ -217,7 +294,11 @@ async fn close_options_apply_output_cap_and_report_each_full_response_before_val
     assert_eq!(output.text, "Repaired answer");
     assert_eq!(output.usage.len(), 4);
     assert_eq!(observed_charges.len(), 4);
-    assert!(observed_charges.iter().all(|charge| charge.micros == 1_200));
+    assert!(
+        observed_charges
+            .iter()
+            .all(|(usd, micros)| *usd == 0.0012 && *micros == 1_200)
+    );
     let requests = model.requests.lock().unwrap();
     assert_eq!(requests.len(), 4);
     assert!(
@@ -251,6 +332,9 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
                     charged_amount: Some(tinyinference_llm::usage::ChargedAmount::usd_micros(987)),
                     ..Usage::new(11, 3)
                 });
+                response.raw = Some(serde_json::json!({
+                    "openhuman": { "billing": { "charged_amount_usd": 0.000987 } }
+                }));
                 Ok(response)
             } else {
                 Err(tinyinference_llm::Error::Model("scripted failure".into()))
@@ -268,6 +352,10 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
                 .charged_amount
                 .expect("charged amount remains on intact response")
                 .micros,
+        );
+        assert_eq!(
+            response.raw.as_ref().unwrap()["openhuman"]["billing"]["charged_amount_usd"].as_f64(),
+            Some(0.000987)
         );
     };
     let output = grounded_close_with_options(
@@ -300,6 +388,84 @@ async fn completed_close_response_is_reported_when_a_later_request_fails() {
             .iter()
             .all(|request| request.max_tokens == Some(21))
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn completed_close_usage_survives_a_pending_verifier_timeout() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+
+    struct FirstThenPending {
+        calls: AtomicUsize,
+        verifier_started: Mutex<Option<oneshot::Sender<()>>>,
+    }
+
+    #[async_trait]
+    impl ChatModel<()> for FirstThenPending {
+        async fn invoke(
+            &self,
+            _: &(),
+            _: ModelRequest,
+        ) -> tinyinference_llm::Result<ModelResponse> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let mut response = ModelResponse::assistant("Completed answer");
+                response.usage = Some(Usage::new(11, 3));
+                Ok(response)
+            } else {
+                if let Some(started) = self.verifier_started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                std::future::pending().await
+            }
+        }
+    }
+
+    let (started_tx, started_rx) = oneshot::channel();
+    let model = Arc::new(FirstThenPending {
+        calls: AtomicUsize::new(0),
+        verifier_started: Mutex::new(Some(started_tx)),
+    });
+    let model_for_task = Arc::clone(&model);
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_by_callback = Arc::clone(&observed);
+    let task = tokio::spawn(async move {
+        let mut on_response = move |response: &ModelResponse| {
+            observed_by_callback.lock().unwrap().push(
+                response
+                    .usage
+                    .expect("completed response usage")
+                    .input_tokens,
+            );
+        };
+        grounded_close_with_options(
+            model_for_task.as_ref(),
+            &(),
+            &NativeDialect,
+            GroundedCloseConfig {
+                history: &[],
+                initial_prompt: "close",
+                verification_prompt: |reply: &str| format!("verify {reply}"),
+                repair_instruction: |violation| format!("repair {violation:?}"),
+                harness_phrases: &[],
+                budget: Some(std::time::Duration::from_secs(5)),
+                deterministic_fallback: || "fallback".to_owned(),
+            },
+            CloseRequestOptions {
+                max_output_tokens: Some(22),
+                on_response: Some(&mut on_response),
+            },
+        )
+        .await
+    });
+
+    started_rx.await.expect("verifier request started");
+    tokio::time::advance(std::time::Duration::from_secs(5)).await;
+    let output = task.await.expect("close task joins");
+
+    assert_eq!(output.text, "fallback");
+    assert_eq!(output.usage.len(), 1);
+    assert_eq!(*observed.lock().unwrap(), [11]);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
