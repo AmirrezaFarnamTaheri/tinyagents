@@ -466,7 +466,7 @@ fn failed_timeout_falls_back_to_legacy_error_without_leaking_when_capture_is_off
             &AgentEvent::RunFailed {
                 run_id: RunId::new("run-timeout-fallback"),
                 error: "legacy timeout description".into(),
-                outcome: Some(TerminalOutcome::new(TerminalReason::Timeout, "")),
+                outcome: Some(TerminalOutcome::new(TerminalReason::Timeout, "  \n ")),
             },
             20,
         );
@@ -477,6 +477,65 @@ fn failed_timeout_falls_back_to_legacy_error_without_leaking_when_capture_is_off
         assert_eq!(root.attributes["error.message"], expected_error);
         assert_eq!(root.end_unix_ms, Some(20));
     }
+}
+
+#[test]
+fn failed_child_run_keeps_its_typed_error_on_the_child_span() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    let mut collector = SpanCollector::new(
+        TraceContext::new("trace-child-failure", None).with_capture_content(true),
+    );
+    collector.record(&observation_in_run(
+        "parent",
+        None,
+        "parent",
+        0,
+        10,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("parent"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        0,
+        11,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("child"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "child",
+        Some("parent"),
+        "parent",
+        1,
+        20,
+        AgentEvent::RunFailed {
+            run_id: RunId::new("child"),
+            error: "legacy child failure".into(),
+            outcome: Some(TerminalOutcome::new(
+                TerminalReason::ToolFailed,
+                "typed child failure",
+            )),
+        },
+    ));
+
+    let spans = collector.spans();
+    let parent = spans.iter().find(|span| span.kind == SpanKind::Run).unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Subagent)
+        .unwrap();
+    assert_eq!(parent.status, SpanStatus::Unset);
+    assert!(!parent.attributes.contains_key("turn.outcome"));
+    assert!(!parent.attributes.contains_key("error.message"));
+    assert_eq!(child.status, SpanStatus::Error);
+    assert_eq!(child.attributes["turn.outcome"], "failed");
+    assert_eq!(child.attributes["error.message"], "typed child failure");
 }
 
 #[test]
