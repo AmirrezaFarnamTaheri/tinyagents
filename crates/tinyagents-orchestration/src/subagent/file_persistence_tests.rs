@@ -181,6 +181,59 @@ async fn terminal_record_host_metadata_survives_neutral_read() {
 }
 
 #[tokio::test]
+async fn public_terminal_outcome_reads_scoped_persisted_records_synchronously() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileSubagentPersistence::new(dir.path());
+    let first = key("parent-a", "same-task");
+    let second = key("parent-b", "same-task");
+    let absent = key("parent-c", "same-task");
+    let first_outcome = SubagentOutcome::completed("same-task", "first result");
+    let second_outcome = SubagentOutcome::completed("same-task", "second result");
+
+    assert_eq!(store.terminal_outcome(&first).unwrap(), None);
+    assert_eq!(
+        store
+            .record_terminal(&first, &first_outcome, None)
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::Inserted
+    );
+    assert_eq!(
+        store
+            .record_terminal(&second, &second_outcome, None)
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::Inserted
+    );
+
+    assert_eq!(
+        store.terminal_outcome(&first).unwrap(),
+        Some(first_outcome.clone())
+    );
+    assert_eq!(
+        store.terminal_outcome(&second).unwrap(),
+        Some(second_outcome)
+    );
+    assert_eq!(store.terminal_outcome(&absent).unwrap(), None);
+    assert_eq!(
+        store.load_terminal(&first).await.unwrap(),
+        Some(first_outcome)
+    );
+}
+
+#[test]
+fn public_terminal_outcome_propagates_persistence_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileSubagentPersistence::new(dir.path());
+    let task_key = key("parent", "corrupt-terminal");
+    let path = store.terminal_path(&task_key).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"not valid json").unwrap();
+
+    assert!(store.terminal_outcome(&task_key).is_err());
+}
+
+#[tokio::test]
 async fn independent_file_store_handles_commit_only_one_pause_for_a_key() {
     let dir = tempfile::tempdir().unwrap();
     let first_store = FileSubagentPersistence::new(dir.path());
