@@ -1737,18 +1737,36 @@ fn run_finalized_without_a_terminal_event_does_not_invent_success() {
         None,
         "run",
         1,
-        20,
+        15,
+        AgentEvent::ModelStarted {
+            call_id: CallId::new("open-call"),
+            model: "model-x".into(),
+        },
+    ));
+    collector.record(&observation_in_run(
+        "run",
+        None,
+        "run",
+        2,
+        30,
         AgentEvent::RunFinalized {
             run_id: RunId::new("run"),
         },
     ));
-    collector.finish(30);
+    collector.finish(1_000);
 
     let root = &collector.spans()[0];
     assert_eq!(root.end_unix_ms, Some(30));
     assert_eq!(root.status, SpanStatus::Unset);
     assert!(!root.attributes.contains_key("turn.outcome"));
     assert_eq!(root.attributes["force_closed"], true);
+    let generation = collector
+        .spans()
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .expect("unfinished generation");
+    assert_eq!(generation.end_unix_ms, Some(30));
+    assert_eq!(generation.attributes["force_closed"], true);
 }
 
 #[test]
