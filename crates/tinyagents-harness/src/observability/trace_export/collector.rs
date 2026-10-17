@@ -631,7 +631,7 @@ impl SpanCollector {
                 self.apply_pending_turn_stop();
             }
             AgentEvent::RunFailed { error, outcome, .. } => {
-                self.close_open_iteration(timestamp_ms, SpanStatus::Error);
+                self.close_open_iteration(timestamp_ms, failed_iteration_status(outcome.as_ref()));
                 self.close_failed_run(outcome.as_ref(), error, timestamp_ms);
                 self.apply_pending_turn_stop();
             }
@@ -857,25 +857,69 @@ impl SpanCollector {
                     }
             }
         };
-        if (delta != 0.0 || source != "provider_reported")
-            && let Some(parent) = self.spans[index]
+        let direct_parent = self.spans[index]
+            .parent_span_id
+            .as_deref()
+            .and_then(|id| self.spans.iter().position(|span| span.span_id == id));
+        let mut run_root = direct_parent;
+        while let Some(parent) = run_root {
+            if matches!(self.spans[parent].kind, SpanKind::Turn | SpanKind::Subagent) {
+                break;
+            }
+            run_root = self.spans[parent]
                 .parent_span_id
                 .as_deref()
-                .and_then(|id| self.spans.iter().position(|span| span.span_id == id))
-        {
-            let prior_parent = self.spans[parent]
-                .attributes
-                .get("gen_ai.usage.cost_usd")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0);
-            self.spans[parent].attributes.insert(
-                "gen_ai.usage.cost_usd".into(),
-                json_f64((prior_parent + delta).max(0.0)),
-            );
-            self.spans[parent]
-                .attributes
-                .insert("gen_ai.cost.source".into(), json_str(source));
+                .and_then(|id| self.spans.iter().position(|span| span.span_id == id));
         }
+
+        if source == "provider_reported" {
+            if let Some(parent) = direct_parent
+                && matches!(
+                    self.spans[parent].kind,
+                    SpanKind::Iteration | SpanKind::SubagentIteration
+                )
+            {
+                let iteration_delta = amount
+                    - if prior_source == "estimated" {
+                        prior
+                    } else {
+                        0.0
+                    };
+                self.add_cost_delta(parent, iteration_delta, source);
+            }
+            // Run-level provider totals arrive through UsageRecorded. Remove
+            // an earlier estimate here, but do not add this per-call charge to
+            // the run root a second time.
+            if prior_source == "estimated"
+                && let Some(root) = run_root
+            {
+                self.add_cost_delta(root, -prior, source);
+            }
+        } else {
+            if let Some(parent) = direct_parent {
+                self.add_cost_delta(parent, delta, source);
+            }
+            if let Some(root) = run_root
+                && Some(root) != direct_parent
+            {
+                self.add_cost_delta(root, delta, source);
+            }
+        }
+    }
+
+    fn add_cost_delta(&mut self, index: usize, delta: f64, source: &str) {
+        let prior = self.spans[index]
+            .attributes
+            .get("gen_ai.usage.cost_usd")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        self.spans[index].attributes.insert(
+            "gen_ai.usage.cost_usd".into(),
+            json_f64((prior + delta).max(0.0)),
+        );
+        self.spans[index]
+            .attributes
+            .insert("gen_ai.cost.source".into(), json_str(source));
     }
 
     /// Closes open spans deterministically. Missing terminal events are marked
@@ -1069,7 +1113,10 @@ impl SpanCollector {
     }
 
     fn active_parent(&mut self, at: u64) -> usize {
-        self.ensure_run_root(at)
+        self.open_iterations
+            .get(&self.active_run_id())
+            .copied()
+            .unwrap_or_else(|| self.ensure_run_root(at))
     }
 
     fn active_run_id(&self) -> String {
@@ -1316,6 +1363,16 @@ fn terminal_iteration_status(outcome: Option<&crate::terminal::TerminalOutcome>)
         None | Some(TerminalClass::Success) => SpanStatus::Ok,
         Some(TerminalClass::Cancellation | TerminalClass::Suspended) => SpanStatus::Unset,
         Some(TerminalClass::Timeout | TerminalClass::Failure) => SpanStatus::Error,
+    }
+}
+
+fn failed_iteration_status(outcome: Option<&crate::terminal::TerminalOutcome>) -> SpanStatus {
+    use crate::terminal::TerminalClass;
+    match outcome.map(|outcome| outcome.reason.class()) {
+        Some(TerminalClass::Cancellation | TerminalClass::Suspended) => SpanStatus::Unset,
+        None | Some(TerminalClass::Success | TerminalClass::Timeout | TerminalClass::Failure) => {
+            SpanStatus::Error
+        }
     }
 }
 

@@ -163,11 +163,68 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
             None,
             "parent-run",
             3,
+            1_020,
+            AgentEvent::ToolStarted {
+                call_id: CallId::new("tool-1"),
+                tool_name: "lookup".into(),
+                input: None,
+                parent_call_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            4,
+            1_030,
+            AgentEvent::SubAgentStarted {
+                name: "researcher".into(),
+                depth: 1,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            5,
+            1_080,
+            AgentEvent::SubAgentCompleted {
+                name: "researcher".into(),
+                depth: 1,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            6,
+            1_090,
+            AgentEvent::ToolCompleted {
+                call_id: CallId::new("tool-1"),
+                tool_name: "lookup".into(),
+                started_at_ms: Some(1_020),
+                input: None,
+                output: None,
+                duration_ms: Some(70),
+                output_bytes: None,
+                error: None,
+                metadata: None,
+                parent_call_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            7,
             1_100,
             AgentEvent::ModelCompleted {
                 call_id: CallId::new("same-call"),
                 started_at_ms: Some(1_010),
-                usage: Some(Usage::new(100, 20)),
+                usage: Some(Usage {
+                    charged_amount: Some(ChargedAmount::usd_micros(250)),
+                    ..Usage::new(100, 20)
+                }),
                 input: None,
                 output: None,
             },
@@ -176,7 +233,20 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
             "parent-run",
             None,
             "parent-run",
-            4,
+            8,
+            1_101,
+            AgentEvent::UsageRecorded {
+                usage: Usage {
+                    charged_amount: Some(ChargedAmount::usd_micros(250)),
+                    ..Default::default()
+                },
+            },
+        ),
+        observation_in_run(
+            "parent-run",
+            None,
+            "parent-run",
+            9,
             1_105,
             AgentEvent::TurnCompleted {
                 turn: 1,
@@ -188,7 +258,7 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
             "parent-run",
             None,
             "parent-run",
-            5,
+            10,
             1_110,
             AgentEvent::RunCompleted {
                 run_id: RunId::new("parent-run"),
@@ -198,6 +268,16 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
     ] {
         parent.record(&obs);
     }
+    parent
+        .enrich_generation(
+            &RunId::new("parent-run"),
+            &CallId::new("same-call"),
+            GenerationEnrichment {
+                estimated_cost_usd: Some(0.5),
+                ..Default::default()
+            },
+        )
+        .expect("native parent generation can be enriched");
 
     let parent_spans = parent.spans();
     let parent_iteration = parent_spans
@@ -212,6 +292,14 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
         .iter()
         .find(|span| span.kind == SpanKind::Generation)
         .expect("parent model generation");
+    let parent_tool = parent_spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Tool)
+        .expect("parent tool span");
+    let parent_subagent = parent_spans
+        .iter()
+        .find(|span| span.name == "subagent.researcher")
+        .expect("parent's subagent span");
     assert_eq!(parent_iteration.kind, SpanKind::Iteration);
     assert_eq!(
         parent_iteration.parent_span_id.as_deref(),
@@ -220,8 +308,20 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
     assert_eq!(parent_iteration.start_unix_ms, 1_010);
     assert_eq!(parent_iteration.end_unix_ms, Some(1_105));
     assert_eq!(parent_iteration.attributes["agent.iteration"], 1);
+    for work_span in [parent_generation, parent_tool, parent_subagent] {
+        assert_eq!(
+            work_span.parent_span_id.as_deref(),
+            Some(parent_iteration.span_id.as_str()),
+            "model, tool, and subagent work should be nested under the iteration"
+        );
+    }
     assert_eq!(parent_generation.start_unix_ms, 1_010);
     assert_eq!(parent_generation.end_unix_ms, Some(1_100));
+    assert_eq!(
+        parent_iteration.attributes["gen_ai.usage.cost_usd"],
+        0.00025
+    );
+    assert_eq!(parent_root.attributes["gen_ai.usage.cost_usd"], 0.00025);
 
     let child_context = TraceContext::new("trace-child-iterations", None)
         .with_run_type(RunType::Subagent)
@@ -314,6 +414,16 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
     ] {
         child.record(&obs);
     }
+    child
+        .enrich_generation(
+            &RunId::new("child-run"),
+            &CallId::new("same-call"),
+            GenerationEnrichment {
+                estimated_cost_usd: Some(0.5),
+                ..Default::default()
+            },
+        )
+        .expect("native child generation can be enriched");
     let child_spans = child.spans();
     let child_iteration = child_spans
         .iter()
@@ -335,11 +445,17 @@ fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
     assert_eq!(child_iteration.start_unix_ms, 1_050);
     assert_eq!(child_iteration.end_unix_ms, Some(1_065));
     assert_eq!(child_iteration.attributes["agent.iteration"], 1);
+    assert_eq!(
+        child_generation.parent_span_id.as_deref(),
+        Some(child_iteration.span_id.as_str())
+    );
     assert_eq!(child_root.attributes["run.id"], "child-run");
     assert_eq!(child_root.attributes["parent_run_id"], "parent-run");
     assert_eq!(child_root.attributes["root_run_id"], "parent-run");
     assert_eq!(child_generation.start_unix_ms, 1_050);
     assert_eq!(child_generation.end_unix_ms, Some(1_060));
+    assert_eq!(child_iteration.attributes["gen_ai.usage.cost_usd"], 0.5);
+    assert_eq!(child_root.attributes["gen_ai.usage.cost_usd"], 0.5);
 
     use crate::terminal::{TerminalOutcome, TerminalReason};
     let mut interrupted =
@@ -482,6 +598,36 @@ fn nested_iterations_follow_explicit_subagent_links_with_reused_call_ids() {
             Some("parent-run"),
             "parent-run",
             2,
+            1_048,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("shared-call"),
+                started_at_ms: Some(1_045),
+                usage: Some(Usage {
+                    charged_amount: Some(ChargedAmount::usd_micros(125)),
+                    ..Usage::new(8, 2)
+                }),
+                input: None,
+                output: None,
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            Some("parent-run"),
+            "parent-run",
+            3,
+            1_049,
+            AgentEvent::UsageRecorded {
+                usage: Usage {
+                    charged_amount: Some(ChargedAmount::usd_micros(125)),
+                    ..Default::default()
+                },
+            },
+        ),
+        observation_in_run(
+            "child-run",
+            Some("parent-run"),
+            "parent-run",
+            4,
             1_050,
             AgentEvent::RunFailed {
                 run_id: RunId::new("child-run"),
@@ -551,6 +697,25 @@ fn nested_iterations_follow_explicit_subagent_links_with_reused_call_ids() {
     assert_eq!(child_iteration.start_unix_ms, 1_045);
     assert_eq!(child_iteration.end_unix_ms, Some(1_050));
     assert_eq!(child_iteration.status, SpanStatus::Error);
+    let child_generation = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation && span.name == "llm.child-model")
+        .expect("same call ID still produces a child-scoped generation");
+    assert_eq!(
+        child_generation.parent_span_id.as_deref(),
+        Some(child_iteration.span_id.as_str())
+    );
+    assert_eq!(
+        child_iteration.attributes["gen_ai.usage.cost_usd"],
+        0.000125
+    );
+    assert_eq!(child_root.attributes["gen_ai.usage.cost_usd"], 0.000125);
+    assert!(
+        !parent_iteration
+            .attributes
+            .contains_key("gen_ai.usage.cost_usd")
+    );
+    assert!(!parent_root.attributes.contains_key("gen_ai.usage.cost_usd"));
     assert_eq!(
         spans
             .iter()
@@ -559,6 +724,80 @@ fn nested_iterations_follow_explicit_subagent_links_with_reused_call_ids() {
         2,
         "the same call ID in parent and child runs remains separately scoped"
     );
+}
+
+#[test]
+fn failed_terminal_outcomes_close_open_iterations_with_authoritative_status() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    for (reason, expected_status) in [
+        (TerminalReason::Cancelled, SpanStatus::Unset),
+        (TerminalReason::Paused, SpanStatus::Unset),
+        (TerminalReason::Timeout, SpanStatus::Error),
+        (TerminalReason::ToolFailed, SpanStatus::Error),
+        (TerminalReason::Completed, SpanStatus::Error),
+    ] {
+        let run_id = format!("run-{:?}", reason.class());
+        let mut collector = SpanCollector::new(TraceContext::new(
+            format!("trace-terminal-iteration-{:?}", reason.class()),
+            None,
+        ));
+        for obs in [
+            observation_in_run(
+                &run_id,
+                None,
+                &run_id,
+                0,
+                100,
+                AgentEvent::RunStarted {
+                    run_id: RunId::new(&run_id),
+                    thread_id: None,
+                },
+            ),
+            observation_in_run(
+                &run_id,
+                None,
+                &run_id,
+                1,
+                105,
+                AgentEvent::TurnStarted { turn: 1 },
+            ),
+            observation_in_run(
+                &run_id,
+                None,
+                &run_id,
+                2,
+                110,
+                AgentEvent::ModelStarted {
+                    call_id: CallId::new("call-1"),
+                    model: "model".into(),
+                },
+            ),
+            observation_in_run(
+                &run_id,
+                None,
+                &run_id,
+                3,
+                120,
+                AgentEvent::RunFailed {
+                    run_id: RunId::new(&run_id),
+                    error: "terminal".into(),
+                    outcome: Some(TerminalOutcome::new(reason, "terminal")),
+                },
+            ),
+        ] {
+            collector.record(&obs);
+        }
+
+        let spans = collector.spans();
+        let iteration = spans
+            .iter()
+            .find(|span| span.kind == SpanKind::Iteration)
+            .expect("failed run keeps its started iteration");
+        assert_eq!(iteration.end_unix_ms, Some(120), "{reason:?}");
+        assert_eq!(iteration.status, expected_status, "{reason:?}");
+        assert_eq!(spans[0].status, expected_status, "{reason:?}");
+    }
 }
 
 #[test]
@@ -2125,6 +2364,25 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         "cache-run",
         0,
         1,
+        AgentEvent::RunStarted {
+            run_id: RunId::new("cache-run"),
+            thread_id: None,
+        },
+    ));
+    collector.record(&observation_in_run(
+        "cache-run",
+        None,
+        "cache-run",
+        1,
+        2,
+        AgentEvent::TurnStarted { turn: 1 },
+    ));
+    collector.record(&observation_in_run(
+        "cache-run",
+        None,
+        "cache-run",
+        2,
+        3,
         AgentEvent::ModelStarted {
             call_id: call_id.clone(),
             model: "model-x".into(),
@@ -2134,8 +2392,8 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         "cache-run",
         None,
         "cache-run",
-        1,
-        2,
+        3,
+        4,
         AgentEvent::CacheHit {
             call_id: call_id.clone(),
             key: "opaque-cache-key".into(),
@@ -2145,8 +2403,8 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         "cache-run",
         None,
         "cache-run",
-        2,
-        3,
+        4,
+        5,
         AgentEvent::ModelCompleted {
             call_id,
             started_at_ms: Some(1),
@@ -2161,20 +2419,25 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
         },
     ));
 
-    let generation = collector
-        .spans()
+    let spans = collector.spans();
+    let generation = spans
         .iter()
         .find(|span| span.kind == SpanKind::Generation)
         .unwrap();
+    let iteration = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Iteration)
+        .unwrap();
+    assert_eq!(
+        generation.parent_span_id.as_deref(),
+        Some(iteration.span_id.as_str())
+    );
     assert_eq!(generation.attributes["gen_ai.cache.hit"], true);
     assert_eq!(generation.attributes["gen_ai.cost.source"], "cached");
     assert_eq!(generation.attributes["gen_ai.usage.input_tokens"], 50);
     assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
-    assert!(
-        !collector.spans()[0]
-            .attributes
-            .contains_key("gen_ai.usage.cost_usd")
-    );
+    assert!(!iteration.attributes.contains_key("gen_ai.usage.cost_usd"));
+    assert!(!spans[0].attributes.contains_key("gen_ai.usage.cost_usd"));
 }
 
 #[test]
