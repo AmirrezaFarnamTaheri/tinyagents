@@ -1415,6 +1415,205 @@ fn durable_generation_enrichment_applies_before_or_after_model_completion() {
 }
 
 #[test]
+fn generation_enrichment_is_run_scoped_replay_safe_and_validated_at_projection() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-enrichment-scopes", None));
+    for observation in [
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            0,
+            10,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("parent"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            1,
+            11,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("same-call"),
+                model: "model-parent".into(),
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            2,
+            12,
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("same-call"),
+                enrichment: GenerationEnrichment {
+                    provider_id: Some("parent-provider".into()),
+                    estimated_cost_usd: Some(0.1),
+                    ..Default::default()
+                },
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            0,
+            13,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("child"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            1,
+            14,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("same-call"),
+                model: "model-child".into(),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            2,
+            15,
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("same-call"),
+                enrichment: GenerationEnrichment {
+                    provider_id: Some("child-provider".into()),
+                    estimated_cost_usd: Some(0.2),
+                    ..Default::default()
+                },
+            },
+        ),
+        // Replaying this offset with different content must not replace the
+        // durable first event on the child stream.
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            2,
+            16,
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("same-call"),
+                enrichment: GenerationEnrichment {
+                    provider_id: Some("replayed-provider".into()),
+                    estimated_cost_usd: Some(0.9),
+                    ..Default::default()
+                },
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            3,
+            20,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("same-call"),
+                started_at_ms: Some(11),
+                usage: None,
+                input: None,
+                output: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            3,
+            21,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("same-call"),
+                started_at_ms: Some(14),
+                usage: None,
+                input: None,
+                output: None,
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            4,
+            22,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("invalid-call"),
+                model: "model-invalid".into(),
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            5,
+            23,
+            AgentEvent::ModelCompleted {
+                call_id: CallId::new("invalid-call"),
+                started_at_ms: Some(22),
+                usage: None,
+                input: None,
+                output: None,
+            },
+        ),
+        // Public event values can be constructed without going through
+        // deserialization; reject unsafe unchecked values at projection too.
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            6,
+            24,
+            AgentEvent::GenerationEnriched {
+                call_id: CallId::new("invalid-call"),
+                enrichment: GenerationEnrichment {
+                    provider_id: Some("/private/user-secret".into()),
+                    pricing: Some(GenerationPricing {
+                        input_per_mtok_usd: Some(-1.0),
+                        ..Default::default()
+                    }),
+                    estimated_cost_usd: Some(0.3),
+                },
+            },
+        ),
+    ] {
+        collector.record(&observation);
+    }
+
+    let spans = collector.spans();
+    let parent_generation = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-parent")
+        .expect("parent generation");
+    let child_generation = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-child")
+        .expect("child generation");
+    let invalid_generation = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation && span.attributes["gen_ai.model"] == "model-invalid")
+        .expect("invalid enrichment generation");
+    assert_eq!(parent_generation.attributes["gen_ai.provider"], "parent-provider");
+    assert_eq!(parent_generation.attributes["gen_ai.usage.cost_usd"], 0.1);
+    assert_eq!(child_generation.attributes["gen_ai.provider"], "child-provider");
+    assert_eq!(child_generation.attributes["gen_ai.usage.cost_usd"], 0.2);
+    assert!(!child_generation.attributes["gen_ai.provider"].to_string().contains("replayed-provider"));
+    assert!(!invalid_generation.attributes.contains_key("gen_ai.provider"));
+    assert!(!invalid_generation.attributes.contains_key("gen_ai.pricing.input_per_mtok_usd"));
+    assert!(!invalid_generation.attributes.contains_key("gen_ai.usage.cost_usd"));
+    assert!(spans.iter().all(|span| !span
+        .attributes
+        .values()
+        .any(|value| value.to_string().contains("user-secret"))));
+}
+
+#[test]
 fn run_finalized_extends_a_terminal_root_without_changing_its_outcome() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-run-finalized", None));
     collector.record(&observation_in_run(
