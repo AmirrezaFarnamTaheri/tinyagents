@@ -92,6 +92,92 @@ impl ArtifactStore for MemoryStore {
 }
 
 #[tokio::test]
+async fn byte_overflow_stores_without_a_character_cap_and_keeps_the_full_text() {
+    let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
+    let full = "éclair";
+    let applied = ResultPolicy::new()
+        .with_max_bytes(full.len() - 1)
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store.clone())
+        .apply("task-bytes", full, None)
+        .await;
+
+    assert_eq!(applied.text, full);
+    assert_eq!(applied.omitted_chars, 0);
+    assert_eq!(applied.artifact.as_ref().unwrap().id, "artifact-1");
+    assert_eq!(
+        store.0.lock().unwrap().as_slice(),
+        &[("task-bytes".to_owned(), full.to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn byte_overflow_uses_strict_utf8_byte_boundaries() {
+    let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
+    let policy = ResultPolicy::new()
+        .with_max_bytes("é".len())
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store.clone());
+    let at_boundary = policy.apply("t", "é", None).await;
+    assert!(at_boundary.artifact.is_none());
+    assert!(store.0.lock().unwrap().is_empty());
+
+    let over_boundary = policy.apply("t", "éx", None).await;
+    assert!(over_boundary.artifact.is_some());
+    assert_eq!(store.0.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn byte_overflow_and_character_overflow_store_once_before_capping() {
+    let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
+    let full = "é0123456789";
+    let applied = ResultPolicy::new()
+        .with_max_bytes(1)
+        .with_max_chars(6)
+        .with_overflow(ResultOverflow::Artifact)
+        .with_artifact_store(store.clone())
+        .apply("task-both", full, None)
+        .await;
+
+    assert_eq!(applied.artifact.as_ref().unwrap().id, "artifact-1");
+    assert_eq!(applied.omitted_chars, full.chars().count() - applied.text.chars().count());
+    assert!(applied.text.chars().count() <= 6);
+    assert_eq!(
+        store.0.lock().unwrap().as_slice(),
+        &[("task-both".to_owned(), full.to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn byte_overflow_without_a_store_keeps_text_and_reports_the_store_error() {
+    let full = "0123456789";
+    let applied = ResultPolicy::new()
+        .with_max_bytes(2)
+        .with_overflow(ResultOverflow::Artifact)
+        .apply("t", full, None)
+        .await;
+
+    assert_eq!(applied.text, full);
+    assert_eq!(applied.omitted_chars, 0);
+    assert!(applied.artifact.is_none());
+    assert!(applied.artifact_error.unwrap().contains("no artifact store"));
+}
+
+#[tokio::test]
+async fn byte_threshold_does_not_truncate_without_artifact_overflow() {
+    let policy = ResultPolicy::new().with_max_bytes(0);
+    assert!(!policy.is_active());
+    let empty = policy.apply("t", "", None).await;
+    assert_eq!(empty.text, "");
+    assert!(empty.artifact.is_none() && empty.artifact_error.is_none());
+
+    let output = policy.apply("t", "é", None).await;
+    assert_eq!(output.text, "é");
+    assert_eq!(output.omitted_chars, 0);
+    assert!(output.artifact.is_none() && output.artifact_error.is_none());
+}
+
+#[tokio::test]
 async fn artifact_overflow_stores_the_full_text_and_returns_a_preview() {
     let store = Arc::new(MemoryStore(Mutex::new(Vec::new())));
     let policy = ResultPolicy::new()

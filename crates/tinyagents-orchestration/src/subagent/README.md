@@ -204,12 +204,16 @@ orchestration depends on graph).
   `[SUBAGENT_INCOMPLETE]` text marker. The transcript view reads
   `"status": "incomplete"` in a spawn result and still reads the legacy marker;
   both project as `SubagentOutcomeKind::Incomplete` (previously `Failed`).
-- **Result policy.** `ResultPolicy { max_chars, overflow: Truncate | Artifact,
+- **Result policy.** `ResultPolicy { max_chars, max_bytes, overflow: Truncate | Artifact,
   schema }` (builders; `artifact_store` is a host `ArtifactStore` callback, the
-  orchestration layer owns no store). `Truncate` keeps head and tail around
-  `[… N chars omitted …]`; `Artifact` stores the full output through the host
-  store and returns the preview plus a path-free `ArtifactReference` (no store:
-  falls back to truncate and reports `artifact_error`). `schema` is checked with
+  orchestration layer owns no store). `max_chars` caps returned text and
+  `max_bytes` measures full UTF-8 bytes with a strict `>` boundary. `Truncate`
+  keeps head and tail around `[… N chars omitted …]`; it never truncates bytes.
+  `Artifact` stores the full output when either configured limit is exceeded and
+  returns the path-free reference. A byte-only trigger leaves returned text
+  unchanged; with no store, character overflow falls back to truncation and a
+  byte-only overflow reports `artifact_error` while keeping the full text.
+  `schema` is checked with
   the tool-call boundary's structural validator (`type`, `properties`,
   `required`, `additionalProperties`, `items`, `enum`; no `$ref`/combinators)
   and a mismatch is surfaced as `schema_error`, never a failure. Defaults: no
