@@ -126,7 +126,10 @@ async fn public_pause_path_locates_scoped_persisted_pause_records() {
         let persisted: PersistedSubagentPause =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(persisted, pause);
-        assert_eq!(store.load_pause(task_key).await.unwrap(), Some(pause.outcome));
+        assert_eq!(
+            store.load_pause(task_key).await.unwrap(),
+            Some(pause.outcome)
+        );
         paths.push(path);
         assert_eq!(paths.len(), index + 1);
     }
