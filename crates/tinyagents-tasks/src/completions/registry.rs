@@ -68,6 +68,19 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
         Ok(self.lock()?.get(key).map(Arc::clone))
     }
 
+    /// Removes one cached router without disturbing any other scope.
+    ///
+    /// The returned router and any other caller-held `Arc` remain usable; this
+    /// only stops the pool from returning it for future lookups. Durable records
+    /// and in-flight claims remain owned by the held router until those handles
+    /// are dropped or their claims are settled.
+    pub fn remove(
+        &self,
+        key: &K,
+    ) -> Result<Option<Arc<CompletionRouter>>, CompletionRouterPoolError> {
+        Ok(self.lock()?.remove(key))
+    }
+
     /// Drops cached routers so their stores can be reopened after a lifecycle
     /// boundary. Durable records remain in the backing store.
     pub fn clear(&self) -> Result<(), CompletionRouterPoolError> {
