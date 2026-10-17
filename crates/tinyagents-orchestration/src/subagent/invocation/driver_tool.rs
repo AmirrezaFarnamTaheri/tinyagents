@@ -4,7 +4,9 @@
 //! construction, durable task identity, and opaque planner options. The driver
 //! then remains the only path that plans, executes, and persists the run.
 
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -46,6 +48,12 @@ type RequestFactory<State, Ctx, H> = dyn Fn(&State, &RunContext<Ctx>, &Value, &C
 type DeliveryTarget<Ctx, H> = dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync;
 type CompletionCallback =
     dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync;
+type AsyncCompletionCallback = dyn Fn(
+        String,
+        Result<crate::subagent::SubagentRunResult, String>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+    + Send
+    + Sync;
 type OwnerScope = dyn Fn(u64) -> String + Send + Sync;
 
 /// A typed-parent dispatcher that runs through [`SubagentDriver`].
@@ -63,6 +71,7 @@ pub struct DriverSubAgentTool<State, Ctx: Send + 'static, H: Send + 'static> {
     request_factory: Arc<RequestFactory<State, Ctx, H>>,
     delivery_target: Arc<DeliveryTarget<Ctx, H>>,
     completion: Option<Arc<CompletionCallback>>,
+    async_completion: Option<Arc<AsyncCompletionCallback>>,
     jobs: Option<SubAgentJobRegistry>,
     owner_scope: Arc<OwnerScope>,
     permission: PermissionLevel,
@@ -109,6 +118,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             request_factory: Arc::new(request_factory),
             delivery_target: Arc::new(delivery_target),
             completion: None,
+            async_completion: None,
             jobs: None,
             owner_scope: Arc::new(|owner| owner.to_string()),
             permission: PermissionLevel::ReadOnly,
@@ -193,6 +203,28 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
+    /// Installs an awaited host callback for detached completion.
+    ///
+    /// Unlike [`Self::with_completion_handler`], this callback completes
+    /// before the shared Jobs registry exposes the child as terminal. Hosts
+    /// that persist product-side durable state before waiters may observe a
+    /// terminal status should use this seam.
+    pub fn with_async_completion_handler<Fut>(
+        mut self,
+        handler: impl Fn(String, Result<crate::subagent::SubagentRunResult, String>) -> Fut
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.async_completion = Some(Arc::new(move |target, result| {
+            Box::pin(handler(target, result))
+        }));
+        self
+    }
+
     fn requested_mode(args: &Value) -> Result<crate::subagent::SubAgentMode, String> {
         match args.get("mode") {
             None | Some(Value::Null) => Ok(crate::subagent::SubAgentMode::Background),
@@ -272,6 +304,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             let cancellation = request.run_context().cancellation.clone();
             let driver = Arc::clone(&self.driver);
             let completion = self.completion.clone();
+            let async_completion = self.async_completion.clone();
             let detached_task_id = task_id.clone();
             let completion_target = target.clone();
             let bridge = bridged_job.clone();
@@ -279,6 +312,12 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             tokio::spawn(async move {
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
+                        if result.disposition
+                            != crate::subagent::SubagentPersistenceDisposition::ObserverCancelled
+                            && let Some(completion) = async_completion
+                        {
+                            completion(completion_target.clone(), Ok(result.clone())).await;
+                        }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Ok(result.outcome.clone()));
                         }
@@ -293,6 +332,9 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     }
                     Err(error) => {
                         let error = error.to_string();
+                        if let Some(completion) = async_completion {
+                            completion(completion_target.clone(), Err(error.clone())).await;
+                        }
                         if let Some((jobs, id, _)) = &bridge {
                             jobs.mark_driver_result(id, Err(error.clone()));
                         }
