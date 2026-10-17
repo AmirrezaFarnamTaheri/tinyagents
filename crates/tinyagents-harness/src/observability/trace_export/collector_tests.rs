@@ -122,6 +122,144 @@ fn observations_fold_generation_usage_ttft_and_run_lifecycle() {
 }
 
 #[test]
+fn iterations_are_scoped_to_their_run_and_open_iterations_close_at_terminal() {
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+
+    let mut collector = SpanCollector::new(TraceContext::new("trace-iterations", None));
+    for obs in [
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            0,
+            100,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("parent"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            1,
+            110,
+            AgentEvent::TurnStarted { turn: 1 },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            2,
+            120,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("parent-call"),
+                model: "parent-model".into(),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            0,
+            130,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("child"),
+                thread_id: None,
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            1,
+            140,
+            AgentEvent::TurnStarted { turn: 1 },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            2,
+            150,
+            AgentEvent::ModelStarted {
+                call_id: CallId::new("child-call"),
+                model: "child-model".into(),
+            },
+        ),
+        observation_in_run(
+            "child",
+            Some("parent"),
+            "parent",
+            3,
+            160,
+            AgentEvent::RunFailed {
+                run_id: RunId::new("child"),
+                error: "child failed".into(),
+                outcome: Some(TerminalOutcome::new(
+                    TerminalReason::ToolFailed,
+                    "child failed",
+                )),
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            3,
+            170,
+            AgentEvent::TurnCompleted {
+                turn: 1,
+                tool_result_count: 0,
+                tool_call_ids: Vec::new(),
+            },
+        ),
+        observation_in_run(
+            "parent",
+            None,
+            "parent",
+            4,
+            180,
+            AgentEvent::RunCompleted {
+                run_id: RunId::new("parent"),
+                outcome: None,
+            },
+        ),
+    ] {
+        collector.record(&obs);
+    }
+
+    let spans = collector.spans();
+    let parent_iteration = spans
+        .iter()
+        .find(|span| span.name == "agent.iteration#1")
+        .expect("parent turn should have an iteration span");
+    let parent_root = spans
+        .iter()
+        .find(|span| span.name == "agent.turn")
+        .expect("parent run root");
+    assert_eq!(parent_iteration.kind, SpanKind::Iteration);
+    assert_eq!(parent_iteration.parent_span_id.as_deref(), Some(parent_root.span_id.as_str()));
+    assert_eq!(parent_iteration.start_unix_ms, 120);
+    assert_eq!(parent_iteration.end_unix_ms, Some(170));
+    assert_eq!(parent_iteration.attributes["agent.iteration"], 1);
+
+    let child_iteration = spans
+        .iter()
+        .find(|span| span.name == "subagent.iteration#1")
+        .expect("child turn should have an iteration span");
+    let child_root = spans
+        .iter()
+        .find(|span| span.name == "subagent.child")
+        .expect("child run root");
+    assert_eq!(child_iteration.kind, SpanKind::SubagentIteration);
+    assert_eq!(child_iteration.parent_span_id.as_deref(), Some(child_root.span_id.as_str()));
+    assert_eq!(child_iteration.start_unix_ms, 150);
+    assert_eq!(child_iteration.end_unix_ms, Some(160));
+    assert_eq!(child_iteration.attributes["agent.iteration"], 1);
+}
+
+#[test]
 fn unstreamed_call_does_not_report_completion_as_ttft_and_open_tool_is_force_closed() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-2", None));
     collector.record_event(
@@ -843,7 +981,9 @@ fn later_native_failure_replaces_typed_stop_enrichment() {
     use crate::terminal::{TerminalOutcome, TerminalReason};
     use crate::turn_stop::TurnStop;
 
-    let mut collector = SpanCollector::new(TraceContext::new("trace-late-failure", None));
+    let mut collector = SpanCollector::new(
+        TraceContext::new("trace-late-failure", None).with_capture_content(true),
+    );
     collector.record(&observation(
         0,
         10,
