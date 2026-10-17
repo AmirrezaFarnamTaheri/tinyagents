@@ -11,7 +11,9 @@ use tinyagents_graph::delegation::{
     run_delegation, run_or_resume_delegation,
 };
 use tinyagents_harness::{context::RunContext, ids::CallId, tool::ToolDispatch};
-use tinytools::{Tool, ToolExposure, ToolResult};
+use tinytools::{
+    PermissionLevel, Tool, ToolCategory, ToolExposure, ToolResult, ToolScope, ToolTimeout,
+};
 
 use crate::subagent::SUBAGENT_MODE_FIELD;
 
@@ -122,6 +124,7 @@ where
                 "expected_output":{"type":"string"},"citation_requirement":{"type":"string"},
                 "model":{"type":"string"},"blocking":{"type":"boolean","description":"Wait for the target result when true."}
             }}),
+            metadata: None,
             exposure: self.exposure,
         })
     }
@@ -165,6 +168,7 @@ struct DelegationDeclaration {
     name: String,
     description: String,
     parameters: Value,
+    metadata: Option<DelegationToolMetadata>,
     exposure: ToolExposure,
 }
 #[async_trait]
@@ -180,6 +184,22 @@ impl Tool for DelegationDeclaration {
     }
     fn exposure(&self) -> ToolExposure {
         self.exposure
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        self.metadata
+            .map_or(PermissionLevel::ReadOnly, |metadata| metadata.permission)
+    }
+    fn scope(&self) -> ToolScope {
+        self.metadata
+            .map_or(ToolScope::All, |metadata| metadata.scope)
+    }
+    fn category(&self) -> ToolCategory {
+        self.metadata
+            .map_or(ToolCategory::System, |metadata| metadata.category)
+    }
+    fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
+        self.metadata
+            .map_or(ToolTimeout::Inherit, |metadata| metadata.timeout)
     }
     async fn execute(&self, _args: Value) -> anyhow::Result<ToolResult> {
         anyhow::bail!("delegation requires typed-parent dispatch")
@@ -214,7 +234,15 @@ pub fn review_stage_output(text: impl Into<String>) -> DelegationStageOutput {
 
 type ConfigFactory<State, Ctx> =
     dyn Fn(&State, &RunContext<Ctx>, &Value) -> DelegationConfig + Send + Sync;
-type ResultProjector = dyn Fn(&DelegationOutcome) -> Value + Send + Sync;
+type ResultProjector = dyn Fn(Result<DelegationOutcome, String>) -> ToolResult + Send + Sync;
+
+#[derive(Debug, Clone, Copy)]
+struct DelegationToolMetadata {
+    permission: PermissionLevel,
+    scope: ToolScope,
+    category: ToolCategory,
+    timeout: ToolTimeout,
+}
 
 /// Determines how review-stage approval is interpreted by [`DelegationTool`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -241,6 +269,7 @@ where
     resumable: bool,
     review_approval_policy: ReviewApprovalPolicy,
     result_projector: Option<Arc<ResultProjector>>,
+    metadata: Option<DelegationToolMetadata>,
 }
 
 impl<State, Ctx, Worker, Fut> DelegationTool<State, Ctx, Worker, Fut>
@@ -263,6 +292,7 @@ where
             resumable: false,
             review_approval_policy: ReviewApprovalPolicy::StandaloneApprove,
             result_projector: None,
+            metadata: None,
         }
     }
 
@@ -296,12 +326,29 @@ where
         self
     }
 
-    /// Projects the complete graph outcome into the host's model-facing result.
+    /// Projects the complete graph outcome or raw graph error into a tool result.
     pub fn with_result_projection(
         mut self,
-        project: impl Fn(&DelegationOutcome) -> Value + Send + Sync + 'static,
+        project: impl Fn(Result<DelegationOutcome, String>) -> ToolResult + Send + Sync + 'static,
     ) -> Self {
         self.result_projector = Some(Arc::new(project));
+        self
+    }
+
+    /// Preserves host authorization and execution metadata on the declaration.
+    pub fn with_metadata(
+        mut self,
+        permission: PermissionLevel,
+        scope: ToolScope,
+        category: ToolCategory,
+        timeout: ToolTimeout,
+    ) -> Self {
+        self.metadata = Some(DelegationToolMetadata {
+            permission,
+            scope,
+            category,
+            timeout,
+        });
         self
     }
 }
@@ -319,6 +366,7 @@ where
             name: self.name.clone(),
             description: self.description.clone(),
             parameters: self.parameters.clone(),
+            metadata: self.metadata,
             exposure: ToolExposure::Direct,
         })
     }
@@ -359,12 +407,12 @@ where
                     state,
                     pending: None,
                 })
-        }
-        .map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
+        };
 
         if let Some(project) = &self.result_projector {
-            return Ok(ToolResult::json(project(&outcome)));
+            return Ok(project(outcome));
         }
+        let outcome = outcome.map_err(|error| anyhow::anyhow!("delegation failed: {error}"))?;
         if self.resumable {
             return Ok(ToolResult::json(json!({
                 "state": outcome.state,

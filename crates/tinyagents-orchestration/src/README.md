@@ -29,8 +29,10 @@ on orchestration policy.
   an injected stage worker. Its default keeps the one-shot execution and
   standalone `APPROVE` parser; `with_resumable_execution` opts checkpointed
   threads into classify-and-resume behavior. Hosts can retain their worker's
-  approval decision with `ReviewApprovalPolicy::WorkerOutput` and project the
-  complete state plus any pending approval through `with_result_projection`.
+  approval decision with `ReviewApprovalPolicy::WorkerOutput`, project the
+  complete state, pending approval, or graph error into a `ToolResult` through
+  `with_result_projection`, and preserve declaration metadata with
+  `with_metadata`.
 - `parallel::ParallelFanoutTool` composes host task parsing, admission policy,
   asynchronous preflight, branch-context creation, and execution with ordered
   results and explicit rejection records.

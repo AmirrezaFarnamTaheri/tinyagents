@@ -1,6 +1,6 @@
 use super::*;
 use tinyagents_graph::delegation::{DelegationConfig, DelegationStage, DelegationStageOutput};
-use tinytools::ToolExposure;
+use tinytools::{ToolCategory, ToolExposure, ToolResult, ToolScope, ToolTimeout};
 
 #[test]
 fn approval_parser_requires_a_standalone_approve_token() {
@@ -29,6 +29,31 @@ fn multi_target_schema_exposes_only_configured_agents_and_blocking_envelope() {
     assert_eq!(schema["properties"]["blocking"]["type"], "boolean");
     assert_eq!(DELEGATION_MODE_FIELD, SUBAGENT_MODE_FIELD);
     assert_eq!(declaration.exposure(), ToolExposure::Hidden);
+}
+
+#[test]
+fn graph_alias_preserves_host_execution_metadata() {
+    use tinytools::PermissionLevel;
+
+    let declaration = DelegationTool::<(), (), _, _>::new(
+        |_, _, _| DelegationConfig::default(),
+        |_, _, _| async { Ok(DelegationStageOutput::done("unused")) },
+    )
+    .with_metadata(
+        PermissionLevel::Execute,
+        ToolScope::AgentOnly,
+        ToolCategory::Workflow,
+        ToolTimeout::Unbounded,
+    )
+    .tool();
+
+    assert_eq!(declaration.permission_level(), PermissionLevel::Execute);
+    assert_eq!(declaration.scope(), ToolScope::AgentOnly);
+    assert_eq!(declaration.category(), ToolCategory::Workflow);
+    assert_eq!(
+        declaration.timeout_policy(&Value::Null),
+        ToolTimeout::Unbounded
+    );
 }
 
 #[test]
@@ -343,19 +368,23 @@ async fn resumable_delegation_projects_pending_approval_and_full_state() {
     )
     .with_resumable_execution()
     .with_review_approval_policy(ReviewApprovalPolicy::WorkerOutput)
-    .with_result_projection(|outcome| {
-        json!({
-            "final_output": outcome.state.final_output,
-            "approved": outcome.state.approved,
-            "cancelled": outcome.state.cancelled,
-            "revisions": outcome.state.revisions,
-            "reviews": outcome.state.reviews,
-            "pending": outcome.pending.as_ref().map(|pending| json!({
-                "node": pending.node,
-                "thread_id": pending.thread_id,
-                "payload": pending.payload,
-            })),
-        })
+    .with_result_projection(|result| match result {
+        Ok(outcome) => ToolResult::success(
+            json!({
+                "final_output": outcome.state.final_output,
+                "approved": outcome.state.approved,
+                "cancelled": outcome.state.cancelled,
+                "revisions": outcome.state.revisions,
+                "reviews": outcome.state.reviews,
+                "pending": outcome.pending.as_ref().map(|pending| json!({
+                    "node": pending.node,
+                    "thread_id": pending.thread_id,
+                    "payload": pending.payload,
+                })),
+            })
+            .to_string(),
+        ),
+        Err(error) => ToolResult::error(error),
     });
 
     let parent = RunContext::new(RunConfig::new("parent"), ());
@@ -370,6 +399,7 @@ async fn resumable_delegation_projects_pending_approval_and_full_state() {
     .await
     .expect("the durable approval interrupt is a result, not an error");
     let value: Value = serde_json::from_str(&result.output()).unwrap();
+    assert!(!result.is_error);
     assert_eq!(value["final_output"], Value::Null);
     assert_eq!(value["approved"], true);
     assert_eq!(value["reviews"], json!(["APPROVE after the final checks"]));
@@ -402,7 +432,12 @@ async fn resumable_delegation_preserves_caller_cancellation() {
         },
         |_, _, _| async { Ok(DelegationStageOutput::done("must not run")) },
     )
-    .with_resumable_execution();
+    .with_resumable_execution()
+    .with_result_projection(|result| match result {
+        Ok(outcome) if outcome.state.cancelled => ToolResult::error("CANCELLED"),
+        Ok(_) => ToolResult::success("unexpected completion"),
+        Err(error) => ToolResult::error(error),
+    });
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -414,7 +449,42 @@ async fn resumable_delegation_preserves_caller_cancellation() {
     )
     .await
     .unwrap();
-    let value: Value = serde_json::from_str(&result.output()).unwrap();
-    assert_eq!(value["state"]["cancelled"], true);
-    assert_eq!(value["state"]["plan"], Value::Null);
+    assert!(result.is_error);
+    assert_eq!(result.output(), "CANCELLED");
+}
+
+#[tokio::test]
+async fn result_projection_receives_raw_graph_errors() {
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::new_call_id,
+        tool::ToolDispatch,
+    };
+
+    let tool = DelegationTool::<(), (), _, _>::new(
+        |_, _, _| DelegationConfig::default(),
+        |_, _, _| async { Err("worker database unavailable".into()) },
+    )
+    .with_resumable_execution()
+    .with_result_projection(|result| match result {
+        Ok(_) => ToolResult::success("unexpected completion"),
+        Err(error) => ToolResult::error(format!("HOST ERROR: {error}")),
+    });
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task":"surface worker failure"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("the projection formats the graph error as a tool result");
+
+    assert!(result.is_error);
+    assert_eq!(
+        result.output(),
+        "HOST ERROR: delegation graph run failed: model error: worker database unavailable"
+    );
 }
