@@ -4,9 +4,13 @@
 //! parsing, and the one-repair state machine. Hosts supply every user-facing
 //! instruction so product policy and prompt wording remain outside the neutral
 //! runtime.
+//!
+//! Additive `*_with_options` entry points let hosts set an output cap and
+//! observe completed responses while preserving the legacy entry points and
+//! configuration structs.
 
 use tinyinference_llm::message::Message;
-use tinyinference_llm::model::{ChatModel, ModelRequest, ToolChoice};
+use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ToolChoice};
 use tinyinference_llm::usage::Usage;
 use tinytools_agent::dialect::{DialectResponse, ToolDialect};
 
@@ -37,14 +41,38 @@ pub fn results_from_tool_outcomes(
         .collect()
 }
 
+/// Copy tool outcomes into close results using the host's truncation policy.
+pub fn results_from_tool_outcomes_with_options(
+    outcomes: &[crate::turn_outcome::ToolCallOutcome],
+    per_result_cap: usize,
+    truncation_marker: &str,
+) -> Vec<CloseToolResult> {
+    outcomes
+        .iter()
+        .map(|outcome| CloseToolResult {
+            name: outcome.name.clone(),
+            success: outcome.success,
+            content: truncate_chars_with_marker(
+                &outcome.content,
+                per_result_cap,
+                truncation_marker,
+            ),
+        })
+        .collect()
+}
+
 /// Trim surrounding whitespace and truncate on a Unicode character boundary.
 pub fn truncate_chars(text: &str, max: usize) -> String {
+    truncate_chars_with_marker(text, max, "… [truncated]")
+}
+
+fn truncate_chars_with_marker(text: &str, max: usize, marker: &str) -> String {
     let trimmed = text.trim();
     if trimmed.chars().count() <= max {
         return trimmed.to_owned();
     }
     let prefix = trimmed.chars().take(max).collect::<String>();
-    format!("{prefix}… [truncated]")
+    format!("{prefix}{marker}")
 }
 
 /// Close result and the provider usage for its completion and verification
@@ -142,6 +170,65 @@ pub fn render_tool_results(results: &[CloseToolResult], total_budget: usize) -> 
     rendered.join("\n")
 }
 
+/// Host-configurable per-result trimming and newest-first block selection.
+///
+/// `render_block` returns one complete output block, including any separators
+/// it needs. Its exact character count is charged against `total_budget`.
+/// `omitted_notice` receives the number of earlier results omitted and its
+/// returned string is prefixed verbatim after selection.
+pub struct CloseResultRenderOptions<'a, Block, Omitted> {
+    /// Per-result Unicode character cap before calling `render_block`.
+    pub per_result_cap: usize,
+    /// Marker appended after capped result content.
+    pub truncation_marker: &'a str,
+    /// Total Unicode character budget for rendered blocks.
+    pub total_budget: usize,
+    /// Render one complete host-formatted tool result block.
+    pub render_block: Block,
+    /// Render the host-formatted notice for omitted older results.
+    pub omitted_notice: Omitted,
+}
+
+/// Render host-formatted results, selecting newest entries under a budget.
+///
+/// Each result's content is trimmed and capped first. The newest result is
+/// always retained, even when its rendered block exceeds the total budget;
+/// older results are added while their exact rendered block lengths fit.
+/// Selected blocks retain their original order and the omission notice is
+/// prepended verbatim.
+pub fn render_tool_results_with_options<Block, Omitted>(
+    results: &[CloseToolResult],
+    options: CloseResultRenderOptions<'_, Block, Omitted>,
+) -> String
+where
+    Block: Fn(&CloseToolResult) -> String,
+    Omitted: Fn(usize) -> String,
+{
+    let mut selected = Vec::new();
+    let mut used = 0usize;
+    for result in results.iter().rev() {
+        let bounded = CloseToolResult {
+            name: result.name.clone(),
+            success: result.success,
+            content: truncate_chars_with_marker(
+                &result.content,
+                options.per_result_cap,
+                options.truncation_marker,
+            ),
+        };
+        let block = (options.render_block)(&bounded);
+        let block_chars = block.chars().count();
+        if !selected.is_empty() && used.saturating_add(block_chars) > options.total_budget {
+            break;
+        }
+        used = used.saturating_add(block_chars);
+        selected.push(block);
+    }
+    let omitted = results.len().saturating_sub(selected.len());
+    selected.reverse();
+    format!("{}{}", (options.omitted_notice)(omitted), selected.concat())
+}
+
 /// Build a deterministic checkpoint from captured tool output. The host owns
 /// the prose template; `{steps}` and `{results}` are the only substitutions.
 pub fn deterministic_checkpoint(
@@ -220,6 +307,23 @@ pub struct RequiredOutputRepairConfig<'a> {
     pub reply_already_streamed: bool,
 }
 
+/// Per-request options shared by grounded close and required-output repair.
+pub struct CloseRequestOptions<'a> {
+    /// Maximum number of output tokens for every request in the operation.
+    pub max_output_tokens: Option<u32>,
+    /// Observe each completed provider response before validation or retry.
+    pub on_response: Option<&'a mut dyn FnMut(&ModelResponse)>,
+}
+
+impl Default for CloseRequestOptions<'_> {
+    fn default() -> Self {
+        Self {
+            max_output_tokens: None,
+            on_response: None,
+        }
+    }
+}
+
 /// Ask, screen, separately verify, and repair at most once. Every call uses a
 /// request with no tool schemas and `ToolChoice::None`; `ToolDialect` rejects
 /// textual tool syntax even if a provider ignores that constraint.
@@ -236,6 +340,35 @@ where
     R: Fn(CloseViolation) -> String,
     F: FnOnce() -> String,
 {
+    grounded_close_with_options(
+        model,
+        state,
+        dialect,
+        config,
+        CloseRequestOptions::default(),
+    )
+    .await
+}
+
+/// Ask, screen, verify, and repair with per-request host options.
+///
+/// The response callback runs immediately after each successful model call,
+/// before the harness inspects its text or decides whether another request is
+/// needed. It is not called for a failed or timed-out request.
+pub async fn grounded_close_with_options<State, M, V, R, F>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    config: GroundedCloseConfig<'_, V, R, F>,
+    mut options: CloseRequestOptions<'_>,
+) -> CloseOutput
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+    V: for<'reply> Fn(&'reply str) -> String,
+    R: Fn(CloseViolation) -> String,
+    F: FnOnce() -> String,
+{
     let mut usage = Vec::new();
     let mut prompt = config.initial_prompt.to_owned();
     let started = tokio::time::Instant::now();
@@ -243,8 +376,16 @@ where
         let remaining = config
             .budget
             .map(|limit| limit.saturating_sub(started.elapsed()));
-        let Some((candidate, call_usage, has_tool_call)) =
-            completion(model, state, dialect, config.history, &prompt, remaining).await
+        let Some((candidate, call_usage, has_tool_call)) = completion(
+            model,
+            state,
+            dialect,
+            config.history,
+            &prompt,
+            remaining,
+            &mut options,
+        )
+        .await
         else {
             if attempt == 1 {
                 break;
@@ -263,7 +404,17 @@ where
             let remaining = config
                 .budget
                 .map(|limit| limit.saturating_sub(started.elapsed()));
-            match completion(model, state, dialect, &[], &verify_prompt, remaining).await {
+            match completion(
+                model,
+                state,
+                dialect,
+                &[],
+                &verify_prompt,
+                remaining,
+                &mut options,
+            )
+            .await
+            {
                 Some((verdict, call_usage, has_tool_call)) => {
                     usage.extend(call_usage);
                     if !has_tool_call && parse_close_verdict(&verdict) == CloseVerdict::Accept {
@@ -305,6 +456,28 @@ where
     M: ChatModel<State> + ?Sized,
     State: Send + Sync,
 {
+    repair_required_output_with_options(
+        model,
+        state,
+        dialect,
+        config,
+        CloseRequestOptions::default(),
+    )
+    .await
+}
+
+/// Repair required output using host-supplied per-request options.
+pub async fn repair_required_output_with_options<State, M>(
+    model: &M,
+    state: &State,
+    dialect: &dyn ToolDialect,
+    config: RequiredOutputRepairConfig<'_>,
+    mut options: CloseRequestOptions<'_>,
+) -> Option<RequiredOutputRepair>
+where
+    M: ChatModel<State> + ?Sized,
+    State: Send + Sync,
+{
     use crate::config::{find_required_block, output_satisfies_contract, synthesize_block};
 
     if output_satisfies_contract(config.reply, config.contract) {
@@ -317,6 +490,7 @@ where
         config.history,
         config.repair_instruction,
         None,
+        &mut options,
     )
     .await;
     let (candidate, usage, has_tool_call) = attempted.unwrap_or_default();
@@ -349,6 +523,7 @@ async fn completion<State, M>(
     history: &[Message],
     prompt: &str,
     timeout: Option<std::time::Duration>,
+    options: &mut CloseRequestOptions<'_>,
 ) -> Option<(String, Vec<Usage>, bool)>
 where
     M: ChatModel<State> + ?Sized,
@@ -359,9 +534,10 @@ where
     }
     let mut messages = history.to_vec();
     messages.push(Message::user(prompt));
-    let request = ModelRequest::new(messages)
+    let mut request = ModelRequest::new(messages)
         .with_tools(Vec::new())
         .with_tool_choice(ToolChoice::None);
+    request.max_tokens = options.max_output_tokens;
     let response = match timeout {
         Some(timeout) => tokio::time::timeout(timeout, model.invoke(state, request))
             .await
@@ -369,6 +545,9 @@ where
             .ok()?,
         None => model.invoke(state, request).await.ok()?,
     };
+    if let Some(on_response) = options.on_response.as_mut() {
+        on_response(&response);
+    }
     let text = response.text().to_owned();
     let has_tool_call = !response.message.tool_calls.is_empty()
         || !dialect
