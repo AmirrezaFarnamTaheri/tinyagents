@@ -33,6 +33,52 @@ pub trait TeamMemberExecutor: Send + Sync {
     async fn execute(&self, member: &AgentTeamMember, task: &AgentTeamTask) -> Result<Vec<String>>;
 }
 
+/// Typed claim failures from [`TeamService::start_member_with_started`].
+#[derive(Debug)]
+pub enum TeamMemberStartError {
+    /// The task was already claimed.
+    AlreadyClaimed { task_id: String },
+    /// One or more task dependencies are incomplete.
+    Blocked { task_id: String, unmet: Vec<String> },
+    /// The task does not exist in the requested team.
+    UnknownTask { task_id: String },
+    /// Team/member validation or a ledger operation failed.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for TeamMemberStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyClaimed { task_id } => write!(f, "task is already claimed: {task_id}"),
+            Self::Blocked { unmet, .. } => {
+                write!(f, "task dependencies are incomplete: {}", unmet.join(", "))
+            }
+            Self::UnknownTask { task_id } => write!(f, "unknown task: {task_id}"),
+            Self::Other(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for TeamMemberStartError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Other(error) => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+/// Durable identity delivered after a team member claim becomes active.
+#[derive(Clone, Debug)]
+pub struct TeamMemberStarted {
+    /// Run id recorded on the active member row.
+    pub run_id: String,
+    /// Active member row, including its worker thread and run ids.
+    pub member: AgentTeamMember,
+    /// Task returned by the successful durable claim.
+    pub task: AgentTeamTask,
+}
+
 /// Durable team state required by [`TeamService`].
 ///
 /// The trait intentionally mirrors the session run-ledger operations rather
@@ -596,19 +642,53 @@ impl<L: TeamLedger> TeamService<L> {
         executor: &E,
         require_evidence: bool,
     ) -> Result<CompletionOutcome> {
+        self.start_member_with_started(
+            team_id,
+            task_id,
+            member_id,
+            executor,
+            require_evidence,
+            |_| {},
+        )
+        .await
+    }
+
+    /// Claims and activates a member task, then calls `on_started` before the
+    /// executor is polled. A host can return an immediate response from the
+    /// callback while this same future continues execution and retains the
+    /// normal owner-controlled evidence and cleanup path.
+    pub async fn start_member_with_started<E, Started>(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        executor: &E,
+        require_evidence: bool,
+        on_started: Started,
+    ) -> Result<CompletionOutcome>
+    where
+        E: TeamMemberExecutor + ?Sized,
+        Started: FnOnce(TeamMemberStarted),
+    {
         let claim_token = Uuid::new_v4().to_string();
         let claimed = match self.claim_task(team_id, task_id, member_id, &claim_token)? {
             ClaimOutcome::Claimed(task) => *task,
             ClaimOutcome::AlreadyClaimed => {
-                return Err(anyhow!("task is already claimed: {task_id}"));
+                return Err(anyhow!(TeamMemberStartError::AlreadyClaimed {
+                    task_id: task_id.to_string(),
+                }));
             }
             ClaimOutcome::Blocked { unmet } => {
-                return Err(anyhow!(
-                    "task dependencies are incomplete: {}",
-                    unmet.join(", ")
-                ));
+                return Err(anyhow!(TeamMemberStartError::Blocked {
+                    task_id: task_id.to_string(),
+                    unmet,
+                }));
             }
-            ClaimOutcome::UnknownTask => return Err(anyhow!("unknown task: {task_id}")),
+            ClaimOutcome::UnknownTask => {
+                return Err(anyhow!(TeamMemberStartError::UnknownTask {
+                    task_id: task_id.to_string(),
+                }));
+            }
         };
         let mut cleanup = MemberExecutionCleanup {
             service: self,
@@ -642,6 +722,12 @@ impl<L: TeamLedger> TeamService<L> {
                 .unwrap_or_else(|| worker_thread_id.clone()),
             member.run_id.clone().unwrap_or_else(|| run_id.clone()),
         ));
+
+        on_started(TeamMemberStarted {
+            run_id: member.run_id.clone().unwrap_or_else(|| run_id.clone()),
+            member: member.clone(),
+            task: claimed.clone(),
+        });
 
         let execution = executor.execute(&member, &claimed).await;
         let completion = match execution {

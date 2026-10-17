@@ -24,7 +24,10 @@ pub use runtime::{
     DeliveredMessages, EVENT_PAGE_SIZE, MESSAGE_DELIVERED_EVENT, TEAM_MESSAGE_EVENT,
     build_member_prompt, deliver_pending_messages, drain_run_events, truncate_chars,
 };
-pub use service::{SessionTeamLedger, TeamLedger, TeamMemberExecutor, TeamService, claimable_task};
+pub use service::{
+    SessionTeamLedger, TeamLedger, TeamMemberExecutor, TeamMemberStartError, TeamMemberStarted,
+    TeamService, claimable_task,
+};
 pub use types::{LEAD_SENDER, MemberShutdown, MemberStep, NewMember, TeamError, TeamView};
 
 #[cfg(test)]

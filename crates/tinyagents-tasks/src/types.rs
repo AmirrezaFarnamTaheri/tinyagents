@@ -526,6 +526,26 @@ pub enum DetachedTaskWaitOutcome<Status> {
     TimedOut(Status),
 }
 
+/// One result from [`DetachedTaskRegistry::wait_many`](crate::DetachedTaskRegistry::wait_many).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetachedTaskBatchWaitItem<Metadata, Status> {
+    /// Stable task id requested by the caller.
+    pub task_id: TaskId,
+    /// Registration metadata captured before a terminal entry is pruned.
+    pub metadata: Metadata,
+    /// Terminal status or the latest status at the shared deadline.
+    pub outcome: DetachedTaskWaitOutcome<Status>,
+}
+
+/// A batch wait stopped at the first task that could not be waited on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetachedTaskBatchWaitError {
+    /// Task whose wait failed. Later task ids were not inspected or pruned.
+    pub task_id: TaskId,
+    /// Registry failure for this task.
+    pub error: DetachedTaskRegistryError,
+}
+
 /// Why a detached task runtime control could not be completed.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -86,6 +86,31 @@ impl CompletionDelivery {
     pub async fn deliver_once<B, F, D, Fut, E, U>(
         &self,
         target: DeliveryTarget<'_>,
+        is_busy: B,
+        admitted: F,
+        deliver: D,
+        mut write_undelivered: U,
+    ) -> DeliveryOutcome
+    where
+        B: FnMut() -> bool,
+        F: DeliveryFence,
+        D: FnMut(&[CompletionRecord]) -> Fut,
+        Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
+    {
+        self.deliver_once_with_error(target, is_busy, admitted, deliver, move |records, _| {
+            write_undelivered(records)
+        })
+        .await
+    }
+
+    /// Error-aware form of [`Self::deliver_once`]. The callback receives the
+    /// final delivery error for records that give up, synchronously under the
+    /// thread lease after the durable give-up transition.
+    pub async fn deliver_once_with_error<B, F, D, Fut, E, U>(
+        &self,
+        target: DeliveryTarget<'_>,
         mut is_busy: B,
         admitted: F,
         mut deliver: D,
@@ -97,7 +122,7 @@ impl CompletionDelivery {
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
         E: std::fmt::Display,
-        U: FnMut(&[CompletionRecord]),
+        U: FnMut(&[CompletionRecord], &str),
     {
         let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
             return DeliveryOutcome::Busy;
@@ -119,6 +144,30 @@ impl CompletionDelivery {
     pub async fn recover_on_boot<B, F, D, Fut, E, U>(
         &self,
         target: DeliveryTarget<'_>,
+        is_busy: B,
+        admitted: F,
+        deliver: D,
+        mut write_undelivered: U,
+    ) -> DeliveryOutcome
+    where
+        B: FnMut() -> bool,
+        F: DeliveryFence,
+        D: FnMut(&[CompletionRecord]) -> Fut,
+        Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
+    {
+        self.recover_on_boot_with_error(target, is_busy, admitted, deliver, move |records, _| {
+            write_undelivered(records)
+        })
+        .await
+    }
+
+    /// Error-aware form of [`Self::recover_on_boot`]. The callback receives
+    /// the final error for records that give up while the thread lease is held.
+    pub async fn recover_on_boot_with_error<B, F, D, Fut, E, U>(
+        &self,
+        target: DeliveryTarget<'_>,
         mut is_busy: B,
         admitted: F,
         mut deliver: D,
@@ -130,7 +179,7 @@ impl CompletionDelivery {
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
         E: std::fmt::Display,
-        U: FnMut(&[CompletionRecord]),
+        U: FnMut(&[CompletionRecord], &str),
     {
         let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
             return DeliveryOutcome::Busy;
@@ -161,7 +210,7 @@ impl CompletionDelivery {
         D: FnMut(&[CompletionRecord]) -> Fut,
         Fut: Future<Output = std::result::Result<(), E>>,
         E: std::fmt::Display,
-        U: FnMut(&[CompletionRecord]),
+        U: FnMut(&[CompletionRecord], &str),
     {
         if !sleep_if_admitted(initial_delay, admitted).await {
             return DeliveryOutcome::Fenced;
@@ -269,7 +318,7 @@ impl CompletionDelivery {
                     claim.clear();
                     gave_up_total += gave_up.len();
                     if !gave_up.is_empty() {
-                        (*write_undelivered)(&gave_up);
+                        (*write_undelivered)(&gave_up, &error.to_string());
                     }
                     if gave_up.len() == batch.len() || !admitted.admitted() {
                         return DeliveryOutcome::Failed {

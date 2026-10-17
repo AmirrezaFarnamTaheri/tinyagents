@@ -34,8 +34,8 @@ impl TranscriptLocator for Keyed {
 
 #[tokio::test]
 async fn a_held_turn_lock_blocks_the_same_session_until_released() {
-    let locator = Keyed("store-a");
-    let session = SessionRef::scoped("thread-1", "agent");
+    let locator = Keyed("held-lock-store");
+    let session = SessionRef::scoped("held-lock-thread", "agent");
 
     let guard = lock_session_turn(&locator, &session).await.unwrap();
     assert!(is_held(&locator, &session).await);
@@ -46,26 +46,38 @@ async fn a_held_turn_lock_blocks_the_same_session_until_released() {
 
 #[tokio::test]
 async fn every_generation_and_every_locator_over_one_destination_share_the_lock() {
-    let session = SessionRef::scoped("thread-1", "agent");
-    let _guard = lock_session_turn(&Keyed("store-a"), &session)
+    let session = SessionRef::scoped("generation-lock-thread", "agent");
+    let _guard = lock_session_turn(&Keyed("generation-lock-store"), &session)
         .await
         .unwrap();
 
     // A compaction moves the head on; it is still the same conversation. A
     // host also rebuilds its locator per turn rather than sharing one.
-    let rebuilt = Keyed("store-a");
+    let rebuilt = Keyed("generation-lock-store");
     assert!(is_held(&rebuilt, &session.next_generation().next_generation()).await);
 }
 
 #[tokio::test]
 async fn other_sessions_and_other_destinations_are_independent() {
-    let locator = Keyed("store-a");
-    let session = SessionRef::scoped("thread-1", "agent");
+    let locator = Keyed("independent-session-store-a");
+    let session = SessionRef::scoped("independent-session-thread", "agent");
     let _guard = lock_session_turn(&locator, &session).await.unwrap();
 
-    assert!(!is_held(&locator, &SessionRef::scoped("thread-2", "agent")).await);
-    assert!(!is_held(&locator, &SessionRef::scoped("thread-1", "other-agent")).await);
-    assert!(!is_held(&Keyed("store-b"), &session).await);
+    assert!(
+        !is_held(
+            &locator,
+            &SessionRef::scoped("independent-other-thread", "agent")
+        )
+        .await
+    );
+    assert!(
+        !is_held(
+            &locator,
+            &SessionRef::scoped("independent-session-thread", "other-agent")
+        )
+        .await
+    );
+    assert!(!is_held(&Keyed("independent-session-store-b"), &session).await);
 }
 
 #[tokio::test]
@@ -73,7 +85,7 @@ async fn distinct_in_memory_locators_do_not_share_a_lock() {
     use crate::port::InMemoryTranscriptLocator;
     let first = InMemoryTranscriptLocator::new("first");
     let second = InMemoryTranscriptLocator::new("second");
-    let session = SessionRef::scoped("thread-1", "agent");
+    let session = SessionRef::scoped("in-memory-lock-thread", "agent");
     let _guard = lock_session_turn(&first, &session).await.unwrap();
 
     assert!(is_held(&first, &session).await);

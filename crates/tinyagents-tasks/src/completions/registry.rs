@@ -8,6 +8,16 @@ use tinystoragedrivers_core::DocumentStore;
 
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
 
+/// Outcome of replacing one cached router only if it is still current.
+pub enum CompletionRouterReplaceOutcome {
+    /// `expected` was cached and was replaced by this router.
+    Replaced(Arc<CompletionRouter>),
+    /// Another router is cached; callers should use this winner.
+    Current(Arc<CompletionRouter>),
+    /// No router is cached, commonly because the pool was cleared meanwhile.
+    Missing,
+}
+
 /// Why a router-pool lookup could not complete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionRouterPoolError {
@@ -63,6 +73,28 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     pub fn clear(&self) -> Result<(), CompletionRouterPoolError> {
         self.lock()?.clear();
         Ok(())
+    }
+
+    /// Atomically replaces `expected` only while it remains the cached router.
+    ///
+    /// A concurrent replacement wins and is returned as `Current`. If the
+    /// entry was removed (for example by [`Self::clear`]), returns `Missing`
+    /// without restoring a possibly stale router.
+    pub fn replace_if_current(
+        &self,
+        key: &K,
+        expected: &Arc<CompletionRouter>,
+        replacement: Arc<CompletionRouter>,
+    ) -> Result<CompletionRouterReplaceOutcome, CompletionRouterPoolError> {
+        let mut routers = self.lock()?;
+        match routers.get(key) {
+            Some(current) if Arc::ptr_eq(current, expected) => {
+                routers.insert(key.clone(), Arc::clone(&replacement));
+                Ok(CompletionRouterReplaceOutcome::Replaced(replacement))
+            }
+            Some(current) => Ok(CompletionRouterReplaceOutcome::Current(Arc::clone(current))),
+            None => Ok(CompletionRouterReplaceOutcome::Missing),
+        }
     }
 
     /// Number of opened scopes.

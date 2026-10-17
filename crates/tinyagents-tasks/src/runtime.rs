@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use tokio::time::Instant;
 
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
@@ -18,8 +19,8 @@ use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::steering::{RecentRequestIds, SteeringHandle};
 
 use crate::{
-    CancelledDetachedTask, DetachedTaskRegistryError, DetachedTaskSnapshot,
-    DetachedTaskWaitOutcome, SteeringRegistry,
+    CancelledDetachedTask, DetachedTaskBatchWaitError, DetachedTaskBatchWaitItem,
+    DetachedTaskRegistryError, DetachedTaskSnapshot, DetachedTaskWaitOutcome, SteeringRegistry,
 };
 
 struct DetachedTaskEntry<Metadata, Status> {
@@ -357,6 +358,76 @@ where
         owner_id: &str,
         timeout: Duration,
     ) -> std::result::Result<DetachedTaskWaitOutcome<Status>, DetachedTaskRegistryError> {
+        self.wait_until(task_id, owner_id, Some(timeout)).await
+    }
+
+    /// Waits for tasks in input order against one shared timeout budget.
+    ///
+    /// Each task's metadata is captured before its terminal runtime entry is
+    /// pruned. A timeout leaves the current and later runtimes registered.
+    /// On the first registry error, later ids are left untouched. `None` waits
+    /// without a deadline.
+    pub async fn wait_many(
+        &self,
+        task_ids: &[TaskId],
+        owner_id: &str,
+        timeout: Option<Duration>,
+    ) -> std::result::Result<
+        Vec<DetachedTaskBatchWaitItem<Metadata, Status>>,
+        DetachedTaskBatchWaitError,
+    > {
+        let deadline = timeout.map(|duration| Instant::now() + duration);
+        let mut results = Vec::with_capacity(task_ids.len());
+        for task_id in task_ids {
+            let metadata = match self.metadata_for(task_id, owner_id) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
+            };
+            let remaining =
+                deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            match self.wait_until(task_id, owner_id, remaining).await {
+                Ok(outcome) => results.push(DetachedTaskBatchWaitItem {
+                    task_id: task_id.clone(),
+                    metadata,
+                    outcome,
+                }),
+                Err(error) => {
+                    return Err(DetachedTaskBatchWaitError {
+                        task_id: task_id.clone(),
+                        error,
+                    });
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    fn metadata_for(
+        &self,
+        task_id: &TaskId,
+        owner_id: &str,
+    ) -> std::result::Result<Metadata, DetachedTaskRegistryError> {
+        let guard = self.lock()?;
+        let entry = guard
+            .get(task_id)
+            .ok_or(DetachedTaskRegistryError::Unknown)?;
+        if entry.owner_id != owner_id {
+            return Err(DetachedTaskRegistryError::NotOwned);
+        }
+        Ok(entry.metadata.clone())
+    }
+
+    async fn wait_until(
+        &self,
+        task_id: &TaskId,
+        owner_id: &str,
+        timeout: Option<Duration>,
+    ) -> std::result::Result<DetachedTaskWaitOutcome<Status>, DetachedTaskRegistryError> {
         let mut status = {
             let guard = self.lock()?;
             let entry = guard
@@ -387,7 +458,11 @@ where
             }
         };
 
-        match tokio::time::timeout(timeout, waited).await {
+        let waited = match timeout {
+            Some(timeout) => tokio::time::timeout(timeout, waited).await.map_err(|_| ()),
+            None => Ok(waited.await),
+        };
+        match waited {
             Ok(Ok(terminal)) => {
                 self.remove(task_id)?;
                 Ok(DetachedTaskWaitOutcome::Terminal(terminal))
@@ -396,7 +471,7 @@ where
                 self.remove(task_id)?;
                 Err(error)
             }
-            Err(_) => Ok(DetachedTaskWaitOutcome::TimedOut(status.borrow().clone())),
+            Err(()) => Ok(DetachedTaskWaitOutcome::TimedOut(status.borrow().clone())),
         }
     }
 
