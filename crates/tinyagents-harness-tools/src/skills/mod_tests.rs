@@ -354,7 +354,7 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
 
 #[tokio::test]
 async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_and_live_parent() {
-    let (tools, handle) =
+    let (_tools, handle) =
         bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
     let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -413,7 +413,7 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
 
 #[tokio::test]
 async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch() {
-    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
+    let (_tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
     let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let executed_for_selector = executed.clone();
@@ -622,18 +622,18 @@ fn resolve_registry_for_enforces_pack_membership() {
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
     let (tools, handle) =
         bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
-    let listing = render_pack_filtered(&CATALOG, "alpha", handle, &|name| name == "a_one", "")
+    let listing = render_pack_filtered(&CATALOG, "alpha", &handle, &|name| name == "a_one", "")
         .expect("one callable tool");
     assert!(listing.contains("## `a_one`"));
     assert!(!listing.contains("## `a_two`"));
 
-    let denied = render_pack_filtered(&CATALOG, "alpha", handle, &|_| false, "Hand off instead.")
+    let denied = render_pack_filtered(&CATALOG, "alpha", &handle, &|_| false, "Hand off instead.")
         .unwrap_err();
     assert_eq!(
         denied,
         "Skill `alpha` has no tools available in this session. Hand off instead."
     );
-    let bare = render_pack_filtered(&CATALOG, "alpha", handle, &|_| false, "").unwrap_err();
+    let bare = render_pack_filtered(&CATALOG, "alpha", &handle, &|_| false, "").unwrap_err();
     assert_eq!(
         bare,
         "Skill `alpha` has no tools available in this session."
