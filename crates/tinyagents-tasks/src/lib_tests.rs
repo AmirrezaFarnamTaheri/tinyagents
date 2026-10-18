@@ -1,8 +1,5 @@
-//! Unit tests for graph orchestration: tool argument parsing and outcomes for
-//! `spawn`/`await`/`cancel`/`kill`/`status`/`list`/`timeout`/`race`/`yield`/
-//! `steer`, `TaskStore` transition validation and filtering for both
-//! [`InMemoryTaskStore`] (the durable [`DriverTaskStore`] has its own tests), `reconcile_orphaned_tasks` sweep semantics, and
-//! `DetachedTaskRegistry` ownership/steering/cancellation behavior.
+//! Unit tests for task-store transitions and filtering, orphan reconciliation,
+//! detached-task ownership/steering/cancellation, and store registry behavior.
 
 use std::sync::Arc;
 
@@ -10,6 +7,15 @@ use std::sync::Arc;
 use super::*;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::ids::TaskId;
+
+fn graph_spec(id: &str) -> OrchestrationTaskSpec {
+    OrchestrationTaskSpec::new(
+        id,
+        OrchestrationTaskKind::Graph {
+            graph_id: "child".into(),
+        },
+    )
+}
 
 #[test]
 fn in_memory_store_tracks_task_lifecycle() {
