@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 
 use crate::progress::AgentProgress;
-use crate::run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueueStatus, QueuedMessage, RunQueue};
 
 /// Identity that isolates session locks and active turns between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -35,6 +35,59 @@ pub struct TurnRequest<P = serde_json::Value> {
     pub disposition: QueueDisposition,
     pub deadline: Option<Duration>,
     pub idle_timeout: Option<Duration>,
+}
+
+/// Host payloads that can stand in for the metadata of a steer the harness
+/// recovered and pushed back onto the run queue.
+///
+/// The steering forwarder re-creates a recovered item through
+/// [`QueuedMessage::requeued`], which knows only a fresh id, the text, the
+/// thread label and the clock. [`TurnRequest`] implements that trait for every
+/// payload that can build such a placeholder, so a turn's run queue can be the
+/// harness's own queue. The runner restores the scope and thread of a recovered
+/// item when it dispatches it as a fresh turn and lets the payload adopt the
+/// metadata of the turn that was running.
+pub trait RequeuePayload {
+    /// A placeholder payload for a recovered item.
+    fn requeued(thread_label: &str, queued_at_ms: u64) -> Self;
+
+    /// Fill what a recovered placeholder lacks from the payload of the turn
+    /// that was running when it was recovered. Payloads that are already
+    /// complete must be left untouched.
+    fn adopt(&mut self, _running: &Self) {}
+}
+
+impl RequeuePayload for serde_json::Value {
+    fn requeued(_thread_label: &str, _queued_at_ms: u64) -> Self {
+        serde_json::Value::Null
+    }
+}
+
+impl<P: RequeuePayload + Send + 'static> QueuedMessage for TurnRequest<P> {
+    fn id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn requeued(id: String, text: String, thread_label: &str, queued_at_ms: u64) -> Self {
+        Self {
+            scope: ScopeKey {
+                agent_id: String::new(),
+                profile_id: None,
+            },
+            thread_id: thread_label.to_owned(),
+            request_id: id,
+            text,
+            payload: P::requeued(thread_label, queued_at_ms),
+            host_authored: false,
+            disposition: QueueDisposition::Steer,
+            deadline: None,
+            idle_timeout: None,
+        }
+    }
 }
 
 /// Host-owned identity and fingerprint for the checked-out durable session.
@@ -259,7 +312,7 @@ where
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
-    P: Clone + Send + Sync + 'static,
+    P: Clone + Send + Sync + RequeuePayload + 'static,
 {
     pub fn new(
         host: Arc<H>,
