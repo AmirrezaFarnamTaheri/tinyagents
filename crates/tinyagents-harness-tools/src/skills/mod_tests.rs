@@ -12,7 +12,7 @@ use tinyagents_harness::tinyinference_llm::{
     message::Message, providers::MockModel, tool::ToolCall,
 };
 use tinyagents_harness::{
-    runtime::{AgentHarness, RunPolicy},
+    runtime::AgentHarness,
     testkit,
     tool::{BoundToolCall, ToolCallBinding, ToolDispatch},
 };
@@ -307,7 +307,7 @@ impl tinyagents_harness::tool::ToolDispatch<(), String> for LiveParentDispatch {
 
 #[tokio::test]
 async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
-    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
+    let (_tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
     let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(|selection| {
         assert_eq!(selection.tool_name(), "a_one");
@@ -765,9 +765,9 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("scripted", model);
     harness.register_tool(Arc::new(UseSkillTool::new(handle, CATALOG)));
-    harness.with_policy(RunPolicy {
+    harness.with_policy(tinyagents_harness::runtime::RunPolicy {
         tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(rules),
-        ..RunPolicy::default()
+        ..tinyagents_harness::runtime::RunPolicy::default()
     });
 
     let run = harness
