@@ -23,8 +23,11 @@ pub trait BoundToolCall: Send + Sync {
 /// Harness infrastructure invokes this once after argument preparation and uses
 /// the returned target for both admission and execution. It does not know the
 /// implementation-specific routing model.
+type Binder = dyn Fn(Arc<dyn Tool>, &Value) -> Arc<dyn BoundToolCall> + Send + Sync;
+
+/// Generic binding contract exposed by a tool through its erased host extension.
 pub struct ToolCallBinding {
-    bind: Arc<dyn Fn(Arc<dyn Tool>, &Value) -> Arc<dyn BoundToolCall> + Send + Sync>,
+    bind: Arc<Binder>,
 }
 
 impl ToolCallBinding {
