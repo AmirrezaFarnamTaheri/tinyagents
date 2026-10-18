@@ -1,5 +1,5 @@
 use super::*;
-use crate::run_queue::{QueueLane, QueueMode, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueuedMessage, RunQueue};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
@@ -1636,6 +1636,7 @@ async fn idle_guard_restarts_when_quiet_work_finishes() {
             idle_timeout: std::time::Duration::from_secs(5),
             deadline: None,
             close_timeout: std::time::Duration::from_secs(1),
+            ..TurnRunnerConfig::default()
         },
     ));
     let mut turn = request(QueueDisposition::Interrupt, false);
@@ -1672,6 +1673,7 @@ async fn continuous_progress_cannot_starve_the_wall_deadline() {
             idle_timeout: std::time::Duration::from_secs(60),
             deadline: Some(std::time::Duration::from_secs(5)),
             close_timeout: std::time::Duration::from_secs(1),
+            ..TurnRunnerConfig::default()
         },
     ));
     let run = {
@@ -1708,6 +1710,7 @@ async fn wall_deadline_is_polled_while_progress_delivery_is_pending() {
             idle_timeout: std::time::Duration::from_secs(60),
             deadline: Some(std::time::Duration::from_secs(5)),
             close_timeout: std::time::Duration::from_secs(1),
+            ..TurnRunnerConfig::default()
         },
     ));
     let run = {
@@ -1801,6 +1804,7 @@ async fn cancellation_during_grounded_close_prevents_persisting_completion() {
             idle_timeout: std::time::Duration::from_secs(5),
             deadline: None,
             close_timeout: std::time::Duration::from_secs(60),
+            ..TurnRunnerConfig::default()
         },
     ));
     let mut turn = request(QueueDisposition::Interrupt, false);
