@@ -1600,6 +1600,10 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     .expect("cooperative cancellation should settle")
     .unwrap();
     assert_eq!(settled.status, SubAgentJobStatus::Cancelled);
+    assert!(matches!(
+        jobs.cancel_key_owned(&key, "parent-a"),
+        Err(SubAgentJobError::Terminal { .. })
+    ));
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
