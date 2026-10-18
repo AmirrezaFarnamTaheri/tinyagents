@@ -137,10 +137,19 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
     where
         Scope: Sync,
     {
+        let legacy_source = if metadata.kind == MediaSourceKind::Base64 {
+            let mime = metadata
+                .mime_hint
+                .as_deref()
+                .unwrap_or("application/octet-stream");
+            format!("data:{mime};base64,{source}")
+        } else {
+            source.to_owned()
+        };
         self.resolve_with_mime_hint(
             scope,
             modality,
-            source,
+            &legacy_source,
             max_bytes,
             metadata.mime_hint.as_deref(),
         )
@@ -630,14 +639,7 @@ where
             _ => self.config.files.max_file_bytes(),
         };
         let resolved = self
-            .resolve(
-                scope,
-                modality,
-                &source,
-                max_bytes,
-                false,
-                &metadata,
-            )
+            .resolve(scope, modality, &source, max_bytes, false, &metadata)
             .await?;
         let ResolvedMedia {
             mut attachment,
@@ -733,7 +735,11 @@ where
         require_file_mime: bool,
         metadata: &MediaSourceMetadata,
     ) -> tinyinference_llm::Result<ResolvedMedia> {
-        let remote = source.starts_with("http://") || source.starts_with("https://");
+        let remote_source = source.starts_with("http://") || source.starts_with("https://");
+        let remote = match metadata.kind {
+            MediaSourceKind::Path | MediaSourceKind::Base64 => false,
+            MediaSourceKind::Url | MediaSourceKind::Untyped => remote_source,
+        };
         let remote_allowed = match modality {
             InputModality::Image => self.config.images.allow_remote_fetch,
             InputModality::Audio | InputModality::Video | InputModality::Document => {
@@ -1145,11 +1151,7 @@ fn media_source(
                 mime_hint: Some(media_type.clone()),
                 encoded_len: Some(data.len()),
             };
-            (
-                modality,
-                format!("data:{media_type};base64,{data}"),
-                metadata,
-            )
+            (modality, data, metadata)
         }
     })
 }
