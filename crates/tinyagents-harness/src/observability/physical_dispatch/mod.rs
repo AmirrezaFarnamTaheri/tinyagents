@@ -97,7 +97,11 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
         let metadata = stream.metadata().clone();
         let mut stream = Box::pin(stream);
         let mut guard = Some(guard);
+        let mut ended = false;
         let observed = futures::stream::poll_fn(move |cx| {
+            if ended {
+                return std::task::Poll::Ready(None);
+            }
             let item = stream.as_mut().poll_next(cx);
             if let std::task::Poll::Ready(Some(item)) = &item {
                 let outcome = match item {
@@ -112,6 +116,7 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
                 };
                 if let Some(outcome) = outcome {
                     if let Some(guard) = guard.take() {
+                        ended = true;
                         guard.finish(outcome);
                     }
                 } else if let ModelStreamItem::UsageDelta(usage) = item
@@ -132,6 +137,7 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
             if matches!(item, std::task::Poll::Ready(None))
                 && let Some(guard) = guard.take()
             {
+                ended = true;
                 guard.finish(dispatch_outcome(None, false));
             }
             item
