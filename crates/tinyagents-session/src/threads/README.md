@@ -101,6 +101,17 @@ after the swap. `delete_messages_from` returns `None` for an unknown cut point
 or thread. `purge_threads` deletes every thread document (live and tombstoned),
 stream and intent, and counts live threads and messages.
 
+Hosts that need to retain work for each removed thread can use
+`DriverConversationStore::purge_threads_with`. Its synchronous callback gets
+the logical thread ID after a successful document deletion, including for
+tombstones, and runs before the next row is processed. Keep the callback short,
+nonblocking, infallible and non-reentrant; it is intended for recording a small
+durable obligation, not doing the follow-up work inline. If a later read or
+delete fails, earlier callbacks have already run. The purge is not crash-atomic:
+a process failure between deleting a document and invoking its callback can
+leave that obligation unreported. The existing `ConversationPersistence` purge
+uses the same loop with a no-op callback.
+
 Plain message append does not authorize distributed agent execution. No
 importer, provider selection or legacy source-ownership grant is added.
 
