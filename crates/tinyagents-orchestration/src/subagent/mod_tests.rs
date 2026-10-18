@@ -12,7 +12,7 @@ use tinyagents_harness::{
     CancellationToken,
     context::{RunConfig, RunContext},
 };
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 use tinyinference_llm::{message::Message, usage::UsageTotals};
 
 use super::*;

@@ -1,3 +1,4 @@
+use tinyagents_harness::tool::ToolSnapshot;
 use std::{future::Future, sync::Arc};
 
 use tinyagents_harness::CancellationToken;

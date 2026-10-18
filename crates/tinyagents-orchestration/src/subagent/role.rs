@@ -8,7 +8,7 @@
 //! set it inherits. [`subagent_framing`] is an optional, neutral system
 //! preamble a host may prepend; nothing applies it by default.
 
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Fleet-control tools whose visibility shapes orchestration prompts and
 /// decisions. The names are stable tool identifiers supplied by the host.

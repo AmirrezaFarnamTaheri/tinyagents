@@ -1,3 +1,4 @@
+use tinyagents_harness::tool::ToolSnapshot;
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::{
@@ -23,7 +24,7 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, ToolSnapshot,
+    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest,
     TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 

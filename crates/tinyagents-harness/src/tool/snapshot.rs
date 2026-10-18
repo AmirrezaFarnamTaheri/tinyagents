@@ -2,7 +2,23 @@ use std::collections::BTreeMap;
 
 use tinytools::ToolSpec;
 
-use crate::RuntimeError;
+#[cfg(test)]
+#[path = "snapshot_tests.rs"]
+mod tests;
+
+use thiserror::Error;
+
+/// Errors while freezing or restoring a tool declaration snapshot.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum ToolSnapshotError {
+    /// Two different declarations used the same name.
+    #[error("tool snapshot has conflicting declarations for `{0}`")]
+    NameCollision(String),
+    /// Stored declaration JSON could not be decoded.
+    #[error("decode recorded tool declarations: {0}")]
+    Decode(String),
+}
+
 
 /// An immutable, model-visible tool declaration set for one session turn.
 ///
@@ -19,14 +35,14 @@ impl ToolSnapshot {
     ///
     /// Identical repeated declarations are deduplicated.  A shared name with
     /// different contents is rejected rather than silently choosing one.
-    pub fn new(specs: Vec<ToolSpec>) -> Result<Self, RuntimeError> {
+    pub fn new(specs: Vec<ToolSpec>) -> Result<Self, ToolSnapshotError> {
         let mut names = BTreeMap::<String, ToolSpec>::new();
         for spec in specs {
             if let Some(existing) = names.get(&spec.name) {
                 let same = existing.description == spec.description
                     && existing.parameters == spec.parameters;
                 if !same {
-                    return Err(RuntimeError::ToolNameCollision(spec.name));
+                    return Err(ToolSnapshotError::NameCollision(spec.name));
                 }
                 continue;
             }
@@ -74,9 +90,9 @@ impl ToolSnapshot {
     }
 
     /// Restores a snapshot from a transcript `tools` record.
-    pub fn from_json(value: &serde_json::Value) -> Result<Self, RuntimeError> {
+    pub fn from_json(value: &serde_json::Value) -> Result<Self, ToolSnapshotError> {
         let specs: Vec<ToolSpec> = serde_json::from_value(value.clone()).map_err(|error| {
-            RuntimeError::Persistence(format!("decode recorded tool declarations: {error}"))
+            ToolSnapshotError::Decode(error.to_string())
         })?;
         Self::new(specs)
     }
@@ -85,7 +101,7 @@ impl ToolSnapshot {
     /// not already carry. A name present in both keeps this snapshot's
     /// declaration: the live host is authoritative for a tool it still
     /// supplies. Returns the merged snapshot and how many were retained.
-    pub fn with_retained(&self, recorded: &ToolSnapshot) -> Result<(Self, usize), RuntimeError> {
+    pub fn with_retained(&self, recorded: &ToolSnapshot) -> Result<(Self, usize), ToolSnapshotError> {
         let retained: Vec<ToolSpec> = recorded
             .specs
             .iter()

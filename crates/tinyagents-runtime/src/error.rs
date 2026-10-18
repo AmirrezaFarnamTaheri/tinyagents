@@ -30,3 +30,12 @@ pub enum RuntimeError {
     #[error("invalid session state: {0}")]
     InvalidSessionState(String),
 }
+
+impl From<tinyagents_harness::tool::ToolSnapshotError> for RuntimeError {
+    fn from(error: tinyagents_harness::tool::ToolSnapshotError) -> Self {
+        match error {
+            tinyagents_harness::tool::ToolSnapshotError::NameCollision(name) => Self::ToolNameCollision(name),
+            tinyagents_harness::tool::ToolSnapshotError::Decode(error) => Self::Persistence(error),
+        }
+    }
+}
