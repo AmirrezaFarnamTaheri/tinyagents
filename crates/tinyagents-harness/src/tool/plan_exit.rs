@@ -21,6 +21,12 @@ pub struct PlanExitTool {
 }
 
 impl PlanExitTool {
+    /// Stable tool name advertised to the model and host registries.
+    pub const NAME: &'static str = "plan_exit";
+
+    /// Stable tool description advertised to the model and host registries.
+    pub const DESCRIPTION: &'static str = "Exit plan mode and hand off the plan to execution. Call this once the plan is complete — the wrapped harness will switch to build mode (when wired). The `plan` argument is the user-facing plan text that downstream agents will execute against.";
+
     /// Creates a tool using the host's run-mode lookup and policy checks.
     pub fn new(lookup: Arc<PlanExitModeLookup>) -> Self {
         Self { lookup }
@@ -30,14 +36,11 @@ impl PlanExitTool {
 #[async_trait]
 impl Tool for PlanExitTool {
     fn name(&self) -> &str {
-        "plan_exit"
+        Self::NAME
     }
 
     fn description(&self) -> &str {
-        "Exit plan mode and hand off the plan to execution. Call this once \
-         the plan is complete — the wrapped harness will switch to build \
-         mode (when wired). The `plan` argument is the user-facing plan \
-         text that downstream agents will execute against."
+        Self::DESCRIPTION
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
