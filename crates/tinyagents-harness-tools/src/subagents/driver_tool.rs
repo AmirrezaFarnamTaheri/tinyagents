@@ -16,8 +16,8 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
-use tinyagents_orchestration::subagent::InlineJobGuard;
 use tinyagents_orchestration::subagent::DriverJobRegistration;
+use tinyagents_orchestration::subagent::InlineJobGuard;
 use tinyagents_orchestration::subagent::{
     SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
 };
@@ -197,7 +197,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// completion state or route a notification without moving policy into this crate.
     pub fn with_completion_handler(
         mut self,
-        handler: impl Fn(&str, Result<tinyagents_orchestration::subagent::SubagentOutcome, String>) + Send + Sync + 'static,
+        handler: impl Fn(&str, Result<tinyagents_orchestration::subagent::SubagentOutcome, String>)
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         self.completion = Some(Arc::new(handler));
         self
@@ -211,7 +214,10 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// terminal status should use this seam.
     pub fn with_async_completion_handler<Fut>(
         mut self,
-        handler: impl Fn(String, Result<tinyagents_orchestration::subagent::SubagentRunResult, String>) -> Fut
+        handler: impl Fn(
+            String,
+            Result<tinyagents_orchestration::subagent::SubagentRunResult, String>,
+        ) -> Fut
         + Send
         + Sync
         + 'static,
@@ -225,9 +231,13 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
-    fn requested_mode(args: &Value) -> Result<tinyagents_orchestration::subagent::SubAgentMode, String> {
+    fn requested_mode(
+        args: &Value,
+    ) -> Result<tinyagents_orchestration::subagent::SubAgentMode, String> {
         match args.get("mode") {
-            None | Some(Value::Null) => Ok(tinyagents_orchestration::subagent::SubAgentMode::Background),
+            None | Some(Value::Null) => {
+                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
+            }
             Some(Value::String(mode)) if mode == "background" => {
                 Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
             }
@@ -287,7 +297,9 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
             let status = match job.status {
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Queued => "queued",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Running => "running",
-                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => {
+                    "awaiting_input"
+                }
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Completed => "completed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Failed => "failed",
                 tinyagents_orchestration::subagent::SubAgentJobStatus::Incomplete => "incomplete",

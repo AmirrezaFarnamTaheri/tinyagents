@@ -764,7 +764,6 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         &self.jobs
     }
 
-
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();

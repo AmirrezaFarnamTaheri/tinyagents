@@ -1,6 +1,5 @@
 use super::*;
-use tinyagents_orchestration::subagent::*;
-use crate::subagents::{SubAgentJobsTool, SubAgentMessageTool, SubAgentJobAction};
+use crate::subagents::{SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -10,6 +9,7 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::tool::ToolSnapshot;
+use tinyagents_orchestration::subagent::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::providers::MockModel;
@@ -889,25 +889,27 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
         "worker description",
         Arc::new(harness),
     ));
-    let tool =
-        tinyagents_orchestration::subagent::SubAgentTool::new(legacy, tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()))
-            .with_driver(
-                driver(),
-                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-                    let child = parent
-                        .child(RunConfig::new("worker-child"), ())
-                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-                    SubagentRequest::fresh_from_parent(
-                        parent,
-                        child,
-                        "driver-task",
-                        (),
-                        args["input"].as_str().unwrap_or_default(),
-                        None,
-                    )
-                },
-                |_| None,
-            );
+    let tool = tinyagents_orchestration::subagent::SubAgentTool::new(
+        legacy,
+        tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()),
+    )
+    .with_driver(
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "driver-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| None,
+    );
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let result = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -937,31 +939,33 @@ async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     let callback_tx = tx.clone();
-    let tool =
-        tinyagents_orchestration::subagent::SubAgentTool::new(legacy, tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()))
-            .with_driver_and_completion(
-                driver(),
-                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-                    let child = parent
-                        .child(RunConfig::new("worker-child"), ())
-                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-                    SubagentRequest::fresh_from_parent(
-                        parent,
-                        child,
-                        "driver-task",
-                        (),
-                        args["input"].as_str().unwrap_or_default(),
-                        None,
-                    )
-                },
-                |_| Some("parent-session".into()),
-                move |target, result| {
-                    if let Some(tx) = callback_tx.lock().unwrap().take() {
-                        let output = result.map(|outcome| (target.to_owned(), outcome.output));
-                        let _ = tx.send(output);
-                    }
-                },
-            );
+    let tool = tinyagents_orchestration::subagent::SubAgentTool::new(
+        legacy,
+        tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()),
+    )
+    .with_driver_and_completion(
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "driver-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("parent-session".into()),
+        move |target, result| {
+            if let Some(tx) = callback_tx.lock().unwrap().take() {
+                let output = result.map(|outcome| (target.to_owned(), outcome.output));
+                let _ = tx.send(output);
+            }
+        },
+    );
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let response = ToolDispatch::<(), ()>::execute(
         &tool,

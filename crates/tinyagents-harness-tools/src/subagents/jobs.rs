@@ -9,19 +9,21 @@ use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{RunId, TaskId, next_seq};
 use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy};
+use tinyagents_harness::steering::{
+    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
+};
 use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
-use tinyinference_llm::message::Message;
-use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
-use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
-use tokio::sync::watch;
 use tinyagents_orchestration::subagent::{
     AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, IncompleteKind,
     InlineJobGuard, SubAgentJob, SubAgentJobAction, SubAgentJobError, SubAgentJobId,
     SubAgentJobRegistry, SubAgentJobStatus, SubagentSessionStore, WaitError, WaitOutcome,
-    list_subagent_records, record_agent_id, record_subagent_session_id,
-    record_to_wait_outcome, subagent_record_for_task, task_id_for_session_in_records,
+    list_subagent_records, record_agent_id, record_subagent_session_id, record_to_wait_outcome,
+    subagent_record_for_task, task_id_for_session_in_records,
 };
+use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
+use tinyinference_llm::message::Message;
+use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
+use tokio::sync::watch;
 
 type SessionOverlay = (
     Arc<dyn SubagentSessionStore>,
@@ -1107,4 +1109,3 @@ pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
         .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
 type OwnerScope = Arc<dyn Fn(u64) -> String + Send + Sync>;
-

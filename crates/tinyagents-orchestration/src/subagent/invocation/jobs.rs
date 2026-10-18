@@ -665,7 +665,10 @@ impl SubAgentJobRegistry {
     }
 
     /// Returns this run's jobs while preserving detached-registry failures.
-    pub fn try_list_owned(&self, owner: impl ToString) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+    pub fn try_list_owned(
+        &self,
+        owner: impl ToString,
+    ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
         let snapshots = self
             .tasks
             .snapshots(Some(&owner.to_string()))
