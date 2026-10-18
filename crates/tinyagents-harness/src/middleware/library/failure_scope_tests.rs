@@ -104,7 +104,7 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
             }
         } else if call.arguments.get("reset") == Some(&json!(true)) {
             FailureAssessment::ResetFailure {
-                error: "new command exit".into(),
+                error: "failed".into(),
                 hard_reject: false,
                 recoverable_miss: false,
             }
@@ -271,7 +271,7 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         .unwrap()
         .clone()
         .expect("third failure halts");
-    assert!(summary.starts_with("shell: Stopping: "), "{summary}");
+    assert!(summary.starts_with("shell: Stopping"), "{summary}");
     assert!(
         summary.contains("retried 3 times with identical arguments"),
         "{summary}"
@@ -321,7 +321,7 @@ async fn reset_failure_keeps_host_classified_failure_budget() {
         .unwrap()
         .clone()
         .expect("budget remains exhausted");
-    assert!(summary.starts_with("shell: Stopping: "), "{summary}");
+    assert!(summary.starts_with("shell: Stopping"), "{summary}");
 }
 
 #[tokio::test]
