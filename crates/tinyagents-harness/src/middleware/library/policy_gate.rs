@@ -523,8 +523,8 @@ pub struct ToolPolicyGateMiddleware<Ctx: Send + Sync = ()> {
     resolver: Option<Arc<dyn ApprovalResolver<Ctx>>>,
     render: DenialRenderer,
     post_gate: Option<ToolPolicyPostGate<Ctx>>,
-    /// Serialises approval prompts across the overlapping calls of a
-    /// concurrent batch; calls the policy allows or denies never take it.
+    /// Serialises calls to `resolve` across an overlapping concurrent batch;
+    /// already-allowed `resolve_allowed` admissions do not take this lock.
     prompt_lock: tokio::sync::Mutex<()>,
 }
 
