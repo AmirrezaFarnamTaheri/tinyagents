@@ -125,6 +125,20 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
         self.halt_copy(kind, summary, error)
     }
 
+    /// Refines a generic ladder cause using host-owned classification facts.
+    /// The middleware replaces the returned cause's summary with the final
+    /// rendered copy before storing it on the run.
+    fn halt_cause_for_call(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _kind: FailureStopKind,
+        cause: Option<crate::no_progress::ClassifiedStopCause>,
+        _error: &str,
+        _call: &ToolCall,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        cause
+    }
+
     /// Called at the start of a model response's tool batch.
     fn start_batch(&self, _ctx: &RunContext<Ctx>) {}
 
@@ -360,18 +374,28 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {
-                if let Some(summary) =
-                    run.recoverable
-                        .record(self.policy.as_ref(), tool, &argument_key, &error)
+                if let Some(cause) = run.recoverable.record_with_cause(
+                    self.policy.as_ref(),
+                    tool,
+                    &argument_key,
+                    &error,
+                )
                 {
                     let summary = self.policy.halt_copy_for_call(
                         ctx,
                         FailureStopKind::Recoverable,
-                        summary,
+                        cause.summary.clone(),
                         &error,
                         &call,
                     );
-                    self.halt(ctx, summary, None);
+                    self.halt(
+                        ctx,
+                        summary.clone(),
+                        Some(crate::no_progress::ClassifiedStopCause {
+                            summary,
+                            ..cause
+                        }),
+                    );
                     run.recoverable.reset_streak();
                 }
             }
@@ -438,7 +462,8 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     hard_reject,
                     recoverable_miss,
                 };
-                match run.tracker.record(step, &attempt) {
+                let assessment = run.tracker.record_with_cause(step, &attempt);
+                match assessment.verdict {
                     NoProgress::Continue => {}
                     NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
                     NoProgress::Halt(summary) => {
@@ -450,7 +475,20 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             &error,
                             &call,
                         );
-                        self.halt(ctx, summary, None);
+                        let cause = self.policy.halt_cause_for_call(
+                            ctx,
+                            FailureStopKind::NoProgress,
+                            assessment.failure_cause,
+                            &error,
+                            &call,
+                        );
+                        let cause = cause.map(|cause| {
+                            crate::no_progress::ClassifiedStopCause {
+                                summary: summary.clone(),
+                                ..cause
+                            }
+                        });
+                        self.halt(ctx, summary, cause);
                     }
                 }
             }

@@ -99,6 +99,15 @@ pub use types::{
     SuccessfulRepeat, SuccessfulRepeatTracker, ToolAttempt,
 };
 
+/// A no-progress verdict with typed metadata for terminal halts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NoProgressAssessment {
+    /// Existing ladder verdict, unchanged from [`NoProgressTracker::record`].
+    pub verdict: NoProgress,
+    /// Class and operation for a halt, when the ladder has enough information.
+    pub failure_cause: Option<ClassifiedStopCause>,
+}
+
 use std::sync::{Arc, Mutex};
 
 /// Consecutive **identical** (tool + args + error) failures tolerated before the
@@ -223,6 +232,16 @@ impl NoProgressTracker {
     /// the ladder's verdict. On a [`NoProgress::Halt`] the internal state is
     /// reset for the caller.
     pub fn record(&self, step: usize, attempt: &ToolAttempt) -> NoProgress {
+        self.record_with_cause(step, attempt).verdict
+    }
+
+    /// Record an outcome and preserve the ladder's structured terminal class
+    /// and operation beside its existing human-readable verdict.
+    pub fn record_with_cause(
+        &self,
+        step: usize,
+        attempt: &ToolAttempt,
+    ) -> NoProgressAssessment {
         // Fingerprint before taking the lock: it scans the whole line.
         let err_identity = attempt.error.map(|err| self.fingerprinter.fingerprint(err));
         let mut state = self.state.lock().unwrap();
@@ -230,7 +249,10 @@ impl NoProgressTracker {
         let Some(err) = attempt.error else {
             // Success → progress was made; clear every counter.
             *state = LadderState::default();
-            return NoProgress::Continue;
+            return NoProgressAssessment {
+                verdict: NoProgress::Continue,
+                failure_cause: None,
+            };
         };
 
         // Signature: tool name + argument fingerprint + the fingerprinted error
@@ -278,7 +300,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "policy", attempt.tool);
         }
         if same_count >= self.identical_halt_threshold {
             let summary = format!(
@@ -289,7 +311,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "repeated_failure", attempt.tool);
         }
         if state.consecutive >= NO_PROGRESS_HALT_THRESHOLD {
             let summary = format!(
@@ -301,7 +323,7 @@ impl NoProgressTracker {
                 truncate_for_halt(err),
             );
             *state = LadderState::default();
-            return NoProgress::Halt(summary);
+            return no_progress_halt(summary, "varied_failures", attempt.tool);
         }
 
         // ── Nudge: cap retries *before* forcing an alternative ──────────────
@@ -309,7 +331,10 @@ impl NoProgressTracker {
         // corrective chance to change strategy before the halt threshold.
         if same_count == IDENTICAL_NUDGE_THRESHOLD && state.nudged_sig.as_deref() != Some(&sig) {
             state.nudged_sig = Some(sig);
-            return NoProgress::Nudge(identical_nudge(step, attempt.tool, same_count, err));
+            return NoProgressAssessment {
+                verdict: NoProgress::Nudge(identical_nudge(step, attempt.tool, same_count, err)),
+                failure_cause: None,
+            };
         }
         // Varied failures piling up with no success: step back before the
         // any-failure backstop halts.
@@ -318,10 +343,27 @@ impl NoProgressTracker {
             && !state.nudged_streak
         {
             state.nudged_streak = true;
-            return NoProgress::Nudge(varied_nudge(step, attempt.tool, state.consecutive, err));
+            return NoProgressAssessment {
+                verdict: NoProgress::Nudge(varied_nudge(step, attempt.tool, state.consecutive, err)),
+                failure_cause: None,
+            };
         }
 
-        NoProgress::Continue
+        NoProgressAssessment {
+            verdict: NoProgress::Continue,
+            failure_cause: None,
+        }
+    }
+}
+
+fn no_progress_halt(summary: String, class: &str, operation: &str) -> NoProgressAssessment {
+    NoProgressAssessment {
+        verdict: NoProgress::Halt(summary.clone()),
+        failure_cause: Some(ClassifiedStopCause {
+            class: class.to_owned(),
+            operation: operation.to_owned(),
+            summary,
+        }),
     }
 }
 
