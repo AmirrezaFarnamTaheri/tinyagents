@@ -8,7 +8,11 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
-use tinyagents_harness::{runtime::AgentHarness, testkit, tool::{BoundToolCall, ToolCallBinding, ToolDispatch}};
+use tinyagents_harness::{
+    runtime::AgentHarness,
+    testkit,
+    tool::{BoundToolCall, ToolCallBinding, ToolDispatch},
+};
 use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";
@@ -34,7 +38,11 @@ const CATALOG: PackCatalog = PackCatalog::new(PACKS, MARKER);
 
 fn bind_call(tool: Arc<dyn Tool>, args: &Value) -> Arc<dyn BoundToolCall> {
     tool.host_extension()
-        .and_then(|extension| extension.downcast_ref::<ToolCallBinding>().map(|binding| binding.bind(tool.clone(), args)))
+        .and_then(|extension| {
+            extension
+                .downcast_ref::<ToolCallBinding>()
+                .map(|binding| binding.bind(tool.clone(), args))
+        })
         .expect("packed tool exposes its binding contract")
 }
 
@@ -235,9 +243,11 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
     let pinned = bind_call(outer.clone(), &args);
     assert!(pinned.tool().supports_markdown());
-    assert!(outer
-        .host_extension()
-        .is_some_and(|extension| extension.is::<PackRegistryHandle>()));
+    assert!(
+        outer
+            .host_extension()
+            .is_some_and(|extension| extension.is::<PackRegistryHandle>())
+    );
     let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
 
     let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
