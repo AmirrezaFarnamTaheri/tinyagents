@@ -9,7 +9,7 @@
 //! so every mutation runs `load → mutate → put` under a **per-thread async
 //! mutex** (`thread_lock`) — the process-local analogue of OpenHuman's
 //! file-rename atomicity. Inside that lock the `goal_id` compare-and-set guard
-//! (see [`account_usage`] / [`set_continuation_suppressed_if`]) still rejects
+//! (see [`account_turn_atomic`]) still rejects
 //! stale accounting from a replaced goal.
 //!
 //! # Single-process only

@@ -62,8 +62,7 @@ Steps run one at a time, top to bottom. Every write keeps that order:
 `TodoTool` is a harness `Tool` named `todo`. `{"todos": [{"content",
 "status"}]}` writes the whole list, `{"complete": N}` (1-based) completes step
 N and starts the next, `{"cancel": N, "reason": "..."}` drops one, and no
-arguments reads the list. The result carries the store's `notes`. Build
-it with `todo_tools(store)` or `register_todo_tools`. The target thread comes
+arguments reads the list. The result carries the store's `notes`. Construct it directly with `TodoTool::new(store)`. The target thread comes
 from `ToolExecutionContext::thread_id` (never a tool argument); the bare
 `Tool::call` entry point errors without a thread. Domain errors (blank
 content, unknown status, an out-of-order step) are surfaced to the model as
