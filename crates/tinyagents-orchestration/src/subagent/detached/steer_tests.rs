@@ -120,7 +120,7 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
     );
     tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
         .unwrap();
-    let (_, fb) = counting();
+    let (calls, fb) = counting();
     assert_eq!(
         steer_detached(
             &reg,
@@ -131,9 +131,9 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
             fb
         )
         .await,
-        Err(SteerError::AlreadyDone)
+        Ok(SteerRoute::Fallback)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -157,7 +157,8 @@ async fn steer_prefers_the_live_handle_then_falls_back() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    steering.register(TaskId::new("t1"), SteeringHandle::allow_all());
+    let handle = SteeringHandle::allow_all();
+    steering.register(TaskId::new("t1"), handle.clone());
     let (calls, fb) = counting();
     assert_eq!(
         steer_detached(
@@ -172,6 +173,12 @@ async fn steer_prefers_the_live_handle_then_falls_back() {
         Ok(SteerRoute::Registry)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let commands = handle.drain();
+    assert!(matches!(
+        commands.as_slice(),
+        [tinyagents_harness::steering::SteeringCommand::InjectMessage(message)]
+            if message.text().contains("[Additional context from user]: go")
+    ));
 }
 
 #[tokio::test]
