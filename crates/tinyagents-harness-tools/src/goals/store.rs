@@ -349,8 +349,6 @@ pub(super) async fn account_turn_atomic(
     elapsed: Duration,
 ) -> Result<Option<(ThreadGoal, ThreadGoal)>> {
     let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
     let Some(mut goal) = load(store, &thread_id).await? else {
         return Ok(None);
     };
