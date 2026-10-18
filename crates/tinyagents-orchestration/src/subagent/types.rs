@@ -286,7 +286,7 @@ impl<C, H> SubagentRequest<C, H> {
         self
     }
 
-    pub(crate) fn resume(&self) -> Option<&SubagentResume> {
+    pub fn resume(&self) -> Option<&SubagentResume> {
         self.resume.as_ref()
     }
 

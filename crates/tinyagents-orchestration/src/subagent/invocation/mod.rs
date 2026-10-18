@@ -89,7 +89,7 @@ pub use delegation_tool::{
 };
 pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
 pub use jobs::{
-    SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
+    InlineJobGuard, DriverJobRegistration,
 };
 pub use types::*;
 

@@ -57,7 +57,7 @@ pub use invocation::{
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
     DriverSubAgentTool, MultiTargetDelegationTool, ReviewApprovalPolicy, SUBAGENT_MODE_FIELD,
     SubAgent, SubAgentJob, SubAgentJobAction, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
-    SubAgentJobStatus, SubAgentJobsTool, SubAgentMessageTool, SubAgentMode, SubAgentSession,
+    SubAgentJobStatus, SubAgentMode, SubAgentSession, InlineJobGuard, DriverJobRegistration,
     SubAgentTool, SubagentDriverToolHost, parse_approval, register_subagent_job_tools,
     review_stage_output,
 };

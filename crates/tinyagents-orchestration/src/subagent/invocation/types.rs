@@ -356,19 +356,19 @@ pub(crate) struct JobControl {
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
     /// Optional loop-consumed message queue for typed message aliases.
-    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
     pub(crate) steering: tinyagents_harness::steering::SteeringHandle,
-    pub(crate) cancellation: CancellationToken,
+    pub cancellation: CancellationToken,
 }
 
-pub(crate) struct DriverJobRegistration {
-    pub(crate) key: crate::subagent::SubagentTaskKey,
-    pub(crate) agent: String,
-    pub(crate) owner: String,
-    pub(crate) cancellation: CancellationToken,
-    pub(crate) steering: Option<tinyagents_harness::steering::SteeringHandle>,
-    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    pub(crate) continuing: bool,
+pub struct DriverJobRegistration {
+    pub key: crate::subagent::SubagentTaskKey,
+    pub agent: String,
+    pub owner: String,
+    pub cancellation: CancellationToken,
+    pub steering: Option<tinyagents_harness::steering::SteeringHandle>,
+    pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub continuing: bool,
 }
 
 /// Error returned by job lookup or live-message delivery.
