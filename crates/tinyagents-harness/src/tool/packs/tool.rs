@@ -29,11 +29,12 @@ pub const USE_SKILL: &str = "use_skill";
 /// **Permission forwarding is load-bearing.** The harness gates a call on the
 /// tool's `permission_level_with_args`, so a proxy reporting its own level would
 /// launder every packed tool's risk down to this one's — a crypto write would
-/// be admitted on a channel that refuses crypto writes. Both accessors resolve
-/// the inner tool and defer to it; the arg-less one has nothing to resolve
-/// from, so it reports the highest level any packed tool needs rather than
-/// guessing low. A call that names no `tool` reads a schema and nothing else,
-/// so that one branch is genuinely `ReadOnly`.
+/// be admitted on a channel that refuses crypto writes. The argument-aware
+/// accessor resolves the selected tool and defers to it. The argument-less
+/// accessor reports the minimum `ReadOnly` operation: schema disclosure. This
+/// keeps the dispatcher visible in a read-only session even when a pack also
+/// contains mutators. A named target that cannot be resolved reports the
+/// `Dangerous` ceiling, including after the call is pinned for admission.
 pub struct UseSkillTool {
     handle: PackRegistryHandle,
     catalog: PackCatalog,
@@ -42,6 +43,15 @@ pub struct UseSkillTool {
 
 impl PackRegistryHandle {
     pub(crate) fn bind_call(&self, outer: Arc<dyn Tool>, args: &Value) -> PinnedPackCall {
+        let answer_permission = if named_tool(args).is_some() {
+            PermissionLevel::Dangerous
+        } else {
+            outer.permission_level_with_args(args)
+        };
+        let answer = |result| PackTarget::Answer {
+            result,
+            permission: answer_permission,
+        };
         let target = match self.catalog_for_binding() {
             Some(catalog) => match resolve_call(self, &catalog, args) {
                 ResolvedPackCall::Execute {
@@ -53,9 +63,9 @@ impl PackRegistryHandle {
                     index,
                     arguments,
                 },
-                ResolvedPackCall::Answer(result) => PackTarget::Answer(result),
+                ResolvedPackCall::Answer(result) => answer(result),
             },
-            None => PackTarget::Answer(ToolResult::error(
+            None => answer(ToolResult::error(
                 "packed tool catalog is unavailable for this registration",
             )),
         };
@@ -67,14 +77,14 @@ impl PinnedPackCall {
     fn selected(&self) -> Option<&dyn Tool> {
         match &self.target {
             PackTarget::Execute { tools, index, .. } => Some(tools[*index].as_ref()),
-            PackTarget::Answer(_) => None,
+            PackTarget::Answer { .. } => None,
         }
     }
 
     fn selected_arguments(&self) -> Option<&Value> {
         match &self.target {
             PackTarget::Execute { arguments, .. } => Some(arguments),
-            PackTarget::Answer(_) => None,
+            PackTarget::Answer { .. } => None,
         }
     }
 
@@ -119,7 +129,7 @@ impl Tool for PinnedPackCall {
         _args: Value,
         options: ToolCallOptions,
     ) -> anyhow::Result<ToolResult> {
-        if let PackTarget::Answer(result) = &self.target {
+        if let PackTarget::Answer { result, .. } = &self.target {
             return Ok(result.clone());
         }
         self.selected()
@@ -147,7 +157,7 @@ impl Tool for PinnedPackCall {
         options: ToolCallOptions,
         context: Option<&dyn ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
-        if let PackTarget::Answer(result) = &self.target {
+        if let PackTarget::Answer { result, .. } = &self.target {
             return Ok(result.clone());
         }
         self.selected()
@@ -186,9 +196,13 @@ impl Tool for PinnedPackCall {
             .map_or_else(|| self.outer.permission_level(), Tool::permission_level)
     }
     fn permission_level_with_args(&self, _args: &Value) -> PermissionLevel {
-        match (self.selected(), self.selected_arguments()) {
-            (Some(tool), Some(args)) => tool.permission_level_with_args(args),
-            _ => self.outer.permission_level(),
+        match &self.target {
+            PackTarget::Execute {
+                tools,
+                index,
+                arguments,
+            } => tools[*index].permission_level_with_args(arguments),
+            PackTarget::Answer { permission, .. } => *permission,
         }
     }
 }
@@ -330,16 +344,7 @@ impl Tool for UseSkillTool {
     }
 
     fn permission_level(&self) -> PermissionLevel {
-        let packed = self.catalog.all_packed_tool_names();
-        self.handle
-            .registries()
-            .iter()
-            .flat_map(|tools| tools.iter())
-            .filter(|t| packed.contains(&t.name()))
-            .map(|t| t.permission_level())
-            .max()
-            // Unbound or empty: report the ceiling, never a permissive default.
-            .unwrap_or(PermissionLevel::Dangerous)
+        PermissionLevel::ReadOnly
     }
 
     fn permission_level_with_args(&self, args: &Value) -> PermissionLevel {
@@ -357,7 +362,7 @@ impl Tool for UseSkillTool {
             // Unresolvable: the call will fail anyway, but report the ceiling so
             // a malformed call can never be admitted on a channel that would
             // have refused the real tool.
-            None => self.permission_level(),
+            None => PermissionLevel::Dangerous,
         }
     }
 

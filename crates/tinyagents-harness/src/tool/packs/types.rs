@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinytools::{Tool, ToolResult};
+use tinytools::{PermissionLevel, Tool, ToolResult};
 
 use super::{catalog::PackCatalog, handle::ToolVec, render::render_pack};
 
@@ -25,7 +25,10 @@ pub(super) enum PackTarget {
         index: usize,
         arguments: Value,
     },
-    Answer(ToolResult),
+    Answer {
+        result: ToolResult,
+        permission: PermissionLevel,
+    },
 }
 
 pub(super) enum ResolvedPackCall {

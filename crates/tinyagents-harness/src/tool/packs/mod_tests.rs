@@ -324,6 +324,7 @@ fn permission_level_is_the_inner_tools_not_the_proxys() {
         ..FakeTool::plain("a_one")
     }]);
     let use_skill = find(&tools, USE_SKILL);
+    assert_eq!(use_skill.permission_level(), PermissionLevel::ReadOnly);
     assert_eq!(
         use_skill.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
         PermissionLevel::Dangerous
@@ -364,7 +365,11 @@ fn external_effect_and_timeout_are_forwarded() {
 #[test]
 fn an_unbound_handle_degrades_closed() {
     let tool = UseSkillTool::new(PackRegistryHandle::default(), CATALOG);
-    assert_eq!(tool.permission_level(), PermissionLevel::Dangerous);
+    assert_eq!(tool.permission_level(), PermissionLevel::ReadOnly);
+    assert_eq!(
+        tool.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
+        PermissionLevel::Dangerous
+    );
 }
 
 #[tokio::test]
