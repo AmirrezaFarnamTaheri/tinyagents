@@ -15,6 +15,7 @@ async fn is_held(locator: &dyn TranscriptLocator, session: &SessionRef) -> bool 
 
 /// A locator naming a fixed destination, so separate instances stand for
 /// separate handles over one store.
+/// Each test needs its own destination because the lock registry is process-wide.
 struct Keyed(&'static str);
 
 impl TranscriptLocator for Keyed {
@@ -34,7 +35,7 @@ impl TranscriptLocator for Keyed {
 
 #[tokio::test]
 async fn a_held_turn_lock_blocks_the_same_session_until_released() {
-    let locator = Keyed("store-a");
+    let locator = Keyed("turn-lock-held");
     let session = SessionRef::scoped("thread-1", "agent");
 
     let guard = lock_session_turn(&locator, &session).await.unwrap();
@@ -47,25 +48,25 @@ async fn a_held_turn_lock_blocks_the_same_session_until_released() {
 #[tokio::test]
 async fn every_generation_and_every_locator_over_one_destination_share_the_lock() {
     let session = SessionRef::scoped("thread-1", "agent");
-    let _guard = lock_session_turn(&Keyed("store-a"), &session)
+    let _guard = lock_session_turn(&Keyed("turn-lock-generations"), &session)
         .await
         .unwrap();
 
     // A compaction moves the head on; it is still the same conversation. A
     // host also rebuilds its locator per turn rather than sharing one.
-    let rebuilt = Keyed("store-a");
+    let rebuilt = Keyed("turn-lock-generations");
     assert!(is_held(&rebuilt, &session.next_generation().next_generation()).await);
 }
 
 #[tokio::test]
 async fn other_sessions_and_other_destinations_are_independent() {
-    let locator = Keyed("store-a");
+    let locator = Keyed("turn-lock-independent-a");
     let session = SessionRef::scoped("thread-1", "agent");
     let _guard = lock_session_turn(&locator, &session).await.unwrap();
 
     assert!(!is_held(&locator, &SessionRef::scoped("thread-2", "agent")).await);
     assert!(!is_held(&locator, &SessionRef::scoped("thread-1", "other-agent")).await);
-    assert!(!is_held(&Keyed("store-b"), &session).await);
+    assert!(!is_held(&Keyed("turn-lock-independent-b"), &session).await);
 }
 
 #[tokio::test]
