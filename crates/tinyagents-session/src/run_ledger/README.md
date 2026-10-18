@@ -163,7 +163,7 @@ the member `stopped` — the bulk analogue of `release_agent_team_task`.
 `RunLedgerStore` is the object-safe, async form of the existing ledger
 API. A handle binds its workspace or namespace once; payloads never choose
 another namespace. It covers agent runs, workflow leases/revisions, events,
-telemetry, teams/members/tasks, effects, entry trees, recovery classification,
+telemetry, teams/members/tasks, effects, recovery classification,
 command-center controls, and the existing retention operations. The three pure
 recovery helpers remain synchronous. Storage methods can await driver ports
 directly; no blocking bridge or caller-runtime reentry is required. The SQLite
@@ -189,7 +189,7 @@ interrupt another live process.
 The SQLite adapter preserves current task completion semantics: completion is
 validated against the member identity, not a takeover claim token. Retention
 preserves its existing scope: sessions/messages/tool calls, events and telemetry;
-it does not add pruning of workflows, teams, effects or entry trees.
+it does not add pruning of workflows, teams or effects.
 
 ### Typed errors
 
