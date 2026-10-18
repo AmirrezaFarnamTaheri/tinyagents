@@ -6,6 +6,7 @@ use std::sync::Arc;
 use super::*;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::ids::TaskId;
+use tinyagents_harness::steering::SteeringHandle;
 
 fn graph_spec(id: &str) -> OrchestrationTaskSpec {
     OrchestrationTaskSpec::new(
