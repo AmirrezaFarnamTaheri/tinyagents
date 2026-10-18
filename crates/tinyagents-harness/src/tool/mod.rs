@@ -4,6 +4,7 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+mod binding;
 pub mod deferred;
 pub mod discover;
 pub mod effects;
@@ -18,11 +19,10 @@ mod schema_walk;
 pub mod select;
 pub mod shared;
 mod signature;
+mod snapshot;
 mod timeout;
 pub mod toolset;
 mod types;
-mod snapshot;
-mod binding;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,6 +30,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use binding::{BoundToolCall, ToolCallBinding};
 pub use deferred::*;
 pub use effects::{
     LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
@@ -49,9 +50,8 @@ pub use shared::{
     CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook, ToolExecScope, ToolExecution,
 };
 pub use signature::*;
-pub use timeout::*;
 pub use snapshot::{ToolSnapshot, ToolSnapshotError};
-pub use binding::{BoundToolCall, ToolCallBinding};
+pub use timeout::*;
 
 /// Name of the generic skill disclosure and indirect-call tool.
 pub const USE_SKILL_TOOL: &str = "use_skill";
@@ -156,9 +156,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
         &self,
         arguments: &Value,
     ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
-        let Some(extension) = self.tool.host_extension().and_then(|extension| {
-            extension.downcast_ref::<ToolCallBinding>()
-        }) else {
+        let Some(extension) = self
+            .tool
+            .host_extension()
+            .and_then(|extension| extension.downcast_ref::<ToolCallBinding>())
+        else {
             return Ok(None);
         };
         let bound = extension.bind(self.tool.clone(), arguments);
@@ -203,7 +205,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCan
         parent: &crate::context::RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
         let context = ToolExecutionContext::from_run_context(parent, call_id);
-        self.bound.tool()
+        self.bound
+            .tool()
             .execute_with_context(arguments, options, Some(&context))
             .await
     }
@@ -504,4 +507,3 @@ mod timeout_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
-

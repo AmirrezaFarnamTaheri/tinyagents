@@ -19,7 +19,6 @@ pub enum ToolSnapshotError {
     Decode(String),
 }
 
-
 /// An immutable, model-visible tool declaration set for one session turn.
 ///
 /// It records declarations only; choosing which tools are permitted and wiring
@@ -91,9 +90,8 @@ impl ToolSnapshot {
 
     /// Restores a snapshot from a transcript `tools` record.
     pub fn from_json(value: &serde_json::Value) -> Result<Self, ToolSnapshotError> {
-        let specs: Vec<ToolSpec> = serde_json::from_value(value.clone()).map_err(|error| {
-            ToolSnapshotError::Decode(error.to_string())
-        })?;
+        let specs: Vec<ToolSpec> = serde_json::from_value(value.clone())
+            .map_err(|error| ToolSnapshotError::Decode(error.to_string()))?;
         Self::new(specs)
     }
 
@@ -101,7 +99,10 @@ impl ToolSnapshot {
     /// not already carry. A name present in both keeps this snapshot's
     /// declaration: the live host is authoritative for a tool it still
     /// supplies. Returns the merged snapshot and how many were retained.
-    pub fn with_retained(&self, recorded: &ToolSnapshot) -> Result<(Self, usize), ToolSnapshotError> {
+    pub fn with_retained(
+        &self,
+        recorded: &ToolSnapshot,
+    ) -> Result<(Self, usize), ToolSnapshotError> {
         let retained: Vec<ToolSpec> = recorded
             .specs
             .iter()

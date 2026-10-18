@@ -16,7 +16,10 @@ pub(super) struct RunLockMap {
 
 impl RunLockMap {
     pub(super) fn lock_for(&self, key: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.locks.lock().unwrap_or_else(|_| panic!("graph run lock map poisoned"));
+        let mut locks = self
+            .locks
+            .lock()
+            .unwrap_or_else(|_| panic!("graph run lock map poisoned"));
         if let Some(lock) = locks.get(key).and_then(Weak::upgrade) {
             return lock;
         }

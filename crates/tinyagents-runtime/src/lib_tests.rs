@@ -25,8 +25,8 @@ use tinytools::{Tool, ToolResult, ToolSpec};
 use crate::{
     CommitReceipt, DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, PrefixSnapshot,
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
-    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest,
-    TranscriptCodec, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec,
+    TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
 struct Driver {

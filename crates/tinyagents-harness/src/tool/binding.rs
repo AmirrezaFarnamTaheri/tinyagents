@@ -32,7 +32,9 @@ impl ToolCallBinding {
     pub fn new(
         bind: impl Fn(Arc<dyn Tool>, &Value) -> Arc<dyn BoundToolCall> + Send + Sync + 'static,
     ) -> Self {
-        Self { bind: Arc::new(bind) }
+        Self {
+            bind: Arc::new(bind),
+        }
     }
 
     /// Captures the indirect target selected for these arguments.

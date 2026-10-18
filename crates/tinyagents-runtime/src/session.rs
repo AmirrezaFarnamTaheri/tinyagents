@@ -1,5 +1,5 @@
-use tinyagents_harness::tool::ToolSnapshot;
 use std::{future::Future, sync::Arc};
+use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::terminal::{TerminalOutcome, TerminalReason};

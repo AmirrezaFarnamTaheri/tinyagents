@@ -1,5 +1,5 @@
-use tinyagents_harness::tool::ToolSnapshot;
 use std::sync::Arc;
+use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_session::transcript::{SessionRef, TranscriptLocator, TranscriptMeta, session_stem};
 

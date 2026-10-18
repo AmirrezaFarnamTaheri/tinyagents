@@ -2,18 +2,32 @@ use super::*;
 use tinytools::ToolSpec;
 
 fn spec(name: &str, description: &str) -> ToolSpec {
-    ToolSpec { name: name.into(), description: description.into(), parameters: serde_json::json!({"type":"object"}) }
+    ToolSpec {
+        name: name.into(),
+        description: description.into(),
+        parameters: serde_json::json!({"type":"object"}),
+    }
 }
 
 #[test]
 fn snapshot_deduplicates_equal_declarations_and_sorts_names() {
     let snapshot = ToolSnapshot::new(vec![spec("z", "z"), spec("a", "a"), spec("a", "a")]).unwrap();
-    assert_eq!(snapshot.specs().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["a", "z"]);
+    assert_eq!(
+        snapshot
+            .specs()
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "z"]
+    );
 }
 
 #[test]
 fn snapshot_rejects_conflicting_declarations() {
-    assert_eq!(ToolSnapshot::new(vec![spec("read", "first"), spec("read", "second")]).unwrap_err(), ToolSnapshotError::NameCollision("read".into()));
+    assert_eq!(
+        ToolSnapshot::new(vec![spec("read", "first"), spec("read", "second")]).unwrap_err(),
+        ToolSnapshotError::NameCollision("read".into())
+    );
 }
 
 #[test]
