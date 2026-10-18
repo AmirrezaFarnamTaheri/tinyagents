@@ -97,7 +97,7 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
         _scope: &FailureScope,
         _result: &ToolResult,
     ) -> FailureAssessment {
-        let assessment = if call.arguments.get("classed") == Some(&json!(true)) {
+        if call.arguments.get("classed") == Some(&json!(true)) {
             FailureAssessment::ClassifiedFailure {
                 class: "auth".into(),
                 budget: 1,
@@ -110,8 +110,7 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
                 hard_reject: false,
                 recoverable_miss: false,
             }
-        };
-        assessment
+        }
     }
 
     fn halt_copy_for_call(
