@@ -26,16 +26,9 @@ pub use plan_exit::{PLAN_EXIT_MARKER, PlanExitModeLookup, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
 
 #[cfg(test)]
-#[path = "time_parse_tests.rs"]
-mod time_parse_tests;
-
-#[cfg(test)]
 #[path = "time_tests.rs"]
 mod time_tests;
 #[cfg(test)]
 #[path = "time_parse_tests.rs"]
 mod time_parse_tests;
 
-#[cfg(test)]
-#[path = "per_call_tests.rs"]
-mod per_call_tests;

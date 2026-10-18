@@ -23,6 +23,7 @@
 //! `Store::compare_and_swap` extension, out of scope here).
 
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use tokio::sync::Mutex;
 
@@ -145,6 +146,7 @@ async fn compute_and_put_set(
                 token_budget,
                 tokens_used: 0,
                 time_used_seconds: 0,
+                time_used_subsec_nanos: 0,
                 created_at_ms,
                 updated_at_ms: now,
             }
@@ -271,7 +273,7 @@ pub async fn account_usage(
     thread_id: &str,
     expected_goal_id: &str,
     token_delta: u64,
-    secs_delta: u64,
+    elapsed: Duration,
 ) -> Result<Option<ThreadGoal>> {
     let thread_id = validate_thread_id(thread_id)?;
     let lock = thread_lock(&thread_id);
@@ -282,15 +284,58 @@ pub async fn account_usage(
     if goal.goal_id != expected_goal_id {
         return Ok(Some(goal));
     }
-    if token_delta == 0 && secs_delta == 0 {
+    if token_delta == 0 && elapsed.is_zero() {
         return Ok(Some(goal));
     }
     goal.tokens_used = goal.tokens_used.saturating_add(token_delta);
-    goal.time_used_seconds = goal.time_used_seconds.saturating_add(secs_delta);
+    account_elapsed(&mut goal, elapsed);
     if goal.status.is_active() && goal.over_budget() {
         goal.status = ThreadGoalStatus::BudgetLimited;
     }
     goal.updated_at_ms = now_ms();
     save(store, &goal).await?;
     Ok(Some(goal))
+}
+
+/// Adds precise elapsed time while preserving the whole-second legacy field.
+fn account_elapsed(goal: &mut ThreadGoal, elapsed: Duration) {
+    goal.time_used_seconds = goal.time_used_seconds.saturating_add(elapsed.as_secs());
+    let nanos = u64::from(goal.time_used_subsec_nanos) + u64::from(elapsed.subsec_nanos());
+    goal.time_used_seconds = goal.time_used_seconds.saturating_add(nanos / 1_000_000_000);
+    goal.time_used_subsec_nanos = (nanos % 1_000_000_000) as u32;
+}
+
+/// Atomically accounts one active turn, returning both the state before and
+/// after it was charged. The per-thread lock covers eligibility, accounting,
+/// and the budget status transition so concurrent turns cannot lose usage or
+/// report the same transition twice.
+pub(super) async fn account_turn_atomic(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    elapsed: Duration,
+) -> Result<Option<(ThreadGoal, ThreadGoal)>> {
+    let thread_id = validate_thread_id(thread_id)?;
+    let lock = thread_lock(&thread_id);
+    let _guard = lock.lock().await;
+    let Some(mut goal) = load(store, &thread_id).await? else {
+        return Ok(None);
+    };
+    if !goal.status.is_active() {
+        return Ok(None);
+    }
+    let before = goal.clone();
+    let token_delta = input_tokens.saturating_add(output_tokens);
+    if token_delta == 0 && elapsed.is_zero() {
+        return Ok(Some((before.clone(), before)));
+    }
+    goal.tokens_used = goal.tokens_used.saturating_add(token_delta);
+    account_elapsed(&mut goal, elapsed);
+    if goal.over_budget() {
+        goal.status = ThreadGoalStatus::BudgetLimited;
+    }
+    goal.updated_at_ms = now_ms();
+    save(store, &goal).await?;
+    Ok(Some((before, goal)))
 }

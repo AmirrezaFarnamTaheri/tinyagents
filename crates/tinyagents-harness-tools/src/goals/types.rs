@@ -82,6 +82,9 @@ pub struct ThreadGoal {
     /// Cumulative wall-clock seconds accounted against this goal.
     #[serde(default)]
     pub time_used_seconds: u64,
+    /// Nanosecond remainder beyond `time_used_seconds`.
+    #[serde(default)]
+    pub time_used_subsec_nanos: u32,
     /// Creation time (unix epoch milliseconds).
     pub created_at_ms: u64,
     /// Last-mutation time (unix epoch milliseconds).

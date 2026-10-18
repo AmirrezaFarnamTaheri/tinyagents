@@ -15,16 +15,24 @@
 //! primitive is provider-neutral and drives off the graph runtime.
 
 pub mod budget;
+mod observer;
 mod prompt;
+mod runtime;
 pub mod store;
 mod tool;
 mod types;
 
 pub use budget::{BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, turn_tokens};
+pub use observer::{GoalObserver, GoalUpdateThrottle};
 pub use prompt::active_goal_context_block;
+pub use runtime::{GoalStore, GoalTurnPreparation};
 pub use tool::{GoalTool, GoalToolKind, GoalUpdateHook, goal_tools, register_goal_tools};
 pub use types::{ThreadGoal, ThreadGoalStatus};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod runtime_tests;
