@@ -76,6 +76,11 @@ struct PendingResolver {
     entered: tokio::sync::Notify,
 }
 
+#[derive(Default)]
+struct MetadataResolver {
+    sources: Mutex<Vec<MediaSourceMetadata>>,
+}
+
 #[async_trait]
 impl MediaSourceResolver<String> for PendingResolver {
     async fn resolve(
@@ -87,6 +92,43 @@ impl MediaSourceResolver<String> for PendingResolver {
     ) -> std::result::Result<ResolvedMedia, String> {
         self.entered.notify_one();
         std::future::pending().await
+    }
+}
+
+#[async_trait]
+impl MediaSourceResolver<String> for MetadataResolver {
+    async fn resolve(
+        &self,
+        _scope: &String,
+        _modality: InputModality,
+        source: &str,
+        _max_bytes: usize,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        Ok(ResolvedMedia::new(attachment(
+            source,
+            "text/plain",
+            b"resolved source",
+        )))
+    }
+
+    async fn resolve_with_source_metadata(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+        metadata: &MediaSourceMetadata,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        self.sources.lock().unwrap().push(metadata.clone());
+        if modality == InputModality::Image {
+            Ok(ResolvedMedia::new(attachment(
+                source,
+                "image/png",
+                &valid_png(),
+            )))
+        } else {
+            self.resolve(scope, modality, source, max_bytes).await
+        }
     }
 }
 
@@ -375,10 +417,16 @@ async fn hard_zero_rejects_before_any_source_read() {
 async fn typed_mime_hints_are_forwarded_per_block_but_markers_have_none() {
     let model = Arc::new(CaptureModel::new(false));
     let resolver = Arc::new(Resolver {
-        sources: HashMap::from([(
-            "shared.bin".into(),
-            attachment("shared.bin", "text/plain", b"content"),
-        )]),
+        sources: HashMap::from([
+            (
+                "shared.bin".into(),
+                attachment("shared.bin", "text/plain", b"content"),
+            ),
+            (
+                "data:text/plain;base64,aGVsbG8=".into(),
+                attachment("inline.txt", "text/plain", b"hello"),
+            ),
+        ]),
         ..Resolver::default()
     });
     let wrapped = wrapper(
@@ -421,6 +469,133 @@ async fn typed_mime_hints_are_forwarded_per_block_but_markers_have_none() {
             None,
         ]
     );
+
+    wrapped
+        .invoke(
+            &"tenant-a".into(),
+            ModelRequest::new(vec![Message::User(UserMessage {
+                content: vec![ContentBlock::Document(MediaRef::Base64 {
+                    data: "aGVsbG8=".into(),
+                    media_type: "text/plain".into(),
+                })],
+            })]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resolver.resolved_sources.lock().unwrap().last().unwrap(),
+        "data:text/plain;base64,aGVsbG8="
+    );
+    assert_eq!(
+        resolver
+            .mime_hints
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_deref(),
+        Some("text/plain")
+    );
+}
+
+#[tokio::test]
+async fn source_metadata_preserves_typed_kinds_hints_and_base64_length_per_block() {
+    let resolver = Arc::new(MetadataResolver::default());
+    let wrapped = MediaRequestModel::new(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        |state: &String, _request| Ok(state.clone()),
+        resolver.clone(),
+        Arc::new(NoTextExtractor),
+    );
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Document(MediaRef::Path {
+                path: "shared".into(),
+                media_type: Some("application/pdf".into()),
+            }),
+            ContentBlock::Document(MediaRef::Url {
+                url: "shared".into(),
+                media_type: Some("text/markdown".into()),
+            }),
+            ContentBlock::Document(MediaRef::Base64 {
+                data: "aGVsbG8=".into(),
+                media_type: "text/plain".into(),
+            }),
+            ContentBlock::Image(ImageRef {
+                url: "typed-image".into(),
+                mime_type: Some("image/png".into()),
+            }),
+            ContentBlock::Text("[IMAGE:image-marker] [FILE:file-marker]".into()),
+        ],
+    })]);
+
+    wrapped.invoke(&"tenant-a".into(), request).await.unwrap();
+
+    let sources = resolver.sources.lock().unwrap();
+    assert_eq!(
+        *sources,
+        vec![
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Path,
+                mime_hint: Some("application/pdf".into()),
+                encoded_len: None,
+            },
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Url,
+                mime_hint: Some("text/markdown".into()),
+                encoded_len: None,
+            },
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Base64,
+                mime_hint: Some("text/plain".into()),
+                encoded_len: Some("aGVsbG8=".len()),
+            },
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Untyped,
+                mime_hint: Some("image/png".into()),
+                encoded_len: None,
+            },
+            MediaSourceMetadata::default(),
+            MediaSourceMetadata::default(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn remote_path_text_is_rejected_before_legacy_resolver_dispatch() {
+    let resolver = Arc::new(Resolver::default());
+    let wrapped = MediaRequestModel::new(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig {
+            files: FileLimits {
+                allow_remote_fetch: false,
+                ..FileLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        |state: &String, _request| Ok(state.clone()),
+        resolver.clone(),
+        Arc::new(NoTextExtractor),
+    );
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Document(MediaRef::Path {
+            path: "https://example.test/file.pdf".into(),
+            media_type: Some("application/pdf".into()),
+        })],
+    })]);
+
+    let error = wrapped
+        .invoke(&"tenant-a".into(), request)
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("remote attachment fetch is disabled")
+    );
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
