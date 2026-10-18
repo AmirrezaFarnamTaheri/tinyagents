@@ -152,7 +152,13 @@ impl DriverConversationStore {
         })
     }
 
-    pub(super) async fn purge_native(&self) -> ConversationResult<ConversationPurgeStats> {
+    pub(super) async fn purge_native_with<F>(
+        &self,
+        mut after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(&str) + Send,
+    {
         let mut stats = ConversationPurgeStats::default();
         let mut query = Query::filter(Filter::All).limit(PAGE_SIZE);
         loop {
@@ -164,9 +170,13 @@ impl DriverConversationStore {
                     stats.thread_count += 1;
                     stats.message_count += row.doc.thread.message_count;
                 }
-                self.docs
+                let deleted = self
+                    .docs
                     .delete(COLLECTION, &row.id, Precondition::None)
                     .await?;
+                if deleted {
+                    after_delete(&row.doc.thread.id);
+                }
             }
             // Deleting shifts later rows into the first page, so restart from
             // the head until the collection is empty.

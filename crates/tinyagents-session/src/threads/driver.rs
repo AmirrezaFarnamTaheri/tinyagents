@@ -128,6 +128,39 @@ impl DriverConversationStore {
         Ok(())
     }
 
+    /// Purge thread documents and notify the caller after each successful removal.
+    ///
+    /// The callback receives the logical thread ID from the stored conversation,
+    /// including for tombstoned threads. It runs synchronously, immediately after
+    /// the document store confirms that row was deleted and before another row is
+    /// processed. A `false` delete result does not invoke the callback.
+    ///
+    /// The callback is infallible by API shape and runs on the caller's executor.
+    /// Keep it limited to recording the obligation; do not perform follow-up work,
+    /// panic, or call back into this store. If durable recording uses synchronous
+    /// I/O, run the purge from an appropriate blocking executor. Completed
+    /// callbacks remain observable if a later query, decode, or delete fails; the
+    /// purge is not crash-atomic, so a process failure between deletion and the
+    /// callback can still leave a deletion obligation unreported.
+    ///
+    /// The returned counts retain [`ConversationPersistence::purge_threads`]
+    /// semantics: tombstones are removed but are not included in the live thread
+    /// or message totals.
+    ///
+    /// # Errors
+    /// Returns the same admission and driver errors as
+    /// [`ConversationPersistence::purge_threads`].
+    pub async fn purge_threads_with<F>(
+        &self,
+        after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(&str) + Send,
+    {
+        self.admit().await?;
+        self.purge_native_with(after_delete).await
+    }
+
     fn key(id: &str) -> ConversationResult<String> {
         if id.is_empty() || id.contains('\0') || id.len() > 1024 * 1024 {
             return Err(StorageError::invalid_input(
@@ -397,8 +430,7 @@ impl ConversationPersistence for DriverConversationStore {
             .await
     }
     async fn purge_threads(&self) -> ConversationResult<ConversationPurgeStats> {
-        self.admit().await?;
-        self.purge_native().await
+        self.purge_threads_with(|_| {}).await
     }
 }
 fn timestamp(value: &str) -> i64 {
@@ -417,3 +449,7 @@ mod schema_tests;
 #[cfg(test)]
 #[path = "driver_append_tests.rs"]
 mod append_tests;
+
+#[cfg(test)]
+#[path = "driver_purge_callback_tests.rs"]
+mod purge_callback_tests;
