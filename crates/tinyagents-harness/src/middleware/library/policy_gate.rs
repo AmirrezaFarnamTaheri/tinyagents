@@ -117,9 +117,12 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
 
     /// Optionally admits an already-allowed call without prompting or
     /// requesting human approval, and attaches an audit or admission ticket.
-    /// This callback must never widen the policy decision;
-    /// returning `Deny` can only fail the call closed. The default preserves
-    /// existing resolver behavior and leaves allowed calls ticket-free.
+    /// Calls to this method may run concurrently; implementations must be
+    /// thread-safe. The harness does not serialize this callback with the
+    /// approval prompt lock, which serializes calls to [`Self::resolve`] only.
+    /// This callback must never widen the policy decision; returning `Deny`
+    /// can only fail the call closed. The default preserves existing resolver
+    /// behavior and leaves allowed calls ticket-free.
     async fn resolve_allowed(
         &self,
         _ctx: &RunContext<Ctx>,
