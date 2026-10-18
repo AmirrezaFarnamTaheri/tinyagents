@@ -1685,15 +1685,18 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
     let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let child_cancellation = Arc::new(std::sync::Mutex::new(None));
+    let captured_child_cancellation = child_cancellation.clone();
     let parent = RunContext::new(RunConfig::new("parent-cancel-cascade"), ());
     let tool = DriverSubAgentTool::new(
         "worker",
         "worker description",
         blocking_driver(started.clone(), release, calls.clone()),
-        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("parent-cancel-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            *captured_child_cancellation.lock().unwrap() = Some(child.cancellation.clone());
             SubagentRequest::fresh_from_parent(
                 parent,
                 child,
@@ -1722,6 +1725,7 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
         .to_owned();
     started.notified().await;
     parent.cancellation.cancel();
+    assert!(child_cancellation.lock().unwrap().as_ref().unwrap().is_cancelled());
     let terminal = tokio::time::timeout(
         std::time::Duration::from_secs(1),
         jobs.wait_owned(&task_id, parent.instance_id().to_string()),
