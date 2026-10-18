@@ -303,28 +303,9 @@ async fn run_approved<State: Send + Sync, Ctx: Send + Sync>(
             Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
         }
         ApprovalResolution::Allow { ticket } => {
-            let mut guard = TicketGuard::new(resolver, ticket);
-            match next.run(ctx, state, call).await {
-                Ok(outcome) => {
-                    match &outcome {
-                        MiddlewareToolOutcome::Result(result) => {
-                            guard.complete(ApprovalExecutionOutcome::Result(result))
-                        }
-                        MiddlewareToolOutcome::Command { control } => {
-                            guard.complete(ApprovalExecutionOutcome::Control(control))
-                        }
-                    }
-                    Ok(outcome)
-                }
-                Err(error) => {
-                    if matches!(error, TinyAgentsError::Cancelled) {
-                        guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
-                    } else {
-                        guard.complete(ApprovalExecutionOutcome::Failed(&error));
-                    }
-                    Err(error)
-                }
-            }
+            let outcome = next.run(ctx, state, call).await?;
+            record_approved(resolver, ticket.as_deref(), &outcome);
+            Ok(outcome)
         }
     }
 }
