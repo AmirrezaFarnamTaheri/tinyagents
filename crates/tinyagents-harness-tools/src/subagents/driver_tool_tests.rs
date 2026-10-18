@@ -10,10 +10,13 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::tool::ToolSnapshot;
+use tinyagents_harness::run_queue::{QueueLane, RunQueue};
+use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_orchestration::subagent::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
+use tinytools::{PermissionLevel, Tool, ToolCategory, ToolScope, ToolTimeout};
 
 struct CloseCorrectionModel(std::sync::atomic::AtomicUsize);
 
@@ -287,6 +290,241 @@ async fn selector_misses_remain_fatal_by_default() {
             .to_string()
             .contains("durable subagent session not found")
     );
+}
+
+#[test]
+fn job_tool_metadata_and_default_schemas_are_preserved() {
+    let jobs = SubAgentJobRegistry::new();
+    let query = SubAgentJobsTool::new(jobs.clone());
+    assert_eq!(query.name(), "subagent_jobs");
+    let query_schema = query.parameters_schema();
+    assert_eq!(query_schema["properties"]["job_id"]["type"], "string");
+    assert_eq!(
+        query_schema["properties"]["action"]["enum"],
+        json!(["query", "cancel", "close", "await"])
+    );
+
+    let message = SubAgentMessageTool::new(jobs);
+    assert_eq!(message.name(), "subagent_message");
+    let message_schema = message.parameters_schema();
+    for field in ["job_id", "session_id", "message", "request_id"] {
+        assert_eq!(message_schema["properties"][field]["type"], "string");
+    }
+
+    let custom_schema = json!({"type":"object", "required":["task_ref"]});
+    let jobs_alias = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_tool_name("host_jobs")
+        .with_description("host query description")
+        .with_parameters(custom_schema.clone())
+        .with_metadata(
+            PermissionLevel::Execute,
+            ToolScope::CliRpcOnly,
+            ToolCategory::Workflow,
+            ToolTimeout::Millis(17),
+        );
+    assert_eq!(jobs_alias.name(), "host_jobs");
+    assert_eq!(jobs_alias.description(), "host query description");
+    assert_eq!(jobs_alias.parameters_schema(), custom_schema);
+    assert_eq!(jobs_alias.permission_level(), PermissionLevel::Execute);
+    assert_eq!(jobs_alias.scope(), ToolScope::CliRpcOnly);
+    assert_eq!(jobs_alias.category(), ToolCategory::Workflow);
+    assert_eq!(jobs_alias.timeout_policy(&json!({})), ToolTimeout::Millis(17));
+
+    let message_alias = SubAgentMessageTool::new(SubAgentJobRegistry::new())
+        .with_tool_name("host_message")
+        .with_description("host message description")
+        .with_parameters(custom_schema.clone())
+        .with_metadata(
+            PermissionLevel::Dangerous,
+            ToolScope::AgentOnly,
+            ToolCategory::Workflow,
+            ToolTimeout::Millis(29),
+        );
+    assert_eq!(message_alias.name(), "host_message");
+    assert_eq!(message_alias.description(), "host message description");
+    assert_eq!(message_alias.parameters_schema(), custom_schema);
+    assert_eq!(message_alias.permission_level(), PermissionLevel::Dangerous);
+    assert_eq!(message_alias.scope(), ToolScope::AgentOnly);
+    assert_eq!(message_alias.category(), ToolCategory::Workflow);
+    assert_eq!(
+        message_alias.timeout_policy(&json!({})),
+        ToolTimeout::Millis(29)
+    );
+}
+
+#[test]
+fn await_alias_timeout_uses_default_and_clamps_invalid_or_out_of_range_values() {
+    let tool = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_await_timeout_field("deadline_secs", 4, 9);
+    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Millis(4_000));
+    assert_eq!(
+        tool.timeout_policy(&json!({"deadline_secs":"invalid"})),
+        ToolTimeout::Millis(4_000)
+    );
+    assert_eq!(
+        tool.timeout_policy(&json!({"deadline_secs":0})),
+        ToolTimeout::Millis(1_000)
+    );
+    assert_eq!(
+        tool.timeout_policy(&json!({"deadline_secs":100})),
+        ToolTimeout::Millis(9_000)
+    );
+    assert_eq!(
+        tool.timeout_policy(&json!({"deadline_secs":7})),
+        ToolTimeout::Millis(7_000)
+    );
+}
+
+#[tokio::test]
+async fn fixed_query_alias_ignores_action_override_and_keeps_host_declaration() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("fixed-query-parent"), ());
+    let (id, _, _, _, _) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: SubagentTaskKey::from_context(&parent, "fixed-query", None),
+            agent: "worker".into(),
+            owner: parent.instance_id().to_string(),
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    let schema = json!({"type":"object", "required":["task_ref"]});
+    let query = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_field("task_ref")
+        .with_tool_name("query_worker")
+        .with_description("query one worker")
+        .with_parameters(schema.clone())
+        .with_required_identifier();
+    assert_eq!(query.name(), "query_worker");
+    assert_eq!(query.description(), "query one worker");
+    assert_eq!(query.parameters_schema(), schema);
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &query,
+        &(),
+        CallId::new("fixed-query-action-override"),
+        json!({"task_ref": id.as_str(), "action":"cancel"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("fixed query ignores generic action input");
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.output()).unwrap()["status"],
+        "queued"
+    );
+    assert_eq!(
+        jobs.get_owned(id.as_str(), parent.instance_id().to_string())
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Queued,
+        "action=cancel was ignored by the fixed query alias"
+    );
+}
+
+#[tokio::test]
+async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("message-routing-parent"), ());
+    let queue = Arc::new(RunQueue::<Message>::new());
+    let steering = SteeringHandle::allow_all();
+    let (id, steering, queue, _, _) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: SubagentTaskKey::from_context(&parent, "message-routing", None),
+            agent: "worker".into(),
+            owner: parent.instance_id().to_string(),
+            cancellation: CancellationToken::new(),
+            steering: Some(steering),
+            run_queue: Some(queue),
+            continuing: false,
+        })
+        .unwrap();
+    let lane_alias = SubAgentMessageTool::new(jobs.clone())
+        .with_tool_name("send_worker_message")
+        .with_argument_fields("task_ref", "session_ref", "content", "dedupe_key")
+        .with_lane_field("delivery")
+        .with_owner_scope(Arc::new(|run_id| run_id.to_string()));
+
+    let send = |call_id: &'static str, args: Value| {
+        ToolDispatch::<(), ()>::execute(
+            &lane_alias,
+            &(),
+            CallId::new(call_id),
+            args,
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+    };
+    let first = send(
+        "collect-once",
+        json!({"task_ref":id.as_str(), "content":"collect payload", "delivery":"collect", "dedupe_key":"same"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&first.output()).unwrap()["status"],
+        "message_queued"
+    );
+    let duplicate = send(
+        "collect-duplicate",
+        json!({"task_ref":id.as_str(), "content":"collect payload", "delivery":"collect", "dedupe_key":"same"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&duplicate.output()).unwrap()["duplicate"],
+        true
+    );
+    assert_eq!(queue.status().await.total, 1, "duplicate request enqueues once");
+
+    send(
+        "steer-new",
+        json!({"task_ref":id.as_str(), "content":"steer payload", "delivery":"steer", "dedupe_key":"new"}),
+    )
+    .await
+    .unwrap();
+    send(
+        "unknown-lane-idless",
+        json!({"task_ref":id.as_str(), "content":"unknown falls back to steer", "delivery":"future-lane"}),
+    )
+    .await
+    .unwrap();
+    let status = queue.status().await;
+    assert_eq!((status.steers, status.collects, status.total), (2, 1, 3));
+    let queued = queue.snapshot().await;
+    assert!(queued.iter().any(|(lane, message)| {
+        *lane == QueueLane::Collect && message.text() == "collect payload"
+    }));
+    assert!(queued.iter().any(|(lane, message)| {
+        *lane == QueueLane::Steer && message.text() == "steer payload"
+    }));
+    assert!(queued.iter().any(|(lane, message)| {
+        *lane == QueueLane::Steer && message.text() == "unknown falls back to steer"
+    }));
+
+    let default_steering = SubAgentMessageTool::new(jobs)
+        .with_argument_fields("task_ref", "session_ref", "content", "dedupe_key")
+        .with_owner_scope(Arc::new(|run_id| run_id.to_string()));
+    ToolDispatch::<(), ()>::execute(
+        &default_steering,
+        &(),
+        CallId::new("default-steering"),
+        json!({"task_ref":id.as_str(), "content":"default steering payload"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(queue.status().await.total, 3, "default message bypasses run queue");
+    let commands = steering.drain();
+    assert_eq!(commands.len(), 1);
+    assert!(matches!(
+        &commands[0],
+        SteeringCommand::InjectMessage(message) if message.text() == "default steering payload"
+    ));
 }
 
 struct FailingSessionGet;
