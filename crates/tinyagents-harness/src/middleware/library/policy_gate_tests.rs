@@ -482,6 +482,36 @@ async fn approval_gate_records_success_and_failure_for_an_approved_ticket() {
 }
 
 #[tokio::test]
+async fn terminal_resolver_receives_one_success_outcome() {
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+        "approval",
+        resolver.clone(),
+    )));
+    let runs = Arc::new(Mutex::new(0));
+    let outcome = stack
+        .run_wrapped_tool(
+            &ctx(),
+            &(),
+            call("send"),
+            &Base {
+                runs: runs.clone(),
+                fail: false,
+            },
+        )
+        .await
+        .unwrap();
+    let result = outcome.into_result();
+    assert_eq!(result.output(), "ran");
+    assert_eq!(*runs.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "result")]
+    );
+}
+
+#[tokio::test]
 async fn approval_gate_records_harness_errors_for_an_approved_ticket() {
     struct ErrorBase;
     impl ToolBaseCall<(), Host> for ErrorBase {
