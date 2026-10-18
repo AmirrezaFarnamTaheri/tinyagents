@@ -46,7 +46,7 @@ async fn dropping_an_inflight_provider_future_reports_one_cancelled_terminal() {
     call.abort();
     let _ = call.await;
 
-    let outcomes = recorder.0.lock().unwrap();
+    let outcomes = recorder.0.lock().unwrap().clone();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
 }
