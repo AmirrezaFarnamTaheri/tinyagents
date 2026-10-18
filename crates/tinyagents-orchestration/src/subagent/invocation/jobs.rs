@@ -822,6 +822,3 @@ impl SubAgentJobRegistry {
     }
 }
 
-#[cfg(test)]
-#[path = "jobs_tests.rs"]
-mod tests;

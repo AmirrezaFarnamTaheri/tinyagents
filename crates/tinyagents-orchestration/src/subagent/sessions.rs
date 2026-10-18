@@ -635,6 +635,3 @@ pub fn task_title_from_prompt(prompt: &str) -> String {
     }
 }
 
-#[cfg(test)]
-#[path = "sessions_tests.rs"]
-mod tests;

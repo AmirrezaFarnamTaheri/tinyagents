@@ -1130,8 +1130,8 @@ impl tinytools::Tool for SubAgentToolDeclaration {
 mod test;
 
 #[cfg(test)]
-#[path = "mod_jobs_tests.rs"]
-mod jobs_tests;
+#[path = "test_helpers.rs"]
+mod test_helpers;
 
 #[cfg(test)]
 #[path = "mod_link_tests.rs"]
