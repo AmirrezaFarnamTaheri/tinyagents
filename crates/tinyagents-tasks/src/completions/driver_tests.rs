@@ -1,7 +1,6 @@
+use super::*;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
@@ -73,6 +72,56 @@ async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
 
     assert_eq!(first_claim.len(), 1);
     assert!(second_claim.is_empty(), "another router already owns this visible claim");
+}
+
+#[tokio::test]
+async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
+    use crate::completions::{ClaimResolution, CompletionClaimMode};
+
+    let storage = MemoryStorage::new();
+    let docs = docs_of(&storage, "shared");
+    let first = DriverCompletionStore::new(Arc::clone(&docs)).unwrap();
+    let second = DriverCompletionStore::new(docs).unwrap();
+    let record = record("lease-task", "parent");
+    first.put(&record).unwrap();
+    let now = SystemTime::now();
+    let first_claim = first
+        .claim_pending(
+            "parent",
+            CompletionClaimMode::Followup,
+            1,
+            "first",
+            now - Duration::from_secs(1),
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
+    let first_token = first_claim.claim.unwrap().token;
+    assert!(first
+        .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+        .unwrap()
+        .is_none(), "an expired owner cannot settle before another router reclaims");
+    let second_claim = second
+        .claim_pending(
+            "parent",
+            CompletionClaimMode::Followup,
+            1,
+            "second",
+            now + Duration::from_secs(10),
+        )
+        .unwrap();
+    assert_eq!(second_claim.len(), 1, "the expired visibility lease is reclaimable");
+    let second_token = second_claim[0].claim.as_ref().unwrap().token.clone();
+
+    assert!(first
+        .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+        .unwrap()
+        .is_none());
+    let settled = second
+        .resolve_claim("lease-task", &second_token, ClaimResolution::Delivered)
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.state, CompletionState::Delivered);
 }
 
 #[tokio::test]

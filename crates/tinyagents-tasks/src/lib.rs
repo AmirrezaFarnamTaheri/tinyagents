@@ -20,8 +20,9 @@ mod store_registry;
 mod types;
 
 pub use completions::{
-    CompletionArtifact, CompletionFormatter, CompletionRecord, CompletionResult, CompletionRouter,
-    CompletionState, CompletionStatus, CompletionStore, CompletionStoreReplaceOutcome,
+    ClaimResolution, CompletionArtifact, CompletionClaim, CompletionClaimMode, CompletionFormatter,
+    CompletionRecord, CompletionResult, CompletionRouter, CompletionState, CompletionStatus,
+    CompletionStore, CompletionStoreReplaceOutcome,
     DEFAULT_MAX_ATTEMPTS, DriverCompletionStore, InMemoryCompletionStore,
     NeutralCompletionFormatter, NotifyMode, RecordOutcome, TombstoneOutcome,
 };
