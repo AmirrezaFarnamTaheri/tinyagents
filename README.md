@@ -35,7 +35,7 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   goals and budgets, per-thread todos, skill tool packs, subagent control
   tools, time and clarification tools, plan exit, per-call binding, and
   per-thread locks. Features: `todos`, `goals`, `skills` (all default), and
-  `subagents` (opt-in).
+  `subagents` (opt-in). See the [crate guide](crates/tinyagents-harness-tools/README.md).
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,

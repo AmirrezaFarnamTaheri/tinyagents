@@ -37,6 +37,7 @@ observability, or test contracts.
 
 ## Detailed Module Docs
 
+- [Harness tools crate](../../crates/tinyagents-harness-tools/README.md)
 - [Harness module](../modules/harness/README.md)
   - [Context](../modules/harness/context.md)
   - [Model and providers](../modules/harness/model.md)
