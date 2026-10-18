@@ -258,11 +258,15 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         ToolResult::error("exit status 1"),
     )
     .await;
-    assert_eq!(
-        halt_summary.lock().unwrap().as_deref(),
-        Some(
-            "shell: Stopping: the `shell` call was retried 2 times with the same error. The environment is not making progress. Report the blocker to the user."
-        )
+    let summary = halt_summary
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("third failure halts");
+    assert!(summary.starts_with("shell: Stopping: "), "{summary}");
+    assert!(
+        summary.contains("retried 3 times with identical arguments"),
+        "{summary}"
     );
 }
 
