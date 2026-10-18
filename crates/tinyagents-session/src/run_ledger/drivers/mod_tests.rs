@@ -77,6 +77,187 @@ async fn file_workflow_records_round_trip_and_stay_in_their_scope() {
     );
 }
 
+/// FileStorage supports atomic lease primitives even though its document store
+/// cannot execute validated multi-document batches. Exercise the complete
+/// workflow lease path, including a race and a revision-fenced transition.
+#[tokio::test]
+async fn file_workflow_lease_race_and_revision_fencing() {
+    use crate::run_ledger::WorkflowLeaseClaim;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let ledger = Arc::new(DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-a").unwrap())
+            .unwrap(),
+    ));
+    let created = ledger
+        .upsert_workflow_run(workflow("leased"))
+        .await
+        .unwrap();
+
+    let mut claimers = tokio::task::JoinSet::new();
+    for owner in ["first", "second", "third"] {
+        let ledger = ledger.clone();
+        claimers.spawn(async move {
+            ledger
+                .try_claim_workflow_run("leased", owner, Duration::minutes(1))
+                .await
+                .unwrap()
+        });
+    }
+    let mut acquired = Vec::new();
+    while let Some(result) = claimers.join_next().await {
+        if let WorkflowLeaseClaim::Acquired(run) = result.unwrap() {
+            acquired.push(run);
+        }
+    }
+    assert_eq!(acquired.len(), 1, "one live workflow lease owner wins");
+    let owner = acquired[0].lease_owner.as_deref().unwrap();
+    assert!(
+        ledger
+            .renew_workflow_run_lease("leased", owner, Duration::minutes(1))
+            .await
+            .unwrap()
+    );
+
+    let current = ledger.get_workflow_run("leased").await.unwrap().unwrap();
+    let mut transition = workflow("leased");
+    transition.summary = Some("committed by lease owner".into());
+    let committed = ledger
+        .compare_and_swap_workflow_run(
+            transition.clone(),
+            current.revision,
+            owner,
+            Duration::minutes(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        committed.summary.as_deref(),
+        Some("committed by lease owner")
+    );
+    assert!(
+        ledger
+            .compare_and_swap_workflow_run(
+                transition,
+                current.revision,
+                owner,
+                Duration::minutes(1)
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "a stale revision cannot overwrite the committed workflow"
+    );
+
+    let not_owner = if owner == "first" { "second" } else { "first" };
+    assert!(
+        !ledger
+            .renew_workflow_run_lease("leased", not_owner, Duration::minutes(1))
+            .await
+            .unwrap()
+    );
+    assert_eq!(created.id, committed.id);
+}
+
+/// Unsupported validated-batch operations must fail before changing any rows.
+/// This pins FileStorage's capability boundary while still exercising the
+/// single-record telemetry path that agents depend on.
+#[tokio::test]
+async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
+    use crate::run_ledger::{AgentRunListRequest, RunEventAppend, RunEventListRequest};
+    use tinystoragedrivers_core::Capability;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let ledger = DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-a").unwrap())
+            .unwrap(),
+    );
+    let telemetry = ledger
+        .upsert_run_telemetry(RunTelemetryUpsert {
+            run_id: "atomic-agent".into(),
+            input_tokens: Some(17),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(telemetry.input_tokens, 17);
+
+    let error = ledger
+        .upsert_agent_run(crate::run_ledger::AgentRunUpsert {
+            id: "atomic-agent".into(),
+            kind: crate::run_ledger::AgentRunKind::Subagent,
+            parent_run_id: None,
+            parent_thread_id: None,
+            agent_id: None,
+            status: crate::run_ledger::AgentRunStatus::Running,
+            prompt_ref: None,
+            worker_thread_id: None,
+            checkpoint_path: None,
+            checkpoint: None,
+            summary: None,
+            error: None,
+            metadata: json!({}),
+            started_at: None,
+            completed_at: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    assert!(
+        ledger
+            .list_agent_runs(&AgentRunListRequest::default())
+            .await
+            .unwrap()
+            .runs
+            .is_empty(),
+        "failed atomic agent upsert leaves no agent row"
+    );
+    assert_eq!(
+        ledger
+            .upsert_run_telemetry(RunTelemetryUpsert {
+                run_id: "atomic-agent".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .input_tokens,
+        17,
+        "failed agent upsert does not alter telemetry"
+    );
+
+    let error = ledger
+        .append_run_event(RunEventAppend {
+            run_id: "atomic-agent".into(),
+            event_type: "created".into(),
+            payload: json!({}),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    assert!(
+        ledger
+            .list_recent_run_events(&RunEventListRequest {
+                run_id: "atomic-agent".into(),
+                after_sequence: None,
+                limit: None,
+            })
+            .await
+            .unwrap()
+            .events
+            .is_empty(),
+        "failed event append leaves no event row"
+    );
+}
+
 /// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
 /// mongodb_run_ledger_conformance -- --ignored` against a local replica set.
 #[tokio::test(flavor = "multi_thread")]
