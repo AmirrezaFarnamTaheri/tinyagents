@@ -17,7 +17,7 @@ fn pause(key: SubagentTaskKey, checkpoint: &str) -> PersistedSubagentPause {
         key,
         replaces: None,
         outcome: SubagentOutcome {
-            status: super::super::SubagentOutcomeKind::AwaitingInput(super::super::SubagentPause {
+            status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
                 reason: "answer?".into(),
                 resume: SubagentResume { checkpoint: Some(checkpoint.into()), ..Default::default() },
             }),
@@ -76,8 +76,24 @@ async fn independent_stores_choose_one_pause_winner_and_return_its_actual_outcom
     let key = key("race");
     let left = pause(key.clone(), "left");
     let right = pause(key.clone(), "right");
-    let (left, right) = tokio::join!(first.save_pause(left), second.save_pause(right));
-    let dispositions = [left.unwrap(), right.unwrap()];
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let first_worker = first.clone();
+    let left_barrier = Arc::clone(&barrier);
+    let left = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        left_barrier.wait();
+        runtime.block_on(first_worker.save_pause(left)).unwrap()
+    });
+    let second_worker = second.clone();
+    let right_barrier = Arc::clone(&barrier);
+    let right = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        right_barrier.wait();
+        runtime.block_on(second_worker.save_pause(right)).unwrap()
+    });
+    barrier.wait();
+    let (left, right) = (left.join().unwrap(), right.join().unwrap());
+    let dispositions = [left, right];
     assert_eq!(dispositions.iter().filter(|x| **x == SubagentPausePersistenceDisposition::Inserted).count(), 1);
     assert_eq!(dispositions.iter().filter(|x| **x == SubagentPausePersistenceDisposition::Existing).count(), 1);
     let winner = first.load_pause(&key).await.unwrap().unwrap().output;
