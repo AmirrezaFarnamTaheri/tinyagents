@@ -34,7 +34,7 @@ fn local_mongo_url() -> String {
 
 async fn local_backend(label: &str) -> MongoStorage {
     let url = local_mongo_url();
-    let database = format!("tinyagents_session_{label}_{}", uuid::Uuid::new_v4());
+    let database = format!("ta_{label}_{}", uuid::Uuid::new_v4().simple());
     let backend = MongoStorage::connect(&url, &database)
         .await
         .expect("local MongoDB replica set is reachable");
