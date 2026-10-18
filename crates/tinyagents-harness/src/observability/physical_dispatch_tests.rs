@@ -2,6 +2,7 @@ use super::*;
 
 use std::sync::Mutex;
 use tinyinference_llm::model::ModelResponse;
+use futures::StreamExt;
 
 #[derive(Default)]
 struct Recorder(Mutex<Vec<PhysicalDispatchOutcome>>);
@@ -40,6 +41,46 @@ async fn dropping_an_inflight_provider_future_reports_one_cancelled_terminal() {
     tokio::task::yield_now().await;
     call.abort();
     let _ = call.await;
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
+}
+
+struct StreamingModel;
+
+#[async_trait::async_trait]
+impl ChatModel<()> for StreamingModel {
+    async fn invoke(
+        &self,
+        _: &(),
+        _: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        Ok(ModelResponse::assistant("invoke fallback"))
+    }
+
+    async fn stream(
+        &self,
+        _: &(),
+        _: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelStream> {
+        let items = futures::stream::iter([ModelStreamItem::Started])
+            .chain(futures::stream::pending());
+        Ok(ModelStream::new(Box::pin(items)))
+    }
+}
+
+#[tokio::test]
+async fn dropping_a_stream_after_a_chunk_reports_cancellation() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(Arc::new(StreamingModel), observer);
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    assert!(matches!(stream.next().await, Some(ModelStreamItem::Started)));
+    drop(stream);
 
     let outcomes = recorder.0.lock().unwrap();
     assert_eq!(outcomes.len(), 1);

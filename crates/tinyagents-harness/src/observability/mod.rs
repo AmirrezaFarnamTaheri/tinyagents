@@ -1,4 +1,4 @@
-//! Durable observability for the harness — journals, status stores, and sinks.
+//! Durable and live observability for the harness, including provider dispatches.
 //!
 //! The live [`crate::events`] layer fans typed [`AgentEvent`]s out to
 //! in-process listeners. This module makes that history **durable and
