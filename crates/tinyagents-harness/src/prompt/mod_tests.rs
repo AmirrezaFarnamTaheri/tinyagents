@@ -11,7 +11,7 @@ use tinyinference_llm::model::ModelProfile;
 #[test]
 fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
     let body = format!(
-        "é stable\n{context}\r\n\n<!--prompt-tier:unknown-->\n{volatile}\n📎 tail",
+        "é stable\r\n  {context}\t\r\ncontext\r\n<!--prompt-tier:unknown-->\ninline {volatile} marker\r\n{volatile}\n📎 tail",
         context = PROMPT_TIER_CONTEXT_MARKER,
         volatile = PROMPT_TIER_VOLATILE_MARKER,
     );
@@ -19,11 +19,14 @@ fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
     assert_eq!(
         split_prompt_tiers(&body, PromptTier::Volatile),
         vec![
-            TieredPromptPart::new(PromptTier::Volatile, "é stable\n"),
-            TieredPromptPart::new(PromptTier::Context, "\n<!--prompt-tier:unknown-->\n",),
+            TieredPromptPart::new(PromptTier::Volatile, "é stable\r\n"),
+            TieredPromptPart::new(
+                PromptTier::Context,
+                "context\r\n<!--prompt-tier:unknown-->\ninline <!--prompt-tier:volatile--> marker\r\n",
+            ),
             TieredPromptPart::new(PromptTier::Volatile, "📎 tail"),
         ],
-        "marker lines are removed, while unknown comments and non-whitespace body bytes stay literal"
+        "trimmed marker lines change tier, while CRLF body bytes, unknown comments, and inline markers stay literal"
     );
 }
 
