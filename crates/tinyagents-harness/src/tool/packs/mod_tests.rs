@@ -108,6 +108,25 @@ fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {
 }
 
 #[test]
+fn a_pinned_disclosure_has_no_executable_selection() {
+    // A pinned disclosure is an Answer struct variant, never a packed
+    // execution target. Only Execute may expose an admitted inner tool.
+    let pinned = super::types::PinnedPackCall {
+        outer: Arc::new(FakeTool::plain("use_skill")),
+        target: super::types::PackTarget::Answer {
+            result: ToolResult::success("pack schema"),
+            permission: PermissionLevel::ReadOnly,
+        },
+    };
+    assert!(pinned.selection().is_none());
+    assert!(pinned.admission_target().is_none());
+    assert_eq!(
+        pinned.permission_level_with_args(&Value::Null),
+        PermissionLevel::ReadOnly,
+    );
+}
+
+#[test]
 fn the_use_skill_declaration_is_byte_stable() {
     let tools = bound(vec![]);
     let tool = find(&tools, USE_SKILL);

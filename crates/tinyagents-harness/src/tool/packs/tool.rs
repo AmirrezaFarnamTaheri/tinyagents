@@ -85,7 +85,7 @@ impl PinnedPackCall {
                 index: *index,
                 arguments: arguments.clone(),
             }),
-            PackTarget::Answer(_) => None,
+            PackTarget::Answer { .. } => None,
         }
     }
 
