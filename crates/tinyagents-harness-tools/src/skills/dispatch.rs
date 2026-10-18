@@ -107,6 +107,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> BoundUseSkillDisp
     }
 }
 
+#[async_trait]
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<State, Ctx>
     for BoundUseSkillDispatch<State, Ctx>
 {
@@ -158,7 +159,6 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
     ) -> anyhow::Result<ToolResult> {
         if let Some(dispatch) = &self.selected {
             let arguments = self
-                .pinned
                 .selection()
                 .map(|selection| selection.arguments().clone())
                 .unwrap_or(Value::Null);
