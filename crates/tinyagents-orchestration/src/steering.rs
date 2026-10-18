@@ -130,7 +130,7 @@ fn send_registered(handle: &SteeringHandle, text: &str, lane: QueueLane) -> bool
 /// Rejects an unsupported lane or unknown / unowned task, then prefers the
 /// live steering handle and falls back to the host when the child is finished
 /// or has no live handle. The text is never logged here.
-pub async fn steer_detached<M, F, Fut>(
+pub async fn steer_detached<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
     access: SteerAccess<'_>,
@@ -140,8 +140,7 @@ pub async fn steer_detached<M, F, Fut>(
 ) -> Result<SteerRoute, SteerError>
 where
     M: Clone + Send + Sync + 'static,
-    F: FnOnce(M, QueueLane, String) -> Fut + SteerFallback<M, Future = Fut>,
-    Fut: Future<Output = ()>,
+    F: SteerFallback<M>,
 {
     let receipt =
         steer_detached_with_request_id(registry, task_id, access, text, lane, None, fallback)
@@ -167,7 +166,7 @@ where
 /// future is dropped, or the host fallback fails to enqueue), a retry with the
 /// same id is acknowledged as a duplicate and is not re-delivered. A caller
 /// that needs retry-until-delivered must use a fresh `request_id`.
-pub async fn steer_detached_with_request_id<M, F, Fut>(
+pub async fn steer_detached_with_request_id<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
     access: SteerAccess<'_>,
@@ -178,8 +177,7 @@ pub async fn steer_detached_with_request_id<M, F, Fut>(
 ) -> Result<SteerReceipt, SteerError>
 where
     M: Clone + Send + Sync + 'static,
-    F: FnOnce(M, QueueLane, String) -> Fut + SteerFallback<M, Future = Fut>,
-    Fut: Future<Output = ()>,
+    F: SteerFallback<M>,
 {
     if !matches!(lane, QueueLane::Steer | QueueLane::Collect) {
         return Err(SteerError::UnsupportedLane);

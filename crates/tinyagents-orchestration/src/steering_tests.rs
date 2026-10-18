@@ -7,6 +7,7 @@ use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tokio::sync::watch;
+use std::future::Ready;
 
 use super::*;
 
@@ -28,6 +29,17 @@ impl SubagentIdentity for Meta {
 }
 
 type Registry = DetachedTaskRegistry<Meta, DetachedSubagentStatus>;
+
+struct RecordingFallback(Arc<std::sync::Mutex<Option<(String, QueueLane, String)>>>);
+
+impl SteerFallback<Meta> for RecordingFallback {
+    type Future = Ready<()>;
+
+    fn enqueue(self, metadata: Meta, lane: QueueLane, text: String) -> Self::Future {
+        *self.0.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
+        std::future::ready(())
+    }
+}
 
 fn registry(steering: SteeringRegistry) -> Registry {
     DetachedTaskRegistry::new(steering, 256, DetachedSubagentStatus::is_terminal)
@@ -58,7 +70,7 @@ fn counting() -> (
 ) {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = calls.clone();
-    (calls, move |_, _, _| {
+    (calls, move |_: Meta, _: QueueLane, _: String| {
         seen.fetch_add(1, Ordering::SeqCst);
         std::future::ready(())
     })
@@ -133,10 +145,7 @@ async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
             SteerAccess::Trusted,
             "x".into(),
             QueueLane::Steer,
-            move |metadata, lane, text| {
-                *captured.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
-                std::future::ready(())
-            }
+            RecordingFallback(captured)
         )
         .await,
         Ok(SteerRoute::Fallback)
