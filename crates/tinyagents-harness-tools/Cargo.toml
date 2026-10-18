@@ -39,3 +39,8 @@ workspace = true
 [dev-dependencies.tokio]
 workspace = true
 features = ["test-util"]
+
+[[example]]
+name = "goals_and_todos"
+path = "examples/goals_and_todos.rs"
+required-features = ["goals", "todos"]

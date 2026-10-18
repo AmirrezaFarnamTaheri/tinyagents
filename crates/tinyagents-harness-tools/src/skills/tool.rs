@@ -397,9 +397,9 @@ impl Tool for UseSkillTool {
         }
     }
 
-    /// The registry handle rides on the vocabulary's erased host extension so
-    /// older hosts can continue downcasting it directly. The handle also keeps
-    /// the catalog needed to bind one indirect target per admitted call.
+    /// The generic call-binding contract rides on the vocabulary's erased host
+    /// extension. It captures the selected packed target once so admission,
+    /// authorization, and execution use the same tool.
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
         Some(&self.binding)
     }

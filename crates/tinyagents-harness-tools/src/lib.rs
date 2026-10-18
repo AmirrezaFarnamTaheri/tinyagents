@@ -5,6 +5,7 @@
 //! implementations that hosts may opt into by feature.
 
 mod ask_clarification;
+#[cfg(feature = "skills")]
 mod canonical_json;
 pub mod per_call;
 mod plan_exit;

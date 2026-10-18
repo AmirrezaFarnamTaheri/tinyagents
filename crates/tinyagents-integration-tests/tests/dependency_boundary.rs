@@ -689,7 +689,16 @@ fn harness_tools_dependencies_stay_within_the_harness_boundary() {
     assert!(dependencies.contains("tinytools ="));
     assert!(!dependencies.contains("tinyagents-graph ="));
     assert!(!dependencies.contains("tinyagents-runtime ="));
-    assert!(!dependencies.contains("tinyinference-llm ="));
+    let inference_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyinference-llm ="))
+        .expect("subagent inference dependency is declared");
+    assert!(inference_dep.contains("optional = true"));
+    let tasks_dep = dependencies
+        .lines()
+        .find(|line| line.trim_start().starts_with("tinyagents-tasks ="))
+        .expect("subagent task dependency is declared");
+    assert!(tasks_dep.contains("optional = true"));
     assert!(manifest.contains("subagents = [\"dep:tinyagents-orchestration\", \"dep:tinyagents-tasks\", \"dep:tinyinference-llm\"]"));
 }
 
