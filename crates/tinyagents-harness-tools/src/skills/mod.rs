@@ -18,7 +18,7 @@
 //! * the **binding** of a [`PackRegistryHandle`] to the registries a session
 //!   builds.
 //!
-//! Not to be confused with [`super::discover`], which is model-driven
+//! Not to be confused with `tinyagents_harness::tool::discover`, which is model-driven
 //! `tool_search` over a BM25 catalog of deferred schemas: that one lets the model
 //! *search* for a tool, this one lets a host *group* tools under named skills
 //! with a playbook and an owner list.
