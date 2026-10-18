@@ -14,11 +14,11 @@ use tinyagents_harness::steering::{
 };
 use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyagents_orchestration::subagent::{
-    AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, IncompleteKind,
-    InlineJobGuard, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
-    SubAgentJobStatus, SubagentAwaitingUser, SubagentSessionStore, WaitError, WaitOutcome,
-    list_subagent_records, record_agent_id, record_subagent_session_id, record_to_wait_outcome,
-    subagent_record_for_task, task_id_for_session_in_records,
+    AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, DurableSubagentStatus,
+    IncompleteKind, InlineJobGuard, SubAgentJob, SubAgentJobError, SubAgentJobId,
+    SubAgentJobRegistry, SubAgentJobStatus, SubagentAwaitingUser, SubagentSessionStore, WaitError,
+    WaitOutcome, list_subagent_records, record_agent_id, record_subagent_session_id,
+    record_to_wait_outcome, subagent_record_for_task, task_id_for_session_in_records,
 };
 use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tinyinference_llm::message::Message;

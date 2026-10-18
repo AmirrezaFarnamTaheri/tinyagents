@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use serde_json::Value;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{TaskId, next_seq};
@@ -14,7 +13,7 @@ use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-use crate::subagent::{AppliedResult, IncompleteKind, SubagentTaskKey};
+use crate::subagent::{AppliedResult, IncompleteKind};
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
