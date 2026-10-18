@@ -35,7 +35,7 @@ const SWEEP_MIN: usize = 16;
 /// [`lock_for`](Self::lock_for) and hold it for the duration of their critical
 /// section; the map itself never keeps a mutex alive.
 #[derive(Debug)]
-pub(crate) struct ThreadLockMap {
+pub struct ThreadLockMap {
     /// Human-readable owner name used in poisoned-lock panic messages.
     what: &'static str,
     /// The weak-value map plus its sweep bookkeeping.
@@ -54,7 +54,7 @@ struct Inner {
 impl ThreadLockMap {
     /// Creates an empty lock map. `what` names the owner in panic messages
     /// (e.g. `"goal lock map"`).
-    pub(crate) fn new(what: &'static str) -> Self {
+    pub fn new(what: &'static str) -> Self {
         Self {
             what,
             inner: StdMutex::new(Inner {
@@ -69,7 +69,7 @@ impl ThreadLockMap {
     ///
     /// All concurrent callers passing the same `thread_id` receive the same
     /// mutex for as long as at least one of them keeps its `Arc` alive.
-    pub(crate) fn lock_for(&self, thread_id: &str) -> Arc<Mutex<()>> {
+    pub fn lock_for(&self, thread_id: &str) -> Arc<Mutex<()>> {
         let mut inner = self
             .inner
             .lock()

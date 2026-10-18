@@ -1,8 +1,7 @@
 //! Domain types for the per-thread todo list.
 //!
 //! A **todo list** is a per-thread ordered checklist of [`TodoItem`]s — the
-//! concrete steps a run is working through, distinct from the single
-//! per-thread [`ThreadGoal`](crate::goals::ThreadGoal). The model writes the
+//! concrete steps a run is working through. The model writes the
 //! whole list once, then ticks its steps off one at a time, in order (see
 //! `sequence`). Each item is a line of text plus its state, and a reason when
 //! it was cancelled.

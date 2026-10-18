@@ -2,7 +2,7 @@
 //! supersteps, interrupts, and resumes.
 //!
 //! A thread goal is a single "completion contract" — a durable objective a
-//! graph keeps pursuing until the model marks it [`Complete`](ThreadGoalStatus::Complete), a token budget
+//! harness keeps pursuing until the model marks it [`Complete`](ThreadGoalStatus::Complete), a token budget
 //! is exhausted, or a host pauses it. This module owns the data model
 //! (`types`), harness-[`Store`](tinyagents_harness::store::Store)-backed
 //! persistence ([`store`]), the model-facing controls exposed as harness tools
@@ -15,14 +15,12 @@
 //! primitive is provider-neutral and drives off the graph runtime.
 
 pub mod budget;
-mod continuation;
 mod prompt;
 pub mod store;
 mod tool;
 mod types;
 
 pub use budget::{BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, turn_tokens};
-pub use continuation::{goal_gate_node, note_user_turn, run_continuation_tick};
 pub use prompt::active_goal_context_block;
 pub use tool::{GoalTool, GoalToolKind, GoalUpdateHook, goal_tools, register_goal_tools};
 pub use types::{GoalProgress, ThreadGoal, ThreadGoalStatus, TurnOutcome};

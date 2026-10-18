@@ -1,8 +1,7 @@
 //! Per-thread **todo list**: an ordered checklist of steps per thread.
 //!
-//! Where [`graph::goals`](crate::goals) holds a single durable objective
-//! per thread, the todo list holds the concrete steps the run is working
-//! through: an ordered list of [`TodoItem`]s, each `pending`, `in_progress`,
+//! The todo list holds the concrete steps the run is working through: an
+//! ordered list of [`TodoItem`]s, each `pending`, `in_progress`,
 //! `completed` or `cancelled`. This module owns the data model and markdown
 //! rendering ([`types`]), the step order (`sequence`: one step at a time,
 //! top to bottom), harness-[`Store`](tinyagents_harness::store::Store)-backed
