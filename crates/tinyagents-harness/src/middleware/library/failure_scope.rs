@@ -275,13 +275,6 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         self.nudges.middleware()
     }
 
-    /// Drain pending nudges for explicit administrative inspection.
-    ///
-    /// Normal model delivery is per-run through [`Self::nudge_injector`].
-    pub fn drain_pending_nudges(&self) -> Vec<String> {
-        self.nudges.drain_all()
-    }
-
     fn run_state(&self, instance_id: u64) -> Arc<RunFailureState> {
         let mut runs = self
             .runs
