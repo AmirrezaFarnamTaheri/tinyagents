@@ -174,19 +174,19 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
                     if let Some(guard) = guard.take() {
                         guard.finish(outcome);
                     }
-                } else if let ModelStreamItem::UsageDelta(usage) = item {
-                    if let Some(guard) = guard.as_mut() {
-                        guard.update_usage(PhysicalDispatchUsage {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            cached_tokens: usage.cache_read_tokens,
-                            reasoning_tokens: usage.reasoning_tokens,
-                            cost_usd: usage
-                                .charged_amount
-                                .as_ref()
-                                .map(|amount| amount.micros as f64 / 1_000_000.0),
-                        });
-                    }
+                } else if let ModelStreamItem::UsageDelta(usage) = item
+                    && let Some(guard) = guard.as_mut()
+                {
+                    guard.update_usage(PhysicalDispatchUsage {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: usage.output_tokens,
+                        cached_tokens: usage.cache_read_tokens,
+                        reasoning_tokens: usage.reasoning_tokens,
+                        cost_usd: usage
+                            .charged_amount
+                            .as_ref()
+                            .map(|amount| amount.micros as f64 / 1_000_000.0),
+                    });
                 }
             }
             item
