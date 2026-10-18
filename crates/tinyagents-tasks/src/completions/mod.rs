@@ -42,10 +42,10 @@ pub use router::{
     CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
     TombstoneOutcome,
 };
-pub use store::{CompletionStore, InMemoryCompletionStore};
+pub use store::{ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore};
 pub use types::{
-    CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,
-    NotifyMode,
+    CompletionArtifact, CompletionClaim, CompletionRecord, CompletionResult, CompletionState,
+    CompletionStatus, NotifyMode,
 };
 
 #[cfg(test)]

@@ -32,7 +32,7 @@ use tinystoragedrivers_core::{
 };
 use tokio::sync::OnceCell;
 
-use super::store::CompletionStore;
+use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore};
 use super::types::{CompletionRecord, CompletionState};
 use crate::storage::{
     COMPLETIONS, CompletionDoc, SCHEMA_VERSION, completions_spec, task_id_key, to_ms,
@@ -166,6 +166,125 @@ impl CompletionStore for DriverCompletionStore {
                 .await
                 .map(|_| ())
                 .map_err(map_error)
+        })
+    }
+
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Vec<CompletionRecord>> {
+        let this = self.clone();
+        let parent_key = parent_key.to_owned();
+        let token = token.to_owned();
+        self.run(async move {
+            this.declare().await?;
+            let rows = this
+                .docs
+                .query_all(
+                    COMPLETIONS,
+                    &Query::filter(Filter::eq("parent_key", parent_key.as_str())),
+                )
+                .await
+                .map_err(map_error)?;
+            let now = SystemTime::now();
+            let mut rows = rows
+                .into_iter()
+                .filter_map(|row| decode_strict(row.clone()).ok().map(|record| (row, record)))
+                .filter(|(_, record)| {
+                    record.state == CompletionState::Pending
+                        && mode.accepts(record.notify_mode)
+                        && record
+                            .claim
+                            .as_ref()
+                            .is_none_or(|claim| claim.visible_after <= now)
+                })
+                .collect::<Vec<_>>();
+            rows.sort_by(|(_, left), (_, right)| {
+                left.finished_at
+                    .cmp(&right.finished_at)
+                    .then_with(|| left.task_id.cmp(&right.task_id))
+            });
+            let mut claimed = Vec::new();
+            for (row, mut record) in rows.into_iter().take(max) {
+                record.attempts = record.attempts.saturating_add(1);
+                record.updated_at = now;
+                record.claim = Some(crate::completions::CompletionClaim {
+                    token: format!("{token}:{}", record.task_id),
+                    visible_after,
+                });
+                let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
+                match this
+                    .docs
+                    .put_with(
+                        COMPLETIONS,
+                        &row.id,
+                        body,
+                        Precondition::Version(row.version),
+                        WriteOptions::new().schema(SCHEMA_VERSION),
+                    )
+                    .await
+                {
+                    Ok(_) => claimed.push(record),
+                    Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {}
+                    Err(error) => return Err(map_error(error)),
+                }
+            }
+            Ok(claimed)
+        })
+    }
+
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> Result<Option<CompletionRecord>> {
+        let this = self.clone();
+        let task_id = task_id.to_owned();
+        let token = token.to_owned();
+        self.run(async move {
+            this.declare().await?;
+            let id = task_id_key(&task_id).map_err(map_error)?;
+            let Some(row) = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
+                return Ok(None);
+            };
+            let mut record = decode_strict(row.clone())?;
+            if record.state != CompletionState::Pending
+                || record.claim.as_ref().is_none_or(|claim| claim.token != token)
+            {
+                return Ok(None);
+            }
+            record.claim = None;
+            record.updated_at = SystemTime::now();
+            match resolution {
+                ClaimResolution::Delivered => record.state = CompletionState::Delivered,
+                ClaimResolution::Failed { max_attempts } if record.attempts >= max_attempts => {
+                    record.state = CompletionState::GaveUp;
+                }
+                ClaimResolution::Failed { .. } | ClaimResolution::Release => {}
+            }
+            let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
+            match this
+                .docs
+                .put_with(
+                    COMPLETIONS,
+                    &id,
+                    body,
+                    Precondition::Version(row.version),
+                    WriteOptions::new().schema(SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => Ok(Some(record)),
+                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
+                    Ok(None)
+                }
+                Err(error) => Err(map_error(error)),
+            }
         })
     }
 

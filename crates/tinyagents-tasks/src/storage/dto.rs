@@ -115,6 +115,8 @@ pub(crate) struct CompletionDoc {
     pub(crate) state: CompletionState,
     #[serde(default)]
     pub(crate) notify_mode: NotifyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) claim: Option<crate::completions::CompletionClaim>,
 }
 
 impl CompletionDoc {
@@ -130,6 +132,7 @@ impl CompletionDoc {
             attempts: record.attempts,
             state: record.state,
             notify_mode: record.notify_mode,
+            claim: record.claim.clone(),
         }
     }
 
@@ -148,6 +151,7 @@ impl CompletionDoc {
             attempts: self.attempts,
             state: self.state,
             notify_mode: self.notify_mode,
+            claim: self.claim,
         }
     }
 }

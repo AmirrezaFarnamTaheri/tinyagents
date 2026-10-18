@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 
-use super::types::{CompletionRecord, CompletionState};
+use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
 
 fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("completion store: {what}: {err}"))
@@ -24,6 +24,33 @@ pub trait CompletionStore: Send + Sync {
 
     /// Upserts a record. Durable stores persist it before returning.
     fn put(&self, record: &CompletionRecord) -> Result<()>;
+
+    /// Atomically leases matching pending completions until `visible_after`.
+    /// Implementations shared across processes must use backend CAS/claim
+    /// semantics; the default fails closed rather than emulating a local lock.
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Vec<CompletionRecord>> {
+        let _ = (parent_key, mode, max, token, visible_after);
+        Err(store_err("claim", "store does not support atomic delivery claims"))
+    }
+
+    /// Resolves a claim only while its token still owns the record. `None`
+    /// means the claim expired, was reclaimed, or the record was withdrawn.
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> Result<Option<CompletionRecord>> {
+        let _ = (task_id, token, resolution);
+        Err(store_err("resolve claim", "store does not support atomic delivery claims"))
+    }
 
     /// Latest records, for one parent or (`None`) for all. Unordered.
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord>;
@@ -43,6 +70,38 @@ pub trait CompletionStore: Send + Sync {
         let _ = retain;
         Ok(0)
     }
+}
+
+/// Which pending completion lane a delivery worker may lease.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionClaimMode {
+    /// Follow-up or explicit collect delivery.
+    Followup,
+    /// Completions held for the parent's next turn.
+    HoldForNextTurn,
+    /// Pull-only completions.
+    Pull,
+}
+
+impl CompletionClaimMode {
+    pub(crate) fn accepts(self, mode: NotifyMode) -> bool {
+        match self {
+            Self::Followup => matches!(mode, NotifyMode::Followup | NotifyMode::Collect),
+            Self::HoldForNextTurn => mode == NotifyMode::HoldForNextTurn,
+            Self::Pull => mode == NotifyMode::Off,
+        }
+    }
+}
+
+/// How a currently owned delivery claim is settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimResolution {
+    /// The parent accepted the completion.
+    Delivered,
+    /// The delivery failed; the claim is released or the record gives up.
+    Failed { max_attempts: u32 },
+    /// The delivery was abandoned without counting another attempt.
+    Release,
 }
 
 fn expired(record: &CompletionRecord, now: SystemTime, retain: Duration) -> bool {
@@ -77,6 +136,74 @@ impl CompletionStore for InMemoryCompletionStore {
     fn put(&self, record: &CompletionRecord) -> Result<()> {
         self.lock()?.insert(record.task_id.clone(), record.clone());
         Ok(())
+    }
+
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Vec<CompletionRecord>> {
+        let now = SystemTime::now();
+        let mut records = self.lock()?;
+        let mut candidates: Vec<_> = records
+            .values()
+            .filter(|record| {
+                record.parent_key == parent_key
+                    && record.state == CompletionState::Pending
+                    && mode.accepts(record.notify_mode)
+                    && record
+                        .claim
+                        .as_ref()
+                        .is_none_or(|claim| claim.visible_after <= now)
+            })
+            .map(|record| record.task_id.clone())
+            .collect();
+        candidates.sort();
+        candidates.truncate(max);
+        let mut claimed = Vec::with_capacity(candidates.len());
+        for id in candidates {
+            let Some(record) = records.get_mut(&id) else {
+                continue;
+            };
+            record.attempts = record.attempts.saturating_add(1);
+            record.updated_at = now;
+            record.claim = Some(CompletionClaim {
+                token: format!("{token}:{id}"),
+                visible_after,
+            });
+            claimed.push(record.clone());
+        }
+        Ok(claimed)
+    }
+
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> Result<Option<CompletionRecord>> {
+        let mut records = self.lock()?;
+        let Some(record) = records.get_mut(task_id) else {
+            return Ok(None);
+        };
+        if record.state != CompletionState::Pending
+            || record.claim.as_ref().is_none_or(|claim| claim.token != token)
+        {
+            return Ok(None);
+        }
+        record.updated_at = SystemTime::now();
+        record.claim = None;
+        match resolution {
+            ClaimResolution::Delivered => record.state = CompletionState::Delivered,
+            ClaimResolution::Failed { max_attempts } if record.attempts >= max_attempts => {
+                record.state = CompletionState::GaveUp;
+            }
+            ClaimResolution::Failed { .. } | ClaimResolution::Release => {}
+        }
+        Ok(Some(record.clone()))
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
