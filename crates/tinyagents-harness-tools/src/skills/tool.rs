@@ -103,7 +103,7 @@ impl PinnedPackCall {
 impl BoundToolCall for PinnedPackCall {
     fn tool(&self) -> Arc<dyn Tool> {
         // The bound executor is this wrapper so the selected target remains pinned.
-        Arc::new(self.clone_for_execution())
+        Arc::new(self.clone())
     }
 
     fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {

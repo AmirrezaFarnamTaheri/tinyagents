@@ -8,10 +8,10 @@ use tinytools::{Tool, ToolCallOptions, ToolResult};
 
 use tinyagents_harness::{
     context::RunContext,
-    tool::{ToolDispatch, ToolExecutionContext},
+    tool::{BoundToolCall, ToolCallBinding, ToolDispatch, ToolExecutionContext},
 };
 
-use super::{PackSelection, PackToolExtension};
+use super::{PackSelection, PinnedPackCall};
 
 /// Resolves a selected packed tool into the host's normal typed dispatcher.
 ///
@@ -51,12 +51,13 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
         let Some(extension) = self
             .tool
             .host_extension()
-            .and_then(|extension| extension.downcast_ref::<PackToolExtension>())
+            .and_then(|extension| extension.downcast_ref::<ToolCallBinding>())
         else {
             anyhow::bail!("use_skill tool is missing its pack registry extension");
         };
-        let pinned = Arc::new(extension.bind_call(self.tool.clone(), arguments));
-        let selected = if let Some(selection) = pinned.selection() {
+        let pinned = extension.bind(self.tool.clone(), arguments);
+        let selection = pinned.as_any().downcast_ref::<PinnedPackCall>().and_then(PinnedPackCall::selection);
+        let selected = if let Some(selection) = selection {
             if let Some(dispatch) = (self.selector)(selection.clone()) {
                 Some(
                     dispatch
@@ -90,7 +91,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
 }
 
 struct BoundUseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> {
-    pinned: Arc<super::PinnedPackCall>,
+    pinned: Arc<dyn BoundToolCall>,
     selected: Option<Arc<dyn ToolDispatch<State, Ctx>>>,
 }
 
@@ -99,7 +100,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
     for BoundUseSkillDispatch<State, Ctx>
 {
     fn tool(&self) -> Arc<dyn Tool> {
-        self.pinned.clone()
+        self.pinned.tool()
     }
 
     fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
