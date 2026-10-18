@@ -33,7 +33,7 @@ fn unstructured_classification_uses_unknown_only_for_unrecognized_messages() {
     );
 
     for (message, expected) in [
-        ("upstream returned 503", FailoverReason::Overloaded),
+        ("provider is overloaded", FailoverReason::Overloaded),
         ("HTTP 429 Too Many Requests", FailoverReason::RateLimit),
         ("the request timed out", FailoverReason::Timeout),
         ("connection reset by peer", FailoverReason::Transport),
