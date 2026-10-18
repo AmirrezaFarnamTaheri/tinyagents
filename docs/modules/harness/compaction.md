@@ -344,15 +344,9 @@ Every successful compaction — threshold-triggered (`before_model`) or
 overflow-triggered (`wrap_model`) — builds a `CompactionRecord` and, when a
 `CompactionSink` is attached to the run
 (`RunContext::compaction_sink` / `RunContext::with_compaction_sink`),
-persists it. `tinyagents-harness` cannot depend on `tinyagents-session` (the
-dependency runs the other way), so `CompactionSink` is a trait rather than a
-concrete `Arc<EntryTree>` field; the session-backed implementation is
-`tinyagents_session::entry_tree::SessionCompactionSink`, which translates
-`first_kept_index` into a durable `EntryId` by re-walking the current tip's
-ancestor chain and counting only the entries `EntryTree::build_context` itself
-turns into messages (`EntryKind::Message`/`EntryKind::Custom`). An index that
-doesn't line up with the session's own view of the conversation is skipped
-rather than persisted as a corrupting boundary.
+persists it. The harness does not prescribe a persistence backend for
+`CompactionSink`; a host may attach any implementation that stores its
+`CompactionRecord`s.
 
 `AgentEvent::Compacted { reason, tokens_before, tokens_after }` is emitted for
 every compaction, in addition to the pre-existing
