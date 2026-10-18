@@ -81,8 +81,8 @@ mod store_tests {
     use std::sync::Arc;
 
     use super::super::store;
-    use super::{GoalStore, ThreadGoalStatus};
-    use tinyagents_harness::store::{InMemoryStore, Store};
+    use super::super::{GoalStore, ThreadGoalStatus};
+    use tinyagents_harness::store::InMemoryStore;
 
     fn store() -> Arc<GoalStore> {
         Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
@@ -268,7 +268,7 @@ mod tool_tests {
     use super::super::runtime::GoalStore;
     use super::super::tool::{GoalTool, GoalToolKind};
     use super::super::{GoalObserver, ThreadGoal};
-    use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinyagents_harness::store::InMemoryStore;
     use tinytools::{Tool, ToolResult, ToolRunContext};
 
     fn store() -> Arc<GoalStore> {
@@ -445,7 +445,7 @@ mod budget_tests {
     };
     use super::super::store;
     use super::{ThreadGoalStatus, goal};
-    use tinyagents_harness::store::{InMemoryStore, Store};
+    use tinyagents_harness::store::InMemoryStore;
 
     fn kv() -> Arc<dyn Store> {
         Arc::new(InMemoryStore::default())

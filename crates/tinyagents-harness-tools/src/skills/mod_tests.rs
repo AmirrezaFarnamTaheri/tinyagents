@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
-use tinyagents_harness::{runtime::AgentHarness, testkit, tool::ToolDispatch};
+use tinyagents_harness::{runtime::AgentHarness, testkit, tool::{BoundToolCall, ToolCallBinding, ToolDispatch}};
 use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";
@@ -31,6 +31,12 @@ static PACKS: &[ToolPack] = &[
 ];
 
 const CATALOG: PackCatalog = PackCatalog::new(PACKS, MARKER);
+
+fn bind_call(tool: Arc<dyn Tool>, args: &Value) -> Arc<dyn BoundToolCall> {
+    tool.host_extension()
+        .and_then(|extension| extension.downcast_ref::<ToolCallBinding>().map(|binding| binding.bind(tool.clone(), args)))
+        .expect("packed tool exposes its binding contract")
+}
 
 struct FakeTool {
     name: &'static str,
@@ -227,17 +233,11 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     handle.bind(Arc::downgrade(&original));
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
     let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
-    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
-    registry.register(outer);
-    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
-    let pinned = dispatch.bind_call(&args).unwrap().unwrap();
+    let pinned = bind_call(outer.clone(), &args);
     assert!(pinned.tool().supports_markdown());
-    assert!(
-        dispatch
-            .tool()
-            .host_extension()
-            .is_some_and(|extension| extension.is::<PackRegistryHandle>())
-    );
+    assert!(outer
+        .host_extension()
+        .is_some_and(|extension| extension.is::<PackRegistryHandle>()));
     let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
 
     let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
@@ -263,11 +263,9 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
 
     let _full_catalog = UseSkillTool::new(handle.clone(), CATALOG);
     let prefix_catalog = UseSkillTool::new(handle.clone(), PackCatalog::new(&PACKS[..1], MARKER));
-    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
-    registry.register(Arc::new(prefix_catalog));
-    let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
+    let prefix_tool: Arc<dyn Tool> = Arc::new(prefix_catalog);
     let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
-    let bound = dispatch.bind_call(&arguments).unwrap().unwrap();
+    let bound = bind_call(prefix_tool, &arguments);
 
     assert!(bound.admission_target().is_none());
     let result = bound.tool().execute(arguments).await.unwrap();
