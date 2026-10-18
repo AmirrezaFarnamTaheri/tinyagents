@@ -46,7 +46,11 @@ taxonomy and `Retry-After` parsing are consumed directly from
   failure).
 - [`FailoverReason`], [`decide`], [`FailoverDecision`], [`FailoverState`] —
   reason-aware failover (`failover.rs`): classify *why* a call failed and
-  choose retry-same / fallback / surface. See the table below.
+  choose retry-same / fallback / surface. `FailoverReason::classify` preserves
+  the established `TinyAgentsError` classification; hosts that receive only a
+  flattened model-error string can use `FailoverReason::classify_unstructured`,
+  which returns `Unknown` when no shared marker recognizes the message. See the
+  table below.
 - [`PersistentFailoverBreaker`] — shared per-key outage state across run
   contexts, with explicit-clock admission, an RAII attempt guard, exponential
   backoff, a configurable failure threshold, and success/reset support. The
