@@ -14,9 +14,7 @@ use tinyagents_harness::tinyinference_llm::{
 use tinyagents_harness::{
     runtime::AgentHarness,
     testkit,
-    tool::{
-        BoundToolCall, CanonicalSharedToolAdapter, ToolCallBinding, ToolDispatch,
-    },
+    tool::{BoundToolCall, CanonicalSharedToolAdapter, ToolCallBinding, ToolDispatch},
 };
 
 const MARKER: &str = "[not_found]";
@@ -845,10 +843,12 @@ async fn pinned_pack_call_merges_outer_approval_and_shared_adapter_forwards_bind
         CanonicalSharedToolAdapter::for_name(vec![tools], USE_SKILL)
             .expect("shared use_skill declaration"),
     );
-    assert!(adapter
-        .host_extension()
-        .expect("adapter forwards the binding extension")
-        .is::<ToolCallBinding>());
+    assert!(
+        adapter
+            .host_extension()
+            .expect("adapter forwards the binding extension")
+            .is::<ToolCallBinding>()
+    );
     let shared = UseSkillDispatch::<(), ()>::new(adapter, Arc::new(|_| None));
     let shared_bound = shared
         .bind_call(&args)

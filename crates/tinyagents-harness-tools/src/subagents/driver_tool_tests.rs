@@ -7,11 +7,11 @@ use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::CallId;
+use tinyagents_harness::run_queue::{QueueLane, RunQueue};
 use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_harness::tool::ToolDispatch;
 use tinyagents_harness::tool::ToolSnapshot;
-use tinyagents_harness::run_queue::{QueueLane, RunQueue};
-use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_orchestration::subagent::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
@@ -328,7 +328,10 @@ fn job_tool_metadata_and_default_schemas_are_preserved() {
     assert_eq!(jobs_alias.permission_level(), PermissionLevel::Execute);
     assert_eq!(jobs_alias.scope(), ToolScope::CliRpcOnly);
     assert_eq!(jobs_alias.category(), ToolCategory::Workflow);
-    assert_eq!(jobs_alias.timeout_policy(&json!({})), ToolTimeout::Millis(17));
+    assert_eq!(
+        jobs_alias.timeout_policy(&json!({})),
+        ToolTimeout::Millis(17)
+    );
 
     let message_alias = SubAgentMessageTool::new(SubAgentJobRegistry::new())
         .with_tool_name("host_message")
@@ -354,8 +357,11 @@ fn job_tool_metadata_and_default_schemas_are_preserved() {
 
 #[test]
 fn await_alias_timeout_uses_default_and_clamps_invalid_or_out_of_range_values() {
-    let tool = SubAgentJobsTool::new(SubAgentJobRegistry::new())
-        .with_await_timeout_field("deadline_secs", 4, 9);
+    let tool = SubAgentJobsTool::new(SubAgentJobRegistry::new()).with_await_timeout_field(
+        "deadline_secs",
+        4,
+        9,
+    );
     assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Millis(4_000));
     assert_eq!(
         tool.timeout_policy(&json!({"deadline_secs":"invalid"})),
@@ -478,7 +484,11 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
         serde_json::from_str::<Value>(&duplicate.output()).unwrap()["duplicate"],
         true
     );
-    assert_eq!(queue.status().await.total, 1, "duplicate request enqueues once");
+    assert_eq!(
+        queue.status().await.total,
+        1,
+        "duplicate request enqueues once"
+    );
 
     send(
         "steer-new",
@@ -498,9 +508,11 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
     assert!(queued.iter().any(|(lane, message)| {
         *lane == QueueLane::Collect && message.text() == "collect payload"
     }));
-    assert!(queued.iter().any(|(lane, message)| {
-        *lane == QueueLane::Steer && message.text() == "steer payload"
-    }));
+    assert!(
+        queued.iter().any(|(lane, message)| {
+            *lane == QueueLane::Steer && message.text() == "steer payload"
+        })
+    );
     assert!(queued.iter().any(|(lane, message)| {
         *lane == QueueLane::Steer && message.text() == "unknown falls back to steer"
     }));
@@ -518,13 +530,103 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
     )
     .await
     .unwrap();
-    assert_eq!(queue.status().await.total, 3, "default message bypasses run queue");
+    assert_eq!(
+        queue.status().await.total,
+        3,
+        "default message bypasses run queue"
+    );
     let commands = steering.drain();
     assert_eq!(commands.len(), 1);
     assert!(matches!(
         &commands[0],
         SteeringCommand::InjectMessage(message) if message.text() == "default steering payload"
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn bounded_await_observes_terminal_state_after_deadline_before_same_future_is_polled() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let driver = blocking_driver(started.clone(), release.clone(), calls);
+    let parent = RunContext::new(RunConfig::new("bounded-await-race-parent"), ());
+    let task_key = SubagentTaskKey::from_context(&parent, "bounded-await-race", None);
+    let request_key = task_key.clone();
+    let tool = DriverSubAgentTool::new(
+        "spawn_async_subagent",
+        "Run the worker in the background.",
+        driver,
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("bounded-await-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                request_key.task_id.clone(),
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
+            )
+            .map(|request| request.with_target("worker"))
+        },
+        |_| Some("worker-session".into()),
+    )
+    .with_parameters(json!({
+        "type":"object",
+        "required":["agent_id","prompt"],
+        "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
+    }))
+    .with_job_registry(jobs.clone());
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-bounded-await-race"),
+        json!({"agent_id":"worker","prompt":"finish at the deadline","mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let task_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    started.notified().await;
+
+    let await_tool = SubAgentJobsTool::new(jobs.clone())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_required_identifier()
+        .with_await_timeout_field("timeout_secs", 30, 30);
+    let same_wait = ToolDispatch::<(), ()>::execute(
+        &await_tool,
+        &(),
+        CallId::new("bounded-await-race-wait"),
+        json!({"task_id":task_id,"timeout_secs":1}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    tokio::pin!(same_wait);
+    tokio::select! {
+        biased;
+        result = &mut same_wait => panic!("child completed before bounded wait deadline: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
+
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    release.add_permits(1);
+    let terminal = jobs
+        .wait_owned(&task_id, parent.instance_id().to_string())
+        .await
+        .expect("child settles after its executor is released");
+    assert_eq!(terminal.status, SubAgentJobStatus::Completed);
+
+    let observed = same_wait.await.unwrap();
+    let observed: Value = serde_json::from_str(&observed.output()).unwrap();
+    assert_eq!(observed["status"], "completed");
+    assert_eq!(observed["output"], "driver result");
 }
 
 struct FailingSessionGet;
