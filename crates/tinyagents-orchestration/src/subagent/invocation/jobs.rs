@@ -716,7 +716,7 @@ impl SubAgentJobRegistry {
     /// Idempotent [`Self::send_message_owned`]: a `request_id` already applied
     /// to this job is acknowledged (`Ok(true)`, "duplicate") without queueing
     /// the message again. Only the last
-    /// [`RecentRequestIds::DEFAULT_CAPACITY`] ids per job are remembered, and a
+    /// `RecentRequestIds::DEFAULT_CAPACITY` ids per job are remembered, and a
     /// rejected send (unknown, foreign or terminal job) never consumes its id.
     pub fn send_message_with_request_id(
         &self,

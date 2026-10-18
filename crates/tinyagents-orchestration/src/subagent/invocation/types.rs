@@ -151,9 +151,10 @@ pub struct SubAgentSession<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// [`SubAgentJobId`]. By default it never waits for the child's final answer;
 /// the optional `mode: "inline"` argument ([`SubAgentMode::Inline`]) instead
 /// awaits the child and returns its final result in the same call. Hosts share
-/// the tool's [`SubAgentJobRegistry`] with [`tinyagents_harness_tools::subagents::SubAgentJobsTool`] and
-/// [`tinyagents_harness_tools::subagents::SubAgentMessageTool`] so callers can query completion or inject a message
-/// at the child's next steering checkpoint.
+/// the tool's [`SubAgentJobRegistry`] with the feature-gated `SubAgentJobsTool`
+/// and `SubAgentMessageTool` from the `tinyagents-harness-tools` crate so
+/// callers can query completion or inject a message at the child's next
+/// steering checkpoint.
 ///
 /// Register this with [`tinyagents_harness::tool::ToolRegistry::register_dispatch`]. The
 /// agent loop calls it with the live parent [`tinyagents_harness::context::RunContext`], so
