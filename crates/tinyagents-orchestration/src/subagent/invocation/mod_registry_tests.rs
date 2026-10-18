@@ -171,3 +171,20 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
     assert!(job.incomplete_kind.is_none() && job.output.is_none());
 }
+
+#[tokio::test]
+async fn message_request_ids_are_bounded_per_job() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, steering) = jobs.create("worker", 1);
+    for index in 0..=tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY {
+        let duplicate = jobs
+            .send_message_with_request_id(id.as_str(), 1, "m", Some(&format!("r{index}")))
+            .unwrap();
+        assert!(!duplicate);
+    }
+    // r0 ages out of the per-job 64-id window and can be delivered again.
+    assert!(!jobs
+        .send_message_with_request_id(id.as_str(), 1, "m", Some("r0"))
+        .unwrap());
+    assert_eq!(steering.pending(), 66);
+}

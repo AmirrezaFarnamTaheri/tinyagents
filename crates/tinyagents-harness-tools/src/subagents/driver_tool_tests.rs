@@ -1144,16 +1144,28 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         .with_argument_fields("task_id", "session_id", "message", "request_id")
         .with_lane_field("mode")
         .with_owner_scope(owner_scope.clone());
-    ToolDispatch::<(), ()>::execute(
+    let queued = ToolDispatch::<(), ()>::execute(
         &steer,
         &(),
         CallId::new("collect"),
-        json!({"task_id":task_id,"message":"quiet context","mode":"collect"}),
+        json!({"task_id":task_id,"message":"quiet context","mode":"collect","request_id":"collect-1"}),
         tinytools::ToolCallOptions::default(),
         &next_turn,
     )
     .await
     .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&queued.output()).unwrap()["status"], "message_queued");
+    let duplicate = ToolDispatch::<(), ()>::execute(
+        &steer,
+        &(),
+        CallId::new("collect-duplicate"),
+        json!({"task_id":task_id,"message":"quiet context","mode":"collect","request_id":"collect-1"}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&duplicate.output()).unwrap()["duplicate"], true);
     let control_id = jobs.get(&task_id).unwrap().id;
 
     assert!(
