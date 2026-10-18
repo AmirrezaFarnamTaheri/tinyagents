@@ -13,9 +13,9 @@
 //! - the ledger helpers that mirror a status into a `TaskStore` and read a
 //!   durable record back as a wait outcome (so a run this process never
 //!   registered, e.g. after a restart, still resolves);
-//! - [`steer_detached`] / [`SteerError`] to inject a message into a running
-//!   subagent (live handle first, host fallback second), and
-//!   [`cancel_for_thread`] to abort the subagents of one parent thread;
+//! - detached task lifecycle helpers for cancellation, waiting, and durable
+//!   resolution. Message steering and thread-scoped cancellation are exposed
+//!   from [`crate::steering`];
 //! - [`SubagentIdentity`] with roster snapshots, session-id resolution and
 //!   resume references over a registry or the durable records.
 //!

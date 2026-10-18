@@ -76,7 +76,8 @@ fn lane_names_and_commands_are_literal() {
 
 #[tokio::test]
 async fn steer_rejects_followup_unknown_unowned_and_terminal() {
-    let reg = registry(SteeringRegistry::default());
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering.clone());
     let tx = add(&reg, "t1", "p1", None);
 
     let (calls, fb) = counting();
@@ -121,7 +122,10 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
     );
     tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
         .unwrap();
-    let (calls, fb) = counting();
+    let handle = SteeringHandle::allow_all();
+    steering.register(TaskId::new("t1"), handle.clone());
+    let delivered = Arc::new(std::sync::Mutex::new(None));
+    let captured = delivered.clone();
     assert_eq!(
         steer_detached(
             &reg,
@@ -129,12 +133,19 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
             SteerAccess::Trusted,
             "x".into(),
             QueueLane::Steer,
-            fb
+            move |metadata, lane, text| {
+                *captured.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
+                std::future::ready(())
+            }
         )
         .await,
         Ok(SteerRoute::Fallback)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *delivered.lock().unwrap(),
+        Some(("researcher".to_string(), QueueLane::Steer, "x".to_string()))
+    );
+    assert!(handle.drain().is_empty(), "terminal children never use stale handles");
 }
 
 #[tokio::test]

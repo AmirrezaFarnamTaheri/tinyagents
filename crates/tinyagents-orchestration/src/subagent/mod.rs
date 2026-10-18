@@ -34,10 +34,9 @@ pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,
     DetachedCompletionTarget, DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome,
-    SpawnedSubagent, SubagentIdentity,
-    SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError, WaitOutcome,
-    cancel_detached_or_durable, cancel_detached_or_durable_with_owners, cancel_for_thread,
-    distinct_parent_threads, list_subagent_records, orphaned_subagent_reason, queue_lane_name,
+    SpawnedSubagent, SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError,
+    WaitOutcome, cancel_detached_or_durable, cancel_detached_or_durable_with_owners,
+    list_subagent_records, orphaned_subagent_reason,
     record_agent_id, record_cancelled, record_detached_completion, record_parent_session,
     record_spawned, record_status, record_subagent_session_id, record_to_wait_outcome,
     resolve_detached_or_durable, resolve_detached_or_durable_with_owners, resume_ref_for_task,
