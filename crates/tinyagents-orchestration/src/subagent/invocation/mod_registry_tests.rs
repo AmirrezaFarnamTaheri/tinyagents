@@ -110,6 +110,44 @@ async fn control_errors_keep_their_documented_order() {
 }
 
 #[tokio::test]
+async fn poisoned_detached_registry_errors_remain_typed_across_job_controls() {
+    let jobs = SubAgentJobRegistry::new();
+    let (id, _) = jobs.create("worker", 7);
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(true));
+        let result = jobs.try_get_owned(id.as_str(), 7);
+        super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(false));
+        result
+    }));
+    assert!(
+        panic.is_err(),
+        "metadata clone poisons the real job registry lock"
+    );
+
+    assert!(matches!(
+        jobs.try_get_owned(id.as_str(), 7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.try_list_owned(7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.wait_owned(id.as_str(), 7).await,
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.cancel_owned(id.as_str(), 7),
+        Err(SubAgentJobError::Registry(_))
+    ));
+    assert!(matches!(
+        jobs.send_message_with_request_id(id.as_str(), 7, "message", None),
+        Err(SubAgentJobError::Registry(_))
+    ));
+}
+
+#[tokio::test]
 async fn listings_are_sorted_by_job_id() {
     let jobs = SubAgentJobRegistry::new();
     for _ in 0..40 {

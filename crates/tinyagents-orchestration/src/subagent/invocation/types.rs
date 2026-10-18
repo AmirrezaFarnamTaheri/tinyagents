@@ -344,8 +344,23 @@ impl Default for SubAgentJobRegistry {
 }
 
 /// Application metadata kept with each job in the detached registry.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct JobMeta;
+
+impl Clone for JobMeta {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        if PANIC_ON_JOB_META_CLONE.with(std::cell::Cell::get) {
+            panic!("poison subagent detached registry during metadata clone");
+        }
+        Self
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PANIC_ON_JOB_META_CLONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// The adapter-owned half of a job: the status publisher and cancel flag.
 pub(crate) struct JobControl {

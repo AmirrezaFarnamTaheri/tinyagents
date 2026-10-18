@@ -9,12 +9,20 @@ fn selector_recovery_preserves_registry_failures_and_retries_selector_denials() 
         Some(&registry_error)
     );
 
-    let denial = SubAgentJobError::NotFound("missing".into());
-    let retry = selector_error(denial, true);
-    assert!(matches!(
-        retry.downcast_ref::<TinyAgentsError>(),
-        Some(TinyAgentsError::ModelRetry(message)) if message == SELECTOR_RETRY_HINT
-    ));
+    for denial in [
+        SubAgentJobError::NotFound("missing".into()),
+        SubAgentJobError::Terminal {
+            job_id: "done".into(),
+            status: tinyagents_orchestration::subagent::SubAgentJobStatus::Completed,
+        },
+        SubAgentJobError::Cancelling("stopping".into()),
+    ] {
+        let retry = selector_error(denial, true);
+        assert!(matches!(
+            retry.downcast_ref::<TinyAgentsError>(),
+            Some(TinyAgentsError::ModelRetry(message)) if message == SELECTOR_RETRY_HINT
+        ));
+    }
 }
 
 #[test]
