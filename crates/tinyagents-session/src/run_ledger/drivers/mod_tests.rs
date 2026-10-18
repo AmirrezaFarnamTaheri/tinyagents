@@ -193,7 +193,7 @@ async fn file_workflow_lease_race_and_revision_fencing() {
 /// single-record telemetry path that agents depend on.
 #[tokio::test]
 async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
-    use crate::run_ledger::{AgentRunListRequest, RunEventAppend, RunEventListRequest};
+    use crate::run_ledger::RunEventAppend;
     use tinystoragedrivers_core::Capability;
 
     let dir = tempfile::tempdir().unwrap();
@@ -270,8 +270,6 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
         "failed event append leaves every event record unchanged"
     );
 
-    let tasks_before = collection_snapshot(&storage, "ledger.tasks").await;
-    let members_before = collection_snapshot(&storage, "ledger.members").await;
     ledger
         .upsert_agent_team_task(crate::run_ledger::AgentTeamTaskUpsert {
             id: "atomic-task".into(),
@@ -290,6 +288,8 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
         })
         .await
         .unwrap();
+    let tasks_before = collection_snapshot(&storage, "ledger.tasks").await;
+    let members_before = collection_snapshot(&storage, "ledger.members").await;
     let error = ledger
         .claim_agent_team_task("atomic-team", "atomic-task", "member", "token")
         .await
