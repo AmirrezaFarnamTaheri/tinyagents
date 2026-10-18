@@ -37,8 +37,29 @@ impl ModelBudget {
     /// Apply this below retry/fallback and above the provider; response caching
     /// should remain outside it so a cache hit does not reserve or settle twice.
     pub fn wrap_model(&self, model: Arc<dyn ChatModel<()>>) -> Arc<dyn ChatModel<()>> {
+        self.wrap_model_with_observer(model, None)
+    }
+
+    /// Wrap a model and report its physical calls to an explicit observer.
+    ///
+    /// Charge normalization runs before either observer so explicit completion
+    /// observers and the turn-scoped observer see the same authoritative usage
+    /// that the budget ledger settles.
+    pub fn wrap_model_with_observer(
+        &self,
+        model: Arc<dyn ChatModel<()>>,
+        observer: Option<Arc<dyn crate::observability::PhysicalDispatchObserver>>,
+    ) -> Arc<dyn ChatModel<()>> {
         let charged = Arc::new(super::GatewayChargeModel::new(model));
-        Arc::new(BudgetedModel::new(charged, self.ledger.clone(), self.call))
+        let explicitly_observed: Arc<dyn ChatModel<()>> = match observer {
+            Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(
+                charged, observer,
+            )),
+            None => charged,
+        };
+        let observed =
+            crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed);
+        Arc::new(BudgetedModel::new(observed, self.ledger.clone(), self.call))
     }
 }
 
