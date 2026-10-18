@@ -94,10 +94,7 @@ fn refusal_metadata_is_reported_without_including_provider_text() {
 
     assert_eq!(outcome.status, PhysicalDispatchStatus::Refused);
     assert!(outcome.refused);
-    assert_eq!(
-        format!("{outcome:?}").contains("private refusal text"),
-        false
-    );
+    assert!(!format!("{outcome:?}").contains("private refusal text"));
 }
 
 #[test]
