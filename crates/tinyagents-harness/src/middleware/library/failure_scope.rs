@@ -49,6 +49,18 @@ pub enum FailureAssessment {
         /// backstop.
         recoverable_miss: bool,
     },
+    /// Informational tool failure that starts a new no-progress streak.
+    /// Unlike `Progress`, this does not notify the host that useful progress
+    /// occurred or clear host-classified failure state.
+    ResetFailure {
+        /// Error text the model saw, already scrubbed by the host.
+        error: String,
+        /// A hard reject that should use the short repeat threshold.
+        hard_reject: bool,
+        /// A recoverable miss that should not count against the varied-failure
+        /// backstop.
+        recoverable_miss: bool,
+    },
     /// Transient/recoverable failure with its separate extended budget.
     RecoverableFailure {
         /// Error text passed to the host's halt-copy callback.
@@ -110,6 +122,19 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
     /// Host copy applied to a generic ladder's stop summary.
     fn halt_copy(&self, _kind: FailureStopKind, summary: String, _error: &str) -> String {
         summary
+    }
+
+    /// Context-aware halt copy for policies whose wording depends on the call.
+    /// Existing policies keep their `halt_copy` behavior by default.
+    fn halt_copy_for_call(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        kind: FailureStopKind,
+        summary: String,
+        error: &str,
+        _call: &ToolCall,
+    ) -> String {
+        self.halt_copy(kind, summary, error)
     }
 
     /// Called at the start of a model response's tool batch.
@@ -296,6 +321,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         let assessment = self.policy.assess(ctx, invocation, &call, &scope, result);
         let repeated_failure = match &assessment {
             FailureAssessment::Failure { error, .. }
+            | FailureAssessment::ResetFailure { error, .. }
             | FailureAssessment::RecoverableFailure { error }
             | FailureAssessment::ClassifiedFailure { error, .. } => self
                 .policy
@@ -330,9 +356,13 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     run.recoverable
                         .record(self.policy.as_ref(), tool, &argument_key, &error)
                 {
-                    let summary =
-                        self.policy
-                            .halt_copy(FailureStopKind::Recoverable, summary, &error);
+                    let summary = self.policy.halt_copy_for_call(
+                        ctx,
+                        FailureStopKind::Recoverable,
+                        summary,
+                        &error,
+                        &call,
+                    );
                     self.halt(ctx, summary, None);
                     run.recoverable.reset_streak();
                 }
@@ -358,10 +388,12 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     }
                     ClassifiedStepWithCause::Halt(cause) => {
                         run.tracker.reset();
-                        let summary = self.policy.halt_copy(
+                        let summary = self.policy.halt_copy_for_call(
+                            ctx,
                             FailureStopKind::Classified,
                             cause.summary.clone(),
                             &error,
+                            &call,
                         );
                         self.policy.classified_halt(
                             ctx,
@@ -397,9 +429,43 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
                     NoProgress::Halt(summary) => {
                         run.tracker.reset();
-                        let summary =
-                            self.policy
-                                .halt_copy(FailureStopKind::NoProgress, summary, &error);
+                        let summary = self.policy.halt_copy_for_call(
+                            ctx,
+                            FailureStopKind::NoProgress,
+                            summary,
+                            &error,
+                            &call,
+                        );
+                        self.halt(ctx, summary, None);
+                    }
+                }
+            }
+            FailureAssessment::ResetFailure {
+                error,
+                hard_reject,
+                recoverable_miss,
+            } => {
+                run.recoverable.reset_streak();
+                run.tracker.reset();
+                let attempt = ToolAttempt {
+                    tool,
+                    arg_fingerprint: &argument_key,
+                    error: Some(&error),
+                    hard_reject,
+                    recoverable_miss,
+                };
+                match run.tracker.record(step, &attempt) {
+                    NoProgress::Continue => {}
+                    NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
+                    NoProgress::Halt(summary) => {
+                        run.tracker.reset();
+                        let summary = self.policy.halt_copy_for_call(
+                            ctx,
+                            FailureStopKind::NoProgress,
+                            summary,
+                            &error,
+                            &call,
+                        );
                         self.halt(ctx, summary, None);
                     }
                 }

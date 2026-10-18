@@ -66,6 +66,56 @@ impl FailureScopePolicy<()> for Policy {
     }
 }
 
+#[derive(Default)]
+struct ResetAndCallCopyPolicy;
+
+impl crate::no_progress::FailurePolicy for ResetAndCallCopyPolicy {
+    fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
+        format!("{tool} failed {count} times")
+    }
+
+    fn no_progress_halt_summary(&self, count: u32, tool: &str, _failure_text: &str) -> String {
+        format!("{tool} made no progress in {count} calls")
+    }
+}
+
+impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
+    fn assess(
+        &self,
+        _ctx: &RunContext<()>,
+        _invocation: &ToolInvocationIdentity,
+        call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> FailureAssessment {
+        let assessment = if call.arguments.get("reset") == Some(&json!(true)) {
+            FailureAssessment::ResetFailure {
+                error: "new command exit".into(),
+                hard_reject: false,
+                recoverable_miss: false,
+            }
+        } else {
+            FailureAssessment::Failure {
+                error: "failed".into(),
+                hard_reject: false,
+                recoverable_miss: false,
+            }
+        };
+        assessment
+    }
+
+    fn halt_copy_for_call(
+        &self,
+        _ctx: &RunContext<()>,
+        _kind: FailureStopKind,
+        summary: String,
+        _error: &str,
+        call: &ToolCall,
+    ) -> String {
+        format!("{}: {summary}", call.name)
+    }
+}
+
 fn context(instance_id: u64) -> RunContext<()> {
     let mut ctx = RunContext::new(RunConfig::new("failure-scope"), ());
     ctx.instance_id = instance_id;
@@ -137,6 +187,41 @@ async fn repeated_failures_nudge_before_halt() {
             .drain()
             .iter()
             .any(|command| matches!(command, SteeringCommand::Pause))
+    );
+}
+
+#[tokio::test]
+async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware = FailureScopeMiddleware::with_identical_threshold(
+        handle.clone(),
+        halt_summary.clone(),
+        Arc::new(ResetAndCallCopyPolicy),
+        2,
+    );
+    let call = |id: &str, reset: bool| {
+        observe_once(
+            &middleware,
+            89,
+            id,
+            "shell",
+            json!({"reset": reset}),
+            ToolResult::error("exit status 1"),
+        )
+    };
+
+    call("first", false).await;
+    call("second", false).await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    call("new-command", true).await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    call("new-command-repeat", false).await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    call("new-command-repeat-again", false).await;
+    assert_eq!(
+        halt_summary.lock().unwrap().as_deref(),
+        Some("shell: Stopping: the `shell` call was retried 2 times with the same error. The environment is not making progress. Report the blocker to the user.")
     );
 }
 
