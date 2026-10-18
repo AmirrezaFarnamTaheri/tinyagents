@@ -85,9 +85,9 @@ impl FleetToolSet {
     }
 }
 
-/// Name of the job query tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job query tool [`register_subagent_job_tools`](tinyagents_harness_tools::subagents::register_subagent_job_tools) registers.
 pub const SUBAGENT_JOBS_TOOL: &str = "subagent_jobs";
-/// Name of the job message tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job message tool [`register_subagent_job_tools`](tinyagents_harness_tools::subagents::register_subagent_job_tools) registers.
 pub const SUBAGENT_MESSAGE_TOOL: &str = "subagent_message";
 
 /// Whether a child may delegate further.

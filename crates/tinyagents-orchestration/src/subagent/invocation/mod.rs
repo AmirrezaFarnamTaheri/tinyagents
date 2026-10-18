@@ -15,7 +15,7 @@
 //!   runs in the background by default, returning a job id immediately; callers
 //!   can request `mode: "inline"` to await the child and receive its final
 //!   result in the same call.
-//! - [`SubAgentJobsTool`] and [`SubAgentMessageTool`] let the host or parent
+//! - [`tinyagents_harness_tools::subagents::SubAgentJobsTool`] and [`tinyagents_harness_tools::subagents::SubAgentMessageTool`] let the host or parent
 //!   query those jobs and steer live children by job id.
 //! - [`SubAgentSession`] keeps a single [`SubAgent`] alive across multiple
 //!   turns, *reusing* the same harness while accumulating the conversation
@@ -29,7 +29,7 @@
 //! - **Reuse** ([`SubAgentSession`]): the child run *completes*, the
 //!   orchestrator obtains human input, then calls the **same** sub-agent again
 //!   carrying the prior transcript. Nothing is killed or restarted.
-//! - **Steering** ([`SubAgentMessageTool`]): an orchestrator or human sends a
+//! - **Steering** ([`tinyagents_harness_tools::subagents::SubAgentMessageTool`]): an orchestrator or human sends a
 //!   message to a **still-running** job. Delivery occurs at a safe checkpoint.
 //!
 //! `SubAgentSession` implements the first. The flow is:
