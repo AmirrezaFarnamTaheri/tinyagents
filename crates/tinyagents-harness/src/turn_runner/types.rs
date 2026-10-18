@@ -12,13 +12,23 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::time::Instant;
 
 use crate::progress::AgentProgress;
-use crate::run_queue::{QueueLane, QueueMode, QueueStatus, RunQueue};
+use crate::run_queue::{QueueLane, QueueMode, QueueStatus, QueuedMessage, RunQueue};
 
 /// Identity that isolates session locks and active turns between agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScopeKey {
     pub agent_id: String,
     pub profile_id: Option<String>,
+}
+
+/// A turn that currently holds a cancellation slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTurn {
+    pub scope: ScopeKey,
+    pub thread_id: String,
+    pub request_id: String,
+    /// Whether it is a parallel turn rather than the thread's primary turn.
+    pub parallel: bool,
 }
 
 /// A request after the host has supplied its channel-independent metadata.
@@ -35,6 +45,59 @@ pub struct TurnRequest<P = serde_json::Value> {
     pub disposition: QueueDisposition,
     pub deadline: Option<Duration>,
     pub idle_timeout: Option<Duration>,
+}
+
+/// Host payloads that can stand in for the metadata of a steer the harness
+/// recovered and pushed back onto the run queue.
+///
+/// The steering forwarder re-creates a recovered item through
+/// [`QueuedMessage::requeued`], which knows only a fresh id, the text, the
+/// thread label and the clock. [`TurnRequest`] implements that trait for every
+/// payload that can build such a placeholder, so a turn's run queue can be the
+/// harness's own queue. The runner restores the scope and thread of a recovered
+/// item when it dispatches it as a fresh turn and lets the payload adopt the
+/// metadata of the turn that was running.
+pub trait RequeuePayload {
+    /// A placeholder payload for a recovered item.
+    fn requeued(thread_label: &str, queued_at_ms: u64) -> Self;
+
+    /// Fill what a recovered placeholder lacks from the payload of the turn
+    /// that was running when it was recovered. Payloads that are already
+    /// complete must be left untouched.
+    fn adopt(&mut self, _running: &Self) {}
+}
+
+impl RequeuePayload for serde_json::Value {
+    fn requeued(_thread_label: &str, _queued_at_ms: u64) -> Self {
+        serde_json::Value::Null
+    }
+}
+
+impl<P: RequeuePayload + Send + 'static> QueuedMessage for TurnRequest<P> {
+    fn id(&self) -> &str {
+        &self.request_id
+    }
+
+    fn text(&self) -> &str {
+        &self.text
+    }
+
+    fn requeued(id: String, text: String, thread_label: &str, queued_at_ms: u64) -> Self {
+        Self {
+            scope: ScopeKey {
+                agent_id: String::new(),
+                profile_id: None,
+            },
+            thread_id: thread_label.to_owned(),
+            request_id: id,
+            text,
+            payload: P::requeued(thread_label, queued_at_ms),
+            host_authored: false,
+            disposition: QueueDisposition::Steer,
+            deadline: None,
+            idle_timeout: None,
+        }
+    }
 }
 
 /// Host-owned identity and fingerprint for the checked-out durable session.
@@ -90,6 +153,9 @@ pub enum TerminalEvent {
         request_id: String,
         message: String,
         class: String,
+        /// The raw host or runner error the failure was classified from, for
+        /// hosts that render richer copy than `class` and `message` carry.
+        error: String,
     },
     Cancelled {
         request_id: String,
@@ -187,6 +253,11 @@ pub struct TurnRunnerConfig {
     pub idle_timeout: Duration,
     pub deadline: Option<Duration>,
     pub close_timeout: Duration,
+    /// How long a cancelled host run keeps being polled, with its own
+    /// cancellation token already fired, before it is dropped. A host uses the
+    /// window to hand back and persist the rounds it completed. Zero drops the
+    /// run immediately.
+    pub cancel_grace: Duration,
 }
 
 impl Default for TurnRunnerConfig {
@@ -195,6 +266,7 @@ impl Default for TurnRunnerConfig {
             idle_timeout: Duration::from_secs(900),
             deadline: None,
             close_timeout: Duration::from_secs(60),
+            cancel_grace: Duration::ZERO,
         }
     }
 }
@@ -259,7 +331,7 @@ where
     E: EventSink<P> + 'static,
     F: FailureClassifier + 'static,
     S: Summarizer<P> + 'static,
-    P: Clone + Send + Sync + 'static,
+    P: Clone + Send + Sync + RequeuePayload + 'static,
 {
     pub fn new(
         host: Arc<H>,
@@ -294,18 +366,31 @@ where
         thread_id: &str,
         request_id: Option<&str>,
     ) -> bool {
+        !self
+            .cancel_requests(scope, thread_id, request_id)
+            .await
+            .is_empty()
+    }
+
+    /// [`cancel`](Self::cancel), returning the id of every turn it stopped: the
+    /// primary turn first, then each parallel turn.
+    pub async fn cancel_requests(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        request_id: Option<&str>,
+    ) -> Vec<String> {
         let key = (scope.clone(), thread_id.to_owned());
+        let mut cancelled = Vec::new();
         let active = self.active.lock().await;
-        let cancelled_primary = if let Some(turn) = active
+        if let Some(turn) = active
             .get(&key)
             .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
         {
             turn.queue.clear().await;
             turn.cancel.cancel();
-            true
-        } else {
-            false
-        };
+            cancelled.push(turn.request_id.clone());
+        }
         drop(active);
         let mut parallel = self.parallel_active.lock().await;
         let keys: Vec<_> = parallel
@@ -320,8 +405,53 @@ where
                 token.cancel();
             }
             self.parallel_queues.lock().await.remove(key);
+            cancelled.push(key.2.clone());
         }
-        cancelled_primary || !keys.is_empty()
+        cancelled
+    }
+
+    /// Every turn that currently holds a cancellation slot, primary and parallel.
+    pub async fn live_turns(&self) -> Vec<LiveTurn> {
+        let mut turns: Vec<LiveTurn> = self
+            .active
+            .lock()
+            .await
+            .iter()
+            .map(|((scope, thread_id), turn)| LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: turn.request_id.clone(),
+                parallel: false,
+            })
+            .collect();
+        turns.extend(self.parallel_active.lock().await.keys().map(
+            |(scope, thread_id, request_id)| LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: request_id.clone(),
+                parallel: true,
+            },
+        ));
+        turns
+    }
+
+    /// Pending items of the thread's active turn queue, oldest first per lane.
+    pub async fn queue_snapshot(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+    ) -> Vec<(QueueLane, TurnRequest<P>)> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| Arc::clone(&turn.queue));
+        match queue {
+            Some(queue) => queue.snapshot().await,
+            None => Vec::new(),
+        }
     }
 
     /// Whether the thread owns a primary user-authored turn cancellation slot.
@@ -630,8 +760,13 @@ where
                 if !request.host_authored && request.disposition != QueueDisposition::Parallel {
                     let (collected, next) = match active_generation {
                         Some(generation) => {
-                            self.finalize_generation(&request.scope, &request.thread_id, generation)
-                                .await
+                            self.finalize_generation(
+                                &request.scope,
+                                &request.thread_id,
+                                generation,
+                                &request.payload,
+                            )
+                            .await
                         }
                         None => (Vec::new(), None),
                     };
@@ -763,6 +898,7 @@ where
                         request_id: queued_request.request_id.clone(),
                         message: format!("queued turn was not run: {message}"),
                         class: class.clone(),
+                        error: error.clone(),
                     },
                 )
                 .await;
@@ -774,6 +910,7 @@ where
                     request_id: request.request_id.clone(),
                     message: message.clone(),
                     class,
+                    error,
                 },
             )
             .await;
@@ -785,6 +922,7 @@ where
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
+        running: &P,
     ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<P>)>) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
@@ -814,7 +952,13 @@ where
         } else {
             next
         };
-        if let Some(request) = next {
+        if let Some(mut request) = next {
+            // A steer the harness recovered was rebuilt without its scope and
+            // payload metadata; it belongs to this thread and inherits what the
+            // finished turn knew.
+            request.scope = scope.clone();
+            request.thread_id = thread_id.to_owned();
+            request.payload.adopt(running);
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
@@ -947,6 +1091,17 @@ where
                 _ = cancellation.cancelled() => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
+                    if !self.config.cancel_grace.is_zero() {
+                        // Let the host unwind with its token fired; its result
+                        // is discarded either way.
+                        let unwound = tokio::time::timeout(self.config.cancel_grace, &mut run).await;
+                        tracing::debug!(
+                            thread_id = %request.thread_id,
+                            request_id = %request.request_id,
+                            unwound = unwound.is_ok(),
+                            "turn runner: cancelled run left its grace window"
+                        );
+                    }
                     return Err("turn cancelled".into());
                 }
                 _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {
