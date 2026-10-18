@@ -275,6 +275,13 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         self.nudges.middleware()
     }
 
+    /// Drain pending nudges for explicit administrative inspection.
+    ///
+    /// Normal model delivery is per-run through [`Self::nudge_injector`].
+    pub fn drain_pending_nudges(&self) -> Vec<String> {
+        self.nudges.drain_all()
+    }
+
     fn run_state(&self, instance_id: u64) -> Arc<RunFailureState> {
         let mut runs = self
             .runs
@@ -353,6 +360,10 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     "",
                     &call,
                 );
+                let cause = cause.map(|cause| crate::no_progress::ClassifiedStopCause {
+                    summary: summary.clone(),
+                    ..cause
+                });
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {

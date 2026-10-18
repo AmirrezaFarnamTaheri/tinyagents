@@ -140,6 +140,49 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
     }
 }
 
+struct TypedCallHaltPolicy;
+
+impl crate::no_progress::FailurePolicy for TypedCallHaltPolicy {
+    fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
+        format!("{tool} failed {count} times")
+    }
+
+    fn no_progress_halt_summary(&self, count: u32, tool: &str, _failure_text: &str) -> String {
+        format!("{tool} made no progress in {count} calls")
+    }
+}
+
+impl FailureScopePolicy<()> for TypedCallHaltPolicy {
+    fn assess(
+        &self,
+        _ctx: &RunContext<()>,
+        _invocation: &ToolInvocationIdentity,
+        _call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> FailureAssessment {
+        FailureAssessment::Halt {
+            summary: "raw terminal summary".into(),
+            cause: Some(ClassifiedStopCause {
+                class: "provider_out_of_budget".into(),
+                operation: "delegate_work".into(),
+                summary: "raw terminal summary".into(),
+            }),
+        }
+    }
+
+    fn halt_copy_for_call(
+        &self,
+        _ctx: &RunContext<()>,
+        _kind: FailureStopKind,
+        summary: String,
+        _error: &str,
+        call: &ToolCall,
+    ) -> String {
+        format!("{}: {summary}", call.name)
+    }
+}
+
 fn context(instance_id: u64) -> RunContext<()> {
     let mut ctx = RunContext::new(RunConfig::new("failure-scope"), ());
     ctx.instance_id = instance_id;
@@ -330,6 +373,37 @@ async fn reset_failure_keeps_host_classified_failure_budget() {
         .expect("budget remains exhausted");
     assert!(summary.starts_with("shell: Stopping"), "{summary}");
     assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn contextual_terminal_copy_is_carried_in_typed_cause() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware =
+        FailureScopeMiddleware::new(handle, halt_summary.clone(), Arc::new(TypedCallHaltPolicy));
+    let mut ctx = context(91);
+    let mut call = ToolCall::new("call", "delegate_work", json!({}));
+    middleware
+        .before_tool(&mut ctx, &(), &mut call)
+        .await
+        .unwrap();
+    let mut result = ToolResult::error("provider unavailable");
+    middleware
+        .after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("call", "delegate_work"),
+            &mut result,
+        )
+        .await
+        .unwrap();
+
+    let final_summary = halt_summary.lock().unwrap().clone().unwrap();
+    assert_eq!(final_summary, "delegate_work: raw terminal summary");
+    let cause = ctx.take_halted_by_guard_cause().unwrap();
+    assert_eq!(cause.summary, final_summary);
+    assert_eq!(cause.class, "provider_out_of_budget");
+    assert_eq!(cause.operation, "delegate_work");
 }
 
 #[tokio::test]
