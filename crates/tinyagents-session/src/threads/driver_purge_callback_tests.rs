@@ -64,12 +64,13 @@ impl DocumentStore for DeleteProbeDocs {
                     .successful_thread_deletes
                     .fetch_add(1, Ordering::SeqCst);
                 if successful == 0 {
-                    if let Some(thread) = self
-                        .inject_thread_after_first_delete
-                        .lock()
-                        .expect("fixture injection mutex")
-                        .take()
-                    {
+                    let thread = {
+                        self.inject_thread_after_first_delete
+                            .lock()
+                            .expect("fixture injection mutex")
+                            .take()
+                    };
+                    if let Some(thread) = thread {
                         let key = DriverConversationStore::key(&thread.thread.id)
                             .expect("fixture thread id is valid");
                         self.inner
@@ -260,10 +261,19 @@ async fn purge_callback_enumerates_paged_and_new_threads() {
     let mut expected = (0..PAGE_SIZE + 3)
         .map(|index| format!("channel/page-{index:03}"))
         .collect::<BTreeSet<_>>();
-    expected.insert(inserted_id.to_owned());
     for id in &expected {
         store.ensure_thread(request(id)).await.unwrap();
     }
+    let injected_key = DriverConversationStore::key(inserted_id).unwrap();
+    assert!(
+        docs.inner
+            .get(COLLECTION, &injected_key)
+            .await
+            .unwrap()
+            .is_none(),
+        "fixture thread must be absent before the purge begins"
+    );
+    expected.insert(inserted_id.to_owned());
 
     let mut deleted = BTreeSet::new();
     let stats = store
