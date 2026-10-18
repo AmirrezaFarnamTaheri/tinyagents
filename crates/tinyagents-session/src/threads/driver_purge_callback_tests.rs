@@ -7,13 +7,18 @@ use tinystoragedrivers_core::{
     StorageError, Version, Versioned,
 };
 
-#[derive(Debug)]
 struct DeleteProbeDocs {
     inner: Arc<dyn DocumentStore>,
     thread_deletes: AtomicUsize,
     successful_thread_deletes: AtomicUsize,
     fail_on_thread_delete: Option<usize>,
     inject_thread_after_first_delete: Mutex<Option<ThreadDoc>>,
+}
+
+impl std::fmt::Debug for DeleteProbeDocs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeleteProbeDocs").finish_non_exhaustive()
+    }
 }
 
 #[async_trait]
