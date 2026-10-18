@@ -22,7 +22,9 @@ impl ChatModel<()> for ChargedModel {
     }
 }
 
-struct RecordingObserver(std::sync::Mutex<Vec<crate::observability::turn_observer::TurnObservation>>);
+struct RecordingObserver(
+    std::sync::Mutex<Vec<crate::observability::turn_observer::TurnObservation>>,
+);
 
 impl crate::observability::turn_observer::Observer for RecordingObserver {
     fn on_event(&self, event: &crate::observability::turn_observer::TurnObservation) {
@@ -98,5 +100,8 @@ async fn physical_dispatch_observes_the_normalized_buyer_charge() {
         TurnObservation::ModelDispatch { usage, .. } => usage.as_ref(),
         _ => None,
     });
-    assert_eq!(dispatch_usage.and_then(|usage| usage.cost_usd), Some(0.000007));
+    assert_eq!(
+        dispatch_usage.and_then(|usage| usage.cost_usd),
+        Some(0.000007)
+    );
 }
