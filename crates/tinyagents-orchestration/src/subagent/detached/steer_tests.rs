@@ -92,6 +92,7 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
         .await,
         Err(SteerError::UnsupportedLane)
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     let (_, fb) = counting();
     assert_eq!(
         steer_detached(
