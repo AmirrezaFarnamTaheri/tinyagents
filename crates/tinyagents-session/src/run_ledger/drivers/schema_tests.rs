@@ -98,10 +98,6 @@ fn the_schemas_name_what_each_owner_declares() {
     names.sort_unstable();
     let mut expected = [
         "ledger.agent_runs",
-        "ledger.entries",
-        "ledger.entry_heads",
-        "ledger.entry_indexes",
-        "ledger.entry_labels",
         "ledger.event_heads",
         "ledger.event_outbox",
         "ledger.events",
