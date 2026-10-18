@@ -78,6 +78,10 @@ pub trait ToolDispatch<State: Send + Sync, Ctx: Send + Sync>: Send + Sync {
     /// Returns the concrete target and effective arguments for call-rule
     /// checks after an indirect call is bound. The dispatcher declaration is
     /// still checked independently.
+    ///
+    /// The same bound implementation and arguments feed
+    /// [`crate::middleware::Middleware::observe_tool_execution`] when the
+    /// executor starts, so observation cannot resolve a different target.
     fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
         None
     }

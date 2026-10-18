@@ -35,11 +35,13 @@ use tinytools::ToolResult;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
 
-/// Harness-owned identity for one completed tool invocation.
+/// Harness-owned identity for one admitted tool invocation.
 ///
-/// [`Middleware::after_tool`] receives this separately from
-/// [`ToolResult`][tinytools::ToolResult] so canonical TinyTools results remain
-/// correlation-free and a tool cannot forge its own execution identity.
+/// [`Middleware::observe_tool_execution`] and [`Middleware::after_tool`]
+/// receive this separately from the concrete target or
+/// [`ToolResult`][tinytools::ToolResult], so packed execution can preserve the
+/// outer transcript identity and canonical TinyTools results remain
+/// correlation-free.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolInvocationIdentity {
     call_id: CallId,
@@ -47,7 +49,7 @@ pub struct ToolInvocationIdentity {
 }
 
 impl ToolInvocationIdentity {
-    /// Creates an identity for a completed invocation.
+    /// Creates an identity for an admitted invocation.
     pub fn new(call_id: impl Into<CallId>, tool_name: impl Into<String>) -> Self {
         Self {
             call_id: call_id.into(),
@@ -308,6 +310,40 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         _call: &mut ToolCall,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Observes one attempt as the admitted tool executor starts.
+    ///
+    /// Called inside the innermost tool-wrap future, after admission, argument
+    /// validation, rules, approvals, and host authorization. A request denied
+    /// or deferred before executor entry, or short-circuited by a wrapper,
+    /// does not reach this hook. A retry that invokes the executor again
+    /// produces another observation; an attempt that starts and then fails
+    /// or is cancelled is still an execution.
+    ///
+    /// `invocation` preserves the admitted outer call's transcript identity.
+    /// `target` and `arguments` describe the actual bound executor and its
+    /// effective arguments. For `use_skill`, they are the pinned inner tool
+    /// and inner arguments, even if wrap middleware later rewrites the outer
+    /// call. A disclosure or missing packed target observes only the dispatcher.
+    /// Ordinary calls use the registered tool and the final arguments passed
+    /// by the wrap onion. The hook also observes nested calls.
+    ///
+    /// This synchronous, read-only hook cannot refuse or rewrite execution.
+    /// Keep it short and use interior mutability for bookkeeping: invocations
+    /// can overlap. It runs in the same future poll as executor entry, so an
+    /// async observer cannot create evidence and then suspend before execution.
+    /// An observation establishes an attempt, not successful completion or a
+    /// confirmed side effect. Use the target's argument-aware permission and
+    /// external-effect declarations when distinguishing previews from writes.
+    fn observe_tool_execution(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _state: &State,
+        _invocation: &ToolInvocationIdentity,
+        _target: &dyn tinytools::Tool,
+        _arguments: &serde_json::Value,
+    ) {
     }
 
     /// Observes each [`ToolDelta`] of progress a tool reported through

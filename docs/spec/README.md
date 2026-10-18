@@ -45,6 +45,7 @@ observability, or test contracts.
   - [Tool](../modules/harness/tool.md)
   - [Tool exposure and discovery](../modules/harness/tool-discovery.md)
   - [Middleware](../modules/harness/middleware.md)
+  - [Tool wrapping and execution observation](../modules/harness/middleware-tool-wrap.md)
   - [Sub-agent and orchestrator steering](../modules/harness/subagent-steering.md)
   - [Structured output](../modules/harness/structured-output.md)
   - [Limits, retry, fallback, and rate limiting](../modules/harness/limits-retry.md)

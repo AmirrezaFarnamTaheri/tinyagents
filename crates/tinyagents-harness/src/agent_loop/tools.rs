@@ -1759,6 +1759,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let base = ToolCallBase {
             harness: self,
             dispatch,
+            invocation: crate::middleware::ToolInvocationIdentity::new(
+                call.id.clone(),
+                call.name.clone(),
+            ),
             options,
             timeout_settings: self.tool_timeouts.clone(),
             level: 0,
@@ -2107,6 +2111,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let base = ToolCallBase {
                 harness: self,
                 dispatch,
+                invocation: crate::middleware::ToolInvocationIdentity::new(
+                    call.id.clone(),
+                    call.name.clone(),
+                ),
                 options,
                 timeout_settings: self.tool_timeouts.clone(),
                 level: 0,
