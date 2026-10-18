@@ -190,7 +190,9 @@ impl CompletionStore for InMemoryCompletionStore {
             return Ok(None);
         };
         if record.state != CompletionState::Pending
-            || record.claim.as_ref().is_none_or(|claim| claim.token != token)
+            || record.claim.as_ref().is_none_or(|claim| {
+                claim.token != token || claim.visible_after <= SystemTime::now()
+            })
         {
             return Ok(None);
         }

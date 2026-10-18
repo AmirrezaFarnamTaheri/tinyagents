@@ -253,8 +253,11 @@ impl CompletionStore for DriverCompletionStore {
                 return Ok(None);
             };
             let mut record = decode_strict(row.clone())?;
+            let now = SystemTime::now();
             if record.state != CompletionState::Pending
-                || record.claim.as_ref().is_none_or(|claim| claim.token != token)
+                || record.claim.as_ref().is_none_or(|claim| {
+                    claim.token != token || claim.visible_after <= now
+                })
             {
                 return Ok(None);
             }
