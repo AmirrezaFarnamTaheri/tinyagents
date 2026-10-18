@@ -834,7 +834,7 @@ async fn awaited_completion_repairs_replayed_terminal_before_jobs_become_termina
 }
 
 #[test]
-fn subagent_driver_alias_preserves_host_name_description_and_schema() {
+fn driver_subagent_tool_preserves_host_name_description_and_schema() {
     let schema = json!({
         "type":"object",
         "required":["agent_id","prompt"],
@@ -870,17 +870,7 @@ fn subagent_driver_alias_preserves_host_name_description_and_schema() {
 }
 
 #[tokio::test]
-async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
-    let mut harness = AgentHarness::new();
-    harness.register_model(
-        "child",
-        Arc::new(MockModel::constant("legacy harness result")),
-    );
-    let legacy = Arc::new(tinyagents_orchestration::subagent::SubAgent::new(
-        "worker",
-        "worker description",
-        Arc::new(harness),
-    ));
+async fn driver_subagent_tool_routes_execution_through_the_driver() {
     let tool = DriverSubAgentTool::new(
         "subagent",
         "worker description",
@@ -918,14 +908,7 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
 }
 
 #[tokio::test]
-async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
-    let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant("legacy result")));
-    let legacy = Arc::new(tinyagents_orchestration::subagent::SubAgent::new(
-        "worker",
-        "worker description",
-        Arc::new(harness),
-    ));
+async fn driver_subagent_tool_routes_detached_completion_to_host_callback() {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     let callback_tx = tx.clone();
