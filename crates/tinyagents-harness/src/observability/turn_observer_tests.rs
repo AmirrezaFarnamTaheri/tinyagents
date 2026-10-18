@@ -106,3 +106,45 @@ async fn install_attaches_only_for_root_turns_with_a_scope() {
     .await;
     assert!(harness.policy().capture.tool_io);
 }
+
+struct NeverCalled;
+
+#[async_trait::async_trait]
+impl tinyinference_llm::model::ChatModel<()> for NeverCalled {
+    async fn invoke(
+        &self,
+        _: &(),
+        _: tinyinference_llm::model::ModelRequest,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelResponse> {
+        panic!("budget refusal must happen before provider invocation")
+    }
+}
+
+#[tokio::test]
+async fn budget_refusal_emits_no_physical_dispatch_event() {
+    use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
+
+    let recorder = Arc::new(Recorder::default());
+    let scope = ObserverScope::new(recorder.clone(), TraceContent::MetadataOnly);
+    let budget = crate::cost::ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(0),
+            cost_micros: None,
+        }),
+        CallBudget {
+            input_tokens: 10_000,
+            output_tokens: 100,
+            cost_micros: 0,
+        },
+    );
+    let model = budget.wrap_model(Arc::new(NeverCalled));
+    let result = with_observer(scope, async {
+        model
+            .invoke(&(), tinyinference_llm::model::ModelRequest::new(Vec::new()))
+            .await
+    })
+    .await;
+
+    assert!(result.is_err());
+    assert!(recorder.0.lock().unwrap().is_empty());
+}

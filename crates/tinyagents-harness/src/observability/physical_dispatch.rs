@@ -2,7 +2,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use futures::Stream;
+use tinyinference_llm::model::{
+    ChatModel, DeferredHandle, DeferredStatus, ModelRequest, ModelResponse, ModelStream,
+    ModelStreamItem,
+};
 
 /// Metadata available when one provider invocation is admitted.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -69,6 +73,7 @@ pub trait PhysicalDispatchObserver: Send + Sync {
 }
 
 /// A provider wrapper that reports each admitted invocation exactly once.
+/// Streaming calls keep the start open until a terminal stream item arrives.
 pub struct ObservedChatModel<State: Send + Sync> {
     inner: Arc<dyn ChatModel<State>>,
     observer: Arc<dyn PhysicalDispatchObserver>,
@@ -123,40 +128,95 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
         };
         let guard = PhysicalDispatchGuard::new(self.observer.on_start(&metadata));
         let result = self.inner.invoke(state, request).await;
-        let response = result.as_ref().ok();
-        let raw = response.and_then(|response| response.raw.as_ref());
-        let usage = response
-            .and_then(|response| response.usage.as_ref())
-            .map(|usage| PhysicalDispatchUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cached_tokens: usage.cache_read_tokens,
-                reasoning_tokens: usage.reasoning_tokens,
-                cost_usd: usage
-                    .charged_amount
-                    .as_ref()
-                    .map(|amount| amount.micros as f64 / 1_000_000.0)
-                    .or_else(|| {
-                        raw.and_then(|raw| raw.pointer("/usage/cost"))
-                            .and_then(serde_json::Value::as_f64)
-                    }),
-            });
-        let status = match response.and_then(|response| response.finish_reason.as_deref()) {
-            Some("refusal" | "content_filter") => PhysicalDispatchStatus::Refused,
-            _ if result.is_ok() => PhysicalDispatchStatus::Succeeded,
-            _ => PhysicalDispatchStatus::Failed,
-        };
-        guard.finish(PhysicalDispatchOutcome {
-            status,
-            duration: Duration::ZERO,
-            usage,
-            answered_model: raw
-                .and_then(|raw| raw.get("model"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            finish_reason: response.and_then(|response| response.finish_reason.clone()),
-        });
+        guard.finish(dispatch_outcome(result.as_ref().ok(), result.is_ok()));
         result
+    }
+
+    async fn stream(
+        &self,
+        state: &State,
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelStream> {
+        let metadata = PhysicalDispatchMetadata {
+            requested_model: request.model.clone(),
+            call_id: request
+                .correlation
+                .as_ref()
+                .map(|correlation| correlation.call_id.clone()),
+        };
+        let guard = PhysicalDispatchGuard::new(self.observer.on_start(&metadata));
+        let stream = match self.inner.stream(state, request).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                guard.finish(dispatch_outcome(None, false));
+                return Err(error);
+            }
+        };
+        let metadata = stream.metadata().clone();
+        let mut stream = Box::pin(stream);
+        let mut guard = Some(guard);
+        let observed = futures::stream::poll_fn(move |cx| {
+            let item = stream.as_mut().poll_next(cx);
+            if let std::task::Poll::Ready(Some(item)) = &item {
+                let outcome = match item {
+                    ModelStreamItem::Completed(response) => {
+                        Some(dispatch_outcome(Some(response), true))
+                    }
+                    ModelStreamItem::Deferred(_) => Some(dispatch_outcome(None, true)),
+                    ModelStreamItem::Failed(_) | ModelStreamItem::ProviderFailed(_) => {
+                        Some(dispatch_outcome(None, false))
+                    }
+                    _ => None,
+                };
+                if let (Some(outcome), Some(guard)) = (outcome, guard.take()) {
+                    guard.finish(outcome);
+                }
+            }
+            item
+        });
+        Ok(ModelStream::new(Box::pin(observed)).with_metadata(metadata))
+    }
+
+    async fn fetch_deferred(
+        &self,
+        handle: &DeferredHandle,
+    ) -> tinyinference_llm::Result<DeferredStatus> {
+        self.inner.fetch_deferred(handle).await
+    }
+}
+
+fn dispatch_outcome(response: Option<&ModelResponse>, succeeded: bool) -> PhysicalDispatchOutcome {
+    let raw = response.and_then(|response| response.raw.as_ref());
+    let usage = response
+        .and_then(|response| response.usage.as_ref())
+        .map(|usage| PhysicalDispatchUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_tokens: usage.cache_read_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+            cost_usd: usage
+                .charged_amount
+                .as_ref()
+                .map(|amount| amount.micros as f64 / 1_000_000.0)
+                .or_else(|| {
+                    raw.and_then(|raw| raw.pointer("/usage/cost"))
+                        .and_then(serde_json::Value::as_f64)
+                }),
+        });
+    let status = match response.and_then(|response| response.finish_reason.as_deref()) {
+        Some("refusal" | "content_filter") => PhysicalDispatchStatus::Refused,
+        _ if succeeded => PhysicalDispatchStatus::Succeeded,
+        _ => PhysicalDispatchStatus::Failed,
+    };
+    PhysicalDispatchOutcome {
+        status,
+        duration: Duration::ZERO,
+        usage,
+        answered_model: raw
+            .and_then(|raw| raw.get("model"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        finish_reason: response.and_then(|response| response.finish_reason.clone()),
     }
 }
 
