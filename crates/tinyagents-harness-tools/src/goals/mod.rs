@@ -26,7 +26,7 @@ pub use budget::{BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, tu
 pub use observer::{GoalObserver, GoalUpdateThrottle};
 pub use prompt::active_goal_context_block;
 pub use runtime::{GoalStore, GoalTurnPreparation};
-pub use tool::{GoalTool, GoalToolKind, GoalUpdateHook, goal_tools, register_goal_tools};
+pub use tool::{GoalTool, GoalToolKind, goal_tools, register_goal_tools};
 pub use types::{ThreadGoal, ThreadGoalStatus};
 
 #[cfg(test)]
