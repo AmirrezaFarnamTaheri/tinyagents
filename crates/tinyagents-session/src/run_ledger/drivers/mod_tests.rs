@@ -137,9 +137,10 @@ async fn file_workflow_lease_race_and_revision_fencing() {
     assert_eq!(acquired.len(), 1, "one live workflow lease owner wins");
     assert_eq!(busy.len(), 2, "every losing live claimant reports Busy");
     let owner = acquired[0].lease_owner.as_deref().unwrap();
-    assert!(busy
-        .iter()
-        .all(|run| run.lease_owner.as_deref() == Some(owner)));
+    assert!(
+        busy.iter()
+            .all(|run| run.lease_owner.as_deref() == Some(owner))
+    );
     assert!(
         ledger
             .renew_workflow_run_lease("leased", owner, Duration::minutes(1))
@@ -198,7 +199,9 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
 
     let dir = tempfile::tempdir().unwrap();
     let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
-    let storage = backend.for_scope(&Scope::new("profile-a").unwrap()).unwrap();
+    let storage = backend
+        .for_scope(&Scope::new("profile-a").unwrap())
+        .unwrap();
     let ledger = DriverRunLedger::new(storage.clone());
     let telemetry = ledger
         .upsert_run_telemetry(RunTelemetryUpsert {
