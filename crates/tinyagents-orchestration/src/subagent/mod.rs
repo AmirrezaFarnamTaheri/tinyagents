@@ -13,10 +13,11 @@ mod admission;
 mod awaiting_user;
 mod completion;
 mod detached;
-mod driver;
+mod document_persistence;
 #[cfg(test)]
 #[path = "document_persistence_tests.rs"]
 mod document_persistence_tests;
+mod driver;
 mod executor;
 mod file_persistence;
 mod invocation;
@@ -50,6 +51,7 @@ pub use detached::{
     wait_all_detached_with_owners, wait_detached, wait_detached_or_durable,
     wait_detached_or_durable_with_owners, wait_error_from_registry,
 };
+pub use document_persistence::DocumentSubagentPersistence;
 pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
 pub use executor::SubagentExecutor;
 pub use file_persistence::FileSubagentPersistence;

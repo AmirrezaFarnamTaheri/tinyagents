@@ -19,7 +19,10 @@ fn pause(key: SubagentTaskKey, checkpoint: &str) -> PersistedSubagentPause {
         outcome: SubagentOutcome {
             status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
                 reason: "answer?".into(),
-                resume: SubagentResume { checkpoint: Some(checkpoint.into()), ..Default::default() },
+                resume: SubagentResume {
+                    checkpoint: Some(checkpoint.into()),
+                    ..Default::default()
+                },
             }),
             output: checkpoint.into(),
             ..SubagentOutcome::cancelled(task)
@@ -38,20 +41,73 @@ async fn reopened_store_preserves_pause_cas_terminal_and_scoped_task_index() {
     let store = open(&backend, &Scope::local());
     let first = key("first");
     let second = key("second");
-    assert_eq!(store.save_pause(pause(first.clone(), "a")).await.unwrap(), SubagentPausePersistenceDisposition::Inserted);
-    assert_eq!(store.save_pause(pause(second.clone(), "b")).await.unwrap(), SubagentPausePersistenceDisposition::Inserted);
+    assert_eq!(
+        store.save_pause(pause(first.clone(), "a")).await.unwrap(),
+        SubagentPausePersistenceDisposition::Inserted
+    );
+    assert_eq!(
+        store.save_pause(pause(second.clone(), "b")).await.unwrap(),
+        SubagentPausePersistenceDisposition::Inserted
+    );
     let reopened = open(&backend, &Scope::local());
     let resume = reopened.load(&first).await.unwrap().unwrap();
-    assert_eq!(reopened.keys_for_task("task").unwrap(), vec![first.clone(), second.clone()]);
-    assert_eq!(reopened.save_pause(pause(first.clone(), "discard")).await.unwrap(), SubagentPausePersistenceDisposition::Existing);
-    assert_eq!(reopened.load_pause(&first).await.unwrap().unwrap().output, "a");
-    assert_eq!(reopened.record_terminal(&first, &SubagentOutcome::completed("task", "premature"), None).await.unwrap(), SubagentTerminalPersistenceDisposition::PauseExisting);
-    assert_eq!(reopened.record_terminal(&first, &SubagentOutcome::completed("task", "winner"), Some(&resume)).await.unwrap(), SubagentTerminalPersistenceDisposition::Inserted);
+    assert_eq!(
+        reopened.keys_for_task("task").unwrap(),
+        vec![first.clone(), second.clone()]
+    );
+    assert_eq!(
+        reopened
+            .save_pause(pause(first.clone(), "discard"))
+            .await
+            .unwrap(),
+        SubagentPausePersistenceDisposition::Existing
+    );
+    assert_eq!(
+        reopened.load_pause(&first).await.unwrap().unwrap().output,
+        "a"
+    );
+    assert_eq!(
+        reopened
+            .record_terminal(
+                &first,
+                &SubagentOutcome::completed("task", "premature"),
+                None
+            )
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::PauseExisting
+    );
+    assert_eq!(
+        reopened
+            .record_terminal(
+                &first,
+                &SubagentOutcome::completed("task", "winner"),
+                Some(&resume)
+            )
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::Inserted
+    );
     assert_eq!(store.load(&first).await.unwrap(), None);
-    assert_eq!(store.terminal_outcome(&first).unwrap().unwrap().output, "winner");
+    assert_eq!(
+        store.terminal_outcome(&first).unwrap().unwrap().output,
+        "winner"
+    );
     assert_eq!(store.keys_for_task("task").unwrap(), vec![second]);
-    assert_eq!(store.save_pause(pause(first.clone(), "resurrect")).await.unwrap(), SubagentPausePersistenceDisposition::TerminalExisting);
-    assert_eq!(store.record_terminal(&first, &SubagentOutcome::completed("task", "loser"), None).await.unwrap(), SubagentTerminalPersistenceDisposition::Existing);
+    assert_eq!(
+        store
+            .save_pause(pause(first.clone(), "resurrect"))
+            .await
+            .unwrap(),
+        SubagentPausePersistenceDisposition::TerminalExisting
+    );
+    assert_eq!(
+        store
+            .record_terminal(&first, &SubagentOutcome::completed("task", "loser"), None)
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::Existing
+    );
 }
 
 #[tokio::test]
@@ -60,12 +116,20 @@ async fn tenant_documents_do_not_leak_between_identical_task_keys() {
     let alice = open(&backend, &Scope::tenant("alice").unwrap());
     let bob = open(&backend, &Scope::tenant("bob").unwrap());
     let key = key("same");
-    alice.save_pause(pause(key.clone(), "secret")).await.unwrap();
+    alice
+        .save_pause(pause(key.clone(), "secret"))
+        .await
+        .unwrap();
     assert_eq!(bob.load(&key).await.unwrap(), None);
     assert!(bob.keys_for_task("task").unwrap().is_empty());
-    bob.record_terminal(&key, &SubagentOutcome::completed("task", "bob"), None).await.unwrap();
+    bob.record_terminal(&key, &SubagentOutcome::completed("task", "bob"), None)
+        .await
+        .unwrap();
     assert!(alice.terminal_outcome(&key).unwrap().is_none());
-    assert_eq!(alice.load_pause(&key).await.unwrap().unwrap().output, "secret");
+    assert_eq!(
+        alice.load_pause(&key).await.unwrap().unwrap().output,
+        "secret"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -94,11 +158,26 @@ async fn independent_stores_choose_one_pause_winner_and_return_its_actual_outcom
     barrier.wait();
     let (left, right) = (left.join().unwrap(), right.join().unwrap());
     let dispositions = [left, right];
-    assert_eq!(dispositions.iter().filter(|x| **x == SubagentPausePersistenceDisposition::Inserted).count(), 1);
-    assert_eq!(dispositions.iter().filter(|x| **x == SubagentPausePersistenceDisposition::Existing).count(), 1);
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|x| **x == SubagentPausePersistenceDisposition::Inserted)
+            .count(),
+        1
+    );
+    assert_eq!(
+        dispositions
+            .iter()
+            .filter(|x| **x == SubagentPausePersistenceDisposition::Existing)
+            .count(),
+        1
+    );
     let winner = first.load_pause(&key).await.unwrap().unwrap().output;
     assert!(winner == "left" || winner == "right");
-    assert_eq!(second.load_pause(&key).await.unwrap().unwrap().output, winner);
+    assert_eq!(
+        second.load_pause(&key).await.unwrap().unwrap().output,
+        winner
+    );
 }
 
 #[tokio::test]
@@ -106,13 +185,36 @@ async fn import_fills_missing_parts_without_replacing_committed_state() {
     let backend = MemoryStorage::new();
     let store = open(&backend, &Scope::local());
     let key = key("legacy");
-    store.import_record(&key, Some(pause(key.clone(), "legacy")), None).unwrap();
-    assert_eq!(store.load_pause(&key).await.unwrap().unwrap().output, "legacy");
-    store.import_record(&key, Some(pause(key.clone(), "old")), None).unwrap();
-    assert_eq!(store.load_pause(&key).await.unwrap().unwrap().output, "legacy");
+    store
+        .import_record(&key, Some(pause(key.clone(), "legacy")), None)
+        .unwrap();
+    assert_eq!(
+        store.load_pause(&key).await.unwrap().unwrap().output,
+        "legacy"
+    );
+    store
+        .import_record(&key, Some(pause(key.clone(), "old")), None)
+        .unwrap();
+    assert_eq!(
+        store.load_pause(&key).await.unwrap().unwrap().output,
+        "legacy"
+    );
     let resume = store.load(&key).await.unwrap().unwrap();
-    store.record_terminal(&key, &SubagentOutcome::completed("task", "new"), Some(&resume)).await.unwrap();
-    store.import_record(&key, Some(pause(key.clone(), "resurrect")), Some(SubagentOutcome::completed("task", "old"))).unwrap();
+    store
+        .record_terminal(
+            &key,
+            &SubagentOutcome::completed("task", "new"),
+            Some(&resume),
+        )
+        .await
+        .unwrap();
+    store
+        .import_record(
+            &key,
+            Some(pause(key.clone(), "resurrect")),
+            Some(SubagentOutcome::completed("task", "old")),
+        )
+        .unwrap();
     assert_eq!(store.load(&key).await.unwrap(), None);
     assert_eq!(store.terminal_outcome(&key).unwrap().unwrap().output, "new");
     assert!(store.keys_for_task("task").unwrap().is_empty());
