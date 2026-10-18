@@ -2271,8 +2271,6 @@ dependencies = [
 name = "tinyagents-tasks"
 version = "2.2.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "serde",
  "serde_json",
  "tempfile",
@@ -2280,7 +2278,6 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools",
  "tokio",
  "tracing",
 ]
