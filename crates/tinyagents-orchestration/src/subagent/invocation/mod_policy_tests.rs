@@ -149,9 +149,7 @@ async fn default_policies_leave_the_output_untouched() {
 #[tokio::test]
 async fn a_leaf_refuses_to_spawn_when_its_harness_exposes_delegation_tools() {
     let mut harness = constant("x");
-    harness.register_tool_dispatch(Arc::new(crate::subagent::SubAgentJobsTool::new(
-        SubAgentJobRegistry::new(),
-    )));
+    harness.register_tool(Arc::new(ExposedDelegationTool));
     let tool = tool_over(harness).with_role(SubagentRole::Leaf);
     let result = call_inline(&tool).await;
     assert!(result.is_error);
@@ -160,6 +158,27 @@ async fn a_leaf_refuses_to_spawn_when_its_harness_exposes_delegation_tools() {
 
     let ok = tool_over(constant("x")).with_role(SubagentRole::Leaf);
     assert!(!call_inline(&ok).await.is_error);
+}
+
+struct ExposedDelegationTool;
+
+#[async_trait::async_trait]
+impl tinytools::Tool for ExposedDelegationTool {
+    fn name(&self) -> &str {
+        crate::subagent::SUBAGENT_JOBS_TOOL
+    }
+
+    fn description(&self) -> &str {
+        "test delegation tool"
+    }
+
+    fn parameters_schema(&self) -> Value {
+        json!({"type": "object"})
+    }
+
+    async fn execute(&self, _args: Value) -> anyhow::Result<tinytools::ToolResult> {
+        Ok(tinytools::ToolResult::success("unused"))
+    }
 }
 
 #[test]

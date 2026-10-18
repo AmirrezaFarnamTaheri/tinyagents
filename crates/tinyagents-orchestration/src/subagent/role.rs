@@ -8,7 +8,7 @@
 //! set it inherits. [`subagent_framing`] is an optional, neutral system
 //! preamble a host may prepend; nothing applies it by default.
 
-use tinyagents_runtime::ToolSnapshot;
+use tinyagents_harness::tool::ToolSnapshot;
 
 /// Fleet-control tools whose visibility shapes orchestration prompts and
 /// decisions. The names are stable tool identifiers supplied by the host.
@@ -85,9 +85,11 @@ impl FleetToolSet {
     }
 }
 
-/// Name of the job query tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job query tool `register_subagent_job_tools` from the
+/// feature-gated `tinyagents-harness-tools` crate registers.
 pub const SUBAGENT_JOBS_TOOL: &str = "subagent_jobs";
-/// Name of the job message tool [`register_subagent_job_tools`](super::register_subagent_job_tools) registers.
+/// Name of the job message tool `register_subagent_job_tools` from the
+/// feature-gated `tinyagents-harness-tools` crate registers.
 pub const SUBAGENT_MESSAGE_TOOL: &str = "subagent_message";
 
 /// Whether a child may delegate further.

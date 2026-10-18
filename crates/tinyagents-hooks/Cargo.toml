@@ -14,7 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 regex = "1.10"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", default-features = false }
-tinyagents-graph = { path = "../tinyagents-graph", version = "2.2.0", default-features = false, optional = true }
+tinyagents-harness-tools = { path = "../tinyagents-harness-tools", version = "2.2.0", default-features = false, optional = true }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0" }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
@@ -22,7 +22,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
-goals = ["dep:tinyagents-graph"]
+goals = ["dep:tinyagents-harness-tools", "tinyagents-harness-tools/goals"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
