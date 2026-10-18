@@ -184,6 +184,12 @@ struct TerminalResolver {
     outcomes: Mutex<Vec<(String, &'static str)>>,
 }
 
+#[derive(Default)]
+struct AllowedAuditResolver {
+    allowed: Mutex<usize>,
+    outcomes: Mutex<Vec<(String, &'static str)>>,
+}
+
 #[async_trait]
 impl ApprovalResolver<Host> for TerminalResolver {
     async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
@@ -193,6 +199,44 @@ impl ApprovalResolver<Host> for TerminalResolver {
     async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
         ApprovalResolution::Allow {
             ticket: Some("ticket".into()),
+        }
+    }
+
+    fn record(&self, _ticket: &str, _result: &ToolResult) {}
+
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        let kind = match outcome {
+            ApprovalExecutionOutcome::Result(_) => "result",
+            ApprovalExecutionOutcome::Failed(_) => "failed",
+            ApprovalExecutionOutcome::Cancelled(_) => "cancelled",
+            ApprovalExecutionOutcome::Control(_) => "control",
+            ApprovalExecutionOutcome::Abandoned => "abandoned",
+        };
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push((ticket.to_owned(), kind));
+    }
+}
+
+#[async_trait]
+impl ApprovalResolver<Host> for AllowedAuditResolver {
+    async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
+        false
+    }
+
+    async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
+        panic!("an already-allowed call must not enter the approval prompt path")
+    }
+
+    async fn resolve_allowed(
+        &self,
+        _ctx: &RunContext<Host>,
+        _call: &ToolCall,
+    ) -> ApprovalResolution {
+        *self.allowed.lock().unwrap() += 1;
+        ApprovalResolution::Allow {
+            ticket: Some("allowed-audit".into()),
         }
     }
 
@@ -408,6 +452,42 @@ async fn approved_post_gate_response_records_one_terminal_callback() {
         *resolver.outcomes.lock().unwrap(),
         vec![("ticket".into(), "result")]
     );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_admits_and_records_allowed_execution() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "ran");
+    assert_eq!(runs, 1);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("allowed-audit".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_never_receives_policy_denials() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "rm", false).await;
+
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(runs, 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 0);
+    assert!(resolver.outcomes.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

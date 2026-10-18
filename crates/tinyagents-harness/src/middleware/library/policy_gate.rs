@@ -115,6 +115,18 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// waiting for a decision or an expiry).
     async fn resolve(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> ApprovalResolution;
 
+    /// Optionally admits an already-allowed call and attaches an audit or
+    /// admission ticket. This callback must never widen the policy decision;
+    /// returning `Deny` can only fail the call closed. The default preserves
+    /// existing resolver behavior and leaves allowed calls ticket-free.
+    async fn resolve_allowed(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+    ) -> ApprovalResolution {
+        ApprovalResolution::Allow { ticket: None }
+    }
+
     /// Records a returned tool result for older resolvers. New resolvers
     /// should implement [`Self::record_terminal`] to observe every terminal
     /// outcome for an acquired ticket.
@@ -240,7 +252,8 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     /// Decides one call end to end for hosts that interleave the gate with
     /// their own checks: the policy decision (with the `waive_approval`
     /// downgrade of [`Self::check`]), then, for a
-    /// [`PolicyDecision::RequireApproval`], settlement through `resolver`.
+    /// [`PolicyDecision::Allow`] admission or [`PolicyDecision::RequireApproval`]
+    /// settlement through `resolver`.
     /// Without a resolver an approval requirement fails closed as
     /// [`GateVerdict::Blocked`].
     pub async fn evaluate(
@@ -252,7 +265,13 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     ) -> GateVerdict {
         let decision = self.check(ctx, call, waive_approval).await;
         match (decision, resolver) {
-            (PolicyDecision::Allow, _) => GateVerdict::Proceed { ticket: None },
+            (PolicyDecision::Allow, Some(resolver)) => {
+                match resolver.resolve_allowed(ctx, call).await {
+                    ApprovalResolution::Allow { ticket } => GateVerdict::Proceed { ticket },
+                    ApprovalResolution::Deny { reason } => GateVerdict::Refused { reason },
+                }
+            }
+            (PolicyDecision::Allow, None) => GateVerdict::Proceed { ticket: None },
             (PolicyDecision::RequireApproval { .. }, Some(resolver)) => {
                 match resolver.resolve(ctx, call).await {
                     ApprovalResolution::Allow { ticket } => GateVerdict::Proceed { ticket },
@@ -626,7 +645,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                         reason: format!("{builder}; {session}"),
                     }),
                     (PolicyDecision::Allow, PolicyDecision::Allow) => {
-                        GateVerdict::Proceed { ticket: None }
+                        if let Some(resolver) = self.resolver.as_deref() {
+                            match resolver.resolve_allowed(ctx, &call).await {
+                                ApprovalResolution::Allow { ticket } => {
+                                    GateVerdict::Proceed { ticket }
+                                }
+                                ApprovalResolution::Deny { reason } => {
+                                    GateVerdict::Refused { reason }
+                                }
+                            }
+                        } else {
+                            GateVerdict::Proceed { ticket: None }
+                        }
                     }
                     // A session denial was returned above.
                     (_, PolicyDecision::Deny { .. }) => {
