@@ -20,10 +20,7 @@ fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
         split_prompt_tiers(&body, PromptTier::Volatile),
         vec![
             TieredPromptPart::new(PromptTier::Volatile, "é stable\n"),
-            TieredPromptPart::new(
-                PromptTier::Context,
-                "\n<!--prompt-tier:unknown-->\n",
-            ),
+            TieredPromptPart::new(PromptTier::Context, "\n<!--prompt-tier:unknown-->\n",),
             TieredPromptPart::new(PromptTier::Volatile, "📎 tail"),
         ],
         "marker lines are removed, while unknown comments and non-whitespace body bytes stay literal"
@@ -41,7 +38,10 @@ fn dynamic_prompt_tier_markers_keep_defaults_and_discard_empty_slices() {
     );
     assert_eq!(
         split_prompt_tiers(
-            &format!("{context}\n{context}\ncontent", context = PROMPT_TIER_CONTEXT_MARKER),
+            &format!(
+                "{context}\n{context}\ncontent",
+                context = PROMPT_TIER_CONTEXT_MARKER
+            ),
             PromptTier::Volatile,
         ),
         vec![TieredPromptPart::new(PromptTier::Context, "content")]

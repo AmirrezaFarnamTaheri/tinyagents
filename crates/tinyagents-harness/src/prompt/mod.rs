@@ -48,9 +48,10 @@ pub const PROMPT_TIER_VOLATILE_MARKER: &str = "<!--prompt-tier:volatile-->";
 /// Split a dynamic prompt body into typed cache-tier parts.
 ///
 /// Marker lines are recognized after trimming for comparison and are omitted
-/// from the returned content. All other line bytes are preserved exactly,
-/// except whitespace-only slices between markers, which are discarded. An
-/// unmarked body stays in `default_tier`.
+/// from the returned content. Markers may repeat or appear in either order;
+/// each changes the tier of following text. All other line bytes are preserved
+/// exactly, except whitespace-only slices between markers, which are
+/// discarded. An unmarked body stays in `default_tier`.
 #[must_use]
 pub fn split_prompt_tiers(body: &str, default_tier: PromptTier) -> Vec<TieredPromptPart> {
     let mut parts = Vec::new();
