@@ -9,3 +9,7 @@ mod driver_tool_tests;
 pub use jobs::{
     SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
 };
+
+#[cfg(test)]
+#[path = "sessions_tests.rs"]
+mod sessions_tests;

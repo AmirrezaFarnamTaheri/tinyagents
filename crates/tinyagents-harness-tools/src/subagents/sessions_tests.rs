@@ -1,6 +1,5 @@
-use super::*;
-use crate::subagent::SubAgentJobsTool;
-use crate::subagent::SubagentRequest;
+use tinyagents_orchestration::subagent::*;
+use crate::subagents::{SubAgentJobAction, SubAgentJobRegistry, SubAgentJobsTool};
 use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::new_call_id;
@@ -214,7 +213,7 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
             .with_lineage(parent_run.clone(), parent_run.clone()),
         )
         .unwrap();
-    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
+    let jobs = SubAgentJobsTool::new(crate::subagents::SubAgentJobRegistry::default())
         .with_sessions(Arc::new(store.clone()), |owner| owner.to_string())
         .with_task_store(task_store, move |_| parent_run.clone());
 
@@ -357,8 +356,8 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
         )
         .unwrap();
 
-    let jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
-        .with_fixed_action(crate::subagent::SubAgentJobAction::Await)
+    let jobs = SubAgentJobsTool::new(crate::subagents::SubAgentJobRegistry::default())
+        .with_fixed_action(crate::subagents::SubAgentJobAction::Await)
         .with_identifier_fields("task_id", "subagent_session_id")
         .with_task_store(task_store.clone(), move |_| owner.clone())
         .with_task_thread_scope(|_| Some("thread-a".into()));
@@ -411,8 +410,8 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
     assert_eq!(failed["error"], "durable failure");
     assert_eq!(failed["agent"], "reviewer");
 
-    let foreign_jobs = SubAgentJobsTool::new(crate::subagent::SubAgentJobRegistry::default())
-        .with_fixed_action(crate::subagent::SubAgentJobAction::Await)
+    let foreign_jobs = SubAgentJobsTool::new(crate::subagents::SubAgentJobRegistry::default())
+        .with_fixed_action(crate::subagents::SubAgentJobAction::Await)
         .with_identifier_field("task_id")
         .with_task_store(task_store.clone(), |_| {
             tinyagents_harness::ids::RunId::new("foreign-owner")
