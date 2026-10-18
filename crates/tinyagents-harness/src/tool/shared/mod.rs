@@ -4,8 +4,8 @@
 //! The harness executes the canonical `tinytools::Tool` contract directly. A
 //! host that keeps its tools in `Arc<Vec<Box<dyn Tool>>>` sets shared across
 //! sessions cannot hand the harness an owned tool, so this adapter resolves the
-//! tool by name at call time, forwards spec, policy, exposure, family and
-//! context, and preserves an optional [`EarlyExitHook`].
+//! tool by name at call time, forwards spec, policy, permissions, side effects,
+//! exposure, family and context, and preserves an optional [`EarlyExitHook`].
 
 mod early_exit;
 
@@ -126,6 +126,30 @@ impl Tool for CanonicalSharedToolAdapter {
 
     fn policy(&self) -> tinytools::ToolPolicy {
         self.resolved_tool().map(Tool::policy).unwrap_or_default()
+    }
+
+    // Admission and execution observers need the selected tool's actual
+    // argument-sensitive metadata. The trait's read-only defaults would
+    // otherwise hide writes and external effects behind this adapter.
+    fn permission_level(&self) -> tinytools::PermissionLevel {
+        self.resolved_tool()
+            .map(Tool::permission_level)
+            .unwrap_or(tinytools::PermissionLevel::Dangerous)
+    }
+
+    fn permission_level_with_args(&self, args: &serde_json::Value) -> tinytools::PermissionLevel {
+        self.resolved_tool()
+            .map(|tool| tool.permission_level_with_args(args))
+            .unwrap_or(tinytools::PermissionLevel::Dangerous)
+    }
+
+    fn external_effect(&self) -> bool {
+        self.resolved_tool().is_none_or(Tool::external_effect)
+    }
+
+    fn external_effect_with_args(&self, args: &serde_json::Value) -> bool {
+        self.resolved_tool()
+            .is_none_or(|tool| tool.external_effect_with_args(args))
     }
 
     /// Forwarded so the harness indexes `Deferred` registrations for its
@@ -261,3 +285,7 @@ impl Tool for CanonicalSharedToolAdapter {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "mod_permissions_tests.rs"]
+mod permissions_tests;
