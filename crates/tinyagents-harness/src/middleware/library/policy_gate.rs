@@ -115,8 +115,9 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// waiting for a decision or an expiry).
     async fn resolve(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> ApprovalResolution;
 
-    /// Optionally admits an already-allowed call and attaches an audit or
-    /// admission ticket. This callback must never widen the policy decision;
+    /// Optionally admits an already-allowed call without prompting or
+    /// requesting human approval, and attaches an audit or admission ticket.
+    /// This callback must never widen the policy decision;
     /// returning `Deny` can only fail the call closed. The default preserves
     /// existing resolver behavior and leaves allowed calls ticket-free.
     async fn resolve_allowed(
