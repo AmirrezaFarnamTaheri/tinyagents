@@ -240,6 +240,11 @@ pub struct TurnRunnerConfig {
     pub idle_timeout: Duration,
     pub deadline: Option<Duration>,
     pub close_timeout: Duration,
+    /// How long a cancelled host run keeps being polled, with its own
+    /// cancellation token already fired, before it is dropped. A host uses the
+    /// window to hand back and persist the rounds it completed. Zero drops the
+    /// run immediately.
+    pub cancel_grace: Duration,
 }
 
 impl Default for TurnRunnerConfig {
@@ -248,6 +253,7 @@ impl Default for TurnRunnerConfig {
             idle_timeout: Duration::from_secs(900),
             deadline: None,
             close_timeout: Duration::from_secs(60),
+            cancel_grace: Duration::ZERO,
         }
     }
 }
@@ -683,7 +689,12 @@ where
                 if !request.host_authored && request.disposition != QueueDisposition::Parallel {
                     let (collected, next) = match active_generation {
                         Some(generation) => {
-                            self.finalize_generation(&request.scope, &request.thread_id, generation)
+                            self.finalize_generation(
+                                &request.scope,
+                                &request.thread_id,
+                                generation,
+                                &request.payload,
+                            )
                                 .await
                         }
                         None => (Vec::new(), None),
@@ -838,6 +849,7 @@ where
         scope: &ScopeKey,
         thread_id: &str,
         owner_generation: u64,
+        running: &P,
     ) -> (Vec<TurnRequest<P>>, Option<(TurnRequest<P>, ActiveTurn<P>)>) {
         let key = (scope.clone(), thread_id.to_owned());
         let mut active = self.active.lock().await;
@@ -867,7 +879,13 @@ where
         } else {
             next
         };
-        if let Some(request) = next {
+        if let Some(mut request) = next {
+            // A steer the harness recovered was rebuilt without its scope and
+            // payload metadata; it belongs to this thread and inherits what the
+            // finished turn knew.
+            request.scope = scope.clone();
+            request.thread_id = thread_id.to_owned();
+            request.payload.adopt(running);
             let reserved = ActiveTurn {
                 request_id: request.request_id.clone(),
                 cancel: crate::CancellationToken::new(),
@@ -1000,6 +1018,17 @@ where
                 _ = cancellation.cancelled() => {
                     task_cancellation.cancel();
                     self.host.cancel_children(request).await;
+                    if !self.config.cancel_grace.is_zero() {
+                        // Let the host unwind with its token fired; its result
+                        // is discarded either way.
+                        let unwound = tokio::time::timeout(self.config.cancel_grace, &mut run).await;
+                        tracing::debug!(
+                            thread_id = %request.thread_id,
+                            request_id = %request.request_id,
+                            unwound = unwound.is_ok(),
+                            "turn runner: cancelled run left its grace window"
+                        );
+                    }
                     return Err("turn cancelled".into());
                 }
                 _ = async { if let Some(deadline) = deadline.at { tokio::time::sleep_until(deadline).await } else { std::future::pending().await } }, if deadline.at.is_some() => {

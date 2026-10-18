@@ -10,7 +10,7 @@ mod types;
 
 pub use types::{
     EventSink, FailureClassifier, IngressDecision, IngressPolicy, IngressStage, QueueDisposition,
-    ReplyStore, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner,
+    ReplyStore, RequeuePayload, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner,
     TurnRunnerConfig, TurnRunnerError, TurnSession, TurnSignal, deterministic_reply_id,
 };
 
