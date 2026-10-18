@@ -1619,6 +1619,60 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+#[tokio::test]
+async fn parent_cancellation_cascades_to_running_driver_jobs() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let parent = RunContext::new(RunConfig::new("parent-cancel-cascade"), ());
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        blocking_driver(started.clone(), release, calls.clone()),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("parent-cancel-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "parent-cancel-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("parent-cancel-thread".into()),
+    )
+    .with_job_registry(jobs.clone());
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-parent-cancel"),
+        json!({"input":"work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let task_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    started.notified().await;
+    parent.cancellation.cancel();
+    let terminal = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        jobs.wait_owned(&task_id, parent.instance_id().to_string()),
+    )
+    .await
+    .expect("parent cancellation settles the child job")
+    .unwrap();
+    assert_eq!(terminal.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 fn inline_blocking_alias(
     jobs: SubAgentJobRegistry,
     driver: Arc<SubagentDriver<(), ()>>,
