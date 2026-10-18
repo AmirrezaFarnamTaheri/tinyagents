@@ -66,6 +66,122 @@ impl FailureScopePolicy<()> for Policy {
     }
 }
 
+#[derive(Default)]
+struct ResetAndCallCopyPolicy {
+    progress: Arc<AtomicUsize>,
+}
+
+impl crate::no_progress::FailurePolicy for ResetAndCallCopyPolicy {
+    fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
+        format!("{tool} failed {count} times")
+    }
+
+    fn no_progress_halt_summary(&self, count: u32, tool: &str, _failure_text: &str) -> String {
+        format!("{tool} made no progress in {count} calls")
+    }
+}
+
+impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
+    fn scope(&self, _ctx: &RunContext<()>, call: &ToolCall) -> FailureScope {
+        FailureScope {
+            argument_fingerprint: "same-arguments".into(),
+            scope: call.name.clone(),
+        }
+    }
+
+    fn assess(
+        &self,
+        _ctx: &RunContext<()>,
+        _invocation: &ToolInvocationIdentity,
+        call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> FailureAssessment {
+        if call.arguments.get("classed") == Some(&json!(true)) {
+            FailureAssessment::ClassifiedFailure {
+                class: "auth".into(),
+                budget: 1,
+                error: "unauthorized".into(),
+                nudge: None,
+            }
+        } else {
+            FailureAssessment::Failure {
+                error: "failed".into(),
+                hard_reject: false,
+                recoverable_miss: false,
+            }
+        }
+    }
+
+    fn halt_copy_for_call(
+        &self,
+        _ctx: &RunContext<()>,
+        _kind: FailureStopKind,
+        summary: String,
+        _error: &str,
+        call: &ToolCall,
+    ) -> String {
+        format!("{}: {summary}", call.name)
+    }
+
+    fn record_progress(&self, _ctx: &RunContext<()>, _call: &ToolCall, _scope: &FailureScope) {
+        self.progress.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn reset_no_progress_before_failure(
+        &self,
+        _ctx: &RunContext<()>,
+        call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> bool {
+        call.arguments.get("reset") == Some(&json!(true))
+    }
+}
+
+struct TypedCallHaltPolicy;
+
+impl crate::no_progress::FailurePolicy for TypedCallHaltPolicy {
+    fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
+        format!("{tool} failed {count} times")
+    }
+
+    fn no_progress_halt_summary(&self, count: u32, tool: &str, _failure_text: &str) -> String {
+        format!("{tool} made no progress in {count} calls")
+    }
+}
+
+impl FailureScopePolicy<()> for TypedCallHaltPolicy {
+    fn assess(
+        &self,
+        _ctx: &RunContext<()>,
+        _invocation: &ToolInvocationIdentity,
+        _call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> FailureAssessment {
+        FailureAssessment::Halt {
+            summary: "raw terminal summary".into(),
+            cause: Some(ClassifiedStopCause {
+                class: "provider_out_of_budget".into(),
+                operation: "delegate_work".into(),
+                summary: "raw terminal summary".into(),
+            }),
+        }
+    }
+
+    fn halt_copy_for_call(
+        &self,
+        _ctx: &RunContext<()>,
+        _kind: FailureStopKind,
+        summary: String,
+        _error: &str,
+        call: &ToolCall,
+    ) -> String {
+        format!("{}: {summary}", call.name)
+    }
+}
+
 fn context(instance_id: u64) -> RunContext<()> {
     let mut ctx = RunContext::new(RunConfig::new("failure-scope"), ());
     ctx.instance_id = instance_id;
@@ -138,6 +254,155 @@ async fn repeated_failures_nudge_before_halt() {
             .iter()
             .any(|command| matches!(command, SteeringCommand::Pause))
     );
+}
+
+#[tokio::test]
+async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let policy = Arc::new(ResetAndCallCopyPolicy::default());
+    let middleware = FailureScopeMiddleware::with_identical_threshold(
+        handle.clone(),
+        halt_summary.clone(),
+        policy.clone(),
+        2,
+    );
+    observe_once(
+        &middleware,
+        89,
+        "first",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    observe_once(
+        &middleware,
+        89,
+        "second",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
+    observe_once(
+        &middleware,
+        89,
+        "new-command",
+        "shell",
+        json!({"reset": true}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
+    observe_once(
+        &middleware,
+        89,
+        "new-command-repeat",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        89,
+        "new-command-repeat-again",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    let summary = halt_summary
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("third failure halts");
+    assert!(summary.starts_with("shell: Stopping"), "{summary}");
+    assert!(
+        summary.contains("retried 3 times with identical arguments"),
+        "{summary}"
+    );
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn reset_failure_keeps_host_classified_failure_budget() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let policy = Arc::new(ResetAndCallCopyPolicy::default());
+    let middleware = FailureScopeMiddleware::new(handle, halt_summary.clone(), policy.clone());
+    observe_once(
+        &middleware,
+        90,
+        "classified-first",
+        "shell",
+        json!({"classed": true}),
+        ToolResult::error("unauthorized"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        90,
+        "informational-exit",
+        "shell",
+        json!({"reset": true}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        90,
+        "classified-second",
+        "shell",
+        json!({"classed": true}),
+        ToolResult::error("unauthorized"),
+    )
+    .await;
+    let summary = halt_summary
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("budget remains exhausted");
+    assert!(summary.starts_with("shell: Stopping"), "{summary}");
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn contextual_terminal_copy_is_carried_in_typed_cause() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware =
+        FailureScopeMiddleware::new(handle, halt_summary.clone(), Arc::new(TypedCallHaltPolicy));
+    let mut ctx = context(91);
+    let mut call = ToolCall::new("call", "delegate_work", json!({}));
+    middleware
+        .before_tool(&mut ctx, &(), &mut call)
+        .await
+        .unwrap();
+    let mut result = ToolResult::error("provider unavailable");
+    middleware
+        .after_tool(
+            &mut ctx,
+            &(),
+            &ToolInvocationIdentity::new("call", "delegate_work"),
+            &mut result,
+        )
+        .await
+        .unwrap();
+
+    let final_summary = halt_summary.lock().unwrap().clone().unwrap();
+    assert_eq!(final_summary, "delegate_work: raw terminal summary");
+    let cause = ctx.take_halted_by_guard_cause().unwrap();
+    assert_eq!(cause.summary, final_summary);
+    assert_eq!(cause.class, "provider_out_of_budget");
+    assert_eq!(cause.operation, "delegate_work");
 }
 
 #[tokio::test]
