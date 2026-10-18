@@ -37,19 +37,37 @@ jobs:
           echo "Merge base $(git merge-base HEAD "$upstream")"
           mkdir -p sync-report
           echo "$upstream" > sync-report/upstream.txt
-          if git merge --no-commit --no-ff "$upstream"; then
-            git rm -- .github/workflows/openhuman-upstream-tinyagents-sync-once.yml
-            git diff --cached --check
-            git commit -m "merge: onboard canonical TinyAgents main ($upstream)"
-            git push origin "HEAD:refs/heads/$branch"
-          else
+          status=0
+          git merge --no-commit --no-ff "$upstream" || status=$?
+          if [ "$status" -ne 0 ]; then
             git diff --name-only --diff-filter=U | tee sync-report/conflicts.txt
             git ls-files -u > sync-report/unmerged-stages.txt
             git diff --cc > sync-report/combined.diff
             git status --short > sync-report/status.txt
-            echo "::error::TinyAgents source merge conflicts ($(wc -l < sync-report/conflicts.txt))"
+            expected="$(printf '%s\n' 'crates/tinyagents-session/src/transcript/turn_lock_tests.rs' 'vendor/tinytools' | sort)"
+            actual="$(sort sync-report/conflicts.txt)"
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unreviewed TinyAgents conflicts; refusing an automatic resolution"
+              exit 2
+            fi
+            # Only test-fixture naming differs; prefer upstream's globally
+            # unique store/thread identifiers to prevent parallel-test bleed.
+            git checkout --theirs -- crates/tinyagents-session/src/transcript/turn_lock_tests.rs
+            git add -- crates/tinyagents-session/src/transcript/turn_lock_tests.rs
+            # Preserve the structural-code additions in the fork of TinyTools,
+            # now rebased by a real upstream merge and verified against its main.
+            git update-index --add --cacheinfo 160000,0d349716deafc4d91a595bf85400e8445cd1a6e8,vendor/tinytools
+          fi
+          # GITHUB_TOKEN has contents:write but not workflows permission.
+          # Sync upstream YAML through the GitHub connector after source merge.
+          git restore --source=HEAD --staged --worktree -- .github/workflows
+          if git diff --name-only --diff-filter=U | grep .; then
+            echo "::error::Still contains unmerged paths"
             exit 2
           fi
+          git diff --cached --check
+          git commit -m "merge: onboard canonical TinyAgents main ($upstream) with TinyTools structural fork"
+          git push origin "HEAD:refs/heads/$branch"
       - name: Publish conflict audit
         if: failure()
         uses: actions/upload-artifact@v4
