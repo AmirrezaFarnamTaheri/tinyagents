@@ -754,6 +754,26 @@ impl RunLedgerStore for DriverRunLedger {
             .await
     }
 
+    async fn complete_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+        evidence: &[String],
+        require_evidence: bool,
+    ) -> Result<CompletionOutcome> {
+        self.complete_team_task_if_claimed(
+            team_id,
+            task_id,
+            member_id,
+            Some(claim_token),
+            evidence,
+            require_evidence,
+        )
+        .await
+    }
+
     /// Implement [`RunLedgerStore::shutdown_agent_team_member`] without a weaker fallback.
     async fn shutdown_agent_team_member(
         &self,
@@ -787,6 +807,44 @@ impl RunLedgerStore for DriverRunLedger {
         .map_err(Into::into)
     }
 
+    async fn try_start_agent_team_member(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<AgentTeamMemberRunAdmission> {
+        let now = Utc::now();
+        self.change(
+            MEMBERS,
+            member_id,
+            move |previous: Option<AgentTeamMember>| {
+                let Some(mut row) = previous.filter(|row| row.team_id == team_id) else {
+                    return Ok((None, AgentTeamMemberRunAdmission::Missing));
+                };
+                match row.member_status {
+                    AgentTeamMemberStatus::Active => {
+                        Ok((None, AgentTeamMemberRunAdmission::AlreadyActive(row)))
+                    }
+                    AgentTeamMemberStatus::Stopped => {
+                        Ok((None, AgentTeamMemberRunAdmission::NotAdmissible(row)))
+                    }
+                    AgentTeamMemberStatus::Pending | AgentTeamMemberStatus::Idle => {
+                        row.member_status = AgentTeamMemberStatus::Active;
+                        row.current_task_id = Some(task_id.to_owned());
+                        row.worker_thread_id = Some(worker_thread_id.to_owned());
+                        row.run_id = Some(run_id.to_owned());
+                        row.updated_at = now;
+                        Ok((Some(row.clone()), AgentTeamMemberRunAdmission::Started(row)))
+                    }
+                }
+            },
+        )
+        .await
+        .map_err(Into::into)
+    }
+
     async fn mark_agent_team_member_idle(
         &self,
         team_id: &str,
@@ -806,11 +864,68 @@ impl RunLedgerStore for DriverRunLedger {
         .map_err(Into::into)
     }
 
+    async fn mark_agent_team_member_idle_if_current(
+        &self,
+        team_id: &str,
+        member_id: &str,
+        task_id: &str,
+        worker_thread_id: &str,
+        run_id: &str,
+    ) -> Result<Option<AgentTeamMember>> {
+        let now = Utc::now();
+        self.change(MEMBERS, member_id, |previous: Option<AgentTeamMember>| {
+            let Some(mut row) = previous.filter(|row| {
+                row.team_id == team_id
+                    && row.member_status == AgentTeamMemberStatus::Active
+                    && row.current_task_id.as_deref() == Some(task_id)
+                    && row.worker_thread_id.as_deref() == Some(worker_thread_id)
+                    && row.run_id.as_deref() == Some(run_id)
+            }) else {
+                return Ok((None, None));
+            };
+            row.member_status = AgentTeamMemberStatus::Idle;
+            row.current_task_id = None;
+            row.updated_at = now;
+            Ok((Some(row.clone()), Some(row)))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
     async fn release_agent_team_task(&self, team_id: &str, task_id: &str) -> Result<bool> {
         let now = now();
         self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
             let Some(mut row) = previous.filter(|row| {
                 row.team_id == team_id && row.status == AgentTeamTaskStatus::InProgress
+            }) else {
+                return Ok((None, false));
+            };
+            row.status = AgentTeamTaskStatus::Todo;
+            row.claimed_by_member_id = None;
+            row.claim_token = None;
+            row.gate_status = "pending".into();
+            row.gate_reason = None;
+            row.updated_at = now;
+            Ok((Some(row), true))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
+    async fn release_agent_team_task_if_claimed(
+        &self,
+        team_id: &str,
+        task_id: &str,
+        member_id: &str,
+        claim_token: &str,
+    ) -> Result<bool> {
+        let now = Utc::now();
+        self.change(TASKS, task_id, |previous: Option<AgentTeamTask>| {
+            let Some(mut row) = previous.filter(|row| {
+                row.team_id == team_id
+                    && row.status == AgentTeamTaskStatus::InProgress
+                    && row.claimed_by_member_id.as_deref() == Some(member_id)
+                    && row.claim_token.as_deref() == Some(claim_token)
             }) else {
                 return Ok((None, false));
             };

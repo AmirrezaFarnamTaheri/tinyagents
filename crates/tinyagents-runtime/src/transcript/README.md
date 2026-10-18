@@ -17,6 +17,12 @@ without assistant tool declarations or user media parts. Both omit custom host
 records. Neither projection is a lossless durable codec: hosts retain raw
 arguments, provider extensions, ids and metadata through `TranscriptCodec`.
 
+`TranscriptCodec::reconcile` supplies a default lossless merge for hosts whose
+rows use the native transcript shape: it matches each next message to one
+unused prior position, retains that row's metadata, and stamps the current
+request id only on new rows. Hosts with a custom durable dialect can override
+it and keep their metadata and usage callbacks.
+
 `reasoning_content_block` and `reasoning_from_content` preserve nonblank reasoning
 without trimming. Multiple spans remain ordered; adjacent duplicate thinking and
 legacy `reasoning_content` provider-extension spans are rendered once. Assistant

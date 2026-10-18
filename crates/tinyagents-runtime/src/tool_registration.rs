@@ -48,6 +48,30 @@ pub struct RegistrationPlan {
     pub spawn_refused: Vec<String>,
 }
 
+/// Deterministic changes between two synthesized tool-name surfaces.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolSurfaceDiff {
+    /// Newly synthesized names, sorted for stable observation.
+    pub added: Vec<String>,
+    /// Revoked names, sorted for stable observation.
+    pub removed: Vec<String>,
+    /// Names present in both surfaces, sorted for stable observation.
+    pub retained: Vec<String>,
+}
+
+/// Computes a stable visibility diff for a synthesized tool refresh.
+pub fn tool_surface_diff(previous: &HashSet<String>, next: &HashSet<String>) -> ToolSurfaceDiff {
+    let mut diff = ToolSurfaceDiff {
+        added: next.difference(previous).cloned().collect(),
+        removed: previous.difference(next).cloned().collect(),
+        retained: previous.intersection(next).cloned().collect(),
+    };
+    diff.added.sort();
+    diff.removed.sort();
+    diff.retained.sort();
+    diff
+}
+
 /// Decides which of `names` register under `admission`.
 pub fn plan_registration<I, S>(names: I, admission: &ToolAdmission) -> RegistrationPlan
 where

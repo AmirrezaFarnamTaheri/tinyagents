@@ -92,8 +92,11 @@ impl FailoverReason {
                 provider.code.as_deref(),
                 &provider.message,
                 provider.retryable,
+                Self::Transport,
             ),
-            TinyAgentsError::Model(message) => classify_text(None, None, message, true),
+            TinyAgentsError::Model(message) => {
+                classify_text(None, None, message, true, Self::Transport)
+            }
             TinyAgentsError::ContextOverflow { .. } => Self::ContextOverflow,
             TinyAgentsError::ModelNotFound(_) => Self::ModelNotFound,
             TinyAgentsError::EmptyResponse => Self::EmptyResponse,
@@ -104,6 +107,17 @@ impl FailoverReason {
             TinyAgentsError::Validation(_) => Self::Format,
             _ => Self::Unknown,
         }
+    }
+
+    /// Classifies a flattened model-failure message conservatively.
+    ///
+    /// Hosts that receive only a string from an adapter can use this entry
+    /// point to retain the shared provider-message matchers without treating
+    /// an unrecognized string as a transport outage. Structured
+    /// [`TinyAgentsError`] classification keeps its existing fallback
+    /// behavior through [`Self::classify`].
+    pub fn classify_unstructured(message: &str) -> Self {
+        classify_text(None, None, message, true, Self::Unknown)
     }
 }
 
@@ -137,6 +151,7 @@ fn classify_text(
     code: Option<&str>,
     message: &str,
     provider_retryable: bool,
+    unknown_fallback: FailoverReason,
 ) -> FailoverReason {
     use FailoverReason::*;
     let lower = match code {
@@ -198,6 +213,9 @@ fn classify_text(
     {
         return Overloaded;
     }
+    if !client_error && has_transient_transport_phrase(&lower) {
+        return Transport;
+    }
     match status {
         Some(409) | Some(500..=599) => return Transport,
         Some(400..=499) => return Format,
@@ -207,8 +225,29 @@ fn classify_text(
     match failure {
         ProviderFailureClass::UpstreamUnhealthy => Transport,
         ProviderFailureClass::NonRetryable if !provider_retryable || status.is_none() => Format,
-        _ => Transport,
+        _ => unknown_fallback,
     }
+}
+
+/// Covers the transient phrases used by hosts before they adopted this
+/// classifier. Compare whole words so `reconnection` is not a false match.
+fn has_transient_transport_phrase(lower: &str) -> bool {
+    let words: Vec<_> = lower
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let has_phrase = |phrase: &[&str]| words.windows(phrase.len()).any(|window| window == phrase);
+    has_phrase(&["connection"])
+        || has_phrase(&["connect", "error"])
+        || has_phrase(&["broken", "pipe"])
+        || has_phrase(&["reset", "by", "peer"])
+        || has_phrase(&["deadline", "exceeded"])
+        || has_phrase(&["temporarily", "unavailable"])
+        || words.iter().any(|word| {
+            word.len() == 3
+                && word.starts_with('5')
+                && word.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 #[cfg(test)]

@@ -67,6 +67,27 @@ pub enum AgentError {
     Other(anyhow::Error),
 }
 
+impl AgentError {
+    /// A stable, content-free identifier for this error category.
+    ///
+    /// Hosts can use this for telemetry and event payloads without maintaining
+    /// their own variant match or exposing provider/user error text.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::ProviderError { .. } => "provider_error",
+            Self::ContextLimitExceeded { .. } => "context_limit_exceeded",
+            Self::ToolExecutionError { .. } => "tool_execution_error",
+            Self::CostBudgetExceeded { .. } => "cost_budget_exceeded",
+            Self::MaxIterationsExceeded { .. } => "max_iterations_exceeded",
+            Self::EmptyProviderResponse { .. } => "empty_provider_response",
+            Self::CompactionFailed { .. } => "compaction_failed",
+            Self::PermissionDenied { .. } => "permission_denied",
+            Self::RegistryValidationFailed { .. } => "registry_validation_failed",
+            Self::Other(_) => "other",
+        }
+    }
+}
+
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

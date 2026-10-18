@@ -53,13 +53,19 @@ pub use budget_gate::{
 };
 pub use context_composer::{ContextComposer, StaticContextComposer, TurnContextRequest};
 pub use experience_store::{Experience, ExperienceStore, InMemoryExperienceStore};
-pub use learning_sink::{LearningSink, NoopLearningSink, TurnSummary};
-pub use model_resolver::{FixedModelResolver, ModelResolveRequest, ModelResolver};
+pub use learning_sink::{
+    LearningSink, NoopLearningSink, ToolOutcomeRecord, TurnSummary, classify_tool_failure,
+};
+pub use model_resolver::{
+    FixedModelResolver, ModelResolveRequest, ModelResolver, PrebuiltModelResolver,
+};
 pub use progress_sink::{NoopProgressSink, ProgressEvent, ProgressSink, RecordingProgressSink};
 pub use security_gate::{
     AllowAllSecurityGate, ContentOrigin, GateDecision, ScreenOutcome, SecurityGate, ToolCallRequest,
 };
-pub use tool_outcome_classifier::{ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier};
+pub use tool_outcome_classifier::{
+    ErrorFieldClassifier, OutcomeClass, ToolOutcomeClassifier, ToolStatusClassifier,
+};
 
 use std::sync::Arc;
 

@@ -624,6 +624,19 @@ pub struct AgentTeamMember {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Outcome of atomically reserving a team member for one task run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentTeamMemberRunAdmission {
+    /// A pending or idle member was atomically moved to active.
+    Started(AgentTeamMember),
+    /// The member already owns an active task.
+    AlreadyActive(AgentTeamMember),
+    /// The member exists but is stopped and cannot start a task.
+    NotAdmissible(AgentTeamMember),
+    /// No member matched the requested team and id.
+    Missing,
+}
+
 /// Fields a caller supplies to create or update an [`AgentTeamMember`].
 #[derive(Debug, Clone)]
 pub struct AgentTeamMemberUpsert {

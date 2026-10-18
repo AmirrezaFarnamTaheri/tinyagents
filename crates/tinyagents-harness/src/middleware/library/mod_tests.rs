@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::*;
-use crate::context::{MiddlewareControl, RunConfig, RunContext};
+use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
 use crate::events::{AgentEvent, EventRecord, RecordingListener};
 use crate::middleware::{BoxModelFuture, MiddlewareStack, ModelBaseCall, ToolInvocationIdentity};
+use crate::middleware::{MiddlewareModelOutcome, ModelHandler, ModelMiddleware};
 use crate::retry::{RateLimiter, RetryPolicy};
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ModelRequest, ModelResponse, ResponseFormat};
@@ -80,6 +81,27 @@ impl ModelBaseCall<(), ()> for FakeModelBase {
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
         let result = (self.behavior)(n, &request);
         Box::pin(async move { result })
+    }
+}
+
+struct CommandModelMiddleware;
+
+#[async_trait::async_trait]
+impl ModelMiddleware<(), ()> for CommandModelMiddleware {
+    fn name(&self) -> &str {
+        "test.command"
+    }
+
+    async fn wrap_model(
+        &self,
+        _ctx: &mut RunContext,
+        _state: &(),
+        _request: ModelRequest,
+        _next: ModelHandler<'_, (), ()>,
+    ) -> Result<MiddlewareModelOutcome> {
+        Ok(MiddlewareModelOutcome::Command {
+            control: MiddlewareControl::JumpTo(LoopTarget::End),
+        })
     }
 }
 
@@ -721,6 +743,105 @@ fn response_with_usage(model: &str, input: u64, output: u64) -> ModelResponse {
         source: ModelResolutionSource::RegistryDefault,
     });
     response
+}
+
+#[tokio::test]
+async fn workload_observers_only_report_successful_fallback_and_carry_one_response() {
+    use tinyinference_llm::model::CapabilitySet;
+
+    let (mut ctx, recorder) = ctx_with_recorder();
+    let carried = Arc::new(AtomicUsize::new(0));
+    let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+    stack.push_model_middleware(Arc::new(RequiredCapabilitiesMiddleware::new(
+        CapabilitySet {
+            image_in: true,
+            ..CapabilitySet::default()
+        },
+    )));
+    stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+    let carried_by_middleware = Arc::clone(&carried);
+    stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |response| {
+        if response.usage.is_some() {
+            carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+        }
+    })));
+
+    let failed = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Err(TinyAgentsError::Model("primary failed".into()))
+    });
+    assert!(
+        stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &failed)
+            .await
+            .is_err()
+    );
+    assert!(
+        events(&recorder)
+            .iter()
+            .all(|event| !matches!(event, AgentEvent::FallbackSelected { .. }))
+    );
+    assert_eq!(carried.load(Ordering::SeqCst), 0);
+
+    let success = FakeModelBase::new(|_, request| {
+        assert!(request.required_capabilities.as_ref().unwrap().image_in);
+        Ok(response_with_usage("backup", 8, 3))
+    });
+    stack
+        .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &success)
+        .await
+        .expect("successful resolved fallback");
+    let selections: Vec<_> = events(&recorder)
+        .into_iter()
+        .filter_map(|event| match event {
+            AgentEvent::FallbackSelected { from, to } => Some((from, to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selections, vec![("primary".into(), "backup".into())]);
+    assert_eq!(carried.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn workload_observers_preserve_model_control_outcomes_without_fabricating_responses() {
+    for (observe_fallback, carry_usage) in [(true, false), (false, true), (true, true)] {
+        let (mut ctx, recorder) = ctx_with_recorder();
+        let carried = Arc::new(AtomicUsize::new(0));
+        let mut stack: MiddlewareStack<()> = MiddlewareStack::new();
+        if observe_fallback {
+            stack.push_model_middleware(Arc::new(FallbackObserverMiddleware::new("primary")));
+        }
+        if carry_usage {
+            let carried_by_middleware = Arc::clone(&carried);
+            stack.push_model_middleware(Arc::new(UsageCarryMiddleware::new(move |_| {
+                carried_by_middleware.fetch_add(1, Ordering::SeqCst);
+            })));
+        }
+        stack.push_model_middleware(Arc::new(CommandModelMiddleware));
+
+        let base = FakeModelBase::new(|_, _| Ok(ok_response()));
+        let outcome = stack
+            .run_wrapped_model(&mut ctx, &(), ModelRequest::default(), &base)
+            .await
+            .expect("control outcomes are successful short-circuits");
+        assert!(
+            matches!(
+                outcome,
+                MiddlewareModelOutcome::Command {
+                    control: MiddlewareControl::JumpTo(LoopTarget::End)
+                }
+            ),
+            "observer converted a command into a fabricated model response"
+        );
+        assert_eq!(base.calls(), 0, "short-circuit must not call the model");
+        assert_eq!(carried.load(Ordering::SeqCst), 0);
+        assert!(events(&recorder).iter().all(|event| {
+            !matches!(
+                event,
+                AgentEvent::FallbackSelected { .. } | AgentEvent::UsageRecorded { .. }
+            )
+        }));
+    }
 }
 
 #[tokio::test]

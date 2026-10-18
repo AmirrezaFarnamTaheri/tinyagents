@@ -9,6 +9,7 @@ pub mod discover;
 pub mod effects;
 pub mod nested;
 pub mod packs;
+pub mod plan_exit;
 mod progress;
 mod prompt;
 mod rules;

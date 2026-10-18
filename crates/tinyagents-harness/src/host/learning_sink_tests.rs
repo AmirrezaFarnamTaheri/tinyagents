@@ -37,6 +37,30 @@ fn record_tool_keeps_first_invocation_order_without_duplicates() {
 }
 
 #[test]
+fn tool_outcomes_keep_only_digest_and_classified_result() {
+    let mut summary = TurnSummary::new("t", "a");
+    summary.record_tool_outcome(ToolOutcomeRecord {
+        name: "read".into(),
+        args_digest: "sha256:abc".into(),
+        success: false,
+        failure_class: Some("permission_denied".into()),
+        duration_ms: 17,
+    });
+    assert_eq!(summary.tools_invoked, ["read"]);
+    assert_eq!(summary.tool_outcomes[0].args_digest, "sha256:abc");
+    assert_eq!(
+        summary.tool_outcomes[0].failure_class.as_deref(),
+        Some("permission_denied")
+    );
+    let encoded = serde_json::to_string(&summary).unwrap();
+    assert!(!encoded.contains("secret"));
+    assert_eq!(
+        serde_json::from_str::<TurnSummary>(&encoded).unwrap(),
+        summary
+    );
+}
+
+#[test]
 fn summary_round_trips_through_json() {
     let summary = sample().with_usage(Usage {
         input_tokens: 12,

@@ -38,10 +38,12 @@ them. `SubagentPersistence` owns a host's durable resume and lifecycle records.
 root run, immediate parent run, optional thread, and host-local task id.
 Fresh-task callers use `SubagentRequest::fresh_from_parent`, which derives the
 key from an actual parent and validates the owned child context. Continuations
-use `continue_with_key`: hosts must authorize and recover the original key,
-then retain it even with a fresh owned execution context. Request fields are
-private, so callers cannot bypass these identity checks. The key is the sole
-durable thread identity; a request carries no duplicate thread field.
+use async `continue_with_key`: pass the original key directly, or pass a
+durable session id and its `SubagentSessionStore` to resolve the original key.
+Hosts remain responsible for authorizing the session id before calling it.
+Request fields are private, so callers cannot bypass identity checks. The key
+is the sole durable thread identity; a request carries no duplicate thread
+field.
 
 Hosts must assign unique durable `RunConfig` ids to parent and child runs. The
 constructors reject an equal parent/child id but cannot prove global uniqueness.
@@ -202,12 +204,17 @@ orchestration depends on graph).
   `[SUBAGENT_INCOMPLETE]` text marker. The transcript view reads
   `"status": "incomplete"` in a spawn result and still reads the legacy marker;
   both project as `SubagentOutcomeKind::Incomplete` (previously `Failed`).
-- **Result policy.** `ResultPolicy { max_chars, overflow: Truncate | Artifact,
+- **Result policy.** `ResultPolicy { max_chars, max_bytes, overflow: Truncate | Artifact,
   schema }` (builders; `artifact_store` is a host `ArtifactStore` callback, the
-  orchestration layer owns no store). `Truncate` keeps head and tail around
-  `[… N chars omitted …]`; `Artifact` stores the full output through the host
-  store and returns the preview plus a path-free `ArtifactReference` (no store:
-  falls back to truncate and reports `artifact_error`). `schema` is checked with
+  orchestration layer owns no store). `max_chars` caps returned text and
+  `max_bytes` measures full UTF-8 bytes with a strict `>` boundary under
+  `Artifact`; it has no effect under `Truncate`. `Truncate` keeps head and tail
+  around `[… N chars omitted …]`; it never truncates bytes.
+  `Artifact` stores the full output when either configured limit is exceeded and
+  returns the path-free reference. A byte-only trigger leaves returned text
+  unchanged; with no store, character overflow falls back to truncation and a
+  byte-only overflow reports `artifact_error` while keeping the full text.
+  `schema` is checked with
   the tool-call boundary's structural validator (`type`, `properties`,
   `required`, `additionalProperties`, `items`, `enum`; no `$ref`/combinators)
   and a mismatch is surfaced as `schema_error`, never a failure. Defaults: no
@@ -281,3 +288,23 @@ and `..Default::default()`.
   `[SUBAGENT_INCOMPLETE]` result now projects as `Incomplete` instead of
   `Failed`.
 - `tinyagents-runtime`: new `ToolSnapshot::retaining`.
+
+
+### Document-backed lifecycle state
+
+`DocumentSubagentPersistence` implements the same pause/resume/terminal contract
+as `FileSubagentPersistence` over a host-supplied, already scoped
+`DocumentStore`. A retrying compare-and-swap stores pause and terminal together
+in one `tsd.kv` value: owner `subagents`, namespace `lifecycle-neutral`, key
+`record/<key_component>`. This namespace leaves older host-specific lifecycle
+values available for read-only conversion. The host selects tenant and agent
+scope; the owner does not derive product identity or open a backend.
+
+A continuation must present the exact resume it loaded. Independent writers
+observe the committed winner, and a terminal prevents further pauses.
+`keys_for_task` derives live scoped keys from the records themselves, avoiding
+a separately committed index. `pause_outcome` and `terminal_outcome` support
+synchronous recovery paths. Hosts convert old checkpoint/outcome formats, then
+call `import_record` or `import_record_at`; these fill missing state and never
+replace an existing terminal. Legacy files and migration markers remain the
+host's responsibility.

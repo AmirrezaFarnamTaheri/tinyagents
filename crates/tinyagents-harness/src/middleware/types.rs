@@ -109,6 +109,8 @@ pub struct AgentRun {
     /// Recovery messages for denied, unknown, or invalid calls intentionally do
     /// not appear here: they produced a transcript response but never acted.
     pub executed_tools: Vec<String>,
+    /// Content-free outcome summaries for completed calls.
+    pub tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather
@@ -167,6 +169,9 @@ pub struct AgentRun {
     /// string parsing. `None` only while the run is still in flight, or when a
     /// wrapping middleware replaced the loop.
     pub terminal: Option<crate::terminal::TerminalOutcome>,
+    /// Typed classified-failure cause when a repeat/no-progress guard halted
+    /// this run. Kept separate from the human-readable terminal message.
+    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
 }
 
 /// Host-only metadata one tool call returned, as recorded on

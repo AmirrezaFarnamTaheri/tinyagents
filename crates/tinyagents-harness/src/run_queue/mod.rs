@@ -38,8 +38,9 @@ mod types;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 pub use forwarder::{
-    COLLECT_PREFIX, ForwardEvent, ForwardEventSink, ForwarderCleanup, QueuedMessage, STEER_PREFIX,
-    SteeringForwarderGuard, forward_collects, forward_steers,
+    COLLECT_PREFIX, ForwardEvent, ForwardEventSink, ForwarderCleanup,
+    MessageSteeringForwarderGuard, QueuedMessage, STEER_PREFIX, SteeringForwarderGuard,
+    forward_collects, forward_message_collects, forward_message_steers, forward_steers,
 };
 
 pub use types::{QueueLane, QueueMode, QueueStatus, RunQueueHandle};
@@ -133,6 +134,30 @@ impl<T> RunQueue<T> {
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
         }
+    }
+
+    /// Drains matching items from one lane in FIFO order and leaves all other
+    /// items in place. This is useful for typed host adapters that can consume
+    /// only a subset of a heterogeneous queue without discarding unsupported
+    /// payloads.
+    pub fn drain_where_now(&self, lane: QueueLane, mut pred: impl FnMut(&T) -> bool) -> Vec<T> {
+        let mut inner = self.lock();
+        let items = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        let mut drained = Vec::new();
+        let mut remaining = Vec::with_capacity(items.len());
+        for item in std::mem::take(items) {
+            if pred(&item) {
+                drained.push(item);
+            } else {
+                remaining.push(item);
+            }
+        }
+        *items = remaining;
+        drained
     }
 
     /// Takes items from `lane` in FIFO order according to `mode`: the oldest

@@ -68,8 +68,8 @@ mod context;
 mod context_ladder;
 mod credential_scrub;
 mod ephemeral;
+mod failure_scope;
 mod image_trim;
-mod lifecycle_hooks;
 mod loop_guards;
 mod memory_protocol;
 mod memory_protocol_middleware;
@@ -84,14 +84,15 @@ mod research_budget;
 mod resilience;
 mod response_shape;
 mod shell_turn_budget;
-mod stop_hooks;
-mod stop_latch;
 mod tool_exposure_shadow;
+mod tool_outcome_capture;
 mod tool_policy;
+mod transcript_snapshot;
 mod turn_clock;
 mod unmet_deliverable;
 mod verify_before_finish;
 mod wind_down;
+mod workload;
 mod wrap_up;
 
 pub use arg_recovery::ArgRecoveryMiddleware;
@@ -114,13 +115,12 @@ pub use credential_scrub::{
 };
 pub use ephemeral::rehome_ephemeral_system_instructions;
 pub use ephemeral::{HARNESS_NOTE_HEADER, push_ephemeral_instruction};
+pub use failure_scope::{
+    FailureAssessment, FailureScope, FailureScopeMiddleware, FailureScopePolicy, FailureStopKind,
+};
 pub use image_trim::{
     IMAGE_MARKER_TOKEN_COST, ImageAwareMessageTrimMiddleware, estimate_message_tokens,
     estimate_text_tokens, legacy_max_input_tokens,
-};
-pub use lifecycle_hooks::{
-    BudgetParityObserver, MemoryPackMiddleware, MemoryPackSource, PackedToolRouteMiddleware,
-    PackedToolRouter,
 };
 pub use loop_guards::{
     LoopGuardThresholds, RECOVERABLE_NO_PROGRESS_FAILURE_THRESHOLD,
@@ -138,7 +138,9 @@ pub use output_cap::{
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
     ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
-    PolicyDecision, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware, record_approved,
+    PolicyDecision, SessionToolCeiling, SessionToolListing, StructuredDenialParts,
+    StructuredDenialRenderOptions, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware,
+    ToolPolicyPostGate, record_approved, structured_denial_renderer,
 };
 pub use repeat_loop_stop::{RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary};
 pub use repeat_progress::{
@@ -161,11 +163,12 @@ pub use shell_turn_budget::{
     ShellTimeoutClampMiddleware, ShellTimeoutNoteMiddleware, ShellTurnBudget, clamp_shell_timeout,
     install_time_notes,
 };
-pub use stop_hooks::{
-    StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
-};
-pub use stop_latch::StopLatch;
 pub use tool_exposure_shadow::{ExposureDivergence, ToolExposureShadowMiddleware};
+pub use tool_outcome_capture::ToolOutcomeCaptureMiddleware;
+pub use transcript_snapshot::{
+    TranscriptSnapshot, TranscriptSnapshotMiddleware, TranscriptSnapshotSink,
+    new_transcript_snapshot_sink, render_unanswered_steps,
+};
 pub(crate) use turn_clock::is_json_document;
 pub use turn_clock::{TurnClock, TurnClockMiddleware};
 pub use unmet_deliverable::{
@@ -177,6 +180,9 @@ pub use verify_before_finish::{
     MIN_REMAINING_MODEL_CALLS, VerifyBeforeFinishMiddleware,
 };
 pub use wind_down::{WindDownCallback, WindDownMiddleware, install as install_wind_down};
+pub use workload::{
+    FallbackObserverMiddleware, RequiredCapabilitiesMiddleware, UsageCarryMiddleware,
+};
 pub use wrap_up::{
     CapturedOutcomes, DEFAULT_CLEARED_PLACEHOLDER, FinalCallWrapUpMiddleware, OutcomesUnavailable,
 };
@@ -229,6 +235,3 @@ mod wrap_up_test;
 
 mod ephemeral_instructions;
 pub use ephemeral_instructions::{EphemeralInstructionMiddleware, EphemeralInstructionQueue};
-#[cfg(test)]
-#[path = "stop_hooks_tests.rs"]
-mod stop_hooks_test;

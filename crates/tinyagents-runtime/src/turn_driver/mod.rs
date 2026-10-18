@@ -24,7 +24,7 @@ mod types;
 pub use driver::{
     HarnessParts, PreparedTurn, TurnDriver, TurnPlan, TurnPlanner, TurnRun, TurnTail,
 };
-pub use steering::{FeedGuard, RunQueueFeed, SteeringFeed, SteeringRegistrar};
+pub use steering::{FeedGuard, MessageRunQueueFeed, RunQueueFeed, SteeringFeed, SteeringRegistrar};
 pub use tool_set::{DispatchSelector, SharedToolSet, ToolSetBuilder, ToolSetReport};
 pub use types::{
     SubagentScope, TurnCompletionSink, TurnControls, TurnReport, TurnReportSlot, TurnScope,
