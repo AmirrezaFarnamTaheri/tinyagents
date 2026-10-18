@@ -12,7 +12,7 @@ use tinyagents_harness::tinyinference_llm::{
     message::Message, providers::MockModel, tool::ToolCall,
 };
 use tinyagents_harness::{
-    runtime::AgentHarness,
+    runtime::{AgentHarness, RunPolicy},
     testkit,
     tool::{BoundToolCall, ToolCallBinding, ToolDispatch},
 };
@@ -749,7 +749,7 @@ fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
 #[tokio::test]
 async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
     let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
-    let mut first = ModelResponse::assistant("");
+    let mut first = tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant("");
     first.message.tool_calls.push(ToolCall::new(
         "packed-call",
         USE_SKILL,
@@ -757,22 +757,21 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
     ));
     let model = Arc::new(testkit::ScriptedModel::new(vec![
         first,
-        ModelResponse::assistant("done"),
+        tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant("done"),
     ]));
-    let rules: tinytools::ToolRules = serde_json::from_value(json!({"rules": [
-        {"id": "deny-a-one", "effect": "deny", "match": {"name": "a_one"}}
-    ]}))
-    .unwrap();
+    let rules = tinytools::ToolRuleSet::single(tinytools::ToolRules::from_allow_deny(
+        Vec::<String>::new(), ["a_one"],
+    ));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("scripted", model);
     harness.register_tool(Arc::new(UseSkillTool::new(handle, CATALOG)));
     harness.with_policy(RunPolicy {
-        tool_rules: ToolRulePolicy::new(rules),
+        tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(rules),
         ..RunPolicy::default()
     });
 
     let run = harness
-        .invoke(vec![Message::user("run the packed tool")])
+        .invoke_default(&(), vec![Message::user("run the packed tool")])
         .await
         .unwrap();
     let result = run
