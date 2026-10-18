@@ -49,18 +49,6 @@ pub enum FailureAssessment {
         /// backstop.
         recoverable_miss: bool,
     },
-    /// Informational tool failure that starts a new no-progress streak.
-    /// Unlike `Progress`, this does not notify the host that useful progress
-    /// occurred or clear host-classified failure state.
-    ResetFailure {
-        /// Error text the model saw, already scrubbed by the host.
-        error: String,
-        /// A hard reject that should use the short repeat threshold.
-        hard_reject: bool,
-        /// A recoverable miss that should not count against the varied-failure
-        /// backstop.
-        recoverable_miss: bool,
-    },
     /// Transient/recoverable failure with its separate extended budget.
     RecoverableFailure {
         /// Error text passed to the host's halt-copy callback.
@@ -158,6 +146,19 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
 
     /// Host adapter for shared repeat-stop state, called after useful progress.
     fn record_progress(&self, _ctx: &RunContext<Ctx>, _call: &ToolCall, _scope: &FailureScope) {}
+
+    /// Reset the generic no-progress streak immediately before recording this
+    /// deterministic failure. This handles informative new command exits
+    /// without claiming host progress or clearing classified failure budgets.
+    fn reset_no_progress_before_failure(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> bool {
+        false
+    }
 
     /// Host adapter for shared repeat-stop state. Returns whether this is a
     /// repeated tool failure, for classified-stop relabeling.
@@ -321,7 +322,6 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
         let assessment = self.policy.assess(ctx, invocation, &call, &scope, result);
         let repeated_failure = match &assessment {
             FailureAssessment::Failure { error, .. }
-            | FailureAssessment::ResetFailure { error, .. }
             | FailureAssessment::RecoverableFailure { error }
             | FailureAssessment::ClassifiedFailure { error, .. } => self
                 .policy
@@ -421,35 +421,12 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 recoverable_miss,
             } => {
                 run.recoverable.reset_streak();
-                let attempt = ToolAttempt {
-                    tool,
-                    arg_fingerprint: &argument_key,
-                    error: Some(&error),
-                    hard_reject,
-                    recoverable_miss,
-                };
-                match run.tracker.record(step, &attempt) {
-                    NoProgress::Continue => {}
-                    NoProgress::Nudge(instruction) => self.nudges.push(ctx, instruction),
-                    NoProgress::Halt(summary) => {
-                        run.tracker.reset();
-                        let summary = self.policy.halt_copy_for_call(
-                            ctx,
-                            FailureStopKind::NoProgress,
-                            summary,
-                            &error,
-                            &call,
-                        );
-                        self.halt(ctx, summary, None);
-                    }
+                if self
+                    .policy
+                    .reset_no_progress_before_failure(ctx, &call, &scope, result)
+                {
+                    run.tracker.reset();
                 }
-            }
-            FailureAssessment::ResetFailure {
-                error,
-                hard_reject,
-                recoverable_miss,
-            } => {
-                run.recoverable.reset_streak();
                 let attempt = ToolAttempt {
                     tool,
                     arg_fingerprint: &argument_key,

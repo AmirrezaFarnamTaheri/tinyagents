@@ -67,7 +67,9 @@ impl FailureScopePolicy<()> for Policy {
 }
 
 #[derive(Default)]
-struct ResetAndCallCopyPolicy;
+struct ResetAndCallCopyPolicy {
+    progress: Arc<AtomicUsize>,
+}
 
 impl crate::no_progress::FailurePolicy for ResetAndCallCopyPolicy {
     fn identical_halt_summary(&self, tool: &str, count: u32, _failure_text: &str) -> String {
@@ -102,12 +104,6 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
                 error: "unauthorized".into(),
                 nudge: None,
             }
-        } else if call.arguments.get("reset") == Some(&json!(true)) {
-            FailureAssessment::ResetFailure {
-                error: "failed".into(),
-                hard_reject: false,
-                recoverable_miss: false,
-            }
         } else {
             FailureAssessment::Failure {
                 error: "failed".into(),
@@ -130,7 +126,17 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
     }
 
     fn record_progress(&self, _ctx: &RunContext<()>, _call: &ToolCall, _scope: &FailureScope) {
-        panic!("ResetFailure must not report host progress");
+        self.progress.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn reset_no_progress_before_failure(
+        &self,
+        _ctx: &RunContext<()>,
+        call: &ToolCall,
+        _scope: &FailureScope,
+        _result: &ToolResult,
+    ) -> bool {
+        call.arguments.get("reset") == Some(&json!(true))
     }
 }
 
@@ -212,10 +218,11 @@ async fn repeated_failures_nudge_before_halt() {
 async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
     let handle = SteeringHandle::allow_all();
     let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let policy = Arc::new(ResetAndCallCopyPolicy::default());
     let middleware = FailureScopeMiddleware::with_identical_threshold(
         handle.clone(),
         halt_summary.clone(),
-        Arc::new(ResetAndCallCopyPolicy),
+        policy.clone(),
         2,
     );
     observe_once(
@@ -237,6 +244,7 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
     )
     .await;
     assert!(halt_summary.lock().unwrap().is_none());
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
     observe_once(
         &middleware,
         89,
@@ -247,6 +255,7 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
     )
     .await;
     assert!(halt_summary.lock().unwrap().is_none());
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
     observe_once(
         &middleware,
         89,
@@ -276,17 +285,15 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         summary.contains("retried 3 times with identical arguments"),
         "{summary}"
     );
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn reset_failure_keeps_host_classified_failure_budget() {
     let handle = SteeringHandle::allow_all();
     let halt_summary = Arc::new(std::sync::Mutex::new(None));
-    let middleware = FailureScopeMiddleware::new(
-        handle,
-        halt_summary.clone(),
-        Arc::new(ResetAndCallCopyPolicy),
-    );
+    let policy = Arc::new(ResetAndCallCopyPolicy::default());
+    let middleware = FailureScopeMiddleware::new(handle, halt_summary.clone(), policy.clone());
     observe_once(
         &middleware,
         90,
@@ -322,6 +329,7 @@ async fn reset_failure_keeps_host_classified_failure_budget() {
         .clone()
         .expect("budget remains exhausted");
     assert!(summary.starts_with("shell: Stopping"), "{summary}");
+    assert_eq!(policy.progress.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
