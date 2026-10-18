@@ -1865,3 +1865,321 @@ impl Summarizer for BlockingSummary {
         std::future::pending().await
     }
 }
+
+/// Payload that, like a host payload, is incomplete when the steering
+/// forwarder rebuilds a recovered steer and completes itself from the turn that
+/// was running.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ClientPayload {
+    client: String,
+}
+
+impl RequeuePayload for ClientPayload {
+    fn requeued(_thread_label: &str, _queued_at_ms: u64) -> Self {
+        Self::default()
+    }
+
+    fn adopt(&mut self, running: &Self) {
+        if self.client.is_empty() {
+            self.client.clone_from(&running.client);
+        }
+    }
+}
+
+#[derive(Default)]
+struct ClientHost {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    /// `(request_id, scope agent, thread, client)` per run.
+    runs: Mutex<Vec<(String, String, String, String)>>,
+    queue: Mutex<Option<Arc<RunQueue<TurnRequest<ClientPayload>>>>>,
+}
+
+#[async_trait::async_trait]
+impl TurnHost<ClientPayload> for ClientHost {
+    async fn checkout(&self, request: &TurnRequest<ClientPayload>) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(
+        &self,
+        request: &TurnRequest<ClientPayload>,
+    ) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest<ClientPayload>) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        request: &TurnRequest<ClientPayload>,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        _cancellation: crate::CancellationToken,
+        queue: Arc<RunQueue<TurnRequest<ClientPayload>>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        self.runs.lock().unwrap().push((
+            request.request_id.clone(),
+            request.scope.agent_id.clone(),
+            request.thread_id.clone(),
+            request.payload.client.clone(),
+        ));
+        if request.request_id == "request-a" {
+            *self.queue.lock().unwrap() = Some(queue);
+            self.started.notify_one();
+            self.release.notified().await;
+        }
+        Ok(TurnResult {
+            reply: "ok".into(),
+            data: serde_json::Value::Null,
+        })
+    }
+    async fn checkin(&self, _request: &TurnRequest<ClientPayload>) {}
+    async fn cancel_children(&self, _request: &TurnRequest<ClientPayload>) {}
+}
+
+struct ClientIngress;
+
+#[async_trait::async_trait]
+impl IngressPolicy<ClientPayload> for ClientIngress {
+    async fn apply(
+        &self,
+        _stage: IngressStage,
+        _request: &mut TurnRequest<ClientPayload>,
+    ) -> Result<IngressDecision, String> {
+        Ok(IngressDecision::Continue)
+    }
+}
+
+struct ClientReplies;
+
+#[async_trait::async_trait]
+impl ReplyStore<ClientPayload> for ClientReplies {
+    async fn persist(
+        &self,
+        _request: &TurnRequest<ClientPayload>,
+        _reply_id: &str,
+        _result: &TurnResult,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct ClientEvents;
+
+#[async_trait::async_trait]
+impl EventSink<ClientPayload> for ClientEvents {
+    async fn progress(
+        &self,
+        _request: &TurnRequest<ClientPayload>,
+        _event: crate::progress::AgentProgress,
+    ) {
+    }
+    async fn terminal(&self, _request: &TurnRequest<ClientPayload>, _event: TerminalEvent) {}
+}
+
+struct ClientSummary;
+
+#[async_trait::async_trait]
+impl Summarizer<ClientPayload> for ClientSummary {
+    async fn grounded_close(
+        &self,
+        _request: &TurnRequest<ClientPayload>,
+        _reason: &str,
+    ) -> Option<TurnResult> {
+        None
+    }
+}
+
+#[test]
+fn run_queue_item_exposes_request_identity_to_the_steering_forwarder() {
+    let item = TurnRequest {
+        scope: ScopeKey {
+            agent_id: "agent-a".into(),
+            profile_id: None,
+        },
+        thread_id: "thread-a".into(),
+        request_id: "item-1".into(),
+        text: "go left".into(),
+        payload: serde_json::Value::Null,
+        host_authored: false,
+        disposition: QueueDisposition::Steer,
+        deadline: None,
+        idle_timeout: None,
+    };
+    assert_eq!(QueuedMessage::id(&item), "item-1");
+    assert_eq!(QueuedMessage::text(&item), "go left");
+
+    let recovered = <TurnRequest as QueuedMessage>::requeued(
+        "fresh".into(),
+        "go left".into(),
+        "thread-a",
+        42,
+    );
+    assert_eq!(recovered.request_id, "fresh");
+    assert_eq!(recovered.text, "go left");
+    assert_eq!(recovered.thread_id, "thread-a");
+    assert_eq!(recovered.disposition, QueueDisposition::Steer);
+    assert!(!recovered.host_authored);
+    assert_eq!(recovered.payload, serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn recovered_steer_is_dispatched_under_the_finished_turns_scope_and_payload() {
+    let host = Arc::new(ClientHost::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(ClientIngress),
+        Arc::new(ClientReplies),
+        Arc::new(ClientEvents),
+        Arc::new(Failures),
+        Arc::new(ClientSummary),
+        TurnRunnerConfig::default(),
+    ));
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(TurnRequest {
+                    scope: ScopeKey {
+                        agent_id: "agent-a".into(),
+                        profile_id: None,
+                    },
+                    thread_id: "thread-a".into(),
+                    request_id: "request-a".into(),
+                    text: "hello".into(),
+                    payload: ClientPayload {
+                        client: "client-1".into(),
+                    },
+                    host_authored: false,
+                    disposition: QueueDisposition::Interrupt,
+                    deadline: None,
+                    idle_timeout: Some(std::time::Duration::from_secs(5)),
+                })
+                .await
+        })
+    };
+    host.started.notified().await;
+
+    // What the steering forwarder does with a steer the run never applied:
+    // rebuild it from the bare id, text and thread label.
+    let queue = host.queue.lock().unwrap().clone().expect("run queue");
+    queue
+        .push(
+            QueueLane::Steer,
+            <TurnRequest<ClientPayload> as QueuedMessage>::requeued(
+                "recovered".into(),
+                "go left".into(),
+                "thread-a",
+                7,
+            ),
+        )
+        .await;
+
+    host.release.notify_one();
+    primary.await.unwrap().unwrap();
+
+    assert_eq!(
+        host.runs.lock().unwrap().as_slice(),
+        [
+            (
+                "request-a".to_owned(),
+                "agent-a".to_owned(),
+                "thread-a".to_owned(),
+                "client-1".to_owned()
+            ),
+            (
+                "recovered".to_owned(),
+                "agent-a".to_owned(),
+                "thread-a".to_owned(),
+                "client-1".to_owned()
+            ),
+        ]
+    );
+}
+
+#[derive(Default)]
+struct UnwindingHost {
+    started: tokio::sync::Notify,
+    persisted: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl TurnHost for UnwindingHost {
+    async fn checkout(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        Ok(TurnSession {
+            session_id: request.thread_id.clone(),
+            fingerprint: None,
+        })
+    }
+    async fn checkout_fork(&self, request: &TurnRequest) -> Result<TurnSession, String> {
+        self.checkout(request).await
+    }
+    fn run_origin(&self, _request: &TurnRequest) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    async fn run(
+        &self,
+        _request: &TurnRequest,
+        _session: &TurnSession,
+        _origin: &serde_json::Value,
+        cancellation: crate::CancellationToken,
+        _queue: Arc<RunQueue<TurnRequest>>,
+        _progress: tokio::sync::mpsc::Sender<TurnSignal>,
+    ) -> Result<TurnResult, String> {
+        self.started.notify_one();
+        cancellation.cancelled().await;
+        // Hand back and persist the rounds completed so far.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.persisted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Err("stopped".into())
+    }
+    async fn checkin(&self, _request: &TurnRequest) {}
+    async fn cancel_children(&self, _request: &TurnRequest) {}
+}
+
+async fn cancel_unwinding_turn(grace: std::time::Duration) -> bool {
+    let host = Arc::new(UnwindingHost::default());
+    let runner = Arc::new(TurnRunner::new(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+        Arc::new(Failures),
+        Arc::new(Summary),
+        TurnRunnerConfig {
+            cancel_grace: grace,
+            ..TurnRunnerConfig::default()
+        },
+    ));
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move {
+            runner
+                .run(request(QueueDisposition::Interrupt, false))
+                .await
+        })
+    };
+    host.started.notified().await;
+    let req = request(QueueDisposition::Interrupt, false);
+    assert!(runner.cancel(&req.scope, &req.thread_id, None).await);
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    host.persisted.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn cancelled_run_unwinds_within_the_cancel_grace() {
+    assert!(cancel_unwinding_turn(std::time::Duration::from_secs(2)).await);
+}
+
+#[tokio::test]
+async fn cancelled_run_is_dropped_at_once_without_a_cancel_grace() {
+    assert!(!cancel_unwinding_turn(std::time::Duration::ZERO).await);
+}
