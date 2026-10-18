@@ -27,6 +27,16 @@ fn rounded_micros(micros: Option<f64>) -> Option<ChargedAmount> {
         .map(|amount| ChargedAmount::usd_micros(amount.ceil() as i64))
 }
 
+/// Whether raw metadata declares a billing source that outranks provider cost.
+///
+/// Presence is authoritative even when the value is malformed: in that case
+/// charge normalization deliberately leaves the measured charge unknown.
+pub(crate) fn has_authoritative_billing_source(raw: &serde_json::Value) -> bool {
+    raw.pointer("/openhuman_usage_meta/charged_amount_usd")
+        .is_some()
+        || raw.pointer("/usage/buyer_cost_micro").is_some()
+}
+
 fn normalize_charge(response: &mut ModelResponse) {
     let Some(usage) = response.usage.as_mut() else {
         // Missing usage must retain conservative token and charge reservations.

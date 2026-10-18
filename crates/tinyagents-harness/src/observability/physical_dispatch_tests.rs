@@ -118,6 +118,40 @@ fn event_sequence_model(items: Vec<ModelStreamItem>) -> Arc<dyn ChatModel<()>> {
     Arc::new(EventSequenceModel(Mutex::new(Some(items))))
 }
 
+struct PanicsAfterEofModel;
+
+struct PanicsAfterEofStream(usize);
+
+impl futures::Stream for PanicsAfterEofStream {
+    type Item = ModelStreamItem;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let item = match this.0 {
+            0 => Some(ModelStreamItem::Started),
+            1 => Some(ModelStreamItem::UsageDelta(Usage::new(9, 4))),
+            2 => None,
+            _ => panic!("underlying provider stream polled after EOF"),
+        };
+        this.0 += 1;
+        std::task::Poll::Ready(item)
+    }
+}
+
+#[async_trait::async_trait]
+impl ChatModel<()> for PanicsAfterEofModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        Ok(ModelResponse::assistant("unused"))
+    }
+
+    async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
+        Ok(ModelStream::new(Box::pin(PanicsAfterEofStream(0))))
+    }
+}
+
 #[async_trait::async_trait]
 impl ChatModel<()> for StreamingModel {
     async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
@@ -290,14 +324,7 @@ async fn cancelled_stream_keeps_latest_cumulative_usage_delta() {
 async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
     let recorder = Arc::new(Recorder::default());
     let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
-    let model = ObservedChatModel::new(
-        event_sequence_model(vec![
-            ModelStreamItem::Started,
-            ModelStreamItem::UsageDelta(Usage::new(5, 2)),
-            ModelStreamItem::UsageDelta(Usage::new(9, 4)),
-        ]),
-        observer,
-    );
+    let model = ObservedChatModel::new(Arc::new(PanicsAfterEofModel), observer);
     let mut stream = model
         .stream(&(), ModelRequest::new(Vec::new()))
         .await
@@ -310,7 +337,7 @@ async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
     assert!(recorder.0.lock().unwrap().is_empty());
     assert!(matches!(
         stream.next().await,
-        Some(ModelStreamItem::UsageDelta(_))
+        Some(ModelStreamItem::UsageDelta(usage)) if usage.input_tokens == 9
     ));
     assert!(recorder.0.lock().unwrap().is_empty());
     assert!(matches!(
