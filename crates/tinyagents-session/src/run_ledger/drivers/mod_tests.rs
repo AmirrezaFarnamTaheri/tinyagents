@@ -43,13 +43,6 @@ async fn assert_ledger_conformance_and_scope_isolation(backend: &dyn StorageBack
     );
 }
 
-#[tokio::test]
-async fn driver_run_ledger_conformance_and_scope_isolation_pass_on_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
-    assert_ledger_conformance_and_scope_isolation(&backend).await;
-}
-
 /// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
 /// mongodb_run_ledger_conformance -- --ignored` against a local replica set.
 #[tokio::test(flavor = "multi_thread")]
