@@ -113,6 +113,52 @@ pub trait MediaImageReadout<Scope>: Send + Sync {
     ) -> std::result::Result<String, String>;
 }
 
+/// Optional host rendering for an authorized attachment that the selected
+/// model cannot accept natively.
+///
+/// The owner wrapper performs scope resolution, byte and MIME checks, and the
+/// model/transport capability decision before calling this port. Returning
+/// `None` selects the built-in generic image or file fallback. A returned
+/// string is treated as untrusted attachment context and is bounded by the
+/// configured extraction limit before it reaches the model.
+#[async_trait]
+pub trait MediaFallbackRenderer<Scope>: Send + Sync {
+    /// Render one authorized attachment for a non-native model route.
+    async fn render(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+    ) -> std::result::Result<Option<String>, String>;
+}
+
+/// Host persistence for the owner's built-in fallback output.
+///
+/// The host selects cache identity, location, size bounds, and admission. The
+/// owner calls this only after source authorization and native-capability
+/// checks, and only caches successful fallback output. Cache failures should
+/// be treated as misses by implementations and must not reject a model call.
+#[async_trait]
+pub trait MediaFallbackCache<Scope>: Send + Sync {
+    /// Return a cached fallback for the already-resolved attachment, if any.
+    async fn get(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+    ) -> Option<String>;
+
+    /// Store successful fallback text. The owner skips this call for a partial
+    /// or failed rendering.
+    async fn put(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+        text: &str,
+    );
+}
+
 /// Host-specific safe text for media omitted from or unavailable in history.
 ///
 /// An implementation chooses which old failures are recoverable and may
@@ -142,6 +188,8 @@ pub struct MediaRequestModel<State, Scope> {
     extractor: Arc<dyn TextExtractor>,
     image_readout: Option<Arc<dyn MediaImageReadout<Scope>>>,
     history_fallback: Option<Arc<dyn MediaHistoryFallback<Scope>>>,
+    fallback_renderer: Option<Arc<dyn MediaFallbackRenderer<Scope>>>,
+    fallback_cache: Option<Arc<dyn MediaFallbackCache<Scope>>>,
     profile: Option<ModelProfile>,
 }
 
@@ -177,6 +225,8 @@ where
             extractor,
             image_readout: None,
             history_fallback: None,
+            fallback_renderer: None,
+            fallback_cache: None,
             profile,
         }
     }
@@ -196,6 +246,21 @@ where
     /// Install host policy for bounded historical-media omission and recovery.
     pub fn with_history_fallback(mut self, fallback: Arc<dyn MediaHistoryFallback<Scope>>) -> Self {
         self.history_fallback = Some(fallback);
+        self
+    }
+
+    /// Install host-specific fallback rendering for authorized media.
+    pub fn with_fallback_renderer(
+        mut self,
+        renderer: Arc<dyn MediaFallbackRenderer<Scope>>,
+    ) -> Self {
+        self.fallback_renderer = Some(renderer);
+        self
+    }
+
+    /// Install host persistence for the built-in fallback output.
+    pub fn with_fallback_cache(mut self, cache: Arc<dyn MediaFallbackCache<Scope>>) -> Self {
+        self.fallback_cache = Some(cache);
         self
     }
 
@@ -359,6 +424,7 @@ where
                 attachment,
                 annotations,
             } = resolved;
+            validated_image_mime(&attachment)?;
             if self.native(InputModality::Image, &attachment.mime) {
                 native_annotations.extend(annotations);
                 let mime = validated_image_mime(&attachment)?;
@@ -367,10 +433,21 @@ where
                     mime_type: Some(mime),
                 }));
             } else {
-                image_fallback.push(
-                    self.image_fallback(scope, &attachment, &annotations)
-                        .await?,
-                );
+                let rendered = self
+                    .render_fallback(scope, InputModality::Image, &attachment)
+                    .await?;
+                image_fallback.push(match rendered {
+                    Some(text) => self.limit_context(join_annotations(&annotations, &text)),
+                    None => {
+                        self.default_fallback(
+                            scope,
+                            InputModality::Image,
+                            &attachment,
+                            &annotations,
+                        )
+                        .await?
+                    }
+                });
             }
         }
 
@@ -413,14 +490,16 @@ where
                     attachment.mime,
                 )));
             } else {
-                let (payload, archive_text) = self.file_fallback(&attachment).await;
-                let mut context = compose_multimodal_message("", &[], &[payload]);
-                if let Some(archive) = archive_text {
-                    if !context.is_empty() {
-                        context.push_str("\n\n");
+                let context = match self
+                    .render_fallback(scope, InputModality::Document, &attachment)
+                    .await?
+                {
+                    Some(text) => text,
+                    None => {
+                        self.default_fallback(scope, InputModality::Document, &attachment, &[])
+                            .await?
                     }
-                    context.push_str(&archive);
-                }
+                };
                 file_contexts.push(self.limit_context(join_annotations(&annotations, &context)));
             }
         }
@@ -475,6 +554,9 @@ where
         {
             attachment.mime = mime;
         }
+        if modality == InputModality::Image {
+            validated_image_mime(&attachment)?;
+        }
         if self.native(modality, &attachment.mime) {
             let mut output: Vec<_> = annotations.into_iter().map(ContentBlock::Text).collect();
             output.push(native_block(modality, attachment)?);
@@ -482,23 +564,70 @@ where
         }
         let fallback = match modality {
             InputModality::Image => {
-                self.image_fallback(scope, &attachment, &annotations)
-                    .await?
-            }
-            _ => {
-                let (payload, archive_text) = self.file_fallback(&attachment).await;
-                let rendered = compose_multimodal_message("", &[], &[payload]);
-                match archive_text {
-                    Some(archive) if !rendered.is_empty() => {
-                        self.limit_context(format!("{rendered}\n\n{archive}"))
+                match self.render_fallback(scope, modality, &attachment).await? {
+                    Some(text) => text,
+                    None => {
+                        self.default_fallback(scope, modality, &attachment, &[])
+                            .await?
                     }
-                    Some(archive) => archive,
-                    None => self.limit_context(rendered),
                 }
             }
+            _ => match self.render_fallback(scope, modality, &attachment).await? {
+                Some(text) => text,
+                None => {
+                    self.default_fallback(scope, modality, &attachment, &[])
+                        .await?
+                }
+            },
         };
         let fallback = join_annotations(&annotations, &fallback);
         Ok(vec![ContentBlock::Text(self.limit_context(fallback))])
+    }
+
+    async fn render_fallback(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+    ) -> tinyinference_llm::Result<Option<String>> {
+        match &self.fallback_renderer {
+            Some(renderer) => renderer
+                .render(scope, modality, attachment)
+                .await
+                .map_err(|error| model_error(&error)),
+            None => Ok(None),
+        }
+    }
+
+    async fn default_fallback(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+        annotations: &[String],
+    ) -> tinyinference_llm::Result<String> {
+        if let Some(cache) = &self.fallback_cache
+            && let Some(text) = cache.get(scope, modality, attachment).await
+        {
+            return Ok(self.limit_context(join_annotations(annotations, &text)));
+        }
+
+        let (text, cacheable) = if modality == InputModality::Image {
+            (self.image_fallback(scope, attachment, &[]).await?, true)
+        } else {
+            let (payload, archive_text, cacheable) = self.file_fallback(attachment).await;
+            let rendered = compose_multimodal_message("", &[], &[payload]);
+            let text = match archive_text {
+                Some(archive) if !rendered.is_empty() => format!("{rendered}\n\n{archive}"),
+                Some(archive) => archive,
+                None => rendered,
+            };
+            (text, cacheable)
+        };
+        if cacheable && let Some(cache) = &self.fallback_cache {
+            cache.put(scope, modality, attachment, &text).await;
+        }
+        Ok(self.limit_context(join_annotations(annotations, &text)))
     }
 
     async fn resolve(
@@ -584,11 +713,13 @@ where
     async fn file_fallback(
         &self,
         attachment: &ResolvedAttachment,
-    ) -> (FilePayload, Option<String>) {
+    ) -> (FilePayload, Option<String>, bool) {
         if let Some(format) =
             ArchiveFormat::detect(&attachment.name, &attachment.mime, &attachment.bytes)
         {
-            let text = match inspect_archive(&attachment.bytes, format, &ArchiveLimits::default()) {
+            let listing = inspect_archive(&attachment.bytes, format, &ArchiveLimits::default());
+            let cacheable = listing.is_ok();
+            let text = match listing {
                 Ok(listing) => {
                     let mut output = String::from(
                         "Archive listing (names are untrusted; original was not extracted):",
@@ -617,18 +748,27 @@ where
                     self.config.files.effective().2,
                 ),
                 Some(self.limit_context(text)),
+                cacheable,
             );
         }
 
+        let mut cacheable = true;
         let extracted = if is_extractable_text_mime(&attachment.mime)
             || !self.extractor.handles(&attachment.mime)
         {
             None
         } else {
-            self.extractor
+            match self
+                .extractor
                 .extract(&attachment.mime, &attachment.bytes)
                 .await
-                .ok()
+            {
+                Ok(text) => Some(text),
+                Err(_) => {
+                    cacheable = false;
+                    None
+                }
+            }
         };
         (
             FilePayload::from_resolved(
@@ -639,6 +779,7 @@ where
                 self.config.files.effective().2,
             ),
             None,
+            cacheable,
         )
     }
 

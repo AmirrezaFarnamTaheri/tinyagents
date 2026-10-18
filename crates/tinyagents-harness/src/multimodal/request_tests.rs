@@ -166,6 +166,82 @@ impl MediaImageReadout<String> for LongUnicodeReadout {
     }
 }
 
+#[derive(Default)]
+struct RecordingFallback {
+    calls: Mutex<Vec<(String, InputModality, String)>>,
+    fail: bool,
+    return_none: bool,
+}
+
+#[async_trait]
+impl MediaFallbackRenderer<String> for RecordingFallback {
+    async fn render(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+    ) -> std::result::Result<Option<String>, String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((scope.clone(), modality, attachment.name.clone()));
+        if self.fail {
+            return Err("host rendering failed".into());
+        }
+        if self.return_none {
+            return Ok(None);
+        }
+        Ok(Some(format!("host fallback for {}", attachment.name)))
+    }
+}
+
+#[derive(Default)]
+struct RecordingFallbackCache {
+    gets: AtomicUsize,
+    hits: AtomicUsize,
+    puts: Mutex<Vec<(InputModality, String)>>,
+    entries: Mutex<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl MediaFallbackCache<String> for RecordingFallbackCache {
+    async fn get(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+    ) -> Option<String> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        let key = format!("{scope}:{modality:?}:{}", attachment.name);
+        let value = self.entries.lock().unwrap().get(&key).cloned();
+        if value.is_some() {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+        }
+        value
+    }
+
+    async fn put(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        attachment: &ResolvedAttachment,
+        text: &str,
+    ) {
+        self.puts
+            .lock()
+            .unwrap()
+            .push((modality, attachment.name.clone()));
+        let key = format!("{scope}:{modality:?}:{}", attachment.name);
+        self.entries.lock().unwrap().insert(key, text.to_owned());
+    }
+}
+
+fn valid_png() -> Vec<u8> {
+    STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+        .unwrap()
+}
+
 struct SafeHistory;
 
 impl MediaHistoryFallback<String> for SafeHistory {
@@ -239,7 +315,7 @@ fn wrapper(
         model,
         config,
         |state: &String, _request| Ok(state.clone()),
-        resolver,
+        resolver.clone(),
         extractor,
     )
 }
@@ -319,6 +395,436 @@ async fn ordinary_count_limit_is_checked_before_resolving_any_marker() {
 
     assert!(error.to_string().contains("max=1, found=2"));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn fallback_renderer_handles_markers_and_typed_media_for_invoke_and_stream() {
+    let model = Arc::new(CaptureModel::new(false));
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([
+            (
+                "image".into(),
+                attachment("image.png", "image/png", &valid_png()),
+            ),
+            (
+                "document".into(),
+                attachment("document.pdf", "application/pdf", b"pdf"),
+            ),
+            (
+                "notes".into(),
+                attachment("notes.txt", "text/plain", b"notes"),
+            ),
+            ("audio".into(), attachment("voice.wav", "audio/wav", b"wav")),
+        ]),
+        annotations: HashMap::from([
+            ("image".into(), vec!["image note".into()]),
+            ("notes".into(), vec!["file note".into()]),
+            ("document".into(), vec!["document note".into()]),
+        ]),
+        ..Resolver::default()
+    });
+    let renderer = Arc::new(RecordingFallback::default());
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+
+    wrapped
+        .invoke(
+            &"tenant-a".into(),
+            request("caption [IMAGE:image] [FILE:notes]"),
+        )
+        .await
+        .unwrap();
+    let typed = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Document(MediaRef::Path {
+            path: "document".into(),
+            media_type: Some("application/pdf".into()),
+        })],
+    })]);
+    let stream = wrapped.stream(&"tenant-b".into(), typed).await.unwrap();
+    let _: Vec<ModelStreamItem> = stream.collect().await;
+
+    let calls = renderer.calls.lock().unwrap();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[0],
+        ("tenant-a".into(), InputModality::Image, "image.png".into())
+    );
+    assert_eq!(
+        calls[1],
+        (
+            "tenant-a".into(),
+            InputModality::Document,
+            "notes.txt".into()
+        )
+    );
+    assert_eq!(
+        calls[2],
+        (
+            "tenant-b".into(),
+            InputModality::Document,
+            "document.pdf".into()
+        )
+    );
+    let requests = model.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.messages[0].text().contains("host fallback"))
+    );
+    assert_eq!(
+        requests[0].messages[0].text().matches("image note").count(),
+        1
+    );
+    assert_eq!(
+        requests[0].messages[0].text().matches("file note").count(),
+        1
+    );
+    assert_eq!(
+        requests[1].messages[0]
+            .text()
+            .matches("document note")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn typed_image_fallback_keeps_annotations_once_for_custom_and_default_renderers() {
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "image".into(),
+            attachment("image.png", "image/png", &valid_png()),
+        )]),
+        annotations: HashMap::from([("image".into(), vec!["safe image source".into()])]),
+        ..Resolver::default()
+    });
+    let typed_image = || {
+        ModelRequest::new(vec![Message::User(UserMessage {
+            content: vec![ContentBlock::Image(ImageRef {
+                url: "image".into(),
+                mime_type: Some("image/png".into()),
+            })],
+        })])
+    };
+    let custom_model = Arc::new(CaptureModel::new(false));
+    let custom = wrapper(
+        custom_model.clone(),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(Arc::new(RecordingFallback::default()));
+    custom
+        .invoke(&"tenant-a".into(), typed_image())
+        .await
+        .unwrap();
+    assert_eq!(
+        custom_model.requests.lock().unwrap()[0].messages[0]
+            .text()
+            .matches("safe image source")
+            .count(),
+        1
+    );
+
+    let default_model = Arc::new(CaptureModel::new(false));
+    let default = wrapper(
+        default_model.clone(),
+        MediaRequestConfig::default(),
+        resolver,
+        Arc::default(),
+    )
+    .with_fallback_renderer(Arc::new(RecordingFallback {
+        calls: Mutex::default(),
+        fail: false,
+        return_none: true,
+    }));
+    default
+        .invoke(&"tenant-a".into(), typed_image())
+        .await
+        .unwrap();
+    assert_eq!(
+        default_model.requests.lock().unwrap()[0].messages[0]
+            .text()
+            .matches("safe image source")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn fallback_renderer_runs_only_after_authorization_limits_and_native_check() {
+    let model = Arc::new(CaptureModel::new(true));
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "image".into(),
+            attachment("image.png", "image/png", &valid_png()),
+        )]),
+        ..Resolver::default()
+    });
+    let renderer = Arc::new(RecordingFallback::default());
+    let wrapped = wrapper(
+        model,
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    wrapped
+        .invoke(&"tenant-a".into(), request("[IMAGE:image]"))
+        .await
+        .unwrap();
+    assert!(renderer.calls.lock().unwrap().is_empty());
+
+    let no_remote = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    assert!(
+        no_remote
+            .invoke(
+                &"tenant-a".into(),
+                request("[IMAGE:https://files.invalid/image.png]"),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+    assert!(renderer.calls.lock().unwrap().is_empty());
+
+    let oversized_resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "large".into(),
+            attachment("large.png", "image/png", &vec![0; 1024 * 1024 + 1]),
+        )]),
+        ..Resolver::default()
+    });
+    let oversized = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig {
+            images: ImageLimits {
+                max_image_size_mb: 1,
+                ..ImageLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        oversized_resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    assert!(
+        oversized
+            .invoke(&"tenant-a".into(), request("[IMAGE:large]"))
+            .await
+            .is_err()
+    );
+    assert_eq!(oversized_resolver.calls.load(Ordering::SeqCst), 1);
+    assert!(renderer.calls.lock().unwrap().is_empty());
+
+    let invalid_resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "invalid".into(),
+            attachment("invalid.png", "image/x-invalid", b"not an image"),
+        )]),
+        ..Resolver::default()
+    });
+    let invalid = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        invalid_resolver,
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    assert!(
+        invalid
+            .invoke(&"tenant-a".into(), request("[IMAGE:invalid]"))
+            .await
+            .is_err()
+    );
+    assert!(renderer.calls.lock().unwrap().is_empty());
+
+    let missing_resolver = Arc::new(Resolver::default());
+    let missing = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        missing_resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    assert!(
+        missing
+            .invoke(&"tenant-a".into(), request("[IMAGE:missing]"))
+            .await
+            .is_err()
+    );
+    assert_eq!(missing_resolver.calls.load(Ordering::SeqCst), 1);
+    assert!(renderer.calls.lock().unwrap().is_empty());
+
+    let denied = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig {
+            images: ImageLimits {
+                max_images: 1,
+                ..ImageLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        resolver,
+        Arc::default(),
+    )
+    .with_fallback_renderer(renderer.clone());
+    assert!(
+        denied
+            .invoke(&"tenant-a".into(), request("[IMAGE:image] [IMAGE:image]"))
+            .await
+            .is_err()
+    );
+    assert!(renderer.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn fallback_renderer_errors_propagate_and_default_fallback_stays_available() {
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "image".into(),
+            attachment("image.png", "image/png", &valid_png()),
+        )]),
+        ..Resolver::default()
+    });
+    let failing = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(Arc::new(RecordingFallback {
+        calls: Mutex::default(),
+        fail: true,
+        return_none: false,
+    }));
+    assert!(
+        failing
+            .invoke(&"tenant-a".into(), request("[IMAGE:image]"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host rendering failed")
+    );
+
+    let default = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    );
+    default
+        .invoke(&"tenant-a".into(), request("[IMAGE:image]"))
+        .await
+        .unwrap();
+
+    let none_renderer = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    )
+    .with_fallback_renderer(Arc::new(RecordingFallback {
+        calls: Mutex::default(),
+        fail: false,
+        return_none: true,
+    }));
+    none_renderer
+        .invoke(&"tenant-a".into(), request("[IMAGE:image]"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn default_fallback_uses_host_cache_and_skips_failed_archive_output() {
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([
+            (
+                "archive".into(),
+                attachment("bad.zip", "application/zip", b"not an archive"),
+            ),
+            (
+                "text".into(),
+                attachment("notes.txt", "text/plain", b"notes"),
+            ),
+        ]),
+        annotations: HashMap::from([("text".into(), vec!["cache label".into()])]),
+        ..Resolver::default()
+    });
+    let cache = Arc::new(RecordingFallbackCache::default());
+    let model = Arc::new(CaptureModel::new(false));
+    let wrapped = wrapper(
+        model.clone(),
+        MediaRequestConfig {
+            files: FileLimits {
+                max_extracted_text_chars: 1_000,
+                ..FileLimits::default()
+            },
+            ..MediaRequestConfig::default()
+        },
+        resolver,
+        Arc::default(),
+    )
+    .with_fallback_cache(cache.clone());
+    wrapped
+        .invoke(&"tenant-a".into(), request("[FILE:archive] [FILE:text]"))
+        .await
+        .unwrap();
+    wrapped
+        .invoke(&"tenant-a".into(), request("[FILE:text]"))
+        .await
+        .unwrap();
+    wrapped
+        .invoke(&"tenant-b".into(), request("[FILE:text]"))
+        .await
+        .unwrap();
+    cache
+        .entries
+        .lock()
+        .unwrap()
+        .insert("tenant-c:Document:notes.txt".into(), "🧪".repeat(1_100));
+    wrapped
+        .invoke(&"tenant-c".into(), request("[FILE:text]"))
+        .await
+        .unwrap();
+
+    let puts = cache.puts.lock().unwrap();
+    assert_eq!(puts.len(), 2);
+    assert_eq!(puts[0], (InputModality::Document, "notes.txt".into()));
+    assert_eq!(cache.gets.load(Ordering::SeqCst), 5);
+    assert_eq!(cache.hits.load(Ordering::SeqCst), 2);
+    let requests = model.requests.lock().unwrap();
+    assert!(requests[1].messages[0].text().contains("notes"));
+    assert_eq!(
+        requests[1].messages[0]
+            .text()
+            .matches("cache label")
+            .count(),
+        1
+    );
+    assert!(
+        requests[3].messages[0]
+            .text()
+            .contains("Attachment context truncated")
+    );
+    assert_eq!(
+        requests[3].messages[0]
+            .text()
+            .matches("cache label")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

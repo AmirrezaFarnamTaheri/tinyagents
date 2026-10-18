@@ -55,6 +55,11 @@ format contributes a header naming it plus a content hash.
   behavior, and may supply [`MediaImageReadout`] plus selected-model
   [`ModelProfile`] facts. A resolver returns [`ResolvedMedia`] so host-authored
   safe path or recovery annotations stay beside native media and in fallbacks.
+  [`MediaFallbackRenderer`] adds product-specific rendering after source
+  authorization and native-capability checks; returning `None` keeps the
+  built-in fallback. [`MediaFallbackCache`] lets the host choose cache identity
+  and storage for owner-rendered output without moving generic formatting out
+  of TinyAgents.
   Its synchronous trusted-request callback may consume request metadata or
   normalize host markers on the disposable copy before counting; it must not
   resolve sources or perform other I/O.
@@ -94,6 +99,13 @@ format contributes a header naming it plus a content hash.
 - Final image readout and archive fallback context is capped using
   `max_extracted_text_chars` and Unicode scalar values, then marked when
   truncated.
+- The fallback renderer sees only authorized attachments that failed the
+  native model/transport capability check. It can provide host-specific
+  document provenance or paid image readouts; archive inspection, text
+  extraction composition, and reference formatting remain owner behavior.
+  The optional fallback cache receives resolved attachments and cacheability
+  status so hosts can persist successful owner-rendered output under their own
+  key and storage policy. Cache failures are misses and do not fail the turn.
 - What stays with the host, deliberately: the `TextExtractor` implementation
   (which parser, if any, and its timeout), the attachment stash (where bytes
   live between ingress and dispatch), image-readout model choice, source
