@@ -248,6 +248,16 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         ToolResult::error("exit status 1"),
     )
     .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        89,
+        "new-command-repeat-third",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
     assert_eq!(
         halt_summary.lock().unwrap().as_deref(),
         Some(
