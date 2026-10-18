@@ -7,8 +7,7 @@
 //!
 //! The shape is ported from OpenHuman's `thread_goals`, re-hosted on the
 //! harness [`Store`](tinyagents_harness::store::Store) (see [`super::store`]) and
-//! driven by the graph runtime rather than an out-of-band heartbeat (see
-//! [`super::continuation`]).
+//! driven by the host's turn lifecycle.
 
 use serde::{Deserialize, Serialize};
 
@@ -87,11 +86,6 @@ pub struct ThreadGoal {
     pub created_at_ms: u64,
     /// Last-mutation time (unix epoch milliseconds).
     pub updated_at_ms: u64,
-    /// Set when a continuation iteration produced **no progress**, to stop a
-    /// continuation loop. Cleared on any user-initiated run or external
-    /// mutation (e.g. a fresh `goal_set` or [`super::note_user_turn`]).
-    #[serde(default)]
-    pub continuation_suppressed: bool,
 }
 
 impl ThreadGoal {

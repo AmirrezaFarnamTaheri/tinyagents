@@ -23,7 +23,7 @@ mod types;
 pub use budget::{BudgetVerdict, GoalBudgetGuard, account_turn, accrues_usage, turn_tokens};
 pub use prompt::active_goal_context_block;
 pub use tool::{GoalTool, GoalToolKind, GoalUpdateHook, goal_tools, register_goal_tools};
-pub use types::{GoalProgress, ThreadGoal, ThreadGoalStatus, TurnOutcome};
+pub use types::{ThreadGoal, ThreadGoalStatus};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
