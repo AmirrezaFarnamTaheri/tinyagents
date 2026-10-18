@@ -1,0 +1,59 @@
+name: OpenHuman TinyAgents fork upstream sync (one-shot)
+on:
+  push:
+    branches:
+      - integration/openhuman-structural-20261018
+    paths:
+      - .github/workflows/openhuman-upstream-tinyagents-sync-once.yml
+permissions:
+  contents: write
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: true
+      - name: Audit and merge TinyAgents canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="integration/openhuman-structural-20261018"
+          expected="$GITHUB_SHA"
+          current="$(git ls-remote origin "refs/heads/$branch" | cut -f1)"
+          if [ "$current" != "$expected" ]; then
+            echo "::error::Branch changed since this workflow started; stop before updating"
+            exit 3
+          fi
+          git remote add canonical https://github.com/tinyhumansai/tinyagents.git
+          git fetch --no-tags canonical +refs/heads/main:refs/remotes/canonical/main
+          upstream="$(git rev-parse refs/remotes/canonical/main)"
+          echo "Upstream TinyAgents $upstream"
+          echo "Merge base $(git merge-base HEAD "$upstream")"
+          mkdir -p sync-report
+          echo "$upstream" > sync-report/upstream.txt
+          if git merge --no-commit --no-ff "$upstream"; then
+            git rm -- .github/workflows/openhuman-upstream-tinyagents-sync-once.yml
+            git diff --cached --check
+            git commit -m "merge: onboard canonical TinyAgents main ($upstream)"
+            git push origin "HEAD:refs/heads/$branch"
+          else
+            git diff --name-only --diff-filter=U | tee sync-report/conflicts.txt
+            git ls-files -u > sync-report/unmerged-stages.txt
+            git diff --cc > sync-report/combined.diff
+            git status --short > sync-report/status.txt
+            echo "::error::TinyAgents source merge conflicts ($(wc -l < sync-report/conflicts.txt))"
+            exit 2
+          fi
+      - name: Publish conflict audit
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhuman-tinyagents-sync-conflicts
+          path: sync-report/
+          if-no-files-found: warn
