@@ -65,6 +65,11 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
     }
 
     let observer = Arc::new(RecordingObserver(std::sync::Mutex::new(Vec::new())));
+    let ambient = Arc::new(RecordingObserver(std::sync::Mutex::new(Vec::new())));
+    let scope = crate::observability::turn_observer::ObserverScope::new(
+        ambient.clone(),
+        crate::observability::turn_observer::TraceContent::MetadataOnly,
+    );
     let budget = ModelBudget::new(
         Budget::new(SpendLimits {
             tokens: Some(10_000),
@@ -80,10 +85,13 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
         Arc::new(ChargedModel),
         Some(Arc::new(ExplicitObserver(observer.clone()))),
     );
-    wrapped
-        .invoke(&(), ModelRequest::default())
-        .await
-        .expect("budgeted provider call");
+    crate::observability::turn_observer::with_observer(scope, async {
+        wrapped
+            .invoke(&(), ModelRequest::default())
+            .await
+            .expect("budgeted provider call");
+    })
+    .await;
 
     let events = observer.0.lock().unwrap();
     let usage = events.iter().find_map(|event| match event {
@@ -91,6 +99,13 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
         _ => None,
     });
     assert_eq!(usage.and_then(|usage| usage.cost_usd), Some(0.000007));
+    drop(events);
+    let ambient_events = ambient.0.lock().unwrap();
+    let ambient_usage = ambient_events.iter().find_map(|event| match event {
+        TurnObservation::ModelDispatch { usage, .. } => usage.as_ref(),
+        _ => None,
+    });
+    assert_eq!(ambient_usage.and_then(|usage| usage.cost_usd), Some(0.000007));
 }
 
 struct RecordingObserver(
