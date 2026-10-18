@@ -3,6 +3,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use super::budget::GoalBudgetGuard;
 use super::observer::{GoalObserver, GoalUpdateThrottle};
 use super::prompt::active_goal_context_block;
@@ -24,6 +26,7 @@ pub struct GoalStore {
     store: Arc<dyn Store>,
     observer: Arc<dyn GoalObserver>,
     throttle: Arc<GoalUpdateThrottle>,
+    notifications: Arc<AsyncMutex<()>>,
 }
 
 impl GoalStore {
@@ -38,6 +41,7 @@ impl GoalStore {
             store,
             observer,
             throttle: Arc::new(GoalUpdateThrottle::default()),
+            notifications: Arc::new(AsyncMutex::new(())),
         }
     }
 
@@ -58,6 +62,7 @@ impl GoalStore {
         objective: &str,
         token_budget: Option<u64>,
     ) -> Result<ThreadGoal> {
+        let _notifications = self.notifications.lock().await;
         let goal = store::set(&self.store, thread_id, objective, token_budget).await?;
         self.notify_updated(&goal);
         Ok(goal)
@@ -65,6 +70,7 @@ impl GoalStore {
 
     /// Marks the thread's goal complete and notifies the observer.
     pub async fn complete(&self, thread_id: &str) -> Result<ThreadGoal> {
+        let _notifications = self.notifications.lock().await;
         let goal = store::complete(&self.store, thread_id).await?;
         self.notify_updated(&goal);
         Ok(goal)
@@ -72,6 +78,7 @@ impl GoalStore {
 
     /// Pauses the thread's active goal and notifies the observer when changed.
     pub async fn pause(&self, thread_id: &str) -> Result<ThreadGoal> {
+        let _notifications = self.notifications.lock().await;
         let (before, goal) = store::pause_with_before(&self.store, thread_id).await?;
         if before.status != goal.status {
             self.notify_updated(&goal);
@@ -81,6 +88,7 @@ impl GoalStore {
 
     /// Resumes a paused goal and notifies the observer when changed.
     pub async fn resume(&self, thread_id: &str) -> Result<ThreadGoal> {
+        let _notifications = self.notifications.lock().await;
         let (before, goal) = store::resume_with_before(&self.store, thread_id).await?;
         if before.status != goal.status {
             self.notify_updated(&goal);
@@ -90,6 +98,7 @@ impl GoalStore {
 
     /// Removes a goal and notifies the observer only when a row existed.
     pub async fn clear(&self, thread_id: &str) -> Result<bool> {
+        let _notifications = self.notifications.lock().await;
         let cleared = store::clear(&self.store, thread_id).await?;
         if cleared {
             self.throttle.clear(thread_id);
@@ -107,6 +116,7 @@ impl GoalStore {
         output_tokens: u64,
         elapsed: Duration,
     ) -> Result<Option<ThreadGoal>> {
+        let _notifications = self.notifications.lock().await;
         let Some((before, updated)) = store::account_turn_atomic(
             &self.store,
             thread_id,
