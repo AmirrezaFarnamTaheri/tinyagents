@@ -421,9 +421,12 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 recoverable_miss,
             } => {
                 run.recoverable.reset_streak();
-                let _ = self
+                if self
                     .policy
-                    .reset_no_progress_before_failure(ctx, &call, &scope, result);
+                    .reset_no_progress_before_failure(ctx, &call, &scope, result)
+                {
+                    run.tracker.reset();
+                }
                 let attempt = ToolAttempt {
                     tool,
                     arg_fingerprint: &argument_key,
