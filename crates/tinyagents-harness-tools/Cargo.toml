@@ -21,7 +21,6 @@ tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0
 tinyagents-orchestration = { path = "../tinyagents-orchestration", version = "2.2.0", default-features = false, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread"] }
 tracing = { workspace = true }
-uuid = { workspace = true }
 
 [features]
 default = ["todos", "goals", "skills"]
