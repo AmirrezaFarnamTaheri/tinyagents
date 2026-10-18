@@ -312,18 +312,6 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
     );
 }
 
-/// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
-/// mongodb_run_ledger_conformance -- --ignored` against a local replica set.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires a local MongoDB replica set; run explicitly with TSD_MONGO_URL"]
-async fn mongodb_run_ledger_conformance_and_scope_isolation() {
-    let (uri, database) = crate::testkit::local_mongo_test_target("run_ledger");
-    let backend = tinystoragedrivers_mongodb::MongoStorage::connect(&uri, &database)
-        .await
-        .expect("local MongoDB replica set is reachable");
-    assert_ledger_conformance_and_scope_isolation(&backend).await;
-}
-
 /// A known workflow input whose first SQL revision is zero.
 fn workflow(id: &str) -> WorkflowRunUpsert {
     WorkflowRunUpsert {

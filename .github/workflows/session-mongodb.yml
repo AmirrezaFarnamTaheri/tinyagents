@@ -6,6 +6,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/tinyagents-session/**"
+      - "integration-proofs/run-ledger-mongodb/**"
       - ".github/scripts/start-session-mongo-replset.sh"
       - ".github/workflows/session-mongodb.yml"
   push:
@@ -14,6 +15,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "crates/tinyagents-session/**"
+      - "integration-proofs/run-ledger-mongodb/**"
       - ".github/scripts/start-session-mongo-replset.sh"
       - ".github/workflows/session-mongodb.yml"
   schedule:
@@ -53,4 +55,4 @@ jobs:
         run: .github/scripts/start-session-mongo-replset.sh 27017
 
       - name: Run MongoDB driver conformance
-        run: cargo test -p tinyagents-session --all-features mongodb_ -- --ignored
+        run: cargo test --manifest-path integration-proofs/run-ledger-mongodb/Cargo.toml --features mongodb-storage-tests --test session_driver_conformance -- --ignored

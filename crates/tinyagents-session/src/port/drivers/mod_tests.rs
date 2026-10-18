@@ -130,22 +130,6 @@ async fn file_backed_stores_meet_the_contract_and_keep_agents_apart() {
     session_store_isolation_conformance(&stores).await;
 }
 
-/// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
-/// mongodb_backed_stores -- --ignored` against a local replica set.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "requires a local MongoDB replica set; run explicitly with TSD_MONGO_URL"]
-async fn mongodb_backed_stores_meet_the_contract_and_keep_agents_apart() {
-    let (uri, database) = crate::testkit::local_mongo_test_target("session_store");
-    let backend = tinystoragedrivers_mongodb::MongoStorage::connect(&uri, &database)
-        .await
-        .expect("local MongoDB replica set is reachable");
-    let stores =
-        DriverSessionStores::new(Arc::new(backend), tinystoragedrivers_core::Scope::local())
-            .unwrap();
-    session_store_conformance(&stores).await;
-    session_store_isolation_conformance(&stores).await;
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn stores_work_from_a_multi_threaded_runtime() {
     session_store_conformance(&memory()).await;
