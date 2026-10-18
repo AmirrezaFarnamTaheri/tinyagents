@@ -116,10 +116,11 @@ async fn poisoned_detached_registry_errors_remain_typed_across_job_controls() {
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(true));
-        let result = jobs.try_get_owned(id.as_str(), 7);
-        super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(false));
-        result
+        jobs.try_get_owned(id.as_str(), 7)
     }));
+    // The intentional panic skips the end of the closure; clear the trigger
+    // before any assertions or awaits can reuse this test worker.
+    super::types::PANIC_ON_JOB_META_CLONE.with(|panic| panic.set(false));
     assert!(
         panic.is_err(),
         "metadata clone poisons the real job registry lock"
