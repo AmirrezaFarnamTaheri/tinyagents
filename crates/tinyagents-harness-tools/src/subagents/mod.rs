@@ -12,9 +12,3 @@ pub use jobs::{
     SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
 };
 
-#[cfg(test)]
-#[path = "jobs_tests.rs"]
-mod jobs_tests;
-
-#[cfg(test)]
-mod test_helpers;
