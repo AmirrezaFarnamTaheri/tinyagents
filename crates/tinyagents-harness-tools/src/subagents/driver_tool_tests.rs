@@ -1096,7 +1096,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .expect_err("a fixed query alias requires its configured identifier");
-    assert!(missing_identifier.to_string().contains("task_id"));
+    assert!(missing_identifier.to_string().contains("identifier is required"));
     let listed = ToolDispatch::<(), ()>::execute(
         &query,
         &(),
