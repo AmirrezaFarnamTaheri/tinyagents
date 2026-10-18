@@ -93,10 +93,7 @@ fn add_retired_tables(path: &Path) {
          INSERT INTO {entries} VALUES ('kept-entry'); \
          INSERT INTO {labels} VALUES ('kept-label');"
     );
-    Connection::open(path)
-        .unwrap()
-        .execute_batch(&sql)
-        .unwrap();
+    Connection::open(path).unwrap().execute_batch(&sql).unwrap();
 }
 
 fn directory_bytes(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
@@ -258,7 +255,6 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     let unresolved = ledger.list_unresolved_tool_effects("run-1").await.unwrap();
     assert_eq!(unresolved.len(), 1);
     assert_eq!(unresolved[0].idempotency_key.as_deref(), Some("idem-1"));
-
 }
 
 #[tokio::test]
@@ -279,12 +275,14 @@ async fn importing_a_store_with_retired_tables_leaves_them_untouched() {
     let entries = ["entry", "_tree", "_entries"].concat();
     let labels = ["entry", "_tree", "_labels"].concat();
     assert_eq!(
-        db.query_row(&format!("SELECT id FROM {entries}"), [], |row| row.get::<_, String>(0))
+        db.query_row(&format!("SELECT id FROM {entries}"), [], |row| row
+            .get::<_, String>(0))
             .unwrap(),
         "kept-entry"
     );
     assert_eq!(
-        db.query_row(&format!("SELECT id FROM {labels}"), [], |row| row.get::<_, String>(0))
+        db.query_row(&format!("SELECT id FROM {labels}"), [], |row| row
+            .get::<_, String>(0))
             .unwrap(),
         "kept-label"
     );
