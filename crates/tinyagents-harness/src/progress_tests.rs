@@ -18,15 +18,24 @@ fn subagent_usage_cost_carries_the_known_spend_and_its_certainty() {
 
 #[test]
 fn subagent_usage_with_an_unknown_cost_has_no_usd() {
-    let tally = SubagentUsage::default().cost();
+    let usage = SubagentUsage {
+        cost_source: CostSource::Unknown,
+        ..SubagentUsage::default()
+    };
+    let tally = usage.cost();
     assert_eq!(tally.source, CostSource::Unknown);
     assert_eq!(tally.usd(), None);
 }
 
 #[test]
 fn subagent_usage_omits_an_unknown_cost_source_on_the_wire() {
-    let json = serde_json::to_value(SubagentUsage::default()).unwrap();
+    let usage = SubagentUsage {
+        cost_source: CostSource::Unknown,
+        ..SubagentUsage::default()
+    };
+    let json = serde_json::to_value(usage).unwrap();
     assert!(json.get("cost_source").is_none());
+    // Absent on the wire reads back as an unknown cost, never a charged one.
     let round_trip: SubagentUsage = serde_json::from_value(json).unwrap();
-    assert_eq!(round_trip, SubagentUsage::default());
+    assert_eq!(round_trip, usage);
 }
