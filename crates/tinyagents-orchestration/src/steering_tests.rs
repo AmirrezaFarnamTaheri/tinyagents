@@ -1,3 +1,5 @@
+use super::*;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8,8 +10,6 @@ use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tokio::sync::watch;
-
-use super::*;
 
 #[derive(Clone)]
 struct Meta {
