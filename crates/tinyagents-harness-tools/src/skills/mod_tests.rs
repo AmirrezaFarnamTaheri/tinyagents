@@ -745,3 +745,47 @@ fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
     };
     assert_eq!(render(first), render(second));
 }
+
+#[tokio::test]
+async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
+    let mut first = ModelResponse::assistant("");
+    first.message.tool_calls.push(ToolCall::new(
+        "packed-call",
+        USE_SKILL,
+        json!({"skill": "alpha", "tool": "a_one", "args": {}}),
+    ));
+    let model = Arc::new(testkit::ScriptedModel::new(vec![
+        first,
+        ModelResponse::assistant("done"),
+    ]));
+    let rules: tinytools::ToolRules = serde_json::from_value(json!({"rules": [
+        {"id": "deny-a-one", "effect": "deny", "match": {"name": "a_one"}}
+    ]}))
+    .unwrap();
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("scripted", model);
+    harness.register_tool(Arc::new(UseSkillTool::new(handle, CATALOG)));
+    harness.with_policy(RunPolicy {
+        tool_rules: ToolRulePolicy::new(rules),
+        ..RunPolicy::default()
+    });
+
+    let run = harness
+        .invoke(vec![Message::user("run the packed tool")])
+        .await
+        .unwrap();
+    let result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(tool) if tool.tool_call_id == "packed-call" => Some(message.text()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        result.contains("deny-a-one"),
+        "selected target should be refused: {result}"
+    );
+    assert!(tools.iter().any(|tool| tool.name() == "a_one"));
+}
