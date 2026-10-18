@@ -1288,7 +1288,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     assert!(matches!(
         terminal_error.downcast_ref::<SubAgentJobError>(),
         Some(SubAgentJobError::Terminal { .. })
-    ));
+    ), "unexpected terminal error: {terminal_error:#}");
     let recoverable_message = terminal_message.clone().recover_selector_errors();
     let recoverable_error = ToolDispatch::<(), ()>::execute(
         &recoverable_message,
