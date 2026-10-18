@@ -1,14 +1,15 @@
+use super::*;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use std::future::Ready;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tokio::sync::watch;
-
-use super::*;
 
 #[derive(Clone)]
 struct Meta {
@@ -28,6 +29,17 @@ impl SubagentIdentity for Meta {
 }
 
 type Registry = DetachedTaskRegistry<Meta, DetachedSubagentStatus>;
+
+struct RecordingFallback(Arc<std::sync::Mutex<Option<(String, QueueLane, String)>>>);
+
+impl SteerFallback<Meta> for RecordingFallback {
+    type Future = Ready<()>;
+
+    fn enqueue(self, metadata: Meta, lane: QueueLane, text: String) -> Self::Future {
+        *self.0.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
+        std::future::ready(())
+    }
+}
 
 fn registry(steering: SteeringRegistry) -> Registry {
     DetachedTaskRegistry::new(steering, 256, DetachedSubagentStatus::is_terminal)
@@ -58,7 +70,7 @@ fn counting() -> (
 ) {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = calls.clone();
-    (calls, move |_, _, _| {
+    (calls, move |_: Meta, _: QueueLane, _: String| {
         seen.fetch_add(1, Ordering::SeqCst);
         std::future::ready(())
     })
@@ -75,8 +87,9 @@ fn lane_names_and_commands_are_literal() {
 }
 
 #[tokio::test]
-async fn steer_rejects_followup_unknown_unowned_and_terminal() {
-    let reg = registry(SteeringRegistry::default());
+async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering.clone());
     let tx = add(&reg, "t1", "p1", None);
 
     let (calls, fb) = counting();
@@ -92,6 +105,7 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
         .await,
         Err(SteerError::UnsupportedLane)
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     let (_, fb) = counting();
     assert_eq!(
         steer_detached(
@@ -120,7 +134,10 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
     );
     tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
         .unwrap();
-    let (_, fb) = counting();
+    let handle = SteeringHandle::allow_all();
+    steering.register(TaskId::new("t1"), handle.clone());
+    let delivered = Arc::new(std::sync::Mutex::new(None));
+    let captured = delivered.clone();
     assert_eq!(
         steer_detached(
             &reg,
@@ -128,12 +145,19 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal() {
             SteerAccess::Trusted,
             "x".into(),
             QueueLane::Steer,
-            fb
+            RecordingFallback(captured)
         )
         .await,
-        Err(SteerError::AlreadyDone)
+        Ok(SteerRoute::Fallback)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *delivered.lock().unwrap(),
+        Some(("researcher".to_string(), QueueLane::Steer, "x".to_string()))
+    );
+    assert!(
+        handle.drain().is_empty(),
+        "terminal children never use stale handles"
+    );
 }
 
 #[tokio::test]
@@ -157,7 +181,8 @@ async fn steer_prefers_the_live_handle_then_falls_back() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 
-    steering.register(TaskId::new("t1"), SteeringHandle::allow_all());
+    let handle = SteeringHandle::allow_all();
+    steering.register(TaskId::new("t1"), handle.clone());
     let (calls, fb) = counting();
     assert_eq!(
         steer_detached(
@@ -172,6 +197,12 @@ async fn steer_prefers_the_live_handle_then_falls_back() {
         Ok(SteerRoute::Registry)
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let commands = handle.drain();
+    assert!(matches!(
+        commands.as_slice(),
+        [tinyagents_harness::steering::SteeringCommand::InjectMessage(message)]
+            if message.text().contains("[Additional context from user]: go")
+    ));
 }
 
 #[tokio::test]

@@ -91,9 +91,8 @@ crate root as `session::run_ledger::`.
 
 The effect ledger writes `started` before a call executes, which is why "no
 row" means "never began"; hosts that did not attach the ledger must not rely on
-`Resume`. Nothing here re-runs a tool or writes to the ledger. For the
-parent-facing note about interrupted *children* see
-`tinyagents_tasks::build_restart_recovery_note`.
+`Resume`. Nothing here re-runs a tool or writes to the ledger. Hosts own any parent-facing
+summary of interrupted child tasks.
 
 ## Layout of this module
 

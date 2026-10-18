@@ -12,7 +12,10 @@ use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, ScriptedModel, Trajectory};
 use tinyagents_harness::*;
+use tinyagents_orchestration::steering::{SteerAccess, SteerRoute, steer_detached};
+use tinyagents_orchestration::subagent::DetachedSubagentStatus;
 use tinyagents_registry::*;
+use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tinyinference_llm::message::Message;
 
 /// Builds a harness whose only model is a `ScriptedModel`; returns both the
@@ -66,6 +69,67 @@ async fn injected_message_reaches_the_next_model_call() {
     // And the run still completed normally.
     Trajectory::from_events(recorder.events()).assert_completed();
     assert_eq!(run.model_calls, 1);
+}
+
+#[tokio::test]
+async fn detached_steer_dispatch_reaches_the_registered_child_harness() {
+    let (harness, model) = harness_with_scripted(vec!["done"]);
+    let task_id = tinyagents_harness::ids::TaskId::new("detached-child");
+    let steering_registry = SteeringRegistry::new();
+    let registry = DetachedTaskRegistry::new(
+        steering_registry.clone(),
+        8,
+        DetachedSubagentStatus::is_terminal,
+    );
+    let (status_tx, status_rx) = tokio::sync::watch::channel(DetachedSubagentStatus::Running);
+    registry
+        .register_cooperative(
+            task_id.clone(),
+            "parent-thread",
+            "child-metadata".to_string(),
+            status_rx,
+            CancellationToken::new(),
+        )
+        .expect("register the running detached child");
+
+    let steering = SteeringHandle::allow_all();
+    steering_registry.register(task_id.clone(), steering.clone());
+    let route = steer_detached(
+        &registry,
+        task_id.as_str(),
+        SteerAccess::Owner("parent-thread"),
+        "Use the child run's live handle".to_string(),
+        tinyagents_harness::run_queue::QueueLane::Steer,
+        |_: String, _: tinyagents_harness::run_queue::QueueLane, _: String| async {
+            panic!("a registered live child must use its steering handle")
+        },
+    )
+    .await
+    .expect("dispatch steering to the registered child");
+    assert_eq!(route, SteerRoute::Registry);
+
+    // Run the actual child harness with the handle found by public detached
+    // steering; its model request must contain the delivered instruction.
+    let ctx = RunContext::new(RunConfig::new("detached-child"), ()).with_steering(steering);
+    harness
+        .invoke_in_context(&(), ctx, vec![Message::user("Hello")])
+        .await
+        .expect("child run completes");
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|message| message.text().contains("Use the child run's live handle"))
+    );
+
+    status_tx
+        .send(DetachedSubagentStatus::Completed {
+            output: "done".to_string(),
+            iterations: 1,
+        })
+        .expect("publish child completion");
 }
 
 #[tokio::test]

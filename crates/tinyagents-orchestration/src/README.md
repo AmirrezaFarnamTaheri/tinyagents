@@ -48,6 +48,12 @@ this crate only under its `subagents` feature.
   It is the single engine for an agent step: team member steps and workflow
   agent children run through it too (`subagent::run_agent_step`), so they get
   the same spawn admission, policy, result policy and typed outcome.
+- `steering::{steer_detached, steer_detached_with_request_id}` sends lane-checked
+  steering to a live child handle, or delegates it to the host's
+  `SteerFallback` when the handle is absent or the retained task has finished.
+  `SteeringRegistry` remains in `tinyagents-tasks`, where
+  `DetachedTaskRegistry` receives it at construction. `steering::cancel_for_thread`
+  cancels registered children belonging to a parent thread.
 
 The direct invocation implementation and its tool-focused tests live in
 `subagent/invocation/`. Durable lifecycle files live beside it in `subagent/`.
