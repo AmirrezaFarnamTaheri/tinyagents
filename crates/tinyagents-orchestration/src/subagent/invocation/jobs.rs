@@ -745,7 +745,7 @@ impl SubAgentJobRegistry {
         self.send_message_with_lane_and_request_id(job_id, owner, message, request_id, None)
     }
 
-    fn send_message_with_lane_and_request_id(
+    pub fn send_message_with_lane_and_request_id(
         &self,
         job_id: &str,
         owner: impl ToString,
