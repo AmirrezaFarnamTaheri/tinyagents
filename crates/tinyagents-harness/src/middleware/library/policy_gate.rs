@@ -26,8 +26,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::context::RunContext;
-use crate::error::Result;
+use crate::context::{MiddlewareControl, RunContext};
+use crate::error::{Result, TinyAgentsError};
 use crate::middleware::{MiddlewareToolOutcome, ToolHandler, ToolMiddleware};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
@@ -119,6 +119,58 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// an [`ApprovalResolution::Allow`] carrying a ticket whose tool call
     /// returned a result.
     fn record(&self, ticket: &str, result: &ToolResult);
+
+    /// Records the terminal outcome of an approved call. This callback must
+    /// not panic: it runs during unwinding when an acquired ticket is abandoned.
+    /// `Abandoned` means the harness dropped the in-flight future; the tool may
+    /// already have produced partial side effects.
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        if let ApprovalExecutionOutcome::Result(result) = outcome {
+            self.record(ticket, result);
+        }
+    }
+}
+
+/// A terminal outcome observed after an approval ticket was acquired.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ApprovalExecutionOutcome<'a> {
+    /// The wrapped middleware returned a tool result.
+    Result(&'a ToolResult),
+    /// The wrapped middleware returned a harness error other than cancellation.
+    Failed(&'a TinyAgentsError),
+    /// The wrapped middleware returned a typed cancellation error.
+    Cancelled(&'a TinyAgentsError),
+    /// The wrapped middleware returned control instead of a tool result.
+    Control(&'a MiddlewareControl),
+    /// The in-flight future was dropped before the harness observed a result.
+    Abandoned,
+}
+
+struct TicketGuard<'a, Ctx: Send + Sync> {
+    resolver: &'a dyn ApprovalResolver<Ctx>,
+    ticket: Option<String>,
+}
+
+impl<'a, Ctx: Send + Sync> TicketGuard<'a, Ctx> {
+    fn new(resolver: &'a dyn ApprovalResolver<Ctx>, ticket: Option<String>) -> Self {
+        Self { resolver, ticket }
+    }
+
+    fn complete(&mut self, outcome: ApprovalExecutionOutcome<'_>) {
+        if let Some(ticket) = self.ticket.take() {
+            self.resolver.record_terminal(&ticket, outcome);
+        }
+    }
+}
+
+impl<Ctx: Send + Sync> Drop for TicketGuard<'_, Ctx> {
+    fn drop(&mut self) {
+        if let Some(ticket) = self.ticket.take() {
+            self.resolver
+                .record_terminal(&ticket, ApprovalExecutionOutcome::Abandoned);
+        }
+    }
 }
 
 /// What a host must do with a call after [`ToolPolicyGate::evaluate`].
@@ -219,8 +271,18 @@ pub fn record_approved<Ctx: Send + Sync>(
     ticket: Option<&str>,
     outcome: &MiddlewareToolOutcome,
 ) {
-    if let (Some(ticket), MiddlewareToolOutcome::Result(result)) = (ticket, outcome) {
-        resolver.record(ticket, result);
+    if let Some(ticket) = ticket {
+        match outcome {
+            MiddlewareToolOutcome::Result(result) => resolver.record_terminal(
+                ticket,
+                ApprovalExecutionOutcome::Result(result),
+            ),
+            MiddlewareToolOutcome::Command { control } => resolver.record_terminal(
+                ticket,
+                ApprovalExecutionOutcome::Control(control),
+            ),
+            _ => {}
+        }
     }
 }
 
@@ -243,9 +305,25 @@ async fn run_approved<State: Send + Sync, Ctx: Send + Sync>(
             Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
         }
         ApprovalResolution::Allow { ticket } => {
-            let outcome = next.run(ctx, state, call).await?;
-            record_approved(resolver, ticket.as_deref(), &outcome);
-            Ok(outcome)
+            let mut guard = TicketGuard::new(resolver, ticket);
+            match next.run(ctx, state, call).await {
+                Ok(outcome) => {
+                    match &outcome {
+                        MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
+                        MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                        _ => guard.complete(ApprovalExecutionOutcome::Abandoned),
+                    }
+                    Ok(outcome)
+                }
+                Err(error) => {
+                    if matches!(error, TinyAgentsError::Cancelled) {
+                        guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                    } else {
+                        guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                    }
+                    Err(error)
+                }
+            }
         }
     }
 }
@@ -578,11 +656,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                     }
                     return Ok(outcome);
                 }
-                let outcome = next.run(ctx, state, call).await?;
-                if let Some(resolver) = &self.resolver {
-                    record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);
+                let Some(resolver) = &self.resolver else {
+                    return next.run(ctx, state, call).await;
+                };
+                let mut guard = TicketGuard::new(resolver.as_ref(), ticket);
+                match next.run(ctx, state, call).await {
+                    Ok(outcome) => {
+                        match &outcome {
+                            MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
+                            MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                            _ => guard.complete(ApprovalExecutionOutcome::Abandoned),
+                        }
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        if matches!(error, TinyAgentsError::Cancelled) {
+                            guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                        } else {
+                            guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                        }
+                        Err(error)
+                    }
                 }
-                Ok(outcome)
             }
             GateVerdict::Refused { reason } => {
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))

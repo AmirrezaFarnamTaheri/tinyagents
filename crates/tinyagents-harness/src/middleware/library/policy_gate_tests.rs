@@ -447,6 +447,51 @@ async fn approval_gate_records_success_and_failure_for_an_approved_ticket() {
 }
 
 #[tokio::test]
+async fn approval_gate_records_harness_errors_for_an_approved_ticket() {
+    struct ErrorBase;
+    impl ToolBaseCall<(), Host> for ErrorBase {
+        fn call<'a>(
+            &'a self,
+            _ctx: &'a RunContext<Host>,
+            _state: &'a (),
+            _call: ToolCall,
+        ) -> BoxToolFuture<'a> {
+            Box::pin(async { Err(crate::error::TinyAgentsError::Cancelled) })
+        }
+    }
+
+    #[derive(Default)]
+    struct TerminalResolver(Mutex<Vec<(String, &'static str)>>);
+    #[async_trait]
+    impl ApprovalResolver<Host> for TerminalResolver {
+        async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
+            true
+        }
+        async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
+            ApprovalResolution::Allow { ticket: Some("ticket".into()) }
+        }
+        fn record(&self, _ticket: &str, _result: &ToolResult) {}
+        fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+            let kind = match outcome {
+                ApprovalExecutionOutcome::Result(_) => "result",
+                ApprovalExecutionOutcome::Failed(_) => "failed",
+                ApprovalExecutionOutcome::Cancelled(_) => "cancelled",
+                ApprovalExecutionOutcome::Control(_) => "control",
+                ApprovalExecutionOutcome::Abandoned => "abandoned",
+            };
+            self.0.lock().unwrap().push((ticket.to_owned(), kind));
+        }
+    }
+
+    let resolver = Arc::new(TerminalResolver::default());
+    let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new("approval", resolver.clone())));
+    let error = stack.run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase).await.unwrap_err();
+    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled));
+    assert_eq!(*resolver.0.lock().unwrap(), vec![("ticket".into(), "cancelled")]);
+}
+
+#[tokio::test]
 async fn evaluate_settles_each_decision_for_a_host_that_interleaves_the_gate() {
     let gate = ToolPolicyGate::new(Arc::new(NamePolicy));
     let resolver = Resolver::default();
