@@ -363,6 +363,12 @@ pub type SessionToolCeiling<Ctx> = Arc<dyn ToolCallPolicy<Ctx>>;
 pub type SessionToolListing<Ctx> =
     Arc<dyn Fn(&RunContext<Ctx>, &[String]) -> Vec<String> + Send + Sync>;
 
+/// Optional host response applied after both policy gates allow a call and
+/// before the wrapped tool executes. Hosts use this for session-scoped
+/// disclosures such as filtering a `use_skill` listing.
+pub type ToolPolicyPostGate<Ctx> =
+    Arc<dyn Fn(&RunContext<Ctx>, &ToolCall) -> Option<ToolResult> + Send + Sync>;
+
 fn default_denial(call: &ToolCall, policy: &str, decision: &PolicyDecision) -> String {
     let (action, reason) = match decision {
         PolicyDecision::RequireApproval { reason } => ("requires approval", reason.as_str()),
@@ -382,6 +388,7 @@ pub struct ToolPolicyGateMiddleware<Ctx: Send + Sync = ()> {
     session_listing: Option<SessionToolListing<Ctx>>,
     resolver: Option<Arc<dyn ApprovalResolver<Ctx>>>,
     render: DenialRenderer,
+    post_gate: Option<ToolPolicyPostGate<Ctx>>,
     /// Serialises approval prompts across the overlapping calls of a
     /// concurrent batch; calls the policy allows or denies never take it.
     prompt_lock: tokio::sync::Mutex<()>,
@@ -396,6 +403,7 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
             session_listing: None,
             resolver: None,
             render: Arc::new(default_denial),
+            post_gate: None,
             prompt_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -426,6 +434,13 @@ impl<Ctx: Send + Sync> ToolPolicyGateMiddleware<Ctx> {
     /// callback returns them.
     pub fn with_session_listing(mut self, listing: SessionToolListing<Ctx>) -> Self {
         self.session_listing = Some(listing);
+        self
+    }
+
+    /// Applies an optional host response after both gates allow a call and
+    /// before invoking its wrapped tool.
+    pub fn with_post_gate(mut self, post_gate: ToolPolicyPostGate<Ctx>) -> Self {
+        self.post_gate = Some(post_gate);
         self
     }
 
@@ -520,6 +535,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
         }
         match verdict {
             GateVerdict::Proceed { ticket } => {
+                if let Some(result) = self
+                    .post_gate
+                    .as_ref()
+                    .and_then(|post_gate| post_gate(ctx, &call))
+                {
+                    let outcome = MiddlewareToolOutcome::Result(result);
+                    if let Some(resolver) = &self.resolver {
+                        record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);
+                    }
+                    return Ok(outcome);
+                }
                 let outcome = next.run(ctx, state, call).await?;
                 if let Some(resolver) = &self.resolver {
                     record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);

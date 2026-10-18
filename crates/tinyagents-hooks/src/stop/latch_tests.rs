@@ -64,3 +64,23 @@ fn a_security_class_keeps_its_wording() {
     latch.halt_classified("denied".into(), "policy", "shell", true, || "x".into());
     assert_eq!(note(&slot).as_deref(), Some("denied"));
 }
+
+#[test]
+fn classified_bookkeeping_does_not_pause_before_the_driver_halts_once() {
+    let slot: HaltSummarySlot = Arc::default();
+    let handle = SteeringHandle::allow_all();
+    let latch = StopLatch::new(handle.clone(), slot.clone());
+
+    latch.record_classified_halt("classified".into(), "permission", "search", false, || {
+        "denied".into()
+    });
+    assert!(handle.drain().is_empty(), "bookkeeping does not steer");
+    assert_eq!(note(&slot).as_deref(), Some("classified"));
+
+    assert!(!latch.halt("classified".into()));
+    assert_eq!(
+        handle.drain(),
+        vec![SteeringCommand::Pause],
+        "the containing driver owns exactly one pause"
+    );
+}

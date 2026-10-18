@@ -252,6 +252,72 @@ async fn policy_middleware_uses_the_custom_denial_renderer() {
 }
 
 #[tokio::test]
+async fn post_gate_response_runs_only_after_policy_allows() {
+    let post_calls = Arc::new(Mutex::new(0));
+    let observed = post_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy)).with_post_gate(Arc::new(
+            move |_ctx, call| {
+                *observed.lock().unwrap() += 1;
+                (call.name == "read").then(|| ToolResult::success("session listing"))
+            },
+        )),
+    );
+
+    let (denied, runs) = run(middleware.clone(), "rm", false).await;
+    assert!(denied.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*post_calls.lock().unwrap(), 0, "denials precede disclosure");
+
+    let (listing, runs) = run(middleware, "read", false).await;
+    assert!(!listing.is_error);
+    assert_eq!(listing.output(), "session listing");
+    assert_eq!(runs, 0, "the host response replaces tool execution");
+    assert_eq!(*post_calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn approved_post_gate_response_records_the_approval_once() {
+    let resolver = Arc::new(Resolver::default());
+    *resolver.verdict.lock().unwrap() = Some(ApprovalResolution::Allow {
+        ticket: Some("listing-ticket".to_owned()),
+    });
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(|_ctx, _call| {
+                Some(ToolResult::success("approved listing"))
+            })),
+    );
+    let (listing, runs) = run(middleware, "send", true).await;
+    assert_eq!(listing.output(), "approved listing");
+    assert_eq!(runs, 0);
+    assert_eq!(
+        *resolver.recorded.lock().unwrap(),
+        vec![("listing-ticket".to_owned(), false)]
+    );
+}
+
+#[tokio::test]
+async fn session_ceiling_deny_precedes_builder_allow_and_post_gate() {
+    let post_calls = Arc::new(Mutex::new(0));
+    let observed = post_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_post_gate(Arc::new(move |_ctx, _call| {
+                *observed.lock().unwrap() += 1;
+                Some(ToolResult::success("disclosed"))
+            })),
+    );
+    let (result, runs) = run(middleware, "ceiling_only", false).await;
+    assert!(result.is_error);
+    assert!(result.output().contains("session ceiling"));
+    assert_eq!(runs, 0);
+    assert_eq!(*post_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn require_approval_with_a_resolver_runs_once_approved_and_records() {
     let resolver = Arc::new(Resolver::default());
     *resolver.verdict.lock().unwrap() = Some(ApprovalResolution::Allow {

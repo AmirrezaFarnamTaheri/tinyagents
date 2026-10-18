@@ -71,7 +71,13 @@ impl StopLatch {
     /// breaker already stopped it. The pause is sent either way; it is
     /// idempotent. Returns whether `summary` became the stop note.
     pub fn halt(&self, summary: String) -> bool {
-        let latched = match self.slot.lock() {
+        let latched = self.record_halt(summary);
+        self.handle.send(SteeringCommand::Pause);
+        latched
+    }
+
+    fn record_halt(&self, summary: String) -> bool {
+        match self.slot.lock() {
             Ok(mut slot) => match slot.as_deref() {
                 Some(existing) => {
                     tracing::debug!(
@@ -89,9 +95,7 @@ impl StopLatch {
                 }
             },
             Err(_) => false,
-        };
-        self.handle.send(SteeringCommand::Pause);
-        latched
+        }
     }
 
     /// Stop the run for an exhausted classified-failure budget.
@@ -109,14 +113,29 @@ impl StopLatch {
         repeated: bool,
         error_line: impl FnOnce() -> String,
     ) {
+        self.record_classified_halt(summary, class, tool, repeated, error_line);
+        self.handle.send(SteeringCommand::Pause);
+    }
+
+    /// Record classified-stop bookkeeping without sending a pause. Use this
+    /// when a containing driver owns the single steering action after the
+    /// host has supplied classification and repeat-loop evidence.
+    pub fn record_classified_halt(
+        &self,
+        summary: String,
+        class: &str,
+        tool: &str,
+        repeated: bool,
+        error_line: impl FnOnce() -> String,
+    ) {
         if !(repeated && is_correctable_class(class)) {
-            self.halt(summary);
+            self.record_halt(summary);
             return;
         }
         let error_line = error_line();
         // Only the stop that owns the note may be relabelled: a second stop
         // in the batch must not lend it its tool and error.
-        if !self.halt(summary) {
+        if !self.record_halt(summary) {
             return;
         }
         match self.witness.refusals() {
