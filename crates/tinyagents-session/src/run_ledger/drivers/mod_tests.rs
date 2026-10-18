@@ -256,6 +256,39 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
             .is_empty(),
         "failed event append leaves no event row"
     );
+
+    ledger
+        .upsert_agent_team_task(crate::run_ledger::AgentTeamTaskUpsert {
+            id: "atomic-task".into(),
+            team_id: "atomic-team".into(),
+            title: "must remain unclaimed".into(),
+            objective: None,
+            status: crate::run_ledger::AgentTeamTaskStatus::Todo,
+            owner_member_id: None,
+            depends_on: vec![],
+            gate_status: None,
+            gate_reason: None,
+            evidence: vec![],
+            source_run_id: None,
+            order_index: 0,
+            created_at: None,
+        })
+        .await
+        .unwrap();
+    let error = ledger
+        .claim_agent_team_task("atomic-team", "atomic-task", "member", "token")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
+    );
+    let tasks = ledger.list_agent_team_tasks("atomic-team").await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, crate::run_ledger::AgentTeamTaskStatus::Todo);
+    assert!(
+        tasks[0].claimed_by_member_id.is_none(),
+        "failed atomic claim leaves task unclaimed"
+    );
 }
 
 /// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
