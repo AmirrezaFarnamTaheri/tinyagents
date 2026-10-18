@@ -95,6 +95,31 @@ impl GoalObserver for InspectingObserver {
     fn on_cleared(&self, _: &str) {}
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_accounting_preserves_every_unbudgeted_turn() {
+    let store: Arc<dyn Store> = Arc::new(YieldingStore::default());
+    let goals = GoalStore::new(store);
+    goals.set("t", "finish", None).await.unwrap();
+
+    let mut turns = Vec::new();
+    for _ in 0..16 {
+        let goals = goals.clone();
+        turns.push(tokio::spawn(async move {
+            goals
+                .account_turn("t", 1, 0, Duration::from_millis(125))
+                .await
+                .unwrap()
+        }));
+    }
+    for turn in turns {
+        turn.await.unwrap();
+    }
+
+    let goal = goals.get("t").await.unwrap().unwrap();
+    assert_eq!(goal.tokens_used, 16);
+    assert_eq!(goal.time_used_seconds, 2);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn observer_can_read_the_persisted_goal_during_callback() {
     let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
@@ -162,7 +187,7 @@ async fn concurrent_accounting_commits_once_and_notifies_once_on_budget_transiti
     }
 
     let goal = goals.get("t").await.unwrap().unwrap();
-    assert_eq!(goal.tokens_used, 16);
+    assert_eq!(goal.tokens_used, 5);
     assert_eq!(goal.status, ThreadGoalStatus::BudgetLimited);
     let events = observer.0.lock().unwrap();
     assert_eq!(

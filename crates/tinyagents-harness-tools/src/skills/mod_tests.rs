@@ -487,7 +487,6 @@ impl tinyagents_harness::tool::ToolDispatch<(), String> for RecordingParentDispa
     }
 }
 
-
 #[tokio::test]
 async fn a_tool_from_another_skill_is_refused() {
     // Cross-skill dispatch would make `skill` decoration and let a harmless

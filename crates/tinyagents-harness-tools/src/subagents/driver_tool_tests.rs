@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tinyagents_harness::cancel::CancellationToken;
-use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::context::{RunConfig, RunContext};
+use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::CallId;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
@@ -1212,7 +1212,10 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         serde_json::from_str::<Value>(&pending.output()).unwrap()["status"],
         "running"
     );
-    assert_eq!(jobs.get(control_id.as_str()).unwrap().status, SubAgentJobStatus::Running);
+    assert_eq!(
+        jobs.get(control_id.as_str()).unwrap().status,
+        SubAgentJobStatus::Running
+    );
 
     release.add_permits(2);
     let terminal_wait = SubAgentJobsTool::new(jobs.clone())
@@ -1234,7 +1237,10 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         serde_json::from_str::<Value>(&terminal.output()).unwrap()["status"],
         "completed"
     );
-    assert_eq!(jobs.get(control_id.as_str()).unwrap().status, SubAgentJobStatus::Completed);
+    assert_eq!(
+        jobs.get(control_id.as_str()).unwrap().status,
+        SubAgentJobStatus::Completed
+    );
     assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
 
     let replay = ToolDispatch::<(), ()>::execute(
@@ -1378,7 +1384,10 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         .driver_job_for_key(&lifecycle_key, "durable-parent-session")
         .unwrap();
     assert!(!jobs.get(public_id.as_str()).unwrap().status.is_terminal());
-    assert_eq!(jobs.get(&task_id).unwrap().status, SubAgentJobStatus::AwaitingInput);
+    assert_eq!(
+        jobs.get(&task_id).unwrap().status,
+        SubAgentJobStatus::AwaitingInput
+    );
 
     let steer = SubAgentMessageTool::new(jobs.clone())
         .with_argument_fields("task_id", "subagent_session_id", "message", "request_id")
@@ -1726,7 +1735,10 @@ async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
         .next()
         .expect("registered job remains visible");
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
-    assert_eq!(jobs.get(job.id.as_str()).unwrap().status, SubAgentJobStatus::Cancelled);
+    assert_eq!(
+        jobs.get(job.id.as_str()).unwrap().status,
+        SubAgentJobStatus::Cancelled
+    );
 }
 
 #[tokio::test]
@@ -1799,7 +1811,10 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         serde_json::from_str::<Value>(&failed.output()).unwrap()["status"],
         "failed"
     );
-    assert_eq!(jobs.get(&task_id).unwrap().status, SubAgentJobStatus::Failed);
+    assert_eq!(
+        jobs.get(&task_id).unwrap().status,
+        SubAgentJobStatus::Failed
+    );
 
     let replay = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1887,5 +1902,8 @@ async fn cancelling_paused_driver_job_settles_before_wait_returns() {
         serde_json::from_str::<Value>(&waited.output()).unwrap()["status"],
         "cancelled"
     );
-    assert_eq!(jobs.get(id.as_str()).unwrap().status, SubAgentJobStatus::Cancelled);
+    assert_eq!(
+        jobs.get(id.as_str()).unwrap().status,
+        SubAgentJobStatus::Cancelled
+    );
 }
