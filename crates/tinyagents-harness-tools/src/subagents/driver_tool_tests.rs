@@ -1253,6 +1253,55 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         jobs.get(control_id.as_str()).unwrap().status,
         SubAgentJobStatus::Completed
     );
+    let terminal_message = SubAgentMessageTool::new(jobs.clone())
+        .with_argument_fields("task_id", "session_id", "message", "request_id");
+    let terminal_error = ToolDispatch::<(), ()>::execute(
+        &terminal_message,
+        &(),
+        CallId::new("message-terminal-job"),
+        json!({"task_id":task_id,"message":"continue"}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .expect_err("terminal jobs cannot receive messages");
+    assert!(matches!(
+        terminal_error.downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::Terminal { .. })
+    ));
+    let recoverable_message = terminal_message.clone().recover_selector_errors();
+    let recoverable_error = ToolDispatch::<(), ()>::execute(
+        &recoverable_message,
+        &(),
+        CallId::new("recover-terminal-job"),
+        json!({"task_id":task_id,"message":"continue"}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .expect_err("recoverable selector policy reports terminal jobs to the model");
+    assert!(matches!(
+        recoverable_error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
+    let cancel = SubAgentJobsTool::new(jobs.clone())
+        .with_argument_names("action", "task_id", None)
+        .with_owner_scope(owner_scope.clone())
+        .recover_selector_errors();
+    let cancel_error = ToolDispatch::<(), ()>::execute(
+        &cancel,
+        &(),
+        CallId::new("recover-terminal-cancel"),
+        json!({"action":"cancel","task_id":task_id}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .expect_err("recoverable selector policy handles terminal cancel selectors");
+    assert!(matches!(
+        cancel_error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
     assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
 
     let replay = ToolDispatch::<(), ()>::execute(
