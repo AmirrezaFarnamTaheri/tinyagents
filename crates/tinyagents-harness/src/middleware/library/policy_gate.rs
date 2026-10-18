@@ -115,7 +115,7 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// waiting for a decision or an expiry).
     async fn resolve(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> ApprovalResolution;
 
-    /// Records a successful tool result for older resolvers. New resolvers
+    /// Records a returned tool result for older resolvers. New resolvers
     /// should implement [`Self::record_terminal`] to observe every terminal
     /// outcome for an acquired ticket.
     fn record(&self, ticket: &str, result: &ToolResult);
