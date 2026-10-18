@@ -20,6 +20,7 @@ mod driver_store;
 mod reconcile;
 mod recovery;
 mod runtime;
+mod steering_registry;
 mod status;
 mod storage;
 mod store;
@@ -52,12 +53,7 @@ pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
 };
-pub use tool::{
-    OrchestrationStatusOverlay, OrchestrationTool, SteeringRegistry, orchestration_tool_schema,
-    orchestration_tool_schemas, orchestration_tools, orchestration_tools_with_status_overlay,
-    orchestration_tools_with_steering, register_orchestration_tools,
-    register_orchestration_tools_with_status_overlay,
-};
+pub use steering_registry::SteeringRegistry;
 pub use types::*;
 
 #[cfg(test)]
