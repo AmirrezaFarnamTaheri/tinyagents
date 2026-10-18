@@ -39,8 +39,7 @@ use tinyagents_harness::middleware::{
     AgentRun, Middleware, ToolInvocationIdentity, wrap_harness_instruction,
 };
 use tinyagents_harness::store::Store;
-use tinyinference_llm::model::ModelResponse;
-use tinyinference_llm::tool::ToolCall;
+use tinyagents_harness::tinyinference_llm::{model::ModelResponse, tool::ToolCall};
 use tinytools::{ToolContent, ToolResult};
 
 use super::sequence;
