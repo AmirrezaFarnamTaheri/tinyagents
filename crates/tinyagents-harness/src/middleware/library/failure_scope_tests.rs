@@ -221,7 +221,9 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
     call("new-command-repeat-again", false).await;
     assert_eq!(
         halt_summary.lock().unwrap().as_deref(),
-        Some("shell: Stopping: the `shell` call was retried 2 times with the same error. The environment is not making progress. Report the blocker to the user.")
+        Some(
+            "shell: Stopping: the `shell` call was retried 2 times with the same error. The environment is not making progress. Report the blocker to the user."
+        )
     );
 }
 
