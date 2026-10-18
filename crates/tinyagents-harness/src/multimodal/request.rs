@@ -155,7 +155,6 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
             metadata.mime_hint.as_deref(),
         )
         .await
-        .await
     }
 }
 
@@ -493,7 +492,7 @@ where
                     &source,
                     self.config.images.max_image_bytes(),
                     false,
-                    MediaSourceMetadata::default(),
+                    &MediaSourceMetadata::default(),
                 )
                 .await
             {
@@ -553,7 +552,7 @@ where
                     &source,
                     self.config.files.max_file_bytes(),
                     true,
-                    MediaSourceMetadata::default(),
+                    &MediaSourceMetadata::default(),
                 )
                 .await
             {
