@@ -98,7 +98,6 @@ struct BoundUseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 's
     selected: Option<Arc<dyn ToolDispatch<State, Ctx>>>,
 }
 
-#[async_trait]
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> BoundUseSkillDispatch<State, Ctx> {
     fn selection(&self) -> Option<PackSelection> {
         self.pinned
