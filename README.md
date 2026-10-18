@@ -29,9 +29,13 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   middleware, structured output, streaming, usage/cost accounting, retries,
   caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
-  `storage-drivers`, `builtin-tools` (`tools` is a deprecated alias),
-  `multimodal`, `png-optimize` (opt-in PNG re-compression), `media`,
+  `storage-drivers`, `multimodal`, `png-optimize` (opt-in PNG re-compression), `media`,
   `claude-code` and `langfuse` (both default), `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
+- **`tinyagents-harness-tools`** — reusable implementations for the harness:
+  goals and budgets, per-thread todos, skill tool packs, subagent control
+  tools, time and clarification tools, plan exit, per-call binding, and
+  per-thread locks. Features: `todos`, `goals`, `skills` (all default), and
+  `subagents` (opt-in).
 - **`tinyagents-graph`** — a LangGraph-style durable, typed state graph:
   `START`/`END`, nodes, conditional edges, `Send` fanout, reducers/channels,
   checkpoints, interrupts, subgraphs, and time travel. Features: `sqlite`,
@@ -166,13 +170,12 @@ run with `AgentMiddleware`.
 
 ## Subagent orchestration
 
-`tinyagents-orchestration` owns child-agent composition. `SubAgentTool` is a
-typed parent-context dispatcher: its default `background` mode starts a child
-in the background and returns a stable job id immediately, while `inline` mode
-waits for and returns the child's final result in the same call. `SubAgentJobsTool` queries job
-status/results and `SubAgentMessageTool` sends messages to a live job;
-hosts register these control tools over the same explicitly shared
-`SubAgentJobRegistry`. `SubAgentSession` covers retained post-completion
+`tinyagents-orchestration` owns child-agent composition and the shared
+`SubAgentJobRegistry`. `DriverSubAgentTool` is the host-planned typed dispatcher:
+its `background` mode starts a child and returns a stable job id, while
+`inline` mode waits for the final result. The `subagents` feature in
+`tinyagents-harness-tools` provides the `SubAgentJobsTool` and
+`SubAgentMessageTool` declarations over that shared registry. `SubAgentSession` covers retained post-completion
 conversations, while `SubagentDriver` coordinates durable lifecycle
 preparation, execution, pause, resume, and persistence. Teams and workflow DAGs
 are intentionally outside this focused crate.
