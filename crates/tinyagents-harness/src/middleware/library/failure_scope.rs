@@ -450,7 +450,6 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 recoverable_miss,
             } => {
                 run.recoverable.reset_streak();
-                run.tracker.reset();
                 let attempt = ToolAttempt {
                     tool,
                     arg_fingerprint: &argument_key,
