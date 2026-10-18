@@ -486,3 +486,7 @@ impl AgentProgress {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod tests;
