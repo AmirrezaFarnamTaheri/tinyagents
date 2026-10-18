@@ -176,29 +176,71 @@ pub struct ToolStatusClassifier;
 
 impl ToolOutcomeClassifier for ToolStatusClassifier {
     fn classify(&self, _name: &str, result: &ToolResult) -> OutcomeClass {
-        if !result.is_error {
-            return OutcomeClass::Success;
-        }
+        classify_status_failure(result, None)
+    }
+}
 
-        let text = result.output();
-        let failure = tinytools::status::classify(&text, text.contains("timed out"));
-        match failure.class {
-            tinytools::status::ToolFailureClass::ServiceUnavailable
-            | tinytools::status::ToolFailureClass::ModelConnection => {
+impl ToolStatusClassifier {
+    /// Configures which dispatched tools may be retried after a timeout.
+    ///
+    /// The callback is consulted only when the canonical status classifier
+    /// identifies a timeout. All other status mappings remain the same as
+    /// [`ToolStatusClassifier`], and the unit classifier keeps timeouts
+    /// permanent by default.
+    pub fn with_retry_safe_timeouts(
+        self,
+        callback: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) -> impl ToolOutcomeClassifier {
+        ConfiguredToolStatusClassifier {
+            retry_safe_timeout: Box::new(callback),
+        }
+    }
+}
+
+struct ConfiguredToolStatusClassifier {
+    retry_safe_timeout: Box<dyn Fn(&str) -> bool + Send + Sync>,
+}
+
+type RetrySafeTimeoutPolicy<'a> = Option<(&'a dyn Fn(&str) -> bool, &'a str)>;
+
+impl ToolOutcomeClassifier for ConfiguredToolStatusClassifier {
+    fn classify(&self, name: &str, result: &ToolResult) -> OutcomeClass {
+        // The callback is wired in here; status-class mapping is shared with
+        // the default classifier below.
+        classify_status_failure(result, Some((&*self.retry_safe_timeout, name)))
+    }
+}
+
+fn classify_status_failure(
+    result: &ToolResult,
+    retry_safe_timeout: RetrySafeTimeoutPolicy<'_>,
+) -> OutcomeClass {
+    if !result.is_error {
+        return OutcomeClass::Success;
+    }
+
+    let text = result.output();
+    let failure = tinytools::status::classify(&text, text.contains("timed out"));
+    match failure.class {
+        tinytools::status::ToolFailureClass::ServiceUnavailable
+        | tinytools::status::ToolFailureClass::ModelConnection => OutcomeClass::RetryableFailure,
+        tinytools::status::ToolFailureClass::MissingPermission
+        | tinytools::status::ToolFailureClass::MissingApp
+        | tinytools::status::ToolFailureClass::BadCredentials
+        | tinytools::status::ToolFailureClass::BlockedByPolicy
+        | tinytools::status::ToolFailureClass::Denied
+        | tinytools::status::ToolFailureClass::ApprovalExpired
+        | tinytools::status::ToolFailureClass::NotFound
+        | tinytools::status::ToolFailureClass::Unsupported
+        | tinytools::status::ToolFailureClass::InvalidArguments
+        | tinytools::status::ToolFailureClass::CommandFailed
+        | tinytools::status::ToolFailureClass::Unknown => OutcomeClass::PermanentFailure,
+        tinytools::status::ToolFailureClass::Timeout => {
+            if retry_safe_timeout.is_some_and(|(is_safe, name)| is_safe(name)) {
                 OutcomeClass::RetryableFailure
+            } else {
+                OutcomeClass::PermanentFailure
             }
-            tinytools::status::ToolFailureClass::MissingPermission
-            | tinytools::status::ToolFailureClass::MissingApp
-            | tinytools::status::ToolFailureClass::BadCredentials
-            | tinytools::status::ToolFailureClass::BlockedByPolicy
-            | tinytools::status::ToolFailureClass::Timeout
-            | tinytools::status::ToolFailureClass::Denied
-            | tinytools::status::ToolFailureClass::ApprovalExpired
-            | tinytools::status::ToolFailureClass::NotFound
-            | tinytools::status::ToolFailureClass::Unsupported
-            | tinytools::status::ToolFailureClass::InvalidArguments
-            | tinytools::status::ToolFailureClass::CommandFailed
-            | tinytools::status::ToolFailureClass::Unknown => OutcomeClass::PermanentFailure,
         }
     }
 }

@@ -308,6 +308,8 @@ pub type DenialRenderer = Arc<dyn Fn(&ToolCall, &str, &PolicyDecision) -> String
 ///
 /// The harness supplies stable section labels; hosts supply the actual
 /// product-specific copy, including any typed marker they need to preserve.
+/// [`StructuredDenialRenderOptions`] lets a host select its reason label and
+/// punctuation without replacing the shared renderer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructuredDenialParts {
     /// What was blocked, including a marker when downstream policy needs it.
@@ -318,6 +320,24 @@ pub struct StructuredDenialParts {
     pub workaround: String,
     /// Instruction to relay the result instead of silently stopping.
     pub relay: String,
+}
+
+/// Host-selected labels and punctuation for structured policy denials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructuredDenialRenderOptions<'a> {
+    /// Label for the denial's explanation section.
+    pub reason_label: &'a str,
+    /// Text between the workaround and the instruction to relay the denial.
+    pub relay_separator: &'a str,
+}
+
+impl<'a> Default for StructuredDenialRenderOptions<'a> {
+    fn default() -> Self {
+        Self {
+            reason_label: "Why",
+            relay_separator: ". ",
+        }
+    }
 }
 
 impl StructuredDenialParts {
@@ -338,9 +358,21 @@ impl StructuredDenialParts {
 
     /// Renders the shared blocked/why/workaround/relay structure.
     pub fn render(&self) -> String {
+        self.render_with_options(&StructuredDenialRenderOptions::default())
+    }
+
+    /// Renders the shared denial structure with host-selected labels and
+    /// punctuation. The default options preserve [`Self::render`] byte for
+    /// byte.
+    pub fn render_with_options(&self, options: &StructuredDenialRenderOptions<'_>) -> String {
         format!(
-            "Blocked: {}. Why: {}. Workaround: {}. {}",
-            self.blocked, self.why, self.workaround, self.relay
+            "Blocked: {}. {}: {}. Workaround: {}{}{}",
+            self.blocked,
+            options.reason_label,
+            self.why,
+            self.workaround,
+            options.relay_separator,
+            self.relay
         )
     }
 }
