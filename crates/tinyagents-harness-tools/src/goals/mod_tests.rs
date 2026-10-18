@@ -80,12 +80,12 @@ fn thread_goal_round_trips_through_json() {
 mod store_tests {
     use std::sync::Arc;
 
+    use super::super::ThreadGoalStatus;
     use super::super::store;
-    use super::super::{GoalStore, ThreadGoalStatus};
-    use tinyagents_harness::store::InMemoryStore;
+    use tinyagents_harness::store::{InMemoryStore, Store};
 
-    fn store() -> Arc<GoalStore> {
-        Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
+    fn store() -> Arc<dyn Store> {
+        Arc::new(InMemoryStore::default())
     }
 
     #[tokio::test]
