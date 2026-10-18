@@ -457,6 +457,17 @@ pub struct SubagentUsage {
     pub cost_source: crate::cost::CostSource,
 }
 
+impl SubagentUsage {
+    /// The run's cost as a tally, for folding into a parent's.
+    #[must_use]
+    pub fn cost(&self) -> crate::cost::CostTally {
+        crate::cost::CostTally {
+            known_usd: self.charged_amount_usd,
+            source: self.cost_source,
+        }
+    }
+}
+
 fn unknown_cost_source() -> crate::cost::CostSource {
     crate::cost::CostSource::Unknown
 }
@@ -475,3 +486,7 @@ impl AgentProgress {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "progress_tests.rs"]
+mod tests;
