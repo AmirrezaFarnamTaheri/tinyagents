@@ -534,6 +534,8 @@ pub enum AgentEvent {
     ///
     /// This records the cache fact for adapters that do not own the harness
     /// response-cache key. The provider was not invoked for this response.
+    /// Adapters must omit cached provider charges from [`AgentEvent::UsageRecorded`];
+    /// this event has no call linkage for that run-level aggregate.
     ModelResponseCached {
         /// Identifier for the model call satisfied by the cached response.
         call_id: CallId,

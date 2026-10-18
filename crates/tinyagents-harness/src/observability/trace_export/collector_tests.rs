@@ -3273,8 +3273,26 @@ fn keyless_cached_model_response_does_not_record_provider_spend() {
                 output: None,
             },
         ),
+        (
+            5,
+            6,
+            AgentEvent::UsageRecorded {
+                usage: Usage {
+                    input_tokens: 50,
+                    output_tokens: 10,
+                    ..Default::default()
+                },
+            },
+        ),
     ] {
-        collector.record(&observation(offset, ts_ms, event));
+        collector.record(&observation_in_run(
+            "keyless-cache-run",
+            None,
+            "keyless-cache-run",
+            offset,
+            ts_ms,
+            event,
+        ));
     }
 
     let spans = collector.spans();
@@ -3286,6 +3304,7 @@ fn keyless_cached_model_response_does_not_record_provider_spend() {
     assert_eq!(generation.attributes["gen_ai.cost.source"], "cached");
     assert_eq!(generation.attributes["gen_ai.usage.input_tokens"], 50);
     assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
+    assert_eq!(spans[0].attributes["gen_ai.usage.input_tokens"], 50);
     assert!(!spans[0].attributes.contains_key("gen_ai.usage.cost_usd"));
 }
 

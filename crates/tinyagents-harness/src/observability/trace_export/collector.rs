@@ -641,8 +641,7 @@ impl SpanCollector {
                     }
                 }
             }
-            AgentEvent::CacheHit { call_id, .. }
-            | AgentEvent::ModelResponseCached { call_id } => {
+            AgentEvent::CacheHit { call_id, .. } | AgentEvent::ModelResponseCached { call_id } => {
                 self.cached_calls.insert(self.scoped_id(call_id.as_str()));
             }
             AgentEvent::RunCompleted { outcome, .. } => {
