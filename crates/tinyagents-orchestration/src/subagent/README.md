@@ -288,3 +288,23 @@ and `..Default::default()`.
   `[SUBAGENT_INCOMPLETE]` result now projects as `Incomplete` instead of
   `Failed`.
 - `tinyagents-runtime`: new `ToolSnapshot::retaining`.
+
+
+### Document-backed lifecycle state
+
+`DocumentSubagentPersistence` implements the same pause/resume/terminal contract
+as `FileSubagentPersistence` over a host-supplied, already scoped
+`DocumentStore`. A retrying compare-and-swap stores pause and terminal together
+in one `tsd.kv` value: owner `subagents`, namespace `lifecycle-neutral`, key
+`record/<key_component>`. This namespace leaves older host-specific lifecycle
+values available for read-only conversion. The host selects tenant and agent
+scope; the owner does not derive product identity or open a backend.
+
+A continuation must present the exact resume it loaded. Independent writers
+observe the committed winner, and a terminal prevents further pauses.
+`keys_for_task` derives live scoped keys from the records themselves, avoiding
+a separately committed index. `pause_outcome` and `terminal_outcome` support
+synchronous recovery paths. Hosts convert old checkpoint/outcome formats, then
+call `import_record` or `import_record_at`; these fill missing state and never
+replace an existing terminal. Legacy files and migration markers remain the
+host's responsibility.

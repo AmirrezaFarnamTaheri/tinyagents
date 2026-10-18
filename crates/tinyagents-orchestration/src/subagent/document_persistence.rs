@@ -201,6 +201,18 @@ impl DocumentSubagentPersistence {
         Ok(self.read(key)?.terminal)
     }
 
+    /// Reads the live pause outcome from synchronous host recovery paths.
+    pub fn pause_outcome(&self, key: &SubagentTaskKey) -> Result<Option<SubagentOutcome>> {
+        let record = self.read(key)?;
+        if record.terminal.is_some() {
+            return Ok(None);
+        }
+        Ok(record
+            .pause
+            .filter(|pause| pause_resume(pause).is_some())
+            .map(|pause| pause.outcome))
+    }
+
     /// Imports converted legacy state, keeping newer committed parts.
     pub fn import_record(
         &self,
@@ -278,14 +290,7 @@ impl SubagentPersistence for DocumentSubagentPersistence {
     }
 
     async fn load_pause(&self, key: &SubagentTaskKey) -> Result<Option<SubagentOutcome>> {
-        let record = self.read(key)?;
-        if record.terminal.is_some() {
-            return Ok(None);
-        }
-        Ok(record
-            .pause
-            .filter(|pause| pause_resume(pause).is_some())
-            .map(|pause| pause.outcome))
+        self.pause_outcome(key)
     }
 
     async fn save_pause(
