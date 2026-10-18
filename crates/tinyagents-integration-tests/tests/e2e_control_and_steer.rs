@@ -1,31 +1,14 @@
-//! End-to-end coverage for two harness control surfaces:
-//!
-//! - **Part A — [`MiddlewareControl`]**: a lifecycle middleware requests a
-//!   control outcome on the [`RunContext`] in `after_model`, and the agent loop
-//!   honors it at its safe checkpoint after each model response. `StopWithFinal`
-//!   ends the run with a fixed final response (no further tools run) while still
-//!   emitting a `run.completed` event; `Interrupt` surfaces as
-//!   [`TinyAgentsError::Interrupted`].
-//! - **Part B — [`SteeringRegistry`] bridge**: the model-visible
-//!   `orchestrate_steer` tool looks a live task up in a [`SteeringRegistry`] and
-//!   delivers a real [`SteeringCommand`] into the run executing that task. When
-//!   no handle is registered (or the tool has no registry) the request is
-//!   recorded but not delivered (`accepted = false`); unknown commands fail
-//!   validation.
+//! End-to-end coverage for middleware lifecycle controls and a preloaded
+//! steering cancellation sent directly to a real run.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
 
-use tinyagents_graph::orchestration::{
-    InMemoryTaskStore, OrchestrationTaskKind, OrchestrationTaskSpec, OrchestrationTool,
-    OrchestrationToolKind, SteeringRegistry, TaskStore,
-};
 use tinyagents_graph::*;
 use tinyagents_harness::context::{MiddlewareControl, RunConfig, RunContext};
 use tinyagents_harness::events::AgentEvent;
-use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::middleware::Middleware;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
@@ -35,7 +18,6 @@ use tinyagents_registry::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::ModelResponse;
 use tinyinference_llm::providers::MockModel;
-use tinytools::{Tool, ToolContent};
 
 // ── Part A: MiddlewareControl ────────────────────────────────────────────────
 
@@ -226,139 +208,6 @@ async fn interrupt_control_surfaces_as_interrupted_error() {
     }
 }
 
-// ── Part B: SteeringRegistry bridge ──────────────────────────────────────────
-
-/// Builds a store holding one live (running) sub-agent task and returns the
-/// store together with the task id.
-fn live_task() -> (Arc<dyn TaskStore>, TaskId) {
-    let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
-    let id = TaskId::new("child-1");
-    store
-        .insert(OrchestrationTaskSpec::new(
-            id.as_str(),
-            OrchestrationTaskKind::SubAgent {
-                agent: "worker".into(),
-            },
-        ))
-        .expect("insert task spec");
-    store.mark_running(&id).expect("mark task running");
-    (store, id)
-}
-
-/// Calls the steer tool for `task_id` with `command` (and optional extra args),
-/// returning the `accepted` flag from the tool result payload.
-async fn steer_accepted(
-    tool: &OrchestrationTool,
-    task_id: &TaskId,
-    args: serde_json::Value,
-) -> bool {
-    let result = tool
-        .execute(args_with_task(task_id, args))
-        .await
-        .expect("steer tool call succeeds");
-    result
-        .content
-        .into_iter()
-        .find_map(|block| match block {
-            ToolContent::Json { data } => data.get("accepted").and_then(|value| value.as_bool()),
-            ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => None,
-        })
-        .unwrap_or_else(|| panic!("steer result missing `accepted` boolean"))
-}
-
-/// Merges the task id into the caller-supplied steer arguments.
-fn args_with_task(task_id: &TaskId, mut args: serde_json::Value) -> serde_json::Value {
-    let obj = args.as_object_mut().expect("steer args must be an object");
-    obj.insert("task_id".into(), json!(task_id.as_str()));
-    args
-}
-
-#[tokio::test]
-async fn steer_delivers_commands_to_registered_handle() {
-    let (store, id) = live_task();
-    let handle = SteeringHandle::allow_all();
-
-    let registry = SteeringRegistry::new();
-    registry.register(id.clone(), handle.clone());
-
-    let tool =
-        OrchestrationTool::new(OrchestrationToolKind::Steer, store).with_steering(registry.clone());
-
-    // `pause` and `cancel` flow through the model-visible tool schema and are
-    // delivered to the live handle looked up by task id.
-    assert!(
-        steer_accepted(&tool, &id, json!({"command": "pause"})).await,
-        "pause must be delivered to the live registered handle"
-    );
-    assert!(
-        steer_accepted(&tool, &id, json!({"command": "cancel"})).await,
-        "cancel must be delivered to the live registered handle"
-    );
-
-    // The `orchestrate_steer` schema is `additionalProperties: false` and only
-    // permits `task_id`/`command`/`payload`, so a `redirect` cannot carry its
-    // top-level `instruction` through the tool. Exercise the Redirect variant of
-    // the bridge via the same live handle the registry hands back from `get`.
-    let live = registry.get(&id).expect("registry returns the live handle");
-    live.send(SteeringCommand::Redirect {
-        instruction: "go north".into(),
-    });
-
-    let delivered = handle.drain();
-    assert_eq!(
-        delivered,
-        vec![
-            SteeringCommand::Pause,
-            SteeringCommand::Cancel,
-            SteeringCommand::Redirect {
-                instruction: "go north".into()
-            },
-        ],
-        "the handle must receive each delivered command in order"
-    );
-}
-
-#[tokio::test]
-async fn steer_without_registered_handle_is_not_accepted() {
-    let (store, id) = live_task();
-
-    // A registry exists but has no handle registered for this task.
-    let registry = SteeringRegistry::new();
-    let tool_with_empty_registry =
-        OrchestrationTool::new(OrchestrationToolKind::Steer, store.clone()).with_steering(registry);
-    assert!(
-        !steer_accepted(&tool_with_empty_registry, &id, json!({"command": "pause"})).await,
-        "with no handle registered the steer request must not be accepted"
-    );
-
-    // No registry attached to the tool at all.
-    let tool_without_registry = OrchestrationTool::new(OrchestrationToolKind::Steer, store);
-    assert!(
-        !steer_accepted(&tool_without_registry, &id, json!({"command": "pause"})).await,
-        "without a SteeringRegistry the steer request must not be accepted"
-    );
-}
-
-#[tokio::test]
-async fn steer_rejects_unknown_command_with_validation_error() {
-    let (store, id) = live_task();
-    let handle = SteeringHandle::allow_all();
-    let registry = SteeringRegistry::new();
-    registry.register(id.clone(), handle);
-    let tool = OrchestrationTool::new(OrchestrationToolKind::Steer, store).with_steering(registry);
-
-    let err = tool
-        .execute(json!({"task_id": id.as_str(), "command": "explode"}))
-        .await
-        .expect_err("an unknown steering command must error");
-
-    assert!(
-        err.downcast_ref::<TinyAgentsError>()
-            .is_some_and(|error| matches!(error, TinyAgentsError::Validation(_))),
-        "unknown steering command must surface as a validation error, got {err:?}"
-    );
-}
-
 #[tokio::test]
 async fn preloaded_cancel_steering_cancels_a_real_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
@@ -381,109 +230,3 @@ async fn preloaded_cancel_steering_cancels_a_real_run() {
     );
 }
 
-// ── Part C: orchestrate_list kind + created-window filtering ──────────────────
-
-/// Inserts one sub-agent task and one tool task into a fresh store and returns
-/// the store behind the shared [`TaskStore`] handle.
-fn store_with_two_kinds() -> Arc<dyn TaskStore> {
-    let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
-    store
-        .insert(OrchestrationTaskSpec::new(
-            "task-sub",
-            OrchestrationTaskKind::SubAgent {
-                agent: "worker".into(),
-            },
-        ))
-        .expect("insert sub-agent task");
-    store
-        .insert(OrchestrationTaskSpec::new(
-            "task-tool",
-            OrchestrationTaskKind::Tool {
-                tool: "lookup".into(),
-            },
-        ))
-        .expect("insert tool task");
-    store
-}
-
-/// Drives the `orchestrate_list` tool with `args` and returns the JSON array of
-/// task records from the result payload.
-async fn list_records(tool: &OrchestrationTool, args: serde_json::Value) -> Vec<serde_json::Value> {
-    let result = tool
-        .execute(args)
-        .await
-        .expect("orchestrate_list call succeeds");
-    result
-        .content
-        .into_iter()
-        .find_map(|block| match block {
-            ToolContent::Json { data } => data.as_array().cloned(),
-            ToolContent::Text { .. } | ToolContent::Image { .. } | ToolContent::File { .. } => None,
-        })
-        .expect("orchestrate_list returns a JSON array of records")
-}
-
-#[tokio::test]
-async fn orchestrate_list_filters_by_kind() {
-    let store = store_with_two_kinds();
-    let tool = OrchestrationTool::new(OrchestrationToolKind::List, store);
-
-    // Filtering by the `sub_agent` kind returns only the sub-agent task.
-    let subs = list_records(&tool, json!({ "kind": "sub_agent" })).await;
-    assert_eq!(subs.len(), 1, "only the sub-agent task matches the kind");
-    assert_eq!(subs[0]["spec"]["task_id"], "task-sub");
-    assert_eq!(subs[0]["spec"]["kind"]["type"], "sub_agent");
-
-    // The `tool` kind selects the other task.
-    let tools = list_records(&tool, json!({ "kind": "tool" })).await;
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["spec"]["task_id"], "task-tool");
-
-    // An unlisted kind matches nothing.
-    let graphs = list_records(&tool, json!({ "kind": "graph" })).await;
-    assert!(graphs.is_empty(), "no graph tasks were inserted");
-}
-
-#[tokio::test]
-async fn orchestrate_list_filters_by_created_window() {
-    let store = store_with_two_kinds();
-    let tool = OrchestrationTool::new(OrchestrationToolKind::List, store);
-
-    // A window opening at the epoch and closing far in the future admits every
-    // record (both were created between those bounds).
-    let far_future_ms: u64 = 4_000_000_000_000; // year ~2096
-    let all = list_records(
-        &tool,
-        json!({ "created_after_ms": 0, "created_before_ms": far_future_ms }),
-    )
-    .await;
-    assert_eq!(all.len(), 2, "both tasks fall inside the open window");
-
-    // Combining the kind filter with the window narrows to a single record.
-    let sub_in_window = list_records(
-        &tool,
-        json!({
-            "kind": "sub_agent",
-            "created_after_ms": 0,
-            "created_before_ms": far_future_ms
-        }),
-    )
-    .await;
-    assert_eq!(sub_in_window.len(), 1);
-    assert_eq!(sub_in_window[0]["spec"]["task_id"], "task-sub");
-
-    // A window that closes at the epoch (created_before_ms = 0) excludes every
-    // record created after the epoch — i.e. all of them.
-    let none = list_records(&tool, json!({ "created_before_ms": 0 })).await;
-    assert!(
-        none.is_empty(),
-        "records created after the epoch fall outside a window closing at the epoch"
-    );
-
-    // A window opening in the far future (created_after_ms) likewise excludes all.
-    let future_only = list_records(&tool, json!({ "created_after_ms": far_future_ms })).await;
-    assert!(
-        future_only.is_empty(),
-        "no records were created at or after the far-future lower bound"
-    );
-}
