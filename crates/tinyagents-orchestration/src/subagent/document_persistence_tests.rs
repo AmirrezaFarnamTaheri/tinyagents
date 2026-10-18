@@ -17,7 +17,7 @@ fn pause(key: SubagentTaskKey, checkpoint: &str) -> PersistedSubagentPause {
         key,
         replaces: None,
         outcome: SubagentOutcome {
-            status: SubagentOutcomeKind::AwaitingInput(SubagentPause {
+            status: SubagentOutcomeKind::AwaitingInput(super::super::SubagentPause {
                 reason: "answer?".into(),
                 resume: SubagentResume {
                     checkpoint: Some(checkpoint.into()),
@@ -217,5 +217,91 @@ async fn import_fills_missing_parts_without_replacing_committed_state() {
         .unwrap();
     assert_eq!(store.load(&key).await.unwrap(), None);
     assert_eq!(store.terminal_outcome(&key).unwrap().unwrap().output, "new");
+    assert!(store.keys_for_task("task").unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
+    use tinystoragedrivers_core::{Kv, Precondition};
+    let backend = MemoryStorage::new();
+    let scoped = backend.for_scope(&Scope::local()).unwrap();
+    let docs = Arc::clone(scoped.documents());
+    let store = DocumentSubagentPersistence::new(docs.clone()).unwrap();
+    let key = key("raw");
+    let persisted = pause(key.clone(), "raw-checkpoint");
+    store.declare().await.unwrap();
+    let name = DocumentSubagentPersistence::name(&key);
+    let legacy = serde_json::json!({"pause": {"host_checkpoint": "untouched"}});
+    Kv::ns(&docs, OWNER, "lifecycle")
+        .unwrap()
+        .put(&name, &legacy)
+        .await
+        .unwrap();
+    let id = Key::of([OWNER, NS, &name]).unwrap();
+    docs.put(
+        tinystoragedrivers_core::primitives::KV,
+        id.as_str(),
+        serde_json::json!({"owner": OWNER, "ns": NS, "key": name, "value": {"pause": persisted}}),
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        store.load_pause(&key).await.unwrap().unwrap().output,
+        "raw-checkpoint"
+    );
+    let untouched = Kv::ns(&docs, OWNER, "lifecycle")
+        .unwrap()
+        .get::<serde_json::Value>(&name)
+        .await
+        .unwrap();
+    assert_eq!(untouched, Some(legacy));
+}
+
+#[tokio::test]
+async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("lifecycle.sqlite");
+    let key = key("restart");
+    let resume = {
+        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
+        let docs = backend.for_scope(&Scope::local()).unwrap();
+        let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
+        store
+            .save_pause(pause(key.clone(), "checkpoint"))
+            .await
+            .unwrap();
+        store.load(&key).await.unwrap().unwrap()
+    };
+    {
+        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
+        let docs = backend.for_scope(&Scope::local()).unwrap();
+        let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
+        assert_eq!(store.load(&key).await.unwrap(), Some(resume.clone()));
+        assert_eq!(
+            store
+                .record_terminal(
+                    &key,
+                    &SubagentOutcome::completed("task", "done"),
+                    Some(&resume)
+                )
+                .await
+                .unwrap(),
+            SubagentTerminalPersistenceDisposition::Inserted
+        );
+    }
+    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&file).unwrap();
+    let docs = backend.for_scope(&Scope::local()).unwrap();
+    let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
+    assert_eq!(
+        store.terminal_outcome(&key).unwrap().unwrap().output,
+        "done"
+    );
+    let mut stale = pause(key.clone(), "stale");
+    stale.replaces = Some(resume);
+    assert_eq!(
+        store.save_pause(stale).await.unwrap(),
+        SubagentPausePersistenceDisposition::TerminalExisting
+    );
     assert!(store.keys_for_task("task").unwrap().is_empty());
 }

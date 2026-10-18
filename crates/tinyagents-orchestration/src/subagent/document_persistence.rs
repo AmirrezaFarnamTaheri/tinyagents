@@ -352,3 +352,7 @@ impl SubagentPersistence for DocumentSubagentPersistence {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "document_persistence_tests.rs"]
+mod tests;

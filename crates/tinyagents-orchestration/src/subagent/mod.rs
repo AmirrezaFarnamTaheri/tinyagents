@@ -14,9 +14,6 @@ mod awaiting_user;
 mod completion;
 mod detached;
 mod document_persistence;
-#[cfg(test)]
-#[path = "document_persistence_tests.rs"]
-mod document_persistence_tests;
 mod driver;
 mod executor;
 mod file_persistence;
