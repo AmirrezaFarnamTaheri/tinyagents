@@ -242,9 +242,11 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
     let pinned = bind_call(outer.clone(), &args);
     assert!(pinned.tool().supports_markdown());
-    assert!(outer
-        .host_extension()
-        .is_some_and(|extension| extension.is::<ToolCallBinding>()));
+    assert!(
+        outer
+            .host_extension()
+            .is_some_and(|extension| extension.is::<ToolCallBinding>())
+    );
     let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
 
     let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
@@ -352,7 +354,8 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
 
 #[tokio::test]
 async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_and_live_parent() {
-    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let (tools, handle) =
+        bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
     let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
     let selected_for_selector = selected.clone();
@@ -617,7 +620,8 @@ fn resolve_registry_for_enforces_pack_membership() {
 
 #[tokio::test]
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
-    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let (tools, handle) =
+        bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let listing = render_pack_filtered(&CATALOG, "alpha", handle, &|name| name == "a_one", "")
         .expect("one callable tool");
     assert!(listing.contains("## `a_one`"));
