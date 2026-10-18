@@ -1164,7 +1164,10 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&queued.output()).unwrap()["status"], "message_queued");
+    assert_eq!(
+        serde_json::from_str::<Value>(&queued.output()).unwrap()["status"],
+        "message_queued"
+    );
     let duplicate = ToolDispatch::<(), ()>::execute(
         &steer,
         &(),
@@ -1175,7 +1178,10 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&duplicate.output()).unwrap()["duplicate"], true);
+    assert_eq!(
+        serde_json::from_str::<Value>(&duplicate.output()).unwrap()["duplicate"],
+        true
+    );
     let control_id = jobs.get(&task_id).unwrap().id;
 
     assert!(
@@ -1263,8 +1269,12 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         jobs.get(control_id.as_str()).unwrap().status,
         SubAgentJobStatus::Completed
     );
-    let terminal_message = SubAgentMessageTool::new(jobs.clone())
-        .with_argument_fields("task_id", "session_id", "message", "request_id");
+    let terminal_message = SubAgentMessageTool::new(jobs.clone()).with_argument_fields(
+        "task_id",
+        "session_id",
+        "message",
+        "request_id",
+    );
     let terminal_error = ToolDispatch::<(), ()>::execute(
         &terminal_message,
         &(),
@@ -1344,27 +1354,44 @@ async fn jobs_tool_treats_a_null_action_as_query() {
         "worker description",
         blocking_driver(started.clone(), release.clone(), calls),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-            let child = parent.child(RunConfig::new("worker-child"), ())
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
             SubagentRequest::fresh_from_parent(
-                parent, child, "null-action-task", (),
-                args["input"].as_str().unwrap_or_default(), None,
+                parent,
+                child,
+                "null-action-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
             )
         },
         |_| Some("null-action-thread".into()),
-    ).with_job_registry(jobs.clone());
+    )
+    .with_job_registry(jobs.clone());
     let _started = ToolDispatch::<(), ()>::execute(
-        &tool, &(), CallId::new("spawn-null-action"),
+        &tool,
+        &(),
+        CallId::new("spawn-null-action"),
         json!({"input":"work", "mode":"background"}),
-        tinytools::ToolCallOptions::default(), &parent,
-    ).await.unwrap();
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
     started.notified().await;
 
     let query = SubAgentJobsTool::new(jobs);
     let listed = ToolDispatch::<(), ()>::execute(
-        &query, &(), CallId::new("null-action-query"), json!({"action": null}),
-        tinytools::ToolCallOptions::default(), &parent,
-    ).await.unwrap();
+        &query,
+        &(),
+        CallId::new("null-action-query"),
+        json!({"action": null}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
     let listed: Value = serde_json::from_str(&listed.output()).unwrap();
     assert_eq!(listed.as_array().map(Vec::len), Some(1));
 }
@@ -1381,20 +1408,31 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         "worker description",
         blocking_driver(started.clone(), release.clone(), calls),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-            let child = parent.child(RunConfig::new("worker-child"), ())
+            let child = parent
+                .child(RunConfig::new("worker-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
             SubagentRequest::fresh_from_parent(
-                parent, child, "oversized-request-task", (),
-                args["input"].as_str().unwrap_or_default(), None,
+                parent,
+                child,
+                "oversized-request-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
             )
         },
         |_| Some("oversized-request-thread".into()),
-    ).with_job_registry(jobs.clone());
+    )
+    .with_job_registry(jobs.clone());
     ToolDispatch::<(), ()>::execute(
-        &tool, &(), CallId::new("spawn-oversized-request"),
+        &tool,
+        &(),
+        CallId::new("spawn-oversized-request"),
         json!({"input":"work", "mode":"background"}),
-        tinytools::ToolCallOptions::default(), &parent,
-    ).await.unwrap();
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
     started.notified().await;
     let job_id = jobs
         .list()
@@ -1405,16 +1443,27 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         .as_str()
         .to_owned();
 
-    let message = SubAgentMessageTool::new(jobs)
-        .with_argument_fields("task_id", "session_id", "message", "request_id");
+    let message = SubAgentMessageTool::new(jobs).with_argument_fields(
+        "task_id",
+        "session_id",
+        "message",
+        "request_id",
+    );
     let rejected = ToolDispatch::<(), ()>::execute(
-        &message, &(), CallId::new("oversized-request"),
+        &message,
+        &(),
+        CallId::new("oversized-request"),
         json!({"task_id":job_id, "message":"m", "request_id":"x".repeat(129)}),
-        tinytools::ToolCallOptions::default(), &parent,
-    ).await;
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await;
     let error = rejected.expect_err("oversized id is rejected before steering is queued");
     assert!(
-        matches!(error.downcast_ref::<SubAgentJobError>(), Some(SubAgentJobError::RequestIdTooLong)),
+        matches!(
+            error.downcast_ref::<SubAgentJobError>(),
+            Some(SubAgentJobError::RequestIdTooLong)
+        ),
         "unexpected rejection: {error:#}"
     );
 }
@@ -1724,7 +1773,14 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
         .to_owned();
     started.notified().await;
     parent.cancellation.cancel();
-    assert!(child_cancellation.lock().unwrap().as_ref().unwrap().is_cancelled());
+    assert!(
+        child_cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .is_cancelled()
+    );
     let terminal = tokio::time::timeout(
         std::time::Duration::from_secs(1),
         jobs.wait_owned(&task_id, parent.instance_id().to_string()),
@@ -1734,6 +1790,93 @@ async fn parent_cancellation_cascades_to_running_driver_jobs() {
     .unwrap();
     assert_eq!(terminal.status, SubAgentJobStatus::Cancelled);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cancelling_one_driver_job_leaves_its_sibling_running() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let parent = RunContext::new(RunConfig::new("sibling-cancel-parent"), ());
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        blocking_driver(started, release.clone(), calls.clone()),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("sibling-cancel-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                args["task_id"].as_str().unwrap_or_default(),
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("sibling-cancel-thread".into()),
+    )
+    .with_job_registry(jobs.clone());
+    let spawn = |call_id: &'static str, task_id: &'static str| {
+        ToolDispatch::<(), ()>::execute(
+            &tool,
+            &(),
+            CallId::new(call_id),
+            json!({"task_id":task_id,"input":"work","mode":"background"}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+    };
+    let first = spawn("spawn-sibling-a", "sibling-a").await.unwrap();
+    let second = spawn("spawn-sibling-b", "sibling-b").await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while calls.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both sibling executors started");
+    let first_id = serde_json::from_str::<Value>(&first.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let second_id = serde_json::from_str::<Value>(&second.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cancel = SubAgentJobsTool::new(jobs.clone());
+    ToolDispatch::<(), ()>::execute(
+        &cancel,
+        &(),
+        CallId::new("cancel-sibling-a"),
+        json!({"action":"cancel","job_id":first_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let cancelled = jobs
+        .wait_owned(&first_id, parent.instance_id().to_string())
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(
+        jobs.get_owned(&second_id, parent.instance_id().to_string())
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Running,
+        "cancelling one driver job leaves its sibling running",
+    );
+    release.add_permits(1);
+    assert_eq!(
+        jobs.wait_owned(&second_id, parent.instance_id().to_string())
+            .await
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Completed,
+    );
 }
 
 fn inline_blocking_alias(

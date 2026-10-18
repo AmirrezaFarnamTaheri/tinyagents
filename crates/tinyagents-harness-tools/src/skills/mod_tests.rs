@@ -758,7 +758,8 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
         testkit::text_response("done"),
     ]));
     let rules = tinytools::ToolRuleSet::single(tinytools::ToolRules::from_allow_deny(
-        Vec::<String>::new(), ["a_one"],
+        Vec::<String>::new(),
+        ["a_one"],
     ));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("scripted", model);
@@ -780,6 +781,9 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
             _ => None,
         })
         .unwrap();
-    assert!(result.contains("a_one"), "selected target should be refused: {result}");
+    assert!(
+        result.contains("a_one"),
+        "selected target should be refused: {result}"
+    );
     assert!(result.contains("not permitted"), "{result}");
 }

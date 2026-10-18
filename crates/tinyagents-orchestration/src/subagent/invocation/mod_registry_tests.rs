@@ -124,9 +124,8 @@ async fn listings_are_sorted_by_job_id() {
 
 #[test]
 fn registry_lock_failures_are_not_selector_denials() {
-    let error = super::jobs::registry_failure(
-        tinyagents_tasks::DetachedTaskRegistryError::LockPoisoned,
-    );
+    let error =
+        super::jobs::registry_failure(tinyagents_tasks::DetachedTaskRegistryError::LockPoisoned);
     assert!(matches!(error, SubAgentJobError::Registry(_)));
     assert!(!super::jobs::is_recoverable_selector_denial(&error));
 }
@@ -138,7 +137,10 @@ async fn terminal_jobs_never_return_to_running() {
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
     jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
     jobs.mark_running(&id);
-    assert_eq!(jobs.get(id.as_str()).unwrap().status, SubAgentJobStatus::Cancelled);
+    assert_eq!(
+        jobs.get(id.as_str()).unwrap().status,
+        SubAgentJobStatus::Cancelled
+    );
 }
 
 #[tokio::test]
@@ -164,7 +166,10 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
     jobs.mark_budget_overrun(
         &id,
-        crate::subagent::AppliedResult { text: "late".into(), ..Default::default() },
+        crate::subagent::AppliedResult {
+            text: "late".into(),
+            ..Default::default()
+        },
         "over budget".into(),
     );
     let job = jobs.get(id.as_str()).unwrap();
@@ -183,8 +188,10 @@ async fn message_request_ids_are_bounded_per_job() {
         assert!(!duplicate);
     }
     // r0 ages out of the per-job 64-id window and can be delivered again.
-    assert!(!jobs
-        .send_message_with_request_id(id.as_str(), 1, "m", Some("r0"))
-        .unwrap());
+    assert!(
+        !jobs
+            .send_message_with_request_id(id.as_str(), 1, "m", Some("r0"))
+            .unwrap()
+    );
     assert_eq!(steering.pending(), 66);
 }
