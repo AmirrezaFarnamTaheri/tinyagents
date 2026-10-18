@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tinyagents_harness::tool::{BoundToolCall, ToolCallBinding};
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
 use super::catalog::PackCatalog;
@@ -38,10 +39,11 @@ pub struct UseSkillTool {
     handle: PackRegistryHandle,
     catalog: PackCatalog,
     description: String,
+    binding: ToolCallBinding,
 }
 
 impl PackRegistryHandle {
-    pub(crate) fn bind_call(&self, outer: Arc<dyn Tool>, args: &Value) -> PinnedPackCall {
+    pub(crate) fn bind_call(&self, outer: Arc<dyn Tool>, args: &Value) -> Arc<PinnedPackCall> {
         let target = match self.catalog_for_binding() {
             Some(catalog) => match resolve_call(self, &catalog, args) {
                 ResolvedPackCall::Execute {
@@ -59,7 +61,7 @@ impl PackRegistryHandle {
                 "packed tool catalog is unavailable for this registration",
             )),
         };
-        PinnedPackCall { outer, target }
+        Arc::new(PinnedPackCall { outer, target })
     }
 }
 
@@ -95,6 +97,21 @@ impl PinnedPackCall {
 
     pub(crate) fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
         Some((self.selected()?, self.selected_arguments()?))
+    }
+}
+
+impl BoundToolCall for PinnedPackCall {
+    fn tool(&self) -> Arc<dyn Tool> {
+        // The bound executor is this wrapper so the selected target remains pinned.
+        Arc::new(self.clone_for_execution())
+    }
+
+    fn admission_target(&self) -> Option<(&dyn Tool, &Value)> {
+        PinnedPackCall::admission_target(self)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -217,10 +234,15 @@ impl UseSkillTool {
              again with `skill` + `tool` + `args` to run one.\n\nSkills:\n{}",
             catalog.pack_index_markdown()
         );
+        let binding_handle = handle.clone();
+        let binding = ToolCallBinding::new(move |outer, args| {
+            binding_handle.bind_call(outer, args)
+        });
         Self {
             handle,
             catalog,
             description,
+            binding,
         }
     }
 
@@ -380,6 +402,6 @@ impl Tool for UseSkillTool {
     /// older hosts can continue downcasting it directly. The handle also keeps
     /// the catalog needed to bind one indirect target per admitted call.
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
-        Some(&self.handle)
+        Some(&self.binding)
     }
 }

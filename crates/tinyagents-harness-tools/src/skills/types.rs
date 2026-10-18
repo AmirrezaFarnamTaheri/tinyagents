@@ -7,13 +7,8 @@ use tinytools::{Tool, ToolResult};
 
 use super::{catalog::PackCatalog, handle::ToolVec, render::render_pack};
 
-/// Compatibility name for the erased `use_skill` host extension.
-///
-/// This remains a type alias so callers that downcast `Tool::host_extension`
-/// to [`super::PackRegistryHandle`] keep observing the same concrete type.
-pub type PackToolExtension = super::PackRegistryHandle;
-
 /// A call-scoped target captured before authorization and reused for execution.
+#[derive(Clone)]
 pub(crate) struct PinnedPackCall {
     pub(super) outer: Arc<dyn Tool>,
     pub(super) target: PackTarget,
@@ -48,6 +43,7 @@ impl PackSelection {
     }
 }
 
+#[derive(Clone)]
 pub(super) enum PackTarget {
     Execute {
         tools: ToolVec,

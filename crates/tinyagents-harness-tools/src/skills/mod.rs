@@ -38,7 +38,7 @@ pub use render::{
 };
 pub use tool::{USE_SKILL, UseSkillTool};
 pub(crate) use types::PinnedPackCall;
-pub use types::{PackSelection, PackToolExtension, ToolPack};
+pub use types::{PackSelection, ToolPack};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
