@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tinytools::{
     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolExposure, ToolInjectedArgument,
-    ToolPolicy, ToolResult, ToolRunContext, ToolScope, ToolTimeout,
+    ToolPolicy, ToolResult, ToolRunContext, ToolScope, ToolSpec, ToolTimeout,
 };
 
 type ContextFactory<C> = dyn for<'a> Fn(Option<&'a dyn ToolRunContext>) -> C + Send + Sync;
@@ -147,6 +147,21 @@ impl<T: Tool, C: 'static> Tool for PerCallTool<T, C> {
     }
     fn host_extension(&self) -> Option<&(dyn Any + Send + Sync)> {
         self.prototype.host_extension()
+    }
+    fn host_call_extension(&self, args: &Value) -> Option<Box<dyn Any + Send + Sync>> {
+        self.prototype.host_call_extension(args)
+    }
+    fn spec(&self) -> ToolSpec {
+        self.prototype.spec()
+    }
+    fn display_label(&self, args: &Value) -> Option<String> {
+        self.prototype.display_label(args)
+    }
+    fn display_detail(&self, args: &Value) -> Option<String> {
+        self.prototype.display_detail(args)
+    }
+    fn return_direct(&self) -> bool {
+        self.prototype.return_direct()
     }
 }
 
