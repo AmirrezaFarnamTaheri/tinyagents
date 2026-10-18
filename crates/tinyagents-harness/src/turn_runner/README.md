@@ -36,3 +36,13 @@ separate total ceiling. Either guard cancels child work and asks the
 `AgentProgress` is the canonical channel-independent progress vocabulary.
 Hosts translate it to their own event wire format; this module does not define
 channel event names or transport payloads.
+
+`TurnRequest<P>` is itself a [`QueuedMessage`](crate::run_queue::QueuedMessage)
+for every payload that implements `RequeuePayload`, so a turn's run queue can be
+handed straight to the steering forwarder. A steer the forwarder recovers and
+pushes back is rebuilt from a bare id, text and thread label; the runner
+restores the scope and thread when it dispatches that item as a fresh turn and
+lets the payload adopt the metadata of the turn that was running.
+`TurnRunnerConfig::cancel_grace` keeps a cancelled host run polled, with its own
+cancellation token already fired, for a bounded time so the host can hand back
+and persist the rounds it completed. It defaults to zero (drop at once).

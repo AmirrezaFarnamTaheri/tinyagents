@@ -10,8 +10,9 @@ mod types;
 
 pub use types::{
     EventSink, FailureClassifier, IngressDecision, IngressPolicy, IngressStage, QueueDisposition,
-    ReplyStore, RequeuePayload, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest, TurnResult, TurnRunner,
-    TurnRunnerConfig, TurnRunnerError, TurnSession, TurnSignal, deterministic_reply_id,
+    ReplyStore, RequeuePayload, ScopeKey, Summarizer, TerminalEvent, TurnHost, TurnRequest,
+    TurnResult, TurnRunner, TurnRunnerConfig, TurnRunnerError, TurnSession, TurnSignal,
+    deterministic_reply_id,
 };
 
 #[cfg(test)]

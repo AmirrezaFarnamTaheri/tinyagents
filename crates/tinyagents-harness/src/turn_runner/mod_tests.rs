@@ -2017,12 +2017,8 @@ fn run_queue_item_exposes_request_identity_to_the_steering_forwarder() {
     assert_eq!(QueuedMessage::id(&item), "item-1");
     assert_eq!(QueuedMessage::text(&item), "go left");
 
-    let recovered = <TurnRequest as QueuedMessage>::requeued(
-        "fresh".into(),
-        "go left".into(),
-        "thread-a",
-        42,
-    );
+    let recovered =
+        <TurnRequest as QueuedMessage>::requeued("fresh".into(), "go left".into(), "thread-a", 42);
     assert_eq!(recovered.request_id, "fresh");
     assert_eq!(recovered.text, "go left");
     assert_eq!(recovered.thread_id, "thread-a");

@@ -695,7 +695,7 @@ where
                                 generation,
                                 &request.payload,
                             )
-                                .await
+                            .await
                         }
                         None => (Vec::new(), None),
                     };
