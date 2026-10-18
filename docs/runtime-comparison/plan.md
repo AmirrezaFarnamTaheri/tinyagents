@@ -43,9 +43,8 @@ were all merged into `runtime-comparison`.
   `interrupt_after` + `DrainSignal`, and `durable_task` all exist and are
   exercised by tests in this worktree's `crates/`.
 - **Phase 5** (sessions, context, loop-as-graph) — landed (this worktree's
-  `HEAD` merges phase-5). `EntryTree` (id/parent, branches, labels, fork)
-  (E1), compaction (`find_cut_point`, `OverflowClassifier`, `CompactionRecord`)
-  (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
+  `HEAD` merges phase-5). Compaction (`find_cut_point`, `OverflowClassifier`,
+  `CompactionRecord`) (E2), the `prepare_for_model` handoff transform (E3), the tool-effect
   ledger with idempotency keys (B5), and `Message::Custom` (E5) all shipped.
   The loop-as-graph piece (A5) landed only partially — see (b).
 - **Phase 6** (tool ecosystem) — landed. The `ToolSet` trait plus
