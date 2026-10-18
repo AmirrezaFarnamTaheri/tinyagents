@@ -37,6 +37,41 @@ pub mod conformance;
 mod in_memory_transcript;
 pub use in_memory_transcript::InMemoryTranscriptHistory;
 
+/// Returns a local MongoDB URI and a unique database name for an explicitly
+/// enabled driver conformance test.
+#[cfg(test)]
+pub(crate) fn local_mongo_test_target(label: &str) -> (String, String) {
+    let uri = std::env::var("TSD_MONGO_URL")
+        .expect("set TSD_MONGO_URL to run this ignored MongoDB conformance test");
+    let rest = uri.split_once("://").map_or(uri.as_str(), |(_, rest)| rest);
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    let hosts = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let is_loopback = !hosts.is_empty()
+        && !uri.starts_with("mongodb+srv://")
+        && hosts.split(',').all(|host| {
+            let name = if let Some(v6) = host.strip_prefix('[') {
+                v6.split(']').next().unwrap_or_default()
+            } else {
+                host.rsplit_once(':').map_or(host, |(name, _)| name)
+            };
+            matches!(name, "localhost" | "127.0.0.1" | "::1")
+        });
+    assert!(
+        is_loopback,
+        "TSD_MONGO_URL must name a local MongoDB server for conformance tests"
+    );
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let database = format!(
+        "tinyagents_session_{label}_{}_{}",
+        std::process::id(),
+        nanos
+    );
+    (uri, database)
+}
+
 /// Creates an empty driver-backed transcript locator over in-memory storage.
 ///
 /// Use this when a test needs the same locator interface used by production

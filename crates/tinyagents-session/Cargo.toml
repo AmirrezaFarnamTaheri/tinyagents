@@ -56,6 +56,8 @@ storage-drivers = []
 # `legacy`, so they need the importer even under `--no-default-features`.
 tinyagents-session = { path = ".", features = ["legacy-import"] }
 tinystoragedrivers-sqlite = { workspace = true }
+tinystoragedrivers-file = { workspace = true }
+tinystoragedrivers-mongodb = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
