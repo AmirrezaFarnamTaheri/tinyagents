@@ -17,8 +17,7 @@ use crate::testkit::ScriptedModel;
 use crate::tool::ToolRulePolicy;
 use tinyinference_llm::model::ModelResponse;
 use tinytools::{
-    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRules,
-    ToolSubject,
+    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRules, ToolSubject,
 };
 use tokio::sync::Notify;
 
