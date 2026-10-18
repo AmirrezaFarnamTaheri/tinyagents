@@ -132,6 +132,14 @@ fn selector_retry(enabled: bool, fallback: &'static str) -> anyhow::Error {
     }
 }
 
+fn selector_error(error: SubAgentJobError, recover: bool) -> anyhow::Error {
+    if recover && is_recoverable_selector_denial(&error) {
+        TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into()
+    } else {
+        error.into()
+    }
+}
+
 pub(super) fn is_recoverable_selector_denial(error: &SubAgentJobError) -> bool {
     matches!(
         error,
@@ -470,15 +478,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                 };
                 let job = match self.jobs.cancel_owned(job_id, &owner) {
                     Ok(job) => job,
-                    Err(error)
-                        if self.recover_selector_errors
-                            && is_recoverable_selector_denial(&error) =>
-                    {
-                        return Err(
-                            TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into()
-                        );
-                    }
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(selector_error(error, self.recover_selector_errors)),
                 };
                 return Ok(ToolResult::json(serde_json::to_value(job)?));
             }
@@ -1063,12 +1063,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
             .send_message_with_lane_and_request_id(&job_id, &owner, message, request_id, lane)
         {
             Ok(duplicate) => duplicate,
-            Err(error)
-                if self.recover_selector_errors && is_recoverable_selector_denial(&error) =>
-            {
-                return Err(TinyAgentsError::ModelRetry(SELECTOR_RETRY_HINT.to_owned()).into());
-            }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(selector_error(error, self.recover_selector_errors)),
         };
         let mut payload = json!({
             "job_id": job_id,
@@ -1091,3 +1086,7 @@ pub fn register_subagent_job_tools<State: Send + Sync, Ctx: Send + Sync>(
         .register_dispatch(Arc::new(SubAgentMessageTool::new(jobs)))
 }
 type OwnerScope = Arc<dyn Fn(u64) -> String + Send + Sync>;
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;

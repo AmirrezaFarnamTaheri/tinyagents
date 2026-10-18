@@ -1096,7 +1096,11 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .expect_err("a fixed query alias requires its configured identifier");
-    assert!(missing_identifier.to_string().contains("identifier is required"));
+    assert!(
+        missing_identifier
+            .to_string()
+            .contains("identifier is required")
+    );
     let listed = ToolDispatch::<(), ()>::execute(
         &query,
         &(),
@@ -1269,12 +1273,9 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         jobs.get(control_id.as_str()).unwrap().status,
         SubAgentJobStatus::Completed
     );
-    let terminal_message = SubAgentMessageTool::new(jobs.clone()).with_argument_fields(
-        "task_id",
-        "session_id",
-        "message",
-        "request_id",
-    ).with_owner_scope(owner_scope.clone());
+    let terminal_message = SubAgentMessageTool::new(jobs.clone())
+        .with_argument_fields("task_id", "session_id", "message", "request_id")
+        .with_owner_scope(owner_scope.clone());
     let terminal_error = ToolDispatch::<(), ()>::execute(
         &terminal_message,
         &(),
@@ -1285,10 +1286,13 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .expect_err("terminal jobs cannot receive messages");
-    assert!(matches!(
-        terminal_error.downcast_ref::<SubAgentJobError>(),
-        Some(SubAgentJobError::Terminal { .. })
-    ), "unexpected terminal error: {terminal_error:#}");
+    assert!(
+        matches!(
+            terminal_error.downcast_ref::<SubAgentJobError>(),
+            Some(SubAgentJobError::Terminal { .. })
+        ),
+        "unexpected terminal error: {terminal_error:#}"
+    );
     let recoverable_message = terminal_message.clone().recover_selector_errors();
     let recoverable_error = ToolDispatch::<(), ()>::execute(
         &recoverable_message,

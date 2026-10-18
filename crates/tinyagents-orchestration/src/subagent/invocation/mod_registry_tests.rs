@@ -122,14 +122,6 @@ async fn listings_are_sorted_by_job_id() {
     assert_eq!(all.len(), 40);
 }
 
-#[test]
-fn registry_lock_failures_are_not_selector_denials() {
-    let error =
-        super::jobs::registry_failure(tinyagents_tasks::DetachedTaskRegistryError::LockPoisoned);
-    assert!(matches!(error, SubAgentJobError::Registry(_)));
-    assert!(!super::jobs::is_recoverable_selector_denial(&error));
-}
-
 #[tokio::test]
 async fn terminal_jobs_never_return_to_running() {
     let jobs = SubAgentJobRegistry::new();
@@ -147,16 +139,22 @@ async fn terminal_jobs_never_return_to_running() {
 async fn settled_jobs_release_their_cancellation_token() {
     let jobs = SubAgentJobRegistry::new();
     let (id, _) = jobs.create("worker", 1);
-    assert!(jobs.holds_live_cancellation(&id));
+    let task_id = TaskId::new(id.as_str());
+    assert!(jobs.tasks().holds_cancellation(&task_id).unwrap());
     jobs.cancel_owned(id.as_str(), 1).expect("cancel");
-    assert!(!jobs.holds_live_cancellation(&id));
+    assert!(!jobs.tasks().holds_cancellation(&task_id).unwrap());
     assert!(!jobs.get(id.as_str()).unwrap().status.is_terminal());
     jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
     assert!(jobs.get(id.as_str()).unwrap().status.is_terminal());
 
     let (aborted, _) = jobs.create("worker", 1);
     jobs.mark_aborted(&aborted, true);
-    assert!(!jobs.holds_live_cancellation(&aborted));
+    assert!(
+        !jobs
+            .tasks()
+            .holds_cancellation(&TaskId::new(aborted.as_str()))
+            .unwrap()
+    );
 }
 
 #[tokio::test]
