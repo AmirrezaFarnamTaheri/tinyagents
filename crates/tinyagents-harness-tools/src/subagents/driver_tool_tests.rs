@@ -357,6 +357,12 @@ fn job_tool_metadata_and_default_schemas_are_preserved() {
 
 #[test]
 fn await_alias_timeout_uses_default_and_clamps_invalid_or_out_of_range_values() {
+    assert_eq!(
+        SubAgentJobsTool::new(SubAgentJobRegistry::new()).timeout_policy(&json!({})),
+        ToolTimeout::Inherit,
+        "an unconfigured await tool keeps the shared inherited timeout policy"
+    );
+
     let tool = SubAgentJobsTool::new(SubAgentJobRegistry::new()).with_await_timeout_field(
         "deadline_secs",
         4,
