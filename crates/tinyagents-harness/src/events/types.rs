@@ -530,6 +530,17 @@ pub enum AgentEvent {
         key: String,
     },
 
+    /// A model response was served from a cache without an exposed cache key.
+    ///
+    /// This records the cache fact for adapters that do not own the harness
+    /// response-cache key. The provider was not invoked for this response.
+    /// Adapters must omit cached provider charges from [`AgentEvent::UsageRecorded`];
+    /// this event has no call linkage for that run-level aggregate.
+    ModelResponseCached {
+        /// Identifier for the model call satisfied by the cached response.
+        call_id: CallId,
+    },
+
     /// A response-cache lookup missed, so the provider is being invoked and the
     /// result will be stored under `key`.
     CacheMiss {
@@ -1130,6 +1141,7 @@ impl AgentEvent {
             AgentEvent::MiddlewareStarted { .. } => "middleware.started",
             AgentEvent::MiddlewareCompleted { .. } => "middleware.completed",
             AgentEvent::CacheHit { .. } => "cache.hit",
+            AgentEvent::ModelResponseCached { .. } => "model.response_cached",
             AgentEvent::CacheMiss { .. } => "cache.miss",
             AgentEvent::PromptCacheMiss { .. } => "cache.prompt_miss",
             AgentEvent::RetryScheduled { .. } => "retry.scheduled",

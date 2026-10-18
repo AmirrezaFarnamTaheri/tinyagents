@@ -162,6 +162,20 @@ fn completed_events_deserialize_without_started_at_ms() {
 }
 
 #[test]
+fn model_response_cached_event_round_trips_without_a_cache_key() {
+    let event = AgentEvent::ModelResponseCached {
+        call_id: crate::ids::CallId::new("call-1"),
+    };
+    assert_eq!(event.kind(), "model.response_cached");
+
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["kind"], "model_response_cached");
+    assert_eq!(value["call_id"], "call-1");
+    assert!(value.get("key").is_none());
+    assert_eq!(serde_json::from_value::<AgentEvent>(value).unwrap(), event);
+}
+
+#[test]
 fn smoke_harness_run_status_lifecycle() {
     let run_id = RunId::new("run-status");
     let component = ComponentId::new("agent");
