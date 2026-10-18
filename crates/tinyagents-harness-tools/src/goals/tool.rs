@@ -11,7 +11,7 @@
 //! <rendered block> }`: `goal` is the structured camelCase goal a UI can draw
 //! a banner from, `text` the model-readable rendering (also attached as the
 //! markdown form). A host that must react to a change (publish an event, refresh
-//! a chip) registers a hook with [`GoalTool::with_update_hook`].
+//! a chip) attaches a [`super::GoalObserver`] to its [`GoalStore`].
 //!
 //! The target thread is resolved from
 //! [`ToolExecutionContext::thread_id`](tinyagents_harness::tool::ToolExecutionContext),
@@ -25,17 +25,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use super::store;
+use super::runtime::GoalStore;
 use super::types::ThreadGoal;
-use tinyagents_harness::store::Store;
 use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{PermissionLevel, Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
-
-/// Callback a host registers to observe a goal a tool just wrote.
-///
-/// Called after a successful `goal_set` / `goal_complete` / `goal_pause` /
-/// `goal_resume` with the persisted goal (never for `goal_get` or `goal_clear`).
-pub type GoalUpdateHook = Arc<dyn Fn(&ThreadGoal) + Send + Sync>;
 
 /// Which thread-goal control a [`GoalTool`] implements.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -134,29 +127,16 @@ impl GoalToolKind {
     }
 }
 
-/// A harness [`Tool`] for one thread-goal control, backed by a
-/// [`Store`](tinyagents_harness::store::Store).
+/// A harness [`Tool`] for one thread-goal control, backed by [`GoalStore`].
 pub struct GoalTool {
     kind: GoalToolKind,
-    store: Arc<dyn Store>,
-    on_update: Option<GoalUpdateHook>,
+    store: Arc<GoalStore>,
 }
 
 impl GoalTool {
     /// Creates one goal tool of `kind` backed by `store`.
-    pub fn new(kind: GoalToolKind, store: Arc<dyn Store>) -> Self {
-        Self {
-            kind,
-            store,
-            on_update: None,
-        }
-    }
-
-    /// Registers a [`GoalUpdateHook`] invoked after each successful write.
-    #[must_use]
-    pub fn with_update_hook(mut self, hook: GoalUpdateHook) -> Self {
-        self.on_update = Some(hook);
-        self
+    pub fn new(kind: GoalToolKind, store: Arc<GoalStore>) -> Self {
+        Self { kind, store }
     }
 
     /// The control kind this tool implements.
@@ -173,8 +153,7 @@ impl GoalTool {
     ) -> std::result::Result<(Option<ThreadGoal>, String), String> {
         let stringify = |error: tinyagents_harness::error::TinyAgentsError| error.to_string();
         match self.kind {
-            GoalToolKind::Get => match store::get(&self.store, thread_id)
-                .await
+            GoalToolKind::Get => match self.store.get(thread_id)
                 .map_err(stringify)?
             {
                 Some(goal) => Ok((Some(goal), String::new())),
@@ -185,32 +164,27 @@ impl GoalTool {
                     return Err("Missing 'objective' parameter".to_string());
                 };
                 let token_budget = args.get("token_budget").and_then(Value::as_u64);
-                let goal = store::set(&self.store, thread_id, objective, token_budget)
-                    .await
+                let goal = self.store.set(thread_id, objective, token_budget)
                     .map_err(stringify)?;
                 Ok((Some(goal), "Goal set.".to_string()))
             }
             GoalToolKind::Complete => {
-                let goal = store::complete(&self.store, thread_id)
-                    .await
+                let goal = self.store.complete(thread_id)
                     .map_err(stringify)?;
                 Ok((Some(goal), "Goal marked complete.".to_string()))
             }
             GoalToolKind::Pause => {
-                let goal = store::pause(&self.store, thread_id)
-                    .await
+                let goal = self.store.pause(thread_id)
                     .map_err(stringify)?;
                 Ok((Some(goal), String::new()))
             }
             GoalToolKind::Resume => {
-                let goal = store::resume(&self.store, thread_id)
-                    .await
+                let goal = self.store.resume(thread_id)
                     .map_err(stringify)?;
                 Ok((Some(goal), String::new()))
             }
             GoalToolKind::Clear => {
-                let removed = store::clear(&self.store, thread_id)
-                    .await
+                let removed = self.store.clear(thread_id)
                     .map_err(stringify)?;
                 Ok((None, format!("Goal cleared (removed={removed}).")))
             }
@@ -256,7 +230,7 @@ fn error_result(message: impl Into<String>) -> ToolResult {
 
 /// Builds the default **model-facing** goal controls (`goal_get`, `goal_set`,
 /// `goal_complete`).
-pub fn goal_tools(store: Arc<dyn Store>) -> Vec<Arc<GoalTool>> {
+pub fn goal_tools(store: Arc<GoalStore>) -> Vec<Arc<GoalTool>> {
     GoalToolKind::MODEL_FACING
         .into_iter()
         .map(|kind| Arc::new(GoalTool::new(kind, store.clone())))
@@ -266,7 +240,7 @@ pub fn goal_tools(store: Arc<dyn Store>) -> Vec<Arc<GoalTool>> {
 /// Registers the default model-facing goal controls into a tool registry.
 pub fn register_goal_tools<State: Send + Sync, Ctx: Send + Sync>(
     registry: &mut ToolRegistry<State, Ctx>,
-    store: Arc<dyn Store>,
+    store: Arc<GoalStore>,
 ) -> &mut ToolRegistry<State, Ctx> {
     for tool in goal_tools(store) {
         registry.register(tool);
@@ -337,11 +311,6 @@ impl Tool for GoalTool {
             Ok(outcome) => outcome,
             Err(message) => return Ok(error_result(message)),
         };
-        if let (Some(goal), Some(hook)) = (goal.as_ref(), self.on_update.as_ref())
-            && !self.kind.read_only()
-        {
-            hook(goal);
-        }
         let payload = goal_payload(goal.as_ref(), &note);
         let text = payload["text"].as_str().unwrap_or_default().to_string();
         Ok(ToolResult::json(payload).with_markdown(text))
