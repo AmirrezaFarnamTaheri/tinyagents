@@ -105,7 +105,10 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
         TurnObservation::ModelDispatch { usage, .. } => usage.as_ref(),
         _ => None,
     });
-    assert_eq!(ambient_usage.and_then(|usage| usage.cost_usd), Some(0.000007));
+    assert_eq!(
+        ambient_usage.and_then(|usage| usage.cost_usd),
+        Some(0.000007)
+    );
 }
 
 struct RecordingObserver(
