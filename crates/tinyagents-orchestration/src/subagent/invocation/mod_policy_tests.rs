@@ -146,6 +146,22 @@ async fn default_policies_leave_the_output_untouched() {
     assert!(payload.get("schema_error").is_none() && payload.get("artifacts").is_none());
 }
 
+#[tokio::test]
+async fn a_leaf_refuses_to_spawn_when_its_harness_exposes_delegation_tools() {
+    let mut harness = constant("x");
+    harness.register_tool_dispatch(Arc::new(crate::subagent::SubAgentJobsTool::new(
+        SubAgentJobRegistry::new(),
+    )));
+    let tool = tool_over(harness).with_role(SubagentRole::Leaf);
+    let result = call_inline(&tool).await;
+    assert!(result.is_error);
+    assert!(result.output().contains("leaf"));
+    assert!(tool.job_registry().list().is_empty(), "nothing was spawned");
+
+    let ok = tool_over(constant("x")).with_role(SubagentRole::Leaf);
+    assert!(!call_inline(&ok).await.is_error);
+}
+
 #[test]
 fn incomplete_kind_serializes_as_snake_case() {
     assert_eq!(
