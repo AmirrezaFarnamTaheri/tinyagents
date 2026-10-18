@@ -3229,6 +3229,67 @@ fn cache_hit_completion_keeps_usage_visible_without_recording_provider_spend() {
 }
 
 #[test]
+fn keyless_cached_model_response_does_not_record_provider_spend() {
+    let mut collector = SpanCollector::new(TraceContext::new("trace-keyless-cache", None));
+    let call_id = CallId::new("cached-model-response");
+    for (offset, ts_ms, event) in [
+        (
+            0,
+            1,
+            AgentEvent::RunStarted {
+                run_id: RunId::new("keyless-cache-run"),
+                thread_id: None,
+            },
+        ),
+        (1, 2, AgentEvent::TurnStarted { turn: 1 }),
+        (
+            2,
+            3,
+            AgentEvent::ModelStarted {
+                call_id: call_id.clone(),
+                model: "model-x".into(),
+            },
+        ),
+        (
+            3,
+            4,
+            AgentEvent::ModelResponseCached {
+                call_id: call_id.clone(),
+            },
+        ),
+        (
+            4,
+            5,
+            AgentEvent::ModelCompleted {
+                call_id,
+                started_at_ms: Some(3),
+                usage: Some(Usage {
+                    input_tokens: 50,
+                    output_tokens: 10,
+                    charged_amount: Some(ChargedAmount::usd_micros(500_000)),
+                    ..Default::default()
+                }),
+                input: None,
+                output: None,
+            },
+        ),
+    ] {
+        collector.record(&observation(offset, ts_ms, event));
+    }
+
+    let spans = collector.spans();
+    let generation = spans
+        .iter()
+        .find(|span| span.kind == SpanKind::Generation)
+        .unwrap();
+    assert_eq!(generation.attributes["gen_ai.cache.hit"], true);
+    assert_eq!(generation.attributes["gen_ai.cost.source"], "cached");
+    assert_eq!(generation.attributes["gen_ai.usage.input_tokens"], 50);
+    assert!(!generation.attributes.contains_key("gen_ai.usage.cost_usd"));
+    assert!(!spans[0].attributes.contains_key("gen_ai.usage.cost_usd"));
+}
+
+#[test]
 fn usage_from_a_discarded_call_without_model_completion_still_reaches_run_totals() {
     let mut collector = SpanCollector::new(TraceContext::new("trace-discarded", None));
     collector.record(&observation_in_run(
