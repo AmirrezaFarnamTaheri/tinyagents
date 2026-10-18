@@ -2037,7 +2037,6 @@ dependencies = [
 name = "tinyagents-graph"
 version = "2.2.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "futures",
  "serde",
@@ -2113,7 +2112,6 @@ dependencies = [
  "tinytools",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
