@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
-use crate::middleware::library::{RunMode, RunModeHandle};
+use tinyagents_harness::middleware::library::{RunMode, RunModeHandle};
 
 /// Stable marker emitted for a plan-to-build handoff.
 pub const PLAN_EXIT_MARKER: &str = "[plan_exit]";

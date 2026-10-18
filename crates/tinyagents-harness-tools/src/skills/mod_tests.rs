@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
-use crate::{runtime::AgentHarness, testkit, tool::ToolDispatch};
+use tinyagents_harness::{runtime::AgentHarness, testkit, tool::ToolDispatch};
 use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";

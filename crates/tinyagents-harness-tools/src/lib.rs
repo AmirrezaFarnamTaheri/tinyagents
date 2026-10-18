@@ -8,6 +8,7 @@ mod ask_clarification;
 mod plan_exit;
 mod time;
 mod time_parse;
+mod canonical_json;
 pub mod per_call;
 pub mod thread_locks;
 
@@ -23,6 +24,10 @@ pub mod subagents;
 pub use ask_clarification::AskClarificationTool;
 pub use plan_exit::{PLAN_EXIT_MARKER, PlanExitModeLookup, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
+
+#[cfg(test)]
+#[path = "time_parse_tests.rs"]
+mod time_parse_tests;
 
 #[cfg(test)]
 #[path = "ask_clarification_tests.rs"]

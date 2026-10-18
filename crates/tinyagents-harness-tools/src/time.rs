@@ -16,7 +16,7 @@ use chrono_tz::Tz;
 use serde_json::json;
 
 use super::time_parse::{ResolveZone, resolve_expr};
-use crate::tool::ToolRegistry;
+use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{Tool, ToolCallOptions, ToolPolicy, ToolResult};
 
 /// Declared name of [`CurrentTimeTool`].

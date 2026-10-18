@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tinytools::{Tool, ToolCallOptions, ToolResult};
 
-use crate::{
+use tinyagents_harness::{
     context::RunContext,
     tool::{ToolDispatch, ToolExecutionContext},
 };
@@ -75,7 +75,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
     async fn execute(
         &self,
         _state: &State,
-        call_id: crate::ids::CallId,
+        call_id: tinyagents_harness::ids::CallId,
         arguments: Value,
         options: ToolCallOptions,
         parent: &RunContext<Ctx>,
@@ -109,10 +109,10 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
             .or_else(|| self.pinned.admission_target())
     }
 
-    fn output_origin(&self) -> crate::host::ContentOrigin {
+    fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
         self.selected
             .as_ref()
-            .map_or(crate::host::ContentOrigin::Tool, |dispatch| {
+            .map_or(tinyagents_harness::host::ContentOrigin::Tool, |dispatch| {
                 dispatch.output_origin()
             })
     }
@@ -140,7 +140,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
     async fn execute(
         &self,
         state: &State,
-        call_id: crate::ids::CallId,
+        call_id: tinyagents_harness::ids::CallId,
         _arguments: Value,
         options: ToolCallOptions,
         parent: &RunContext<Ctx>,
