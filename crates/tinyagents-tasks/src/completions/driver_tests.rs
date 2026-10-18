@@ -61,6 +61,21 @@ async fn pending_completions_survive_a_reopen() {
 }
 
 #[tokio::test]
+async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
+    let storage = MemoryStorage::new();
+    let docs = docs_of(&storage, "shared");
+    let first = CompletionRouter::new(Arc::new(DriverCompletionStore::new(Arc::clone(&docs)).unwrap()));
+    let second = CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()));
+    first.record(record("shared-task", "parent")).await.unwrap();
+
+    let first_claim = first.claim_pending("parent", 1).unwrap();
+    let second_claim = second.claim_pending("parent", 1).unwrap();
+
+    assert_eq!(first_claim.len(), 1);
+    assert!(second_claim.is_empty(), "another router already owns this visible claim");
+}
+
+#[tokio::test]
 async fn attempts_and_give_up_survive_a_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("completions.sqlite");
