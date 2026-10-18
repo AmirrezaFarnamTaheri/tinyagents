@@ -6,7 +6,7 @@
 //! mutation runs `load → mutate → normalise → put` under a **per-thread async
 //! mutex** ([`thread_lock`]) so the read-modify-write is atomic within the
 //! process (the same single-process caveat as
-//! [`graph::goals::store`](crate::goals::store)).
+//! [`GoalStore`](crate::goals::GoalStore)).
 //!
 //! The list is written wholesale ([`replace`]) and then ticked off one step at
 //! a time ([`complete`], [`cancel`]); every write keeps the step order the

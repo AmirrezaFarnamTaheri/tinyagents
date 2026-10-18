@@ -35,6 +35,7 @@ default = []
 # Retained as a no-op: SQLite persistence is the tinystoragedrivers SQLite driver.
 sqlite = []
 tools = ["tinyagents-harness-tools/todos", "tinyagents-harness-tools/goals", "tinyagents-harness-tools/skills"]
+subagents = ["tinyagents-harness-tools/subagents"]
 multimodal = ["tinyagents-harness/multimodal"]
 claude-code = ["tinyagents-harness/claude-code"]
 langfuse = ["tinyagents-harness/langfuse"]
@@ -47,3 +48,8 @@ tracing = [
 
 [lints.rust]
 unused_imports = "allow"
+
+[[test]]
+name = "live_subagents"
+path = "tests/live_subagents.rs"
+required-features = ["subagents"]
