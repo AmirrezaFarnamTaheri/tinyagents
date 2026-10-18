@@ -72,8 +72,8 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
 
     /// Resolve typed media while preserving its per-block MIME hint.
     ///
-    /// Marker references do not carry a typed hint and continue to use
-    /// [`Self::resolve`]. Existing resolvers remain source-compatible.
+    /// Marker references pass `None`. Existing resolvers remain
+    /// source-compatible because the default delegates to [`Self::resolve`].
     async fn resolve_with_mime_hint(
         &self,
         scope: &Scope,
@@ -81,7 +81,10 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
         source: &str,
         max_bytes: usize,
         _mime_hint: Option<&str>,
-    ) -> std::result::Result<ResolvedMedia, String> {
+    ) -> std::result::Result<ResolvedMedia, String>
+    where
+        Scope: Sync,
+    {
         self.resolve(scope, modality, source, max_bytes).await
     }
 }
@@ -560,7 +563,14 @@ where
             _ => self.config.files.max_file_bytes(),
         };
         let resolved = self
-            .resolve(scope, modality, &source, max_bytes, false, hinted_mime.as_deref())
+            .resolve(
+                scope,
+                modality,
+                &source,
+                max_bytes,
+                false,
+                hinted_mime.as_deref(),
+            )
             .await?;
         let ResolvedMedia {
             mut attachment,

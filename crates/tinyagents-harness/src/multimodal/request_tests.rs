@@ -95,6 +95,34 @@ impl MediaSourceResolver<String> for Resolver {
     async fn resolve(
         &self,
         scope: &String,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        self.mime_hints.lock().unwrap().push(None);
+        self.resolve_source(scope, modality, source, max_bytes)
+    }
+
+    async fn resolve_with_mime_hint(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+        mime_hint: Option<&str>,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        self.mime_hints
+            .lock()
+            .unwrap()
+            .push(mime_hint.map(str::to_owned));
+        self.resolve_source(scope, modality, source, max_bytes)
+    }
+}
+
+impl Resolver {
+    fn resolve_source(
+        &self,
+        scope: &String,
         _modality: InputModality,
         source: &str,
         max_bytes: usize,
@@ -118,21 +146,6 @@ impl MediaSourceResolver<String> for Resolver {
             resolved = resolved.with_annotation(annotation.clone());
         }
         Ok(resolved)
-    }
-
-    async fn resolve_with_mime_hint(
-        &self,
-        scope: &String,
-        modality: InputModality,
-        source: &str,
-        max_bytes: usize,
-        mime_hint: Option<&str>,
-    ) -> std::result::Result<ResolvedMedia, String> {
-        self.mime_hints
-            .lock()
-            .unwrap()
-            .push(mime_hint.map(str::to_owned));
-        self.resolve(scope, modality, source, max_bytes).await
     }
 }
 
@@ -361,11 +374,13 @@ async fn hard_zero_rejects_before_any_source_read() {
 #[tokio::test]
 async fn typed_mime_hints_are_forwarded_per_block_but_markers_have_none() {
     let model = Arc::new(CaptureModel::new(false));
-    let resolver = Arc::new(Resolver::default());
-    resolver.sources.insert(
-        "shared.bin".into(),
-        attachment("shared.bin", "text/plain", b"content"),
-    );
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "shared.bin".into(),
+            attachment("shared.bin", "text/plain", b"content"),
+        )]),
+        ..Resolver::default()
+    });
     let wrapped = wrapper(
         model,
         MediaRequestConfig::default(),
