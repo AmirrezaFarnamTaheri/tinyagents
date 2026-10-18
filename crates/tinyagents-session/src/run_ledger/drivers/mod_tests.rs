@@ -1,6 +1,5 @@
 use super::*;
 use crate::run_ledger::LedgerError;
-use crate::run_ledger::RunLedgerStore;
 use chrono::Duration;
 use serde_json::json;
 use std::sync::Arc;
@@ -37,26 +36,6 @@ pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
                 .unwrap(),
         ),
     )
-}
-
-async fn assert_ledger_conformance_and_scope_isolation(backend: &dyn StorageBackend) {
-    use crate::testkit::conformance::run_ledger_conformance;
-
-    let scoped = |name: &str| {
-        Arc::new(DriverRunLedger::new(
-            backend.for_scope(&Scope::new(name).unwrap()).unwrap(),
-        )) as Arc<dyn RunLedgerStore>
-    };
-    run_ledger_conformance(scoped("session-contract-agent")).await;
-    assert!(
-        scoped("session-contract-peer")
-            .list_agent_runs(&AgentRunListRequest::default())
-            .await
-            .unwrap()
-            .runs
-            .is_empty(),
-        "a separate scope cannot list the conformance agent's runs"
-    );
 }
 
 #[tokio::test]
