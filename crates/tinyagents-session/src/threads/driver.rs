@@ -135,8 +135,10 @@ impl DriverConversationStore {
     /// the document store confirms that row was deleted and before another row is
     /// processed. A `false` delete result does not invoke the callback.
     ///
-    /// The callback is infallible by API shape and must stay short and
-    /// nonblocking. It must not panic or call back into this store. Completed
+    /// The callback is infallible by API shape and runs on the caller's executor.
+    /// Keep it limited to recording the obligation; do not perform follow-up work,
+    /// panic, or call back into this store. If durable recording uses synchronous
+    /// I/O, run the purge from an appropriate blocking executor. Completed
     /// callbacks remain observable if a later query, decode, or delete fails; the
     /// purge is not crash-atomic, so a process failure between deletion and the
     /// callback can still leave a deletion obligation unreported.

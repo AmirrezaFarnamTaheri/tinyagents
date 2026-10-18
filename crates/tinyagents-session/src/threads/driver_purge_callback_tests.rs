@@ -12,6 +12,7 @@ struct DeleteProbeDocs {
     thread_deletes: AtomicUsize,
     successful_thread_deletes: AtomicUsize,
     fail_on_thread_delete: Option<usize>,
+    return_false_after_thread_delete: Option<usize>,
     inject_thread_after_first_delete: Mutex<Option<ThreadDoc>>,
 }
 
@@ -64,6 +65,9 @@ impl DocumentStore for DeleteProbeDocs {
                 return Err(StorageError::unavailable("injected thread delete failure"));
             }
             let deleted = self.inner.delete(collection, id, precondition).await?;
+            if deleted && self.return_false_after_thread_delete == Some(attempt) {
+                return Ok(false);
+            }
             if deleted {
                 let successful = self
                     .successful_thread_deletes
@@ -159,6 +163,7 @@ fn message(id: &str) -> ThreadMessage {
 async fn probed_store(
     fail_on_thread_delete: Option<usize>,
     inject_thread_after_first_delete: Option<&str>,
+    return_false_after_thread_delete: Option<usize>,
 ) -> (DriverConversationStore, Arc<DeleteProbeDocs>) {
     let base = DriverConversationStore::in_memory().await;
     let injected_thread = inject_thread_after_first_delete
@@ -168,6 +173,7 @@ async fn probed_store(
         thread_deletes: AtomicUsize::new(0),
         successful_thread_deletes: AtomicUsize::new(0),
         fail_on_thread_delete,
+        return_false_after_thread_delete,
         inject_thread_after_first_delete: Mutex::new(injected_thread),
     });
     let store = DriverConversationStore {
@@ -180,7 +186,7 @@ async fn probed_store(
 
 #[tokio::test]
 async fn purge_callback_reports_logical_ids_after_each_live_or_tombstoned_delete() {
-    let (store, docs) = probed_store(None, None).await;
+    let (store, docs) = probed_store(None, None, None).await;
     store.ensure_thread(request("channel/live")).await.unwrap();
     store
         .append_message("channel/live", message("live-1"))
@@ -230,7 +236,7 @@ async fn purge_callback_reports_logical_ids_after_each_live_or_tombstoned_delete
 
 #[tokio::test]
 async fn purge_callback_keeps_successful_ids_when_a_later_document_delete_fails() {
-    let (store, docs) = probed_store(Some(2), None).await;
+    let (store, docs) = probed_store(Some(2), None, None).await;
     for id in ["logical/one", "logical/two", "logical/three"] {
         store.ensure_thread(request(id)).await.unwrap();
     }
@@ -262,7 +268,7 @@ async fn purge_callback_keeps_successful_ids_when_a_later_document_delete_fails(
 #[tokio::test]
 async fn purge_callback_enumerates_paged_and_new_threads() {
     let inserted_id = "channel/inserted-during-purge";
-    let (store, docs) = probed_store(None, Some(inserted_id)).await;
+    let (store, docs) = probed_store(None, Some(inserted_id), None).await;
     let mut expected = (0..PAGE_SIZE + 3)
         .map(|index| format!("channel/page-{index:03}"))
         .collect::<BTreeSet<_>>();
@@ -300,4 +306,28 @@ async fn purge_callback_enumerates_paged_and_new_threads() {
     assert_eq!(stats.thread_count, PAGE_SIZE + 4);
     assert_eq!(stats.message_count, 0);
     assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn purge_callback_skips_a_delete_reported_as_not_removed() {
+    let thread_id = "logical/concurrent-delete";
+    let (store, docs) = probed_store(None, None, Some(1)).await;
+    store.ensure_thread(request(thread_id)).await.unwrap();
+    store
+        .append_message(thread_id, message("one"))
+        .await
+        .unwrap();
+    let key = DriverConversationStore::key(thread_id).unwrap();
+
+    let mut callbacks = Vec::new();
+    let stats = store
+        .purge_threads_with(|deleted_id| callbacks.push(deleted_id.to_owned()))
+        .await
+        .unwrap();
+
+    assert!(callbacks.is_empty());
+    assert_eq!((stats.thread_count, stats.message_count), (1, 1));
+    assert!(docs.inner.get(COLLECTION, &key).await.unwrap().is_none());
+    assert_eq!(docs.thread_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 0);
 }
