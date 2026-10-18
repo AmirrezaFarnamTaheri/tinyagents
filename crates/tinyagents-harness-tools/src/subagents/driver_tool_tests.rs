@@ -1325,12 +1325,20 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         tinytools::ToolCallOptions::default(), &parent,
     ).await.unwrap();
     started.notified().await;
+    let job_id = jobs
+        .list()
+        .into_iter()
+        .next()
+        .expect("background execution registered a job")
+        .id
+        .as_str()
+        .to_owned();
 
     let message = SubAgentMessageTool::new(jobs)
         .with_argument_fields("task_id", "session_id", "message", "request_id");
     let rejected = ToolDispatch::<(), ()>::execute(
         &message, &(), CallId::new("oversized-request"),
-        json!({"task_id":"oversized-request-task", "message":"m", "request_id":"x".repeat(129)}),
+        json!({"task_id":job_id, "message":"m", "request_id":"x".repeat(129)}),
         tinytools::ToolCallOptions::default(), &parent,
     ).await;
     let error = rejected.expect_err("oversized id is rejected before steering is queued");
