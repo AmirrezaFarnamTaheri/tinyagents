@@ -77,6 +77,37 @@ async fn account_meter_publishes_after_cumulative_usage_reaches_threshold() {
 }
 
 #[derive(Default)]
+struct InspectingObserver {
+    store: Mutex<Option<Arc<dyn Store>>>,
+}
+
+impl GoalObserver for InspectingObserver {
+    fn on_updated(&self, goal: &ThreadGoal) {
+        let store = self.store.lock().unwrap().as_ref().unwrap().clone();
+        let persisted = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(super::store::get(&store, &goal.thread_id))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(persisted, *goal);
+    }
+
+    fn on_cleared(&self, _: &str) {}
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observer_can_read_the_persisted_goal_during_callback() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+    let observer = Arc::new(InspectingObserver::default());
+    *observer.store.lock().unwrap() = Some(store.clone());
+    let goals = GoalStore::with_observer(store, observer);
+    tokio::time::timeout(Duration::from_secs(1), goals.set("t", "finish", None))
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[derive(Default)]
 struct YieldingStore(InMemoryStore);
 
 #[async_trait]
