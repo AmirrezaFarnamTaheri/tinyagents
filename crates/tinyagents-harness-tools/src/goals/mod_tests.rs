@@ -2,7 +2,6 @@
 
 use super::prompt::*;
 use super::types::*;
-use tinyagents_harness::store::{InMemoryStore, Store};
 
 fn goal(status: ThreadGoalStatus, token_budget: Option<u64>, tokens_used: u64) -> ThreadGoal {
     ThreadGoal {
@@ -83,6 +82,7 @@ mod store_tests {
 
     use super::super::store;
     use super::super::{GoalStore, ThreadGoalStatus};
+    use tinyagents_harness::store::InMemoryStore;
 
     fn store() -> Arc<GoalStore> {
         Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
@@ -268,6 +268,7 @@ mod tool_tests {
     use super::super::runtime::GoalStore;
     use super::super::tool::{GoalTool, GoalToolKind};
     use super::super::{GoalObserver, ThreadGoal};
+    use tinyagents_harness::store::{InMemoryStore, Store};
     use tinytools::{Tool, ToolResult, ToolRunContext};
 
     fn store() -> Arc<GoalStore> {
@@ -444,6 +445,7 @@ mod budget_tests {
     };
     use super::super::store;
     use super::{ThreadGoalStatus, goal};
+    use tinyagents_harness::store::{InMemoryStore, Store};
 
     fn kv() -> Arc<dyn Store> {
         Arc::new(InMemoryStore::default())
