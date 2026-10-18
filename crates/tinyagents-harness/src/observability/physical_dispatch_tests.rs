@@ -286,6 +286,44 @@ async fn cancelled_stream_keeps_latest_cumulative_usage_delta() {
     assert_eq!(outcomes[0].usage.as_ref().unwrap().output_tokens, 4);
 }
 
+#[tokio::test]
+async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::UsageDelta(Usage::new(5, 2)),
+            ModelStreamItem::UsageDelta(Usage::new(9, 4)),
+        ]),
+        observer,
+    );
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+
+    assert!(matches!(stream.next().await, Some(ModelStreamItem::Started)));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::UsageDelta(_))
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::UsageDelta(_))
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(stream.next().await.is_none());
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Failed);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().input_tokens, 9);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().output_tokens, 4);
+}
+
 #[test]
 fn refusal_metadata_is_reported_without_including_provider_text() {
     let response = ModelResponse {
