@@ -331,7 +331,7 @@ pub struct StructuredDenialRenderOptions<'a> {
     pub relay_separator: &'a str,
 }
 
-impl Default for StructuredDenialRenderOptions<'static> {
+impl<'a> Default for StructuredDenialRenderOptions<'a> {
     fn default() -> Self {
         Self {
             reason_label: "Why",

@@ -54,6 +54,25 @@ fn structured_denial_parts_support_host_section_label_and_relay_separator() {
     );
 }
 
+fn render_with_borrowed_reason_label(reason_label: &str) -> String {
+    StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now").render_with_options(
+        &StructuredDenialRenderOptions {
+            reason_label,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn structured_denial_render_options_default_supports_borrowed_labels() {
+    let reason_label = String::from("Reason");
+
+    assert_eq!(
+        render_with_borrowed_reason_label(&reason_label),
+        "Blocked: [blocked] no. Reason: why. Workaround: try this. relay now"
+    );
+}
+
 /// Host context stand-in: the policy reads the channel from it.
 struct Host {
     channel: &'static str,
