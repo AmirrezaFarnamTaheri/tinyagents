@@ -22,7 +22,7 @@ use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
 use super::types::*;
 use crate::retention::RetentionReport;
 
-/// Bound storage for runs, workflows, coordination, effects and entry trees.
+/// Bound storage for runs, workflows, coordination and effects.
 ///
 /// Handles are selected by the host, never by a run's payload or tool arguments.
 /// Shared deployments must bind their tenant/agent namespace before returning a

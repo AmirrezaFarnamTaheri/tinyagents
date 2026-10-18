@@ -3,7 +3,7 @@
 //! Everything this crate persists goes through the `tinystoragedrivers` ports:
 //! session history (sessions, messages, tool calls, with full-text search), a
 //! [`run_ledger`] for background agent and workflow execution state, the
-//! conversation [`entry_tree`], transcripts, turn-state snapshots and chat
+//! transcripts, turn-state snapshots and chat
 //! threads. A host opens one storage backend (SQLite on a desktop, MongoDB in
 //! the cloud, memory in tests), hands it to [`DriverSessionStores`], and gets
 //! every agent's stores in that backend, each under its own tenant scope. This
