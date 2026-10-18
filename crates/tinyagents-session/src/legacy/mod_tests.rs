@@ -85,6 +85,20 @@ fn classic(dir: &Path) -> std::path::PathBuf {
     path
 }
 
+fn add_retired_tables(path: &Path) {
+    let entries = ["entry", "_tree", "_entries"].concat();
+    let labels = ["entry", "_tree", "_labels"].concat();
+    let sql = format!(
+        "CREATE TABLE {entries} (id TEXT); CREATE TABLE {labels} (id TEXT); \
+         INSERT INTO {entries} VALUES ('kept-entry'); \
+         INSERT INTO {labels} VALUES ('kept-label');"
+    );
+    Connection::open(path)
+        .unwrap()
+        .execute_batch(&sql)
+        .unwrap();
+}
+
 fn directory_bytes(dir: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
@@ -245,6 +259,35 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     assert_eq!(unresolved.len(), 1);
     assert_eq!(unresolved[0].idempotency_key.as_deref(), Some("idem-1"));
 
+}
+
+#[tokio::test]
+async fn importing_a_store_with_retired_tables_leaves_them_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = classic(dir.path());
+    add_retired_tables(&path);
+    let backend = MemoryStorage::new();
+    let ledger = ledger_on(&backend, "agent");
+
+    let report = ledger
+        .import_legacy_database(&source_for(&path, &ledger))
+        .await
+        .unwrap();
+
+    assert_eq!(report.sessions.imported, 2);
+    let db = Connection::open(&path).unwrap();
+    let entries = ["entry", "_tree", "_entries"].concat();
+    let labels = ["entry", "_tree", "_labels"].concat();
+    assert_eq!(
+        db.query_row(&format!("SELECT id FROM {entries}"), [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "kept-entry"
+    );
+    assert_eq!(
+        db.query_row(&format!("SELECT id FROM {labels}"), [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "kept-label"
+    );
 }
 
 #[tokio::test]
