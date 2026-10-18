@@ -124,6 +124,7 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
     ///
     /// The default preserves compatibility with existing resolver
     /// implementations by delegating to [`Self::resolve_with_mime_hint`].
+    /// Base64 sources are wrapped as data URIs for that legacy call.
     /// Hosts that need to distinguish typed paths from URLs can override this
     /// method. Marker and image-string sources use [`MediaSourceKind::Untyped`].
     async fn resolve_with_source_metadata(
@@ -153,6 +154,7 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
             max_bytes,
             metadata.mime_hint.as_deref(),
         )
+        .await
         .await
     }
 }
