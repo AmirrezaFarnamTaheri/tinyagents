@@ -6,7 +6,7 @@ use chrono::{SecondsFormat, Utc};
 use chrono_tz::Tz;
 use serde_json::json;
 
-use crate::tool::ToolRegistry;
+use tinyagents_harness::tool::ToolRegistry;
 use tinytools::Tool;
 
 #[test]

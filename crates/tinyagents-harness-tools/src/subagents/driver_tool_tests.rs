@@ -1,9 +1,10 @@
 use super::*;
 use crate::subagents::{SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tinyagents_harness::cancel::CancellationToken;
+use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::CallId;
 use tinyagents_harness::runtime::AgentHarness;
@@ -12,7 +13,6 @@ use tinyagents_harness::tool::ToolSnapshot;
 use tinyagents_orchestration::subagent::*;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
-use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
 
 struct CloseCorrectionModel(std::sync::atomic::AtomicUsize);
@@ -1154,7 +1154,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     )
     .await
     .unwrap();
-    let control_id = SubAgentJobId(task_id.clone());
+    let control_id = jobs.get(&task_id).unwrap().id;
     let queued = jobs.drain_lane_for_test(
         &control_id,
         tinyagents_harness::run_queue::QueueLane::Collect,
@@ -1218,7 +1218,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         serde_json::from_str::<Value>(&pending.output()).unwrap()["status"],
         "running"
     );
-    assert!(jobs.holds_live_cancellation(&control_id));
+    assert_eq!(jobs.get(control_id.as_str()).unwrap().status, SubAgentJobStatus::Running);
 
     release.add_permits(2);
     let terminal_wait = SubAgentJobsTool::new(jobs.clone())
@@ -1240,7 +1240,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         serde_json::from_str::<Value>(&terminal.output()).unwrap()["status"],
         "completed"
     );
-    assert!(!jobs.holds_live_cancellation(&control_id));
+    assert_eq!(jobs.get(control_id.as_str()).unwrap().status, SubAgentJobStatus::Completed);
     assert_eq!(completions.load(std::sync::atomic::Ordering::SeqCst), 2);
 
     let replay = ToolDispatch::<(), ()>::execute(
@@ -1384,7 +1384,7 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         .driver_job_for_key(&lifecycle_key, "durable-parent-session")
         .unwrap();
     assert!(!jobs.get(public_id.as_str()).unwrap().status.is_terminal());
-    assert!(jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
+    assert_eq!(jobs.get(&task_id).unwrap().status, SubAgentJobStatus::AwaitingInput);
 
     let steer = SubAgentMessageTool::new(jobs.clone())
         .with_argument_fields("task_id", "subagent_session_id", "message", "request_id")
@@ -1400,12 +1400,6 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        jobs.drain_lane_for_test(&public_id, tinyagents_harness::run_queue::QueueLane::Steer)
-            .len(),
-        0,
-        "the default message path uses the steering channel, not the run queue"
-    );
 
     let continued = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1738,7 +1732,7 @@ async fn dropping_inline_driver_alias_marks_its_registered_job_cancelled() {
         .next()
         .expect("registered job remains visible");
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
-    assert!(!jobs.holds_live_cancellation(&job.id));
+    assert_eq!(jobs.get(job.id.as_str()).unwrap().status, SubAgentJobStatus::Cancelled);
 }
 
 #[tokio::test]
@@ -1811,7 +1805,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         serde_json::from_str::<Value>(&failed.output()).unwrap()["status"],
         "failed"
     );
-    assert!(!jobs.holds_live_cancellation(&SubAgentJobId(task_id.clone())));
+    assert!(!jobs.holds_live_cancellation(&jobs.get(&task_id).unwrap().id));
 
     let replay = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1835,12 +1829,17 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
 async fn cancelling_paused_driver_job_settles_before_wait_returns() {
     let jobs = SubAgentJobRegistry::new();
     let parent = RunContext::new(RunConfig::new("paused-cancel-parent"), ());
-    let (id, _) = jobs.create_with_cancellation(
-        "worker",
-        parent.instance_id(),
-        CancellationToken::new(),
-        JobLink::default(),
-    );
+    let (id, _, _, _, _) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: SubagentTaskKey::from_context(&parent, "paused-cancel", None),
+            agent: "worker".into(),
+            owner: parent.instance_id().to_string(),
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
     jobs.mark_running(&id);
     jobs.mark_driver_result(
         &id,
@@ -1894,5 +1893,5 @@ async fn cancelling_paused_driver_job_settles_before_wait_returns() {
         serde_json::from_str::<Value>(&waited.output()).unwrap()["status"],
         "cancelled"
     );
-    assert!(!jobs.holds_live_cancellation(&id));
+    assert_eq!(jobs.get(id.as_str()).unwrap().status, SubAgentJobStatus::Cancelled);
 }

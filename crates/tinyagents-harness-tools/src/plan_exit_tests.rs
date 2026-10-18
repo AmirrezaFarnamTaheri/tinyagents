@@ -1,10 +1,6 @@
 use super::*;
 
-use crate::{
-    context::{RunConfig, RunContext},
-    ids::CallId,
-    tool::ToolExecutionContext,
-};
+use tinyagents_harness::{context::{RunConfig, RunContext}, ids::CallId, tool::ToolExecutionContext};
 
 #[tokio::test]
 async fn plan_exit_switches_the_host_resolved_mode_and_keeps_the_marker() {

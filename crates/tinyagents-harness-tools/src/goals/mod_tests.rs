@@ -81,7 +81,7 @@ mod store_tests {
     use std::sync::Arc;
 
     use super::super::store;
-    use super::ThreadGoalStatus;
+    use super::{GoalStore, ThreadGoalStatus};
     use tinyagents_harness::store::{InMemoryStore, Store};
 
     fn store() -> Arc<GoalStore> {

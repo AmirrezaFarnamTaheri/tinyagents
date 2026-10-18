@@ -330,7 +330,7 @@ pub async fn account_usage(
 }
 
 /// Adds precise elapsed time while preserving the whole-second legacy field.
-fn account_elapsed(goal: &mut ThreadGoal, elapsed: Duration) {
+pub(super) fn account_elapsed(goal: &mut ThreadGoal, elapsed: Duration) {
     goal.time_used_seconds = goal.time_used_seconds.saturating_add(elapsed.as_secs());
     let nanos = u64::from(goal.time_used_subsec_nanos) + u64::from(elapsed.subsec_nanos());
     goal.time_used_seconds = goal.time_used_seconds.saturating_add(nanos / 1_000_000_000);
