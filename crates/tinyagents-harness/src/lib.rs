@@ -104,8 +104,6 @@ pub mod testkit;
 pub mod title;
 pub mod token_estimation;
 pub mod tool;
-#[cfg(feature = "builtin-tools")]
-pub mod tools;
 pub mod turn_deadline;
 pub mod turn_outcome;
 pub mod turn_policy;

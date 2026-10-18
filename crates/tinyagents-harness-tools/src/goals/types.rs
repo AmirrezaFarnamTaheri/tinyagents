@@ -107,27 +107,3 @@ impl ThreadGoal {
     }
 }
 
-/// Usage accounted against a goal for one work iteration.
-///
-/// The graph runtime is provider-neutral and does not meter tokens per node, so
-/// accounting is **explicit** at the work-node boundary: a work node records
-/// what it spent (and whether it advanced the objective) and the continuation
-/// gate folds it in. `made_progress` is the graph analogue of OpenHuman's
-/// "the turn produced tool calls" — the caller defines it (e.g. the iteration
-/// produced tool calls or a non-empty state delta).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GoalProgress {
-    /// Tokens spent by the work iteration that just finished.
-    pub tokens_used: u64,
-    /// Wall-clock seconds spent by the work iteration that just finished.
-    pub elapsed_secs: u64,
-    /// Whether the iteration advanced the objective. A `false` here stops the
-    /// self-driving loop (one-shot suppression) so it cannot spin uselessly.
-    pub made_progress: bool,
-}
-
-/// Outcome of running one continuation turn through the external-scheduler
-/// driver ([`super::run_continuation_tick`]). Identical in shape to
-/// [`GoalProgress`]; named distinctly at the driver boundary for clarity.
-pub type TurnOutcome = GoalProgress;
