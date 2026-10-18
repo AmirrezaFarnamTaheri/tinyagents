@@ -1333,10 +1333,11 @@ async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
         json!({"task_id":"oversized-request-task", "message":"m", "request_id":"x".repeat(129)}),
         tinytools::ToolCallOptions::default(), &parent,
     ).await;
-    assert!(matches!(
-        rejected.unwrap_err().downcast_ref::<SubAgentJobError>(),
-        Some(SubAgentJobError::RequestIdTooLong)
-    ));
+    let error = rejected.expect_err("oversized id is rejected before steering is queued");
+    assert!(
+        matches!(error.downcast_ref::<SubAgentJobError>(), Some(SubAgentJobError::RequestIdTooLong)),
+        "unexpected rejection: {error:#}"
+    );
 }
 
 #[tokio::test]

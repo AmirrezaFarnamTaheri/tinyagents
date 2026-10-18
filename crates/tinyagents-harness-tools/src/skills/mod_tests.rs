@@ -781,5 +781,5 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
         })
         .unwrap();
     assert!(result.contains("a_one"), "selected target should be refused: {result}");
-    assert!(result.contains("denied") || result.contains("refused"), "{result}");
+    assert!(result.contains("not permitted"), "{result}");
 }
