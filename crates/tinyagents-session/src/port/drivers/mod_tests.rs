@@ -1,8 +1,8 @@
 use super::*;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
-use tinystoragedrivers_file::FileStorage;
 use tinystoragedrivers_core::MemoryStorage;
+use tinystoragedrivers_file::FileStorage;
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 fn memory() -> DriverSessionStores {
@@ -139,11 +139,9 @@ async fn mongodb_backed_stores_meet_the_contract_and_keep_agents_apart() {
     let backend = tinystoragedrivers_mongodb::MongoStorage::connect(&uri, &database)
         .await
         .expect("local MongoDB replica set is reachable");
-    let stores = DriverSessionStores::new(
-        Arc::new(backend),
-        tinystoragedrivers_core::Scope::local(),
-    )
-    .unwrap();
+    let stores =
+        DriverSessionStores::new(Arc::new(backend), tinystoragedrivers_core::Scope::local())
+            .unwrap();
     session_store_conformance(&stores).await;
     session_store_isolation_conformance(&stores).await;
 }
