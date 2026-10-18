@@ -92,8 +92,11 @@ impl FailoverReason {
                 provider.code.as_deref(),
                 &provider.message,
                 provider.retryable,
+                Self::Transport,
             ),
-            TinyAgentsError::Model(message) => classify_text(None, None, message, true),
+            TinyAgentsError::Model(message) => {
+                classify_text(None, None, message, true, Self::Transport)
+            }
             TinyAgentsError::ContextOverflow { .. } => Self::ContextOverflow,
             TinyAgentsError::ModelNotFound(_) => Self::ModelNotFound,
             TinyAgentsError::EmptyResponse => Self::EmptyResponse,
@@ -104,6 +107,17 @@ impl FailoverReason {
             TinyAgentsError::Validation(_) => Self::Format,
             _ => Self::Unknown,
         }
+    }
+
+    /// Classifies a flattened model-failure message conservatively.
+    ///
+    /// Hosts that receive only a string from an adapter can use this entry
+    /// point to retain the shared provider-message matchers without treating
+    /// an unrecognized string as a transport outage. Structured
+    /// [`TinyAgentsError`] classification keeps its existing fallback
+    /// behavior through [`Self::classify`].
+    pub fn classify_unstructured(message: &str) -> Self {
+        classify_text(None, None, message, true, Self::Unknown)
     }
 }
 
@@ -137,6 +151,7 @@ fn classify_text(
     code: Option<&str>,
     message: &str,
     provider_retryable: bool,
+    unknown_fallback: FailoverReason,
 ) -> FailoverReason {
     use FailoverReason::*;
     let lower = match code {
@@ -210,7 +225,7 @@ fn classify_text(
     match failure {
         ProviderFailureClass::UpstreamUnhealthy => Transport,
         ProviderFailureClass::NonRetryable if !provider_retryable || status.is_none() => Format,
-        _ => Transport,
+        _ => unknown_fallback,
     }
 }
 
