@@ -161,9 +161,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
         }) else {
             return Ok(None);
         };
-        let bound = Arc::new(extension.bind(self.tool.clone(), arguments));
-        let tool = bound.tool();
-        Ok(Some(Arc::new(BoundCanonicalDispatch { tool, bound })))
+        let bound = extension.bind(self.tool.clone(), arguments);
+        Ok(Some(Arc::new(BoundCanonicalDispatch { bound })))
     }
 
     async fn execute(
@@ -182,14 +181,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
 }
 
 struct BoundCanonicalDispatch {
-    tool: Arc<dyn tinytools::Tool>,
-    bound: Arc<BoundToolCall>,
+    bound: Arc<dyn BoundToolCall>,
 }
 
 #[async_trait]
 impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
-        self.tool.clone()
+        self.bound.tool()
     }
 
     fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
@@ -205,7 +203,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCan
         parent: &crate::context::RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
         let context = ToolExecutionContext::from_run_context(parent, call_id);
-        self.tool
+        self.bound.tool()
             .execute_with_context(arguments, options, Some(&context))
             .await
     }
