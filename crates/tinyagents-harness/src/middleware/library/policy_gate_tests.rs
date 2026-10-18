@@ -34,7 +34,11 @@ struct Host {
 }
 
 fn ctx() -> RunContext<Host> {
-    RunContext::new(RunConfig::new("gate"), Host { channel: "web" })
+    ctx_for_channel("web")
+}
+
+fn ctx_for_channel(channel: &'static str) -> RunContext<Host> {
+    RunContext::new(RunConfig::new("gate"), Host { channel })
 }
 
 fn call(name: &str) -> ToolCall {
@@ -149,6 +153,15 @@ impl ApprovalResolver<Host> for Resolver {
 }
 
 async fn run(mw: Arc<dyn ToolMiddleware<(), Host>>, name: &str, fail: bool) -> (ToolResult, usize) {
+    run_on_channel(mw, name, fail, "web").await
+}
+
+async fn run_on_channel(
+    mw: Arc<dyn ToolMiddleware<(), Host>>,
+    name: &str,
+    fail: bool,
+    channel: &'static str,
+) -> (ToolResult, usize) {
     let runs = Arc::new(Mutex::new(0));
     let base = Base {
         runs: runs.clone(),
@@ -156,7 +169,7 @@ async fn run(mw: Arc<dyn ToolMiddleware<(), Host>>, name: &str, fail: bool) -> (
     };
     let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
     stack.push_tool_middleware(mw);
-    let c = ctx();
+    let c = ctx_for_channel(channel);
     let result = stack
         .run_wrapped_tool(&c, &(), call(name), &base)
         .await
@@ -310,7 +323,7 @@ async fn session_ceiling_deny_precedes_builder_allow_and_post_gate() {
                 Some(ToolResult::success("disclosed"))
             })),
     );
-    let (result, runs) = run(middleware, "ceiling_only", false).await;
+    let (result, runs) = run_on_channel(middleware, "ceiling_only", false, "cli").await;
     assert!(result.is_error);
     assert!(result.output().contains("session ceiling"));
     assert_eq!(runs, 0);
