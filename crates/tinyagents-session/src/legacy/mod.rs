@@ -1,9 +1,9 @@
 //! Read-only, id-preserving import of a classic workspace.
 //!
 //! Before the storage-port migration a workspace kept three kinds of state in
-//! files: a SQLite `session_db/sessions.db` (session history, the run ledger,
-//! JSONL transcripts under `session_raw/`, and per-turn
-//! snapshots as JSON under `memory/conversations/turn_states/`. This module
+//! files: a SQLite `session_db/sessions.db` (session history and the run
+//! ledger), JSONL transcripts under `session_raw/`, and per-turn snapshots as
+//! JSON under `memory/conversations/turn_states/`. This module
 //! moves all of it into the storage ports.
 //!
 //! # Guarantees
