@@ -16,9 +16,9 @@ use tinyagents_harness::ids::CallId;
 use tinyagents_harness::tool::ToolDispatch;
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
 
-use super::jobs::InlineJobGuard;
-use super::types::DriverJobRegistration;
-use crate::subagent::{
+use tinyagents_orchestration::subagent::InlineJobGuard;
+use tinyagents_orchestration::subagent::DriverJobRegistration;
+use tinyagents_orchestration::subagent::{
     SubAgentJobRegistry, SubagentDriver, SubagentError, SubagentOutcomeKind, SubagentRequest,
 };
 
@@ -47,10 +47,10 @@ type RequestFactory<State, Ctx, H> = dyn Fn(&State, &RunContext<Ctx>, &Value, &C
     + Sync;
 type DeliveryTarget<Ctx, H> = dyn Fn(&SubagentRequest<Ctx, H>) -> Option<String> + Send + Sync;
 type CompletionCallback =
-    dyn Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync;
+    dyn Fn(&str, Result<tinyagents_orchestration::subagent::SubagentOutcome, String>) + Send + Sync;
 type AsyncCompletionCallback = dyn Fn(
         String,
-        Result<crate::subagent::SubagentRunResult, String>,
+        Result<tinyagents_orchestration::subagent::SubagentRunResult, String>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>>
     + Send
     + Sync;
@@ -197,7 +197,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// completion state or route a notification without moving policy into this crate.
     pub fn with_completion_handler(
         mut self,
-        handler: impl Fn(&str, Result<crate::subagent::SubagentOutcome, String>) + Send + Sync + 'static,
+        handler: impl Fn(&str, Result<tinyagents_orchestration::subagent::SubagentOutcome, String>) + Send + Sync + 'static,
     ) -> Self {
         self.completion = Some(Arc::new(handler));
         self
@@ -211,7 +211,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
     /// terminal status should use this seam.
     pub fn with_async_completion_handler<Fut>(
         mut self,
-        handler: impl Fn(String, Result<crate::subagent::SubagentRunResult, String>) -> Fut
+        handler: impl Fn(String, Result<tinyagents_orchestration::subagent::SubagentRunResult, String>) -> Fut
         + Send
         + Sync
         + 'static,
@@ -225,14 +225,14 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
         self
     }
 
-    fn requested_mode(args: &Value) -> Result<crate::subagent::SubAgentMode, String> {
+    fn requested_mode(args: &Value) -> Result<tinyagents_orchestration::subagent::SubAgentMode, String> {
         match args.get("mode") {
-            None | Some(Value::Null) => Ok(crate::subagent::SubAgentMode::Background),
+            None | Some(Value::Null) => Ok(tinyagents_orchestration::subagent::SubAgentMode::Background),
             Some(Value::String(mode)) if mode == "background" => {
-                Ok(crate::subagent::SubAgentMode::Background)
+                Ok(tinyagents_orchestration::subagent::SubAgentMode::Background)
             }
             Some(Value::String(mode)) if mode == "inline" => {
-                Ok(crate::subagent::SubAgentMode::Inline)
+                Ok(tinyagents_orchestration::subagent::SubAgentMode::Inline)
             }
             Some(_) => Err("`mode` must be \"background\" or \"inline\"".into()),
         }
@@ -285,13 +285,13 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 jobs.wait_owned(id.as_str(), &owner).await?
             };
             let status = match job.status {
-                crate::subagent::SubAgentJobStatus::Queued => "queued",
-                crate::subagent::SubAgentJobStatus::Running => "running",
-                crate::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
-                crate::subagent::SubAgentJobStatus::Completed => "completed",
-                crate::subagent::SubAgentJobStatus::Failed => "failed",
-                crate::subagent::SubAgentJobStatus::Incomplete => "incomplete",
-                crate::subagent::SubAgentJobStatus::Cancelled => "cancelled",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Queued => "queued",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Running => "running",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::AwaitingInput => "awaiting_input",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Completed => "completed",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Failed => "failed",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Incomplete => "incomplete",
+                tinyagents_orchestration::subagent::SubAgentJobStatus::Cancelled => "cancelled",
             };
             return Ok(status_tool_result(
                 public_task_id,
@@ -313,7 +313,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                 match driver.run(request, cancellation).await {
                     Ok(result) => {
                         if result.disposition
-                            != crate::subagent::SubagentPersistenceDisposition::ObserverCancelled
+                            != tinyagents_orchestration::subagent::SubagentPersistenceDisposition::ObserverCancelled
                             && let Some(completion) = async_completion
                         {
                             completion(completion_target.clone(), Ok(result.clone())).await;
@@ -433,7 +433,7 @@ where
             Ok(request) => request,
             Err(error) => return Ok(ToolResult::error(format!("subagent request: {error}"))),
         };
-        let target = if requested == crate::subagent::SubAgentMode::Background {
+        let target = if requested == tinyagents_orchestration::subagent::SubAgentMode::Background {
             (self.delivery_target)(&request)
         } else {
             None

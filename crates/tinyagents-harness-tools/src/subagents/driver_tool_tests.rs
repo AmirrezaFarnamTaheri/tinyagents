@@ -1,5 +1,6 @@
 use super::*;
-use crate::subagent::*;
+use tinyagents_orchestration::subagent::*;
+use crate::subagents::{SubAgentJobsTool, SubAgentMessageTool, SubAgentJobAction};
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
@@ -883,13 +884,13 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
         "child",
         Arc::new(MockModel::constant("legacy harness result")),
     );
-    let legacy = Arc::new(crate::subagent::SubAgent::new(
+    let legacy = Arc::new(tinyagents_orchestration::subagent::SubAgent::new(
         "worker",
         "worker description",
         Arc::new(harness),
     ));
     let tool =
-        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+        tinyagents_orchestration::subagent::SubAgentTool::new(legacy, tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()))
             .with_driver(
                 driver(),
                 |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
@@ -928,7 +929,7 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
 async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
     let mut harness = AgentHarness::new();
     harness.register_model("child", Arc::new(MockModel::constant("legacy result")));
-    let legacy = Arc::new(crate::subagent::SubAgent::new(
+    let legacy = Arc::new(tinyagents_orchestration::subagent::SubAgent::new(
         "worker",
         "worker description",
         Arc::new(harness),
@@ -937,7 +938,7 @@ async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     let callback_tx = tx.clone();
     let tool =
-        crate::subagent::SubAgentTool::new(legacy, crate::subagent::ChildDataPolicy::new(|_| ()))
+        tinyagents_orchestration::subagent::SubAgentTool::new(legacy, tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()))
             .with_driver_and_completion(
                 driver(),
                 |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {

@@ -74,7 +74,6 @@
 //! - `*_tests.rs` files hold the focused tests.
 
 mod delegation_tool;
-mod driver_tool;
 mod jobs;
 mod policy_run;
 mod status_map;
@@ -87,19 +86,12 @@ pub use delegation_tool::{
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
     MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
 };
-pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
-pub use jobs::{
-    InlineJobGuard, DriverJobRegistration,
-};
+pub use jobs::InlineJobGuard;
 pub use types::*;
 
 #[cfg(test)]
 #[path = "delegation_tool_tests.rs"]
 mod delegation_tool_tests;
-
-#[cfg(test)]
-#[path = "driver_tool_tests.rs"]
-mod driver_tool_tests;
 
 use std::sync::Arc;
 
@@ -672,98 +664,6 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         }
     }
 
-    /// Converts this tool declaration to a host-planned driver invocation.
-    ///
-    /// The host request factory must construct a validated request with an
-    /// owned child context. Agent selection, authorization, prompts, tools,
-    /// workspace policy, execution and persistence remain in the driver's
-    /// planner/executor/persistence seams. A requested background call runs
-    /// detached only when `delivery_target` returns a destination; otherwise
-    /// the request is executed inline and its result is returned.
-    pub fn with_driver<H>(
-        mut self,
-        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
-        request_factory: impl Fn(
-            &State,
-            &RunContext<Ctx>,
-            &Value,
-            &tinyagents_harness::ids::CallId,
-        ) -> std::result::Result<
-            crate::subagent::SubagentRequest<Ctx, H>,
-            crate::subagent::SubagentError,
-        > + Send
-        + Sync
-        + 'static,
-        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self
-    where
-        H: Send + Sync + 'static,
-    {
-        let mut dispatch = DriverSubAgentTool::new(
-            self.tool_name.clone(),
-            self.tool_description.clone(),
-            driver,
-            request_factory,
-            delivery_target,
-        )
-        .with_parameters(self.parameters.clone())
-        .with_owner_scope(self.job_owner_scope.clone());
-        if let Some(jobs) = &self.job_registry {
-            dispatch = dispatch.with_job_registry(jobs.clone());
-        }
-        self.driver_dispatch = Some(Arc::new(dispatch));
-        self
-    }
-
-    /// Like [`Self::with_driver`], with a host callback for detached completion.
-    /// The callback receives the resolved delivery target and the neutral
-    /// outcome (or failure), allowing the host to persist/route completion.
-    pub fn with_driver_and_completion<H>(
-        mut self,
-        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
-        request_factory: impl Fn(
-            &State,
-            &RunContext<Ctx>,
-            &Value,
-            &tinyagents_harness::ids::CallId,
-        ) -> std::result::Result<
-            crate::subagent::SubagentRequest<Ctx, H>,
-            crate::subagent::SubagentError,
-        > + Send
-        + Sync
-        + 'static,
-        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
-        + Send
-        + Sync
-        + 'static,
-        completion: impl Fn(&str, std::result::Result<crate::subagent::SubagentOutcome, String>)
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self
-    where
-        H: Send + Sync + 'static,
-    {
-        let mut dispatch = DriverSubAgentTool::new(
-            self.tool_name.clone(),
-            self.tool_description.clone(),
-            driver,
-            request_factory,
-            delivery_target,
-        )
-        .with_parameters(self.parameters.clone())
-        .with_owner_scope(self.job_owner_scope.clone())
-        .with_completion_handler(completion);
-        if let Some(jobs) = &self.job_registry {
-            dispatch = dispatch.with_job_registry(jobs.clone());
-        }
-        self.driver_dispatch = Some(Arc::new(dispatch));
-        self
-    }
-
     /// Applies a timeout/retry/budget policy to every spawned child.
     ///
     /// Call caps tighten the child's run limits; token caps are checked when it
@@ -863,6 +763,23 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// Returns the registry that owns jobs spawned by this tool.
     pub fn job_registry(&self) -> &SubAgentJobRegistry {
         &self.jobs
+    }
+
+    /// Returns the stable owner-key resolver used for jobs from this tool.
+    pub fn job_owner_scope(&self) -> Arc<dyn Fn(u64) -> String + Send + Sync> {
+        Arc::clone(&self.job_owner_scope)
+    }
+
+    /// Installs a host-created invocation dispatcher for this subagent tool.
+    ///
+    /// Generic driver-backed tool implementations live in `tinyagents-harness-tools`;
+    /// this setter lets them attach without making orchestration depend on that crate.
+    pub fn with_driver_dispatch(
+        mut self,
+        dispatch: Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>,
+    ) -> Self {
+        self.driver_dispatch = Some(dispatch);
+        self
     }
 
     /// Overrides the model-visible tool name.
