@@ -37,6 +37,7 @@ impl ModelBudget {
     /// Apply this below retry/fallback and above the provider; response caching
     /// should remain outside it so a cache hit does not reserve or settle twice.
     pub fn wrap_model(&self, model: Arc<dyn ChatModel<()>>) -> Arc<dyn ChatModel<()>> {
+        let model = crate::observability::turn_observer::observe_physical_dispatches(model);
         let charged = Arc::new(super::GatewayChargeModel::new(model));
         Arc::new(BudgetedModel::new(charged, self.ledger.clone(), self.call))
     }

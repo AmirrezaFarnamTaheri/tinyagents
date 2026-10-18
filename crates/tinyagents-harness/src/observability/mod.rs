@@ -31,6 +31,12 @@ mod profile;
 mod types;
 mod worker;
 
+pub mod physical_dispatch;
+pub use physical_dispatch::{
+    ObservedChatModel, PhysicalDispatchGuard, PhysicalDispatchMetadata, PhysicalDispatchObserver,
+    PhysicalDispatchOutcome, PhysicalDispatchStatus, PhysicalDispatchTerminal,
+    PhysicalDispatchUsage,
+};
 pub mod reaper;
 pub mod replay;
 pub mod status;
