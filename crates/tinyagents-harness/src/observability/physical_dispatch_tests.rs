@@ -372,6 +372,23 @@ fn refusal_metadata_is_reported_without_including_provider_text() {
 }
 
 #[test]
+fn malformed_managed_charge_blocks_provider_cost_fallback() {
+    let response = ModelResponse {
+        usage: Some(Usage::new(2, 3)),
+        raw: Some(serde_json::json!({
+            "openhuman_usage_meta": {"charged_amount_usd": "invalid"},
+            "usage": {"cost": 0.000999}
+        })),
+        ..ModelResponse::assistant("ok")
+    };
+
+    let outcome = dispatch_outcome(Some(&response), true);
+
+    assert_eq!(outcome.status, PhysicalDispatchStatus::Succeeded);
+    assert_eq!(outcome.usage.unwrap().cost_usd, None);
+}
+
+#[test]
 fn finishing_a_dispatch_does_not_emit_a_second_cancelled_terminal_on_drop() {
     let recorder = Arc::new(Recorder::default());
     let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
