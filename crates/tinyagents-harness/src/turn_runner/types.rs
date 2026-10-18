@@ -21,6 +21,16 @@ pub struct ScopeKey {
     pub profile_id: Option<String>,
 }
 
+/// A turn that currently holds a cancellation slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveTurn {
+    pub scope: ScopeKey,
+    pub thread_id: String,
+    pub request_id: String,
+    /// Whether it is a parallel turn rather than the thread's primary turn.
+    pub parallel: bool,
+}
+
 /// A request after the host has supplied its channel-independent metadata.
 #[derive(Debug, Clone)]
 pub struct TurnRequest<P = serde_json::Value> {
@@ -143,6 +153,9 @@ pub enum TerminalEvent {
         request_id: String,
         message: String,
         class: String,
+        /// The raw host or runner error the failure was classified from, for
+        /// hosts that render richer copy than `class` and `message` carry.
+        error: String,
     },
     Cancelled {
         request_id: String,
@@ -353,18 +366,31 @@ where
         thread_id: &str,
         request_id: Option<&str>,
     ) -> bool {
+        !self
+            .cancel_requests(scope, thread_id, request_id)
+            .await
+            .is_empty()
+    }
+
+    /// [`cancel`](Self::cancel), returning the id of every turn it stopped: the
+    /// primary turn first, then each parallel turn.
+    pub async fn cancel_requests(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+        request_id: Option<&str>,
+    ) -> Vec<String> {
         let key = (scope.clone(), thread_id.to_owned());
+        let mut cancelled = Vec::new();
         let active = self.active.lock().await;
-        let cancelled_primary = if let Some(turn) = active
+        if let Some(turn) = active
             .get(&key)
             .filter(|turn| request_id.is_none_or(|id| turn.request_id == id))
         {
             turn.queue.clear().await;
             turn.cancel.cancel();
-            true
-        } else {
-            false
-        };
+            cancelled.push(turn.request_id.clone());
+        }
         drop(active);
         let mut parallel = self.parallel_active.lock().await;
         let keys: Vec<_> = parallel
@@ -379,8 +405,53 @@ where
                 token.cancel();
             }
             self.parallel_queues.lock().await.remove(key);
+            cancelled.push(key.2.clone());
         }
-        cancelled_primary || !keys.is_empty()
+        cancelled
+    }
+
+    /// Every turn that currently holds a cancellation slot, primary and parallel.
+    pub async fn live_turns(&self) -> Vec<LiveTurn> {
+        let mut turns: Vec<LiveTurn> = self
+            .active
+            .lock()
+            .await
+            .iter()
+            .map(|((scope, thread_id), turn)| LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: turn.request_id.clone(),
+                parallel: false,
+            })
+            .collect();
+        turns.extend(self.parallel_active.lock().await.keys().map(
+            |(scope, thread_id, request_id)| LiveTurn {
+                scope: scope.clone(),
+                thread_id: thread_id.clone(),
+                request_id: request_id.clone(),
+                parallel: true,
+            },
+        ));
+        turns
+    }
+
+    /// Pending items of the thread's active turn queue, oldest first per lane.
+    pub async fn queue_snapshot(
+        &self,
+        scope: &ScopeKey,
+        thread_id: &str,
+    ) -> Vec<(QueueLane, TurnRequest<P>)> {
+        let key = (scope.clone(), thread_id.to_owned());
+        let queue = self
+            .active
+            .lock()
+            .await
+            .get(&key)
+            .map(|turn| Arc::clone(&turn.queue));
+        match queue {
+            Some(queue) => queue.snapshot().await,
+            None => Vec::new(),
+        }
     }
 
     /// Whether the thread owns a primary user-authored turn cancellation slot.
@@ -827,6 +898,7 @@ where
                         request_id: queued_request.request_id.clone(),
                         message: format!("queued turn was not run: {message}"),
                         class: class.clone(),
+                        error: error.clone(),
                     },
                 )
                 .await;
@@ -838,6 +910,7 @@ where
                     request_id: request.request_id.clone(),
                     message: message.clone(),
                     class,
+                    error,
                 },
             )
             .await;
