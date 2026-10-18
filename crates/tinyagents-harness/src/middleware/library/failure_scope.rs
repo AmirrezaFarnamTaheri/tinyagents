@@ -346,9 +346,13 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
             FailureAssessment::Halt { summary, cause } => {
                 run.tracker.reset();
                 run.recoverable.reset_streak();
-                let summary = self
-                    .policy
-                    .halt_copy(FailureStopKind::Terminal, summary, "");
+                let summary = self.policy.halt_copy_for_call(
+                    ctx,
+                    FailureStopKind::Terminal,
+                    summary,
+                    "",
+                    &call,
+                );
                 self.halt(ctx, summary, cause);
             }
             FailureAssessment::RecoverableFailure { error } => {

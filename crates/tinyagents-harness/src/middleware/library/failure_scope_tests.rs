@@ -80,6 +80,13 @@ impl crate::no_progress::FailurePolicy for ResetAndCallCopyPolicy {
 }
 
 impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
+    fn scope(&self, _ctx: &RunContext<()>, call: &ToolCall) -> FailureScope {
+        FailureScope {
+            argument_fingerprint: "same-arguments".into(),
+            scope: call.name.clone(),
+        }
+    }
+
     fn assess(
         &self,
         _ctx: &RunContext<()>,
@@ -88,7 +95,14 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
         _scope: &FailureScope,
         _result: &ToolResult,
     ) -> FailureAssessment {
-        let assessment = if call.arguments.get("reset") == Some(&json!(true)) {
+        let assessment = if call.arguments.get("classed") == Some(&json!(true)) {
+            FailureAssessment::ClassifiedFailure {
+                class: "auth".into(),
+                budget: 1,
+                error: "unauthorized".into(),
+                nudge: None,
+            }
+        } else if call.arguments.get("reset") == Some(&json!(true)) {
             FailureAssessment::ResetFailure {
                 error: "new command exit".into(),
                 hard_reject: false,
@@ -113,6 +127,10 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
         call: &ToolCall,
     ) -> String {
         format!("{}: {summary}", call.name)
+    }
+
+    fn record_progress(&self, _ctx: &RunContext<()>, _call: &ToolCall, _scope: &FailureScope) {
+        panic!("ResetFailure must not report host progress");
     }
 }
 
@@ -248,16 +266,6 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         ToolResult::error("exit status 1"),
     )
     .await;
-    assert!(halt_summary.lock().unwrap().is_none());
-    observe_once(
-        &middleware,
-        89,
-        "new-command-repeat-third",
-        "shell",
-        json!({}),
-        ToolResult::error("exit status 1"),
-    )
-    .await;
     let summary = halt_summary
         .lock()
         .unwrap()
@@ -268,6 +276,52 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         summary.contains("retried 3 times with identical arguments"),
         "{summary}"
     );
+}
+
+#[tokio::test]
+async fn reset_failure_keeps_host_classified_failure_budget() {
+    let handle = SteeringHandle::allow_all();
+    let halt_summary = Arc::new(std::sync::Mutex::new(None));
+    let middleware = FailureScopeMiddleware::new(
+        handle,
+        halt_summary.clone(),
+        Arc::new(ResetAndCallCopyPolicy),
+    );
+    observe_once(
+        &middleware,
+        90,
+        "classified-first",
+        "shell",
+        json!({"classed": true}),
+        ToolResult::error("unauthorized"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        90,
+        "informational-exit",
+        "shell",
+        json!({"reset": true}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    assert!(halt_summary.lock().unwrap().is_none());
+    observe_once(
+        &middleware,
+        90,
+        "classified-second",
+        "shell",
+        json!({"classed": true}),
+        ToolResult::error("unauthorized"),
+    )
+    .await;
+    let summary = halt_summary
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("budget remains exhausted");
+    assert!(summary.starts_with("shell: Stopping: "), "{summary}");
 }
 
 #[tokio::test]
