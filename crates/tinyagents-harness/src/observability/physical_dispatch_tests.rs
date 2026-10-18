@@ -391,6 +391,23 @@ fn malformed_managed_charge_blocks_provider_cost_fallback() {
 }
 
 #[test]
+fn invalid_provider_cost_does_not_survive_charge_normalization() {
+    for invalid_cost in [-0.001, 1.0e20] {
+        let response = ModelResponse {
+            usage: Some(Usage::new(2, 3)),
+            raw: Some(serde_json::json!({"usage": {"cost": invalid_cost}})),
+            ..ModelResponse::assistant("ok")
+        };
+
+        let outcome = dispatch_outcome(Some(&response), true);
+
+        let usage = outcome.usage.expect("response token usage is retained");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (2, 3));
+        assert_eq!(usage.cost_usd, None, "invalid provider cost {invalid_cost}");
+    }
+}
+
+#[test]
 fn finishing_a_dispatch_does_not_emit_a_second_cancelled_terminal_on_drop() {
     let recorder = Arc::new(Recorder::default());
     let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
