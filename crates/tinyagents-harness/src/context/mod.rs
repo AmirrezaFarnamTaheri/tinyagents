@@ -872,7 +872,7 @@ impl<Ctx> RunContext<Ctx> {
 
     /// Attaches a durable [`crate::summarization::CompactionSink`] so every
     /// [`crate::summarization::CompactionRecord`] a compaction produces on
-    /// this run is persisted (typically into a session's entry tree),
+    /// this run is persisted by a host-provided store,
     /// instead of only living in
     /// [`crate::middleware::ContextCompressionMiddleware::records`]'s
     /// in-process buffer. `None` (the default) disables persistence.
