@@ -3,6 +3,8 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use serde_json::Value;
 use tinyagents_harness::store::{InMemoryStore, Store};
 
 #[derive(Default)]
@@ -74,14 +76,51 @@ async fn account_meter_publishes_after_cumulative_usage_reaches_threshold() {
     assert_eq!(observer.0.lock().unwrap().as_slice(), ["updated:t:active"]);
 }
 
-#[tokio::test]
+#[derive(Default)]
+struct YieldingStore(InMemoryStore);
+
+#[async_trait]
+impl Store for YieldingStore {
+    async fn get(
+        &self,
+        namespace: &str,
+        key: &str,
+    ) -> tinyagents_harness::error::Result<Option<Value>> {
+        tokio::task::yield_now().await;
+        self.0.get(namespace, key).await
+    }
+
+    async fn put(
+        &self,
+        namespace: &str,
+        key: &str,
+        value: Value,
+    ) -> tinyagents_harness::error::Result<()> {
+        tokio::task::yield_now().await;
+        self.0.put(namespace, key, value).await
+    }
+
+    async fn delete(&self, namespace: &str, key: &str) -> tinyagents_harness::error::Result<()> {
+        tokio::task::yield_now().await;
+        self.0.delete(namespace, key).await
+    }
+
+    async fn list(&self, namespace: &str) -> tinyagents_harness::error::Result<Vec<String>> {
+        tokio::task::yield_now().await;
+        self.0.list(namespace).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_accounting_commits_once_and_notifies_once_on_budget_transition() {
-    let (goals, observer) = operations();
+    let store: Arc<dyn Store> = Arc::new(YieldingStore::default());
+    let observer = Arc::new(RecordingObserver::default());
+    let goals = GoalStore::with_observer(store, observer.clone());
     goals.set("t", "finish", Some(5)).await.unwrap();
     observer.0.lock().unwrap().clear();
 
     let mut turns = Vec::new();
-    for _ in 0..10 {
+    for _ in 0..16 {
         let goals = goals.clone();
         turns.push(tokio::spawn(async move {
             goals.account_turn("t", 1, 0, Duration::ZERO).await.unwrap()
@@ -92,7 +131,7 @@ async fn concurrent_accounting_commits_once_and_notifies_once_on_budget_transiti
     }
 
     let goal = goals.get("t").await.unwrap().unwrap();
-    assert_eq!(goal.tokens_used, 5);
+    assert_eq!(goal.tokens_used, 16);
     assert_eq!(goal.status, ThreadGoalStatus::BudgetLimited);
     let events = observer.0.lock().unwrap();
     assert_eq!(
