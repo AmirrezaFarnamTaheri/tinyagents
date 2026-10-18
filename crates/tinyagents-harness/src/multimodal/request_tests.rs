@@ -122,13 +122,13 @@ impl MediaSourceResolver<String> for Resolver {
 impl Resolver {
     fn resolve_source(
         &self,
-        scope: &String,
+        scope: &str,
         _modality: InputModality,
         source: &str,
         max_bytes: usize,
     ) -> std::result::Result<ResolvedMedia, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.scopes.lock().unwrap().push(scope.clone());
+        self.scopes.lock().unwrap().push(scope.to_owned());
         self.resolved_sources
             .lock()
             .unwrap()
