@@ -620,7 +620,7 @@ fn resolve_registry_for_enforces_pack_membership() {
 
 #[tokio::test]
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
-    let (tools, handle) =
+    let (_tools, handle) =
         bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let listing = render_pack_filtered(&CATALOG, "alpha", &handle, &|name| name == "a_one", "")
         .expect("one callable tool");
