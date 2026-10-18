@@ -40,23 +40,26 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
     impl PhysicalDispatchTerminal for ExplicitTerminal {
         fn on_terminal(self: Box<Self>, outcome: PhysicalDispatchOutcome) {
             if let Some(usage) = outcome.usage {
-                self.0.on_event(&TurnObservation::ModelDispatch {
-                    run_id: "explicit".into(),
-                    call_id: None,
-                    requested_model: None,
-                    answered_model: None,
-                    finish_reason: None,
-                    duration_ms: 0,
-                    status: outcome.status,
-                    refused: outcome.refused,
-                    usage: Some(crate::observability::turn_observer::ObservedUsage {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                        cached_tokens: usage.cached_tokens,
-                        reasoning_tokens: usage.reasoning_tokens,
-                        cost_usd: usage.cost_usd,
-                    }),
-                });
+                crate::observability::turn_observer::Observer::on_event(
+                    self.0.as_ref(),
+                    &TurnObservation::ModelDispatch {
+                        run_id: "explicit".into(),
+                        call_id: None,
+                        requested_model: None,
+                        answered_model: None,
+                        finish_reason: None,
+                        duration_ms: 0,
+                        status: outcome.status,
+                        refused: outcome.refused,
+                        usage: Some(crate::observability::turn_observer::ObservedUsage {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cached_tokens: usage.cached_tokens,
+                            reasoning_tokens: usage.reasoning_tokens,
+                            cost_usd: usage.cost_usd,
+                        }),
+                    },
+                );
             }
         }
     }
