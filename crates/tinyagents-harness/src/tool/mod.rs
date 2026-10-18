@@ -502,5 +502,3 @@ mod timeout_test;
 #[path = "mod_tests.rs"]
 mod tests;
 
-mod snapshot;
-pub use snapshot::{ToolSnapshot, ToolSnapshotError};
