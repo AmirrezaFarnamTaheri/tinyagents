@@ -274,10 +274,12 @@ pub fn record_approved<Ctx: Send + Sync>(
 ) {
     if let Some(ticket) = ticket {
         match outcome {
-            MiddlewareToolOutcome::Result(result) => resolver
-                .record_terminal(ticket, ApprovalExecutionOutcome::Result(result)),
-            MiddlewareToolOutcome::Command { control } => resolver
-                .record_terminal(ticket, ApprovalExecutionOutcome::Control(control)),
+            MiddlewareToolOutcome::Result(result) => {
+                resolver.record_terminal(ticket, ApprovalExecutionOutcome::Result(result))
+            }
+            MiddlewareToolOutcome::Command { control } => {
+                resolver.record_terminal(ticket, ApprovalExecutionOutcome::Control(control))
+            }
         }
     }
 }
@@ -305,8 +307,12 @@ async fn run_approved<State: Send + Sync, Ctx: Send + Sync>(
             match next.run(ctx, state, call).await {
                 Ok(outcome) => {
                     match &outcome {
-                        MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
-                        MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                        MiddlewareToolOutcome::Result(result) => {
+                            guard.complete(ApprovalExecutionOutcome::Result(result))
+                        }
+                        MiddlewareToolOutcome::Command { control } => {
+                            guard.complete(ApprovalExecutionOutcome::Control(control))
+                        }
                     }
                     Ok(outcome)
                 }
@@ -658,8 +664,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                 match next.run(ctx, state, call).await {
                     Ok(outcome) => {
                         match &outcome {
-                            MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
-                            MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                            MiddlewareToolOutcome::Result(result) => {
+                                guard.complete(ApprovalExecutionOutcome::Result(result))
+                            }
+                            MiddlewareToolOutcome::Command { control } => {
+                                guard.complete(ApprovalExecutionOutcome::Control(control))
+                            }
                         }
                         Ok(outcome)
                     }

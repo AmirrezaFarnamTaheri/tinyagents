@@ -497,8 +497,14 @@ async fn approval_gate_records_harness_errors_for_an_approved_ticket() {
 
     let resolver = Arc::new(TerminalResolver::default());
     let mut stack: MiddlewareStack<(), Host> = MiddlewareStack::new();
-    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new("approval", resolver.clone())));
-    let error = stack.run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase).await.unwrap_err();
+    stack.push_tool_middleware(Arc::new(ApprovalGateMiddleware::new(
+        "approval",
+        resolver.clone(),
+    )));
+    let error = stack
+        .run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase)
+        .await
+        .unwrap_err();
     assert!(matches!(error, crate::error::TinyAgentsError::Cancelled));
     assert_eq!(
         *resolver.outcomes.lock().unwrap(),
@@ -530,7 +536,10 @@ async fn policy_gate_records_non_cancellation_errors_for_an_approved_ticket() {
         .run_wrapped_tool(&ctx(), &(), call("send"), &ErrorBase)
         .await
         .unwrap_err();
-    assert!(matches!(error, crate::error::TinyAgentsError::Middleware(_)));
+    assert!(matches!(
+        error,
+        crate::error::TinyAgentsError::Middleware(_)
+    ));
     assert_eq!(
         *resolver.outcomes.lock().unwrap(),
         vec![("ticket".into(), "failed")]
@@ -612,10 +621,15 @@ async fn approval_gate_preserves_and_records_control_outcomes() {
     )));
     stack.push_tool_middleware(Arc::new(ControlMiddleware));
     let outcome = stack
-        .run_wrapped_tool(&ctx(), &(), call("send"), &Base {
-            runs: Arc::new(Mutex::new(0)),
-            fail: false,
-        })
+        .run_wrapped_tool(
+            &ctx(),
+            &(),
+            call("send"),
+            &Base {
+                runs: Arc::new(Mutex::new(0)),
+                fail: false,
+            },
+        )
         .await
         .unwrap();
     assert!(matches!(
