@@ -124,7 +124,9 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
     ///
     /// The default preserves compatibility with existing resolver
     /// implementations by delegating to [`Self::resolve_with_mime_hint`].
-    /// Base64 sources are wrapped as data URIs for that legacy call.
+    /// For Base64 metadata, `source` is the raw base64 field here and the
+    /// default wraps it as a data URI for that legacy call. An override sees
+    /// the original source representation and metadata.
     /// Hosts that need to distinguish typed paths from URLs can override this
     /// method. Marker and image-string sources use [`MediaSourceKind::Untyped`].
     async fn resolve_with_source_metadata(
@@ -736,11 +738,10 @@ where
         require_file_mime: bool,
         metadata: &MediaSourceMetadata,
     ) -> tinyinference_llm::Result<ResolvedMedia> {
-        let remote_source = source.starts_with("http://") || source.starts_with("https://");
-        let remote = match metadata.kind {
-            MediaSourceKind::Path | MediaSourceKind::Base64 => false,
-            MediaSourceKind::Url | MediaSourceKind::Untyped => remote_source,
-        };
+        // Keep the generic admission check conservative for legacy resolvers:
+        // they may infer a remote fetch from the source text even when the
+        // newer metadata says it originated as a path.
+        let remote = source.starts_with("http://") || source.starts_with("https://");
         let remote_allowed = match modality {
             InputModality::Image => self.config.images.allow_remote_fetch,
             InputModality::Audio | InputModality::Video | InputModality::Document => {
