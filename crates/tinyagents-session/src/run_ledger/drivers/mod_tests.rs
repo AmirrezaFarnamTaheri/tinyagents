@@ -43,6 +43,40 @@ async fn assert_ledger_conformance_and_scope_isolation(backend: &dyn StorageBack
     );
 }
 
+#[tokio::test]
+async fn file_workflow_records_round_trip_and_stay_in_their_scope() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    let a = DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-a").unwrap())
+            .unwrap(),
+    );
+    let b = DriverRunLedger::new(
+        backend
+            .for_scope(&Scope::new("profile-b").unwrap())
+            .unwrap(),
+    );
+
+    let written = a.upsert_workflow_run(workflow("workflow")).await.unwrap();
+    assert_eq!(a.get_workflow_run("workflow").await.unwrap(), Some(written));
+    assert!(b.get_workflow_run("workflow").await.unwrap().is_none());
+    assert_eq!(
+        a.list_workflow_runs(&WorkflowRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        1
+    );
+    assert_eq!(
+        b.list_workflow_runs(&WorkflowRunListRequest::default())
+            .await
+            .unwrap()
+            .count,
+        0
+    );
+}
+
 /// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
 /// mongodb_run_ledger_conformance -- --ignored` against a local replica set.
 #[tokio::test(flavor = "multi_thread")]
