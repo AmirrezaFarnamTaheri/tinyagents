@@ -1262,6 +1262,84 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
 }
 
 #[tokio::test]
+async fn jobs_tool_treats_a_null_action_as_query() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("null-action-parent"), ());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        blocking_driver(started.clone(), release.clone(), calls),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent.child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent, child, "null-action-task", (),
+                args["input"].as_str().unwrap_or_default(), None,
+            )
+        },
+        |_| Some("null-action-thread".into()),
+    ).with_job_registry(jobs.clone());
+    let _started = ToolDispatch::<(), ()>::execute(
+        &tool, &(), CallId::new("spawn-null-action"),
+        json!({"input":"work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(), &parent,
+    ).await.unwrap();
+    started.notified().await;
+
+    let query = SubAgentJobsTool::new(jobs);
+    let listed = ToolDispatch::<(), ()>::execute(
+        &query, &(), CallId::new("null-action-query"), json!({"action": null}),
+        tinytools::ToolCallOptions::default(), &parent,
+    ).await.unwrap();
+    let listed: Value = serde_json::from_str(&listed.output()).unwrap();
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn oversized_message_request_ids_are_rejected_by_the_moved_shell() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("oversized-request-parent"), ());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        blocking_driver(started.clone(), release.clone(), calls),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent.child(RunConfig::new("worker-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent, child, "oversized-request-task", (),
+                args["input"].as_str().unwrap_or_default(), None,
+            )
+        },
+        |_| Some("oversized-request-thread".into()),
+    ).with_job_registry(jobs.clone());
+    ToolDispatch::<(), ()>::execute(
+        &tool, &(), CallId::new("spawn-oversized-request"),
+        json!({"input":"work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(), &parent,
+    ).await.unwrap();
+    started.notified().await;
+
+    let message = SubAgentMessageTool::new(jobs)
+        .with_argument_fields("task_id", "session_id", "message", "request_id");
+    let rejected = ToolDispatch::<(), ()>::execute(
+        &message, &(), CallId::new("oversized-request"),
+        json!({"task_id":"oversized-request-task", "message":"m", "request_id":"x".repeat(129)}),
+        tinytools::ToolCallOptions::default(), &parent,
+    ).await;
+    assert!(matches!(
+        rejected.unwrap_err().downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::RequestIdTooLong)
+    ));
+}
+
+#[tokio::test]
 async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
     let jobs = SubAgentJobRegistry::new();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));

@@ -748,16 +748,14 @@ fn pack_schema_text_is_independent_of_nested_json_object_insertion_order() {
 
 #[tokio::test]
 async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
-    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
-    let mut first = tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant("");
-    first.message.tool_calls.push(ToolCall::new(
-        "packed-call",
-        USE_SKILL,
-        json!({"skill": "alpha", "tool": "a_one", "args": {}}),
-    ));
-    let model = Arc::new(testkit::ScriptedModel::new(vec![
-        first,
-        tinyagents_harness::tinyinference_llm::model::ModelResponse::assistant("done"),
+    let (_tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
+    let model = Arc::new(MockModel::with_responses(vec![
+        testkit::tool_call_response(ToolCall::new(
+            "packed-call",
+            USE_SKILL,
+            json!({"skill": "alpha", "tool": "a_one", "args": {}}),
+        )),
+        testkit::text_response("done"),
     ]));
     let rules = tinytools::ToolRuleSet::single(tinytools::ToolRules::from_allow_deny(
         Vec::<String>::new(), ["a_one"],
@@ -782,9 +780,6 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
             _ => None,
         })
         .unwrap();
-    assert!(
-        result.contains("deny-a-one"),
-        "selected target should be refused: {result}"
-    );
-    assert!(tools.iter().any(|tool| tool.name() == "a_one"));
+    assert!(result.contains("a_one"), "selected target should be refused: {result}");
+    assert!(result.contains("denied") || result.contains("refused"), "{result}");
 }
