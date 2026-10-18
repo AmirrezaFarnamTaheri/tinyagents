@@ -22,9 +22,9 @@ use tinytools::{Tool, ToolResult};
 
 use crate::{
     DriverRequest, RuntimeError, Session, SessionBuilder, SessionTurnOutcome, SessionTurnRequest,
-    ToolSnapshot, TurnOptions,
+    TurnOptions,
 };
-use tinyagents_harness::tool::ToolExecScope;
+use tinyagents_harness::tool::{ToolExecScope, ToolSnapshot};
 
 type Configure = Arc<dyn Fn(&mut TurnPlan<(), ()>) + Send + Sync>;
 

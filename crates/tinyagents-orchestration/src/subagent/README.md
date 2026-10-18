@@ -1,6 +1,7 @@
 # Subagent orchestration
 
-`tinyagents_orchestration::subagent` is the public home for child-agent work.
+`tinyagents_orchestration::subagent` owns child-agent orchestration policy. Generic
+job and message tool shells live in `tinyagents_harness_tools::subagents`.
 It contains two complementary surfaces.
 
 The invocation surface provides `SubAgent`, `SubAgentTool`,
@@ -10,7 +11,7 @@ parent cancellation, events, and host authority. Model-facing delegation is
 background by default: `SubAgentTool` returns a job id immediately while the
 child continues in the background. Callers can request `mode: "inline"` to
 wait for the child and receive its final result in the same tool call. A host
-registers `SubAgentJobsTool` and
+constructs `tinyagents_harness_tools::subagents::SubAgentJobsTool` and
 `SubAgentMessageTool` over the same registry to query status/results and send
 messages to queued or running jobs. Message delivery is cooperative at the
 child loop's next safe steering checkpoint. The registry is process-local and
@@ -20,7 +21,8 @@ The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:
 
 ```text
-orchestration::subagent -> tinyagents-runtime -> {tinyagents-harness, tinyagents-session}
+tinyagents-harness-tools::subagents -> orchestration::subagent
+orchestration::subagent -> {tinyagents-graph, tinyagents-harness, tinyagents-session}
 ```
 
 Hosts provide three object-safe lifecycle seams. `SubagentPlanner<C, H>`
@@ -287,7 +289,7 @@ and `..Default::default()`.
 - The transcript view's `TranscriptSubagentStatus` gained `Incomplete`, and a legacy
   `[SUBAGENT_INCOMPLETE]` result now projects as `Incomplete` instead of
   `Failed`.
-- `tinyagents-runtime`: new `ToolSnapshot::retaining`.
+- `tinyagents-harness`: `ToolSnapshot::retaining`.
 
 
 ### Document-backed lifecycle state

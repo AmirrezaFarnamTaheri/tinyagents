@@ -4,12 +4,11 @@
 //! concerns: name lookup, provider-schema projection, timeout settings, error
 //! routing, and the explicit recursive-dispatch handoff.
 
+mod binding;
 pub mod deferred;
 pub mod discover;
 pub mod effects;
 pub mod nested;
-pub mod packs;
-pub mod plan_exit;
 mod progress;
 mod prompt;
 mod rules;
@@ -20,6 +19,7 @@ mod schema_walk;
 pub mod select;
 pub mod shared;
 mod signature;
+mod snapshot;
 mod timeout;
 pub mod toolset;
 mod types;
@@ -30,6 +30,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+pub use binding::{BoundToolCall, ToolCallBinding};
 pub use deferred::*;
 pub use effects::{
     LedgerFailure, ToolEffect, ToolEffectLedger, ToolEffectSettle, ToolEffectStart,
@@ -49,7 +50,11 @@ pub use shared::{
     CanonicalSharedToolAdapter, EarlyExit, EarlyExitHook, ToolExecScope, ToolExecution,
 };
 pub use signature::*;
+pub use snapshot::{ToolSnapshot, ToolSnapshotError};
 pub use timeout::*;
+
+/// Name of the generic skill disclosure and indirect-call tool.
+pub const USE_SKILL_TOOL: &str = "use_skill";
 pub use toolset::{ToolExposureExplanation, ToolSet};
 pub use types::ToolExecutionContext;
 
@@ -151,14 +156,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
         &self,
         arguments: &Value,
     ) -> anyhow::Result<Option<Arc<dyn ToolDispatch<State, Ctx>>>> {
-        let Some(extension) = self.tool.host_extension().and_then(|extension| {
-            extension.downcast_ref::<crate::tool::packs::PackToolExtension>()
-        }) else {
+        let Some(extension) = self
+            .tool
+            .host_extension()
+            .and_then(|extension| extension.downcast_ref::<ToolCallBinding>())
+        else {
             return Ok(None);
         };
-        let pinned = Arc::new(extension.bind_call(self.tool.clone(), arguments));
-        let tool: Arc<dyn tinytools::Tool> = pinned.clone();
-        Ok(Some(Arc::new(BoundCanonicalDispatch { tool, pinned })))
+        let bound = extension.bind(self.tool.clone(), arguments);
+        Ok(Some(Arc::new(BoundCanonicalDispatch { bound })))
     }
 
     async fn execute(
@@ -177,18 +183,17 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for Canonica
 }
 
 struct BoundCanonicalDispatch {
-    tool: Arc<dyn tinytools::Tool>,
-    pinned: Arc<crate::tool::packs::PinnedPackCall>,
+    bound: Arc<dyn BoundToolCall>,
 }
 
 #[async_trait]
 impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCanonicalDispatch {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
-        self.tool.clone()
+        self.bound.tool()
     }
 
     fn admission_target(&self) -> Option<(&dyn tinytools::Tool, &Value)> {
-        self.pinned.admission_target()
+        self.bound.admission_target()
     }
 
     async fn execute(
@@ -200,7 +205,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for BoundCan
         parent: &crate::context::RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
         let context = ToolExecutionContext::from_run_context(parent, call_id);
-        self.tool
+        self.bound
+            .tool()
             .execute_with_context(arguments, options, Some(&context))
             .await
     }
@@ -501,3 +507,7 @@ mod timeout_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "binding_tests.rs"]
+mod binding_tests;
