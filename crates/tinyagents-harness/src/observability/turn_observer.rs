@@ -171,8 +171,32 @@ pub fn install<Ctx: Send + Sync + 'static>(
             policy.capture.tool_io = true;
             harness.with_policy(policy);
         }
-        harness.push_model_middleware(scope.clone());
+        harness.push_model_middleware(Arc::new(InstalledObserverMiddleware(scope.clone())));
         events.subscribe(scope);
+    }
+}
+
+/// Restores the captured observer task-local while an installed model hook runs.
+struct InstalledObserverMiddleware(Arc<ObserverScope>);
+
+#[async_trait]
+impl<Ctx: Send + Sync + 'static> ModelMiddleware<(), Ctx> for InstalledObserverMiddleware {
+    fn name(&self) -> &str {
+        "turn_observer"
+    }
+
+    async fn wrap_model(
+        &self,
+        ctx: &mut RunContext<Ctx>,
+        state: &(),
+        request: ModelRequest,
+        next: ModelHandler<'_, (), Ctx>,
+    ) -> crate::error::Result<MiddlewareModelOutcome> {
+        with_observer(
+            Arc::clone(&self.0),
+            self.0.wrap_model(ctx, state, request, next),
+        )
+        .await
     }
 }
 impl EventListener for ObserverScope {

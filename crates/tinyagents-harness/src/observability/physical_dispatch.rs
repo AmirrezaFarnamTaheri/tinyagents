@@ -170,8 +170,23 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
                     }
                     _ => None,
                 };
-                if let (Some(outcome), Some(guard)) = (outcome, guard.take()) {
-                    guard.finish(outcome);
+                if let Some(outcome) = outcome {
+                    if let Some(guard) = guard.take() {
+                        guard.finish(outcome);
+                    }
+                } else if let ModelStreamItem::UsageDelta(usage) = item {
+                    if let Some(guard) = guard.as_mut() {
+                        guard.update_usage(PhysicalDispatchUsage {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: usage.output_tokens,
+                            cached_tokens: usage.cache_read_tokens,
+                            reasoning_tokens: usage.reasoning_tokens,
+                            cost_usd: usage
+                                .charged_amount
+                                .as_ref()
+                                .map(|amount| amount.micros as f64 / 1_000_000.0),
+                        });
+                    }
                 }
             }
             item
@@ -237,6 +252,7 @@ fn dispatch_outcome(response: Option<&ModelResponse>, succeeded: bool) -> Physic
 pub struct PhysicalDispatchGuard {
     terminal: Option<Box<dyn PhysicalDispatchTerminal>>,
     started: Instant,
+    usage: Option<PhysicalDispatchUsage>,
 }
 
 impl PhysicalDispatchGuard {
@@ -245,12 +261,21 @@ impl PhysicalDispatchGuard {
         Self {
             terminal: Some(terminal),
             started: Instant::now(),
+            usage: None,
         }
+    }
+
+    /// Retain the most recent cumulative usage reported by a stream.
+    pub fn update_usage(&mut self, usage: PhysicalDispatchUsage) {
+        self.usage = Some(usage);
     }
 
     /// Finish with a provider result. Dropping an unfinished guard reports cancellation.
     pub fn finish(mut self, mut outcome: PhysicalDispatchOutcome) {
         outcome.duration = self.started.elapsed();
+        if outcome.usage.is_none() {
+            outcome.usage = self.usage.take();
+        }
         if let Some(terminal) = self.terminal.take() {
             terminal.on_terminal(outcome);
         }
@@ -264,7 +289,7 @@ impl Drop for PhysicalDispatchGuard {
                 status: PhysicalDispatchStatus::Cancelled,
                 refused: false,
                 duration: self.started.elapsed(),
-                usage: None,
+                usage: self.usage.take(),
                 answered_model: None,
                 finish_reason: None,
             });
