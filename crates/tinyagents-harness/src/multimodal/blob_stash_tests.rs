@@ -28,7 +28,7 @@ fn image_uri(fill: u8, len: usize) -> String {
 async fn write_is_content_addressed_deduped_and_readable() {
     let s = stash(u64::MAX, Duration::from_secs(3600));
     let first = s.write("abc123", TINY_PNG).await.unwrap();
-    assert_eq!(first.key, "attachments/abc123");
+    assert_eq!(first.key, "harness/attachments/abc123");
     assert_eq!(first.mime, "image/png");
     let second = s.write("abc123", TINY_PNG).await.unwrap();
     assert_eq!(first, second);
@@ -169,4 +169,42 @@ async fn concurrent_writes_under_a_tight_cap_leave_the_stash_within_its_cap() {
     let total: u64 = index.values().map(|entry| entry.len).sum();
     assert!(!index.is_empty());
     assert!(total <= one, "stash over its cap: {total} > {one}");
+}
+
+/// The v2 shape: bytes at `harness/attachments/<id>`, one snake_case
+/// `harness.attachment_stash` row per id with its last use as `touched_ms`.
+#[tokio::test]
+async fn bytes_and_index_use_the_v2_names() {
+    let storage = scoped(&MemoryStorage::new(), "local");
+    let s = stash_on(&storage, u64::MAX, Duration::from_secs(3600));
+    s.write("abc123", TINY_PNG).await.unwrap();
+
+    assert!(
+        storage
+            .blobs()
+            .head("harness/attachments/abc123")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        storage
+            .blobs()
+            .head("attachments/abc123")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let row = storage
+        .documents()
+        .get("harness.attachment_stash", "abc123")
+        .await
+        .unwrap()
+        .expect("one row per id");
+    assert_eq!(row.doc["id"], "abc123");
+    assert_eq!(row.doc["key"], "harness/attachments/abc123");
+    assert_eq!(row.doc["mime"], "image/png");
+    assert!(row.doc["touched_ms"].as_u64().unwrap() > 0);
+    assert!(row.doc.get("touchedAtMs").is_none());
+    assert_eq!(row.meta.schema, 2);
 }

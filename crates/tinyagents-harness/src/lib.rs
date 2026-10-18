@@ -94,6 +94,7 @@ pub mod retry;
 pub mod run_queue;
 pub mod runtime;
 pub mod steering;
+pub mod storage;
 pub mod store;
 pub mod stream;
 pub mod structured;
@@ -166,6 +167,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
+pub use storage::storage_schema;
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
 pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

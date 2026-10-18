@@ -1,4 +1,5 @@
 use super::*;
+use crate::store::Store as _;
 use std::time::Duration;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
@@ -110,11 +111,11 @@ async fn namespaces_do_not_cross_serve_and_clear_independently() {
 }
 
 #[tokio::test]
-async fn scopes_and_collections_keep_entries_apart_and_long_keys_fit() {
+async fn scopes_and_owners_keep_entries_apart_and_long_keys_fit() {
     let storage = MemoryStorage::new();
     let alice = DriverResponseCache::new(docs(&storage, "alice"));
     let bob = DriverResponseCache::new(docs(&storage, "bob"));
-    let other = DriverResponseCache::with_collection(docs(&storage, "alice"), "other");
+    let other = DriverResponseCache::with_owner(docs(&storage, "alice"), "other");
     let long = "k".repeat(10_000);
     alice
         .put(&long, ModelResponse::assistant("mine"))
@@ -125,32 +126,62 @@ async fn scopes_and_collections_keep_entries_apart_and_long_keys_fit() {
     assert!(other.get(&long).await.unwrap().is_none());
 }
 
-/// A backend without native TTL declares no expiry field, so the cache itself
-/// must hide, count and remove an expired entry.
+/// The v2 shape: an entry is a `tsd.kv` document of owner `harness` in the
+/// namespace `cache:<namespace>`, its value the response and its deadline the
+/// record's `expires_ms`, not a body field.
 #[tokio::test]
-async fn expiry_is_enforced_on_read_when_the_backend_has_no_native_ttl() {
-    let docs: Arc<dyn DocumentStore> = Arc::new(crate::testkit::WithoutNativeTtl(docs(
-        &MemoryStorage::new(),
-        "local",
-    )));
-    let cache = DriverResponseCache::new(docs.clone());
+async fn entries_are_tsd_kv_documents_with_the_deadline_in_metadata() {
+    let storage = MemoryStorage::new();
+    let documents = docs(&storage, "local");
+    let cache = DriverResponseCache::new(Arc::clone(&documents)).with_namespace("arm-a");
     cache
         .put_with_ttl(
-            "short",
-            ModelResponse::assistant("stale"),
-            Some(Duration::from_millis(20)),
+            "req-1",
+            ModelResponse::assistant("hi"),
+            Some(Duration::from_secs(60)),
         )
         .await
         .unwrap();
-    assert_eq!(cache.get("short").await.unwrap().unwrap().text(), "stale");
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    assert!(cache.get("short").await.unwrap().is_none());
-    assert_eq!(cache.stats().expirations, 1);
-    // The expired document was removed, not merely skipped.
+    cache
+        .put("forever", ModelResponse::assistant("kept"))
+        .await
+        .unwrap();
+
+    let row = documents
+        .get("tsd.kv", "harness/cache:arm-a/req-1")
+        .await
+        .unwrap()
+        .expect("the entry sits under Key::of([owner, ns, key])");
+    assert_eq!(row.doc["owner"], "harness");
+    assert_eq!(row.doc["ns"], "cache:arm-a");
+    assert_eq!(row.doc["key"], "req-1");
+    assert!(row.doc["value"].is_object(), "the response is unwrapped");
+    assert!(row.doc.get("expiresAtMs").is_none());
+    assert!(row.meta.expires_ms.unwrap() > row.meta.created_ms);
+    let forever = documents
+        .get("tsd.kv", "harness/cache:arm-a/forever")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(forever.meta.expires_ms, None);
+}
+
+/// Clearing one namespace leaves other `tsd.kv` entries alone, including the
+/// flat store's of the same owner.
+#[tokio::test]
+async fn clear_drops_only_its_own_namespace_of_the_shared_collection() {
+    let storage = MemoryStorage::new();
+    let documents = docs(&storage, "local");
+    let flat = crate::store::DriverStore::new(Arc::clone(&documents));
+    flat.put("default", "k", serde_json::json!("flat"))
+        .await
+        .unwrap();
+    let cache = DriverResponseCache::new(Arc::clone(&documents));
+    cache.put("k", ModelResponse::assistant("c")).await.unwrap();
+    cache.clear().await.unwrap();
+    assert!(cache.get("k").await.unwrap().is_none());
     assert_eq!(
-        docs.count(DriverResponseCache::DEFAULT_COLLECTION, &Filter::default())
-            .await
-            .unwrap(),
-        0
+        flat.get("default", "k").await.unwrap(),
+        Some(serde_json::json!("flat"))
     );
 }

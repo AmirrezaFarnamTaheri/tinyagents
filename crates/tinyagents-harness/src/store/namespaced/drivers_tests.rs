@@ -195,11 +195,11 @@ async fn invalid_namespaces_are_rejected_before_any_write() {
 }
 
 #[tokio::test]
-async fn scopes_and_collections_keep_items_apart() {
+async fn scopes_and_owners_keep_items_apart() {
     let storage = MemoryStorage::new();
     let alice = DriverNamespacedStore::new(docs(&storage, "alice"));
     let bob = DriverNamespacedStore::new(docs(&storage, "bob"));
-    let other = DriverNamespacedStore::with_collection(docs(&storage, "alice"), "other_ns_store");
+    let other = DriverNamespacedStore::with_owner(docs(&storage, "alice"), "other");
     let n = ns(&["users", "x"]);
     alice.put(&n, "k", json!(1)).await.unwrap();
     assert!(bob.get(&n, "k").await.unwrap().is_none());
@@ -247,32 +247,91 @@ async fn the_flat_store_surface_works_over_the_driver() {
     assert!(store.list("events").await.unwrap().is_empty());
 }
 
+/// The v2 shape: an item is a `tsd.kv` document of owner `harness` whose
+/// namespace is the segments joined with `.` under a reserved prefix, the
+/// creation and expiry times live in the record metadata, not the body.
 #[tokio::test]
-async fn expiry_is_enforced_on_read_and_swept_when_the_backend_has_no_native_ttl() {
-    let docs: Arc<dyn DocumentStore> = Arc::new(crate::testkit::WithoutNativeTtl(docs(
-        &MemoryStorage::new(),
-        "local",
-    )));
-    let store = DriverNamespacedStore::new(docs);
+async fn items_are_tsd_kv_documents_with_times_in_metadata() {
+    let storage = MemoryStorage::new();
+    let documents = docs(&storage, "local");
+    let store = DriverNamespacedStore::new(Arc::clone(&documents));
+    store
+        .put_with_ttl(
+            &ns(&["users", "alice"]),
+            "likes",
+            json!({"food": "tea"}),
+            Some(60.0),
+        )
+        .await
+        .unwrap();
+
+    let row = documents
+        .get("tsd.kv", "harness/namespaced:users.alice/likes")
+        .await
+        .unwrap()
+        .expect("the item sits under Key::of([owner, ns, key])");
+    assert_eq!(
+        row.doc,
+        json!({
+            "owner": "harness",
+            "ns": "namespaced:users.alice",
+            "key": "likes",
+            "value": {"food": "tea"},
+        })
+    );
+    assert!(row.meta.created_ms > 0);
+    let expires = row.meta.expires_ms.expect("the ttl is the record expiry");
+    assert!(expires > row.meta.created_ms);
+
+    let item = store
+        .get(&ns(&["users", "alice"]), "likes")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.created_at_ms as i64, row.meta.created_ms);
+    assert_eq!(item.expires_at_ms, Some(expires as u64));
+}
+
+/// A subtree search narrows by root without surfacing a sibling root whose
+/// name merely sorts nearby, nor the flat store's entries of the same owner.
+#[tokio::test]
+async fn a_root_search_ignores_lookalike_roots_and_flat_entries() {
+    let storage = MemoryStorage::new();
+    let documents = docs(&storage, "local");
+    let store = DriverNamespacedStore::new(Arc::clone(&documents));
+    store.put(&ns(&["a", "x"]), "k", json!(1)).await.unwrap();
+    store.put(&ns(&["a-b"]), "k", json!(2)).await.unwrap();
+    store.put(&ns(&["ab"]), "k", json!(3)).await.unwrap();
+    crate::store::DriverStore::new(Arc::clone(&documents))
+        .put("a", "k", json!(4))
+        .await
+        .unwrap();
+    let found = store
+        .search(SearchQuery {
+            namespace_prefix: vec!["a".into()],
+            ..SearchQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].value, json!(1));
+}
+
+/// Expiry is the driver's: an expired item reads as absent, and a sweep never fails.
+#[tokio::test]
+async fn expired_items_read_as_absent_and_a_sweep_is_harmless() {
+    let store = DriverNamespacedStore::new(docs(&MemoryStorage::new(), "local"));
     let n = ns(&["cache"]);
     store
         .put_with_ttl(&n, "gone", json!(1), Some(f64::MIN_POSITIVE))
         .await
         .unwrap();
     store
-        .put_with_ttl(&n, "swept", json!(2), Some(f64::MIN_POSITIVE))
-        .await
-        .unwrap();
-    store
-        .put_with_ttl(&n, "keep", json!(3), None)
+        .put_with_ttl(&n, "keep", json!(2), None)
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     assert!(store.get(&n, "gone").await.unwrap().is_none());
-    assert_eq!(
-        store.sweep_expired().await.unwrap(),
-        1,
-        "only `swept` is left"
-    );
+    store.sweep_expired().await.unwrap();
     assert!(store.get(&n, "keep").await.unwrap().is_some());
 }

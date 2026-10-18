@@ -10,9 +10,9 @@
 //!
 //! # Layout
 //!
-//! - bytes: blob `attachments/<id>` with the image MIME as content type;
+//! - bytes: blob `harness/attachments/<id>` with the image MIME as content type;
 //! - index: one document per id in [`BlobAttachmentStash::INDEX_COLLECTION`],
-//!   `{ id, key, mime, len, touchedAtMs }`. Blob metadata carries no timestamps,
+//!   `{ id, key, mime, len, touched_ms }`. Blob metadata carries no timestamps,
 //!   so the index is what orders eviction and expiry. Retrieval is by id; there
 //!   is no path to hand a file reader, so a host rehydrates placeholders from
 //!   [`read_data_uri`](BlobAttachmentStash::read_data_uri).
@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use tinystoragedrivers_core::{
-    BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
-    Query, Sort,
+    BlobStore, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, Sort,
+    WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};
 
@@ -59,9 +59,9 @@ pub struct BlobAttachmentStash {
 
 impl BlobAttachmentStash {
     /// The index collection.
-    pub const INDEX_COLLECTION: &'static str = "attachment_stash_index";
+    pub const INDEX_COLLECTION: &'static str = crate::storage::ATTACHMENT_STASH;
     /// Prefix of every blob key this stash writes.
-    pub const KEY_PREFIX: &'static str = "attachments/";
+    pub const KEY_PREFIX: &'static str = "harness/attachments/";
 
     /// A stash that, after each new write, evicts the least recently used
     /// attachments until the total is back under `max_bytes`;
@@ -84,8 +84,7 @@ impl BlobAttachmentStash {
 
     /// The declaration the index needs.
     pub fn collection_spec() -> CollectionSpec {
-        CollectionSpec::new(Self::INDEX_COLLECTION)
-            .index(IndexSpec::new("touched", ["touchedAtMs"]))
+        crate::storage::attachment_stash_spec()
     }
 
     fn key(id: &str) -> String {
@@ -141,7 +140,7 @@ impl BlobAttachmentStash {
         // can reference one whose previous use is older than the TTL: refresh
         // so the immediately following sweep cannot reclaim it.
         self.index
-            .put(
+            .put_with(
                 Self::INDEX_COLLECTION,
                 id,
                 json!({
@@ -149,9 +148,10 @@ impl BlobAttachmentStash {
                     "key": key,
                     "mime": attachment.mime,
                     "len": len,
-                    "touchedAtMs": now_ms(),
+                    "touched_ms": now_ms(),
                 }),
                 Precondition::None,
+                WriteOptions::new().schema(crate::storage::SCHEMA_VERSION),
             )
             .await?;
         if !present {
@@ -221,7 +221,7 @@ impl BlobAttachmentStash {
             .index
             .query_all(
                 Self::INDEX_COLLECTION,
-                &Query::default().sort(Sort::asc("touchedAtMs")),
+                &Query::default().sort(Sort::asc("touched_ms")),
             )
             .await?;
         let mut total: u64 = rows
@@ -260,7 +260,7 @@ impl BlobAttachmentStash {
             .index
             .query_all(
                 Self::INDEX_COLLECTION,
-                &Query::filter(Filter::lt("touchedAtMs", cutoff)),
+                &Query::filter(Filter::lt("touched_ms", cutoff)),
             )
             .await?;
         let mut reclaimed = 0u64;

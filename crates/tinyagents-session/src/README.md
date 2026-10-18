@@ -78,11 +78,11 @@ reachable under `session::`, `session::run_ledger::`, and
 
 | Collection | Holds |
 | --- | --- |
-| `session_history_sessions` | one document per session; lineage via `parentSessionId` |
-| `session_history_messages` | per-message content, optional reasoning, model, tokens, cost |
-| `session_history_tool_calls` | tool name, input, bounded output, status, duration |
-| `session_history_fts` | search rows over session name, message content, tool name |
-| `session_history_counters` | dense message and tool-call id counters |
+| `history.sessions` | one document per session; lineage via `parent_session_id`, times in `started_ms` / `ended_ms` |
+| `history.messages` | per-message content, optional reasoning, model, tokens, cost |
+| `history.tool_calls` | tool name, input, bounded output, status, duration |
+| `history.search` | search rows over session name, message content, tool name |
+| `tsd.counters` (`history`, `messages` / `tool_calls`) | dense message and tool-call id counters; a failed commit leaves a gap |
 | run-ledger collections | agent and workflow runs, run events and telemetry, teams, members, tasks |
 
 A classic `sessions.db`, `session_raw/` transcripts and turn-state JSON import

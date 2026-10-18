@@ -18,7 +18,7 @@
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
 //! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 //!
-//! # tokio::runtime::Builder::new_multi_thread().build().unwrap().block_on(async {
+//! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
 //! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
 //! # });
@@ -46,10 +46,13 @@ pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::Transcrip
     use std::sync::Arc;
     use tinystoragedrivers_core::MemoryStorage;
 
-    DriverSessionStores::new(Arc::new(MemoryStorage::new()))
-        .expect("driver session stores over memory")
-        .for_agent("test")
-        .transcripts
+    DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .expect("driver session stores over memory")
+    .for_agent("test")
+    .transcripts
 }
 
 #[cfg(test)]

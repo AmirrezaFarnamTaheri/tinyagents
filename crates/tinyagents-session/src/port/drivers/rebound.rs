@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
-use tinystoragedrivers_core::{StorageBackend, StorageError};
+use tinystoragedrivers_core::{Scope, StorageBackend, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};
 use crate::DriverSessionStores;
@@ -63,6 +63,7 @@ pub struct RebindableSessionStores {
     current: RwLock<Arc<DriverSessionStores>>,
     live: Mutex<HashMap<String, Weak<LiveAgentStores>>>,
     recover_on_open: bool,
+    tenant: Scope,
 }
 
 impl RebindableSessionStores {
@@ -71,9 +72,18 @@ impl RebindableSessionStores {
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
+        Self::new_for_tenant(backend, Scope::local(), recover_on_open)
+    }
+
+    /// Creates a process-registered provider whose agents remain under `tenant`.
+    pub fn new_for_tenant(
+        backend: Arc<dyn StorageBackend>,
+        tenant: Scope,
+        recover_on_open: bool,
+    ) -> std::result::Result<Arc<Self>, StorageError> {
         static PROCESS: std::sync::LazyLock<SessionStoreRegistry> =
             std::sync::LazyLock::new(SessionStoreRegistry::default);
-        Self::new_in(&PROCESS, backend, recover_on_open)
+        Self::new_in_tenant(&PROCESS, backend, tenant, recover_on_open)
     }
 
     /// Creates a provider registered only in `registry`.
@@ -82,11 +92,23 @@ impl RebindableSessionStores {
         backend: Arc<dyn StorageBackend>,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
-        let driver = DriverSessionStores::new(backend)?.recover_on_open(recover_on_open);
+        Self::new_in_tenant(registry, backend, Scope::local(), recover_on_open)
+    }
+
+    /// Creates a registry-local provider whose tenant survives backend rebinds.
+    pub fn new_in_tenant(
+        registry: &SessionStoreRegistry,
+        backend: Arc<dyn StorageBackend>,
+        tenant: Scope,
+        recover_on_open: bool,
+    ) -> std::result::Result<Arc<Self>, StorageError> {
+        let driver =
+            DriverSessionStores::new(backend, tenant.clone())?.recover_on_open(recover_on_open);
         let this = Arc::new(Self {
             current: RwLock::new(Arc::new(driver)),
             live: Mutex::new(HashMap::new()),
             recover_on_open,
+            tenant,
         });
         registry.register(&this);
         Ok(this)
@@ -109,8 +131,10 @@ impl RebindableSessionStores {
         // snapshot. This synchronous lock is never held over async I/O.
         let mut live_registry = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live_registry.retain(|_, weak| weak.strong_count() > 0);
-        let next =
-            Arc::new(DriverSessionStores::new(backend)?.recover_on_open(self.recover_on_open));
+        let next = Arc::new(
+            DriverSessionStores::new(backend, self.tenant.clone())?
+                .recover_on_open(self.recover_on_open),
+        );
         let live = live_registry
             .iter()
             .filter_map(|(agent_id, weak)| {

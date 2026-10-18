@@ -625,13 +625,23 @@ pub(super) fn atomic_write_under_dir(
     Ok(())
 }
 
-/// Split `outputs/x` / `workspace/x` into its kind and the name below it.
+/// The pre-v2 directory names, so a path a transcript quoted before the keys
+/// moved under `harness/` still resolves to its (migrated) artifact.
+const LEGACY_DIRS: [(ArtifactKind, &str); 2] = [
+    (ArtifactKind::Output, "outputs"),
+    (ArtifactKind::Scratch, "workspace"),
+];
+
+/// Split `harness/outputs/x` / `harness/workspace/x` (or the legacy `outputs/x` /
+/// `workspace/x`) into its kind and the name below it.
 fn split_key(key: &str) -> Option<(ArtifactKind, &str)> {
     let key = key.trim();
     [ArtifactKind::Output, ArtifactKind::Scratch]
         .into_iter()
-        .find_map(|kind| {
-            key.strip_prefix(kind.subdir())
+        .map(|kind| (kind, kind.subdir()))
+        .chain(LEGACY_DIRS)
+        .find_map(|(kind, dir)| {
+            key.strip_prefix(dir)
                 .and_then(|rest| rest.strip_prefix('/'))
                 .map(|rest| (kind, rest))
         })

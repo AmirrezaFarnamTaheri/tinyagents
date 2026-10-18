@@ -43,7 +43,7 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         second.kv.get("prefs", "key").await.unwrap(),
         Some(serde_json::json!("new-two"))
     );
-    let fresh_driver = DriverSessionStores::new(new_backend).unwrap();
+    let fresh_driver = DriverSessionStores::new(new_backend, Scope::local()).unwrap();
     assert_eq!(
         fresh_driver
             .for_agent("agent-one")
@@ -53,7 +53,7 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
             .unwrap(),
         Some(serde_json::json!("new-one"))
     );
-    let old_driver = DriverSessionStores::new(old_backend).unwrap();
+    let old_driver = DriverSessionStores::new(old_backend, Scope::local()).unwrap();
     assert_eq!(
         old_driver
             .for_agent("agent-one")
@@ -145,7 +145,8 @@ impl Store for BlockingStore {
 
 #[tokio::test]
 async fn rebind_during_a_blocked_store_call_keeps_that_call_old_and_routes_the_next_new() {
-    let base_provider = DriverSessionStores::new(Arc::new(MemoryStorage::new())).unwrap();
+    let base_provider =
+        DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap();
     let mut old = base_provider.for_agent("agent");
     let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel();
@@ -212,7 +213,7 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
             .put("n", "k", serde_json::json!("new"))
             .await
             .unwrap();
-        let direct = DriverSessionStores::new(new_backend).unwrap();
+        let direct = DriverSessionStores::new(new_backend, Scope::local()).unwrap();
         assert_eq!(
             direct
                 .for_agent("late-agent")
@@ -257,7 +258,7 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .put("n", "k", serde_json::json!("retained"))
             .await
             .unwrap();
-        let independent = DriverSessionStores::new(expected_backend)
+        let independent = DriverSessionStores::new(expected_backend, Scope::local())
             .unwrap()
             .for_agent("racing-agent");
         assert_eq!(
@@ -307,7 +308,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .unwrap();
         let mut winner = None;
         for (index, backend) in candidate_backends.into_iter().enumerate() {
-            let direct = DriverSessionStores::new(backend).unwrap();
+            let direct = DriverSessionStores::new(backend, Scope::local()).unwrap();
             if direct
                 .for_agent("agent")
                 .kv
@@ -325,7 +326,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .put("n", "fresh", serde_json::json!("current"))
             .await
             .unwrap();
-        let direct = DriverSessionStores::new(backends[winner].clone()).unwrap();
+        let direct = DriverSessionStores::new(backends[winner].clone(), Scope::local()).unwrap();
         assert_eq!(
             direct.for_agent("agent").kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("same-backend"))
@@ -340,4 +341,40 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             Some(serde_json::json!("current"))
         );
     });
+}
+
+#[tokio::test]
+async fn tenant_is_preserved_across_rebind_without_crossing_other_tenants() {
+    let registry = SessionStoreRegistry::default();
+    let tenant = Scope::tenant("alice").unwrap();
+    let provider = RebindableSessionStores::new_in_tenant(
+        &registry,
+        Arc::new(MemoryStorage::new()),
+        tenant.clone(),
+        false,
+    )
+    .unwrap();
+    let retained = provider.for_agent("agent");
+    let next = Arc::new(MemoryStorage::new());
+    registry.rebind(next.clone()).unwrap();
+    retained
+        .kv
+        .put("n", "k", serde_json::json!("alice"))
+        .await
+        .unwrap();
+    let alice = DriverSessionStores::new(next.clone(), tenant)
+        .unwrap()
+        .for_agent("agent");
+    let bob = DriverSessionStores::new(next.clone(), Scope::tenant("bob").unwrap())
+        .unwrap()
+        .for_agent("agent");
+    let local = DriverSessionStores::new(next, Scope::local())
+        .unwrap()
+        .for_agent("agent");
+    assert_eq!(
+        alice.kv.get("n", "k").await.unwrap(),
+        Some(serde_json::json!("alice"))
+    );
+    assert_eq!(bob.kv.get("n", "k").await.unwrap(), None);
+    assert_eq!(local.kv.get("n", "k").await.unwrap(), None);
 }

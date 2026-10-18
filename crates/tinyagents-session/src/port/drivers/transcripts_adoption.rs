@@ -32,7 +32,7 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 use tinystoragedrivers_core::{DocumentStoreExt, Filter, Query, StorageError};
 
-use super::{DriverTranscriptLocator, ENTRIES, discovered_seed, is_subagent, run_on};
+use super::{DriverTranscriptLocator, ENTRIES, discovered_seed, is_subagent, reservation, run_on};
 use crate::transcript::{
     SessionAdoption, SessionRef, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptRead, TranscriptTurn, session_stem,
@@ -192,10 +192,11 @@ impl DriverTranscriptLocator {
         let reservation = {
             let stem = stem.clone();
             let docs = std::sync::Arc::clone(&self.docs);
+            let tables = std::sync::Arc::clone(&self.tables);
             let declared = std::sync::Arc::clone(&self.declared);
             run_on(&self.bridge, async move {
                 declared.ensure(&docs).await?;
-                Ok(Self::reserve(&docs, &stem).await)
+                Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
             })?
         };
         let reservation = match reservation {
@@ -210,7 +211,7 @@ impl DriverTranscriptLocator {
                 return Ok(None);
             }
         };
-        let handle = self.reserved_handle(&stem, meta.clone(), Some(reservation));
+        let handle = self.reserved_handle(&stem, meta.clone(), Some(reservation.clone()));
         let written = handle.append_turn(TranscriptTurn {
             prev: &[],
             next: &messages,
@@ -223,7 +224,7 @@ impl DriverTranscriptLocator {
             if self.session_exists(session) {
                 return Ok(None);
             }
-            self.release(&stem, reservation);
+            self.release(&stem, &reservation);
             return Err(error);
         }
         tracing::info!(
