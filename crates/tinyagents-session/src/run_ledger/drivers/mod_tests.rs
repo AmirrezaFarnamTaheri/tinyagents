@@ -4,7 +4,23 @@ use crate::run_ledger::RunLedgerStore;
 use chrono::Duration;
 use serde_json::json;
 use std::sync::Arc;
-use tinystoragedrivers_core::{ErrorKind, MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_core::{
+    DocumentStoreExt, ErrorKind, MemoryStorage, Query, Scope, ScopedStorage, StorageBackend,
+    Versioned,
+};
+
+async fn collection_snapshot(
+    storage: &ScopedStorage,
+    collection: &str,
+) -> Vec<Versioned<serde_json::Value>> {
+    let mut rows = storage
+        .documents()
+        .query_all(collection, &Query::default())
+        .await
+        .unwrap();
+    rows.sort_by(|left, right| left.id.cmp(&right.id));
+    rows
+}
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
@@ -96,10 +112,13 @@ async fn file_workflow_lease_race_and_revision_fencing() {
         .await
         .unwrap();
 
+    let start = Arc::new(tokio::sync::Barrier::new(3));
     let mut claimers = tokio::task::JoinSet::new();
     for owner in ["first", "second", "third"] {
         let ledger = ledger.clone();
+        let start = start.clone();
         claimers.spawn(async move {
+            start.wait().await;
             ledger
                 .try_claim_workflow_run("leased", owner, Duration::minutes(1))
                 .await
@@ -107,13 +126,20 @@ async fn file_workflow_lease_race_and_revision_fencing() {
         });
     }
     let mut acquired = Vec::new();
+    let mut busy = Vec::new();
     while let Some(result) = claimers.join_next().await {
-        if let WorkflowLeaseClaim::Acquired(run) = result.unwrap() {
-            acquired.push(run);
+        match result.unwrap() {
+            WorkflowLeaseClaim::Acquired(run) => acquired.push(run),
+            WorkflowLeaseClaim::Busy(run) => busy.push(run),
+            WorkflowLeaseClaim::Missing => panic!("the seeded workflow remains present"),
         }
     }
     assert_eq!(acquired.len(), 1, "one live workflow lease owner wins");
+    assert_eq!(busy.len(), 2, "every losing live claimant reports Busy");
     let owner = acquired[0].lease_owner.as_deref().unwrap();
+    assert!(busy
+        .iter()
+        .all(|run| run.lease_owner.as_deref() == Some(owner)));
     assert!(
         ledger
             .renew_workflow_run_lease("leased", owner, Duration::minutes(1))
@@ -172,11 +198,8 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
 
     let dir = tempfile::tempdir().unwrap();
     let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
-    let ledger = DriverRunLedger::new(
-        backend
-            .for_scope(&Scope::new("profile-a").unwrap())
-            .unwrap(),
-    );
+    let storage = backend.for_scope(&Scope::new("profile-a").unwrap()).unwrap();
+    let ledger = DriverRunLedger::new(storage.clone());
     let telemetry = ledger
         .upsert_run_telemetry(RunTelemetryUpsert {
             run_id: "atomic-agent".into(),
@@ -187,6 +210,8 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
         .unwrap();
     assert_eq!(telemetry.input_tokens, 17);
 
+    let agents_before = collection_snapshot(&storage, "ledger.agent_runs").await;
+    let telemetry_before = collection_snapshot(&storage, "ledger.telemetry").await;
     let error = ledger
         .upsert_agent_run(crate::run_ledger::AgentRunUpsert {
             id: "atomic-agent".into(),
@@ -210,28 +235,19 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
     assert!(
         matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
     );
-    assert!(
-        ledger
-            .list_agent_runs(&AgentRunListRequest::default())
-            .await
-            .unwrap()
-            .runs
-            .is_empty(),
-        "failed atomic agent upsert leaves no agent row"
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.agent_runs").await,
+        agents_before,
+        "failed atomic agent upsert leaves every agent record unchanged"
     );
     assert_eq!(
-        ledger
-            .upsert_run_telemetry(RunTelemetryUpsert {
-                run_id: "atomic-agent".into(),
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .input_tokens,
-        17,
-        "failed agent upsert does not alter telemetry"
+        collection_snapshot(&storage, "ledger.telemetry").await,
+        telemetry_before,
+        "failed atomic agent upsert leaves every telemetry record unchanged"
     );
 
+    let event_heads_before = collection_snapshot(&storage, "ledger.event_heads").await;
+    let events_before = collection_snapshot(&storage, "ledger.event_outbox").await;
     let error = ledger
         .append_run_event(RunEventAppend {
             run_id: "atomic-agent".into(),
@@ -243,20 +259,19 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
     assert!(
         matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
     );
-    assert!(
-        ledger
-            .list_recent_run_events(&RunEventListRequest {
-                run_id: "atomic-agent".into(),
-                after_sequence: None,
-                limit: None,
-            })
-            .await
-            .unwrap()
-            .events
-            .is_empty(),
-        "failed event append leaves no event row"
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.event_heads").await,
+        event_heads_before,
+        "failed event append leaves every event head unchanged"
+    );
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.event_outbox").await,
+        events_before,
+        "failed event append leaves every event record unchanged"
     );
 
+    let tasks_before = collection_snapshot(&storage, "ledger.tasks").await;
+    let members_before = collection_snapshot(&storage, "ledger.members").await;
     ledger
         .upsert_agent_team_task(crate::run_ledger::AgentTeamTaskUpsert {
             id: "atomic-task".into(),
@@ -282,15 +297,15 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
     assert!(
         matches!(error, LedgerError::Driver(ref native) if native.kind() == ErrorKind::Unsupported(Capability::ValidatedBatch))
     );
-    let tasks = ledger.list_agent_team_tasks("atomic-team").await.unwrap();
-    assert_eq!(tasks.len(), 1);
     assert_eq!(
-        tasks[0].status,
-        crate::run_ledger::AgentTeamTaskStatus::Todo
+        collection_snapshot(&storage, "ledger.tasks").await,
+        tasks_before,
+        "failed atomic claim leaves every task record unchanged"
     );
-    assert!(
-        tasks[0].claimed_by_member_id.is_none(),
-        "failed atomic claim leaves task unclaimed"
+    assert_eq!(
+        collection_snapshot(&storage, "ledger.members").await,
+        members_before,
+        "failed atomic claim leaves every member record unchanged"
     );
 }
 
