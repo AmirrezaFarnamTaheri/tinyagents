@@ -25,7 +25,10 @@ impl ChatModel<()> for ChargedModel {
 #[tokio::test]
 async fn explicit_dispatch_observer_runs_after_charge_normalization() {
     use crate::observability::turn_observer::TurnObservation;
-    use crate::observability::{PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome, PhysicalDispatchTerminal};
+    use crate::observability::{
+        PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome,
+        PhysicalDispatchTerminal,
+    };
 
     struct ExplicitObserver(Arc<RecordingObserver>);
     struct ExplicitTerminal(Arc<RecordingObserver>);

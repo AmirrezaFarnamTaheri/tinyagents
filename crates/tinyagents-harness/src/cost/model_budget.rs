@@ -52,14 +52,13 @@ impl ModelBudget {
     ) -> Arc<dyn ChatModel<()>> {
         let charged = Arc::new(super::GatewayChargeModel::new(model));
         let explicitly_observed: Arc<dyn ChatModel<()>> = match observer {
-            Some(observer) => Arc::new(
-                crate::observability::ObservedChatModel::new(charged, observer),
-            ),
+            Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(
+                charged, observer,
+            )),
             None => charged,
         };
-        let observed = crate::observability::turn_observer::observe_physical_dispatches(
-            explicitly_observed,
-        );
+        let observed =
+            crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed);
         Arc::new(BudgetedModel::new(observed, self.ledger.clone(), self.call))
     }
 }
