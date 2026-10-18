@@ -14,7 +14,6 @@ fn goal(status: ThreadGoalStatus, token_budget: Option<u64>, tokens_used: u64) -
         time_used_seconds: 0,
         created_at_ms: 0,
         updated_at_ms: 0,
-        continuation_suppressed: false,
     }
 }
 
@@ -514,35 +513,6 @@ mod budget_tests {
         assert_eq!(unchanged.tokens_used, 0);
     }
 
-    #[tokio::test]
-    async fn a_user_turn_clears_suppression_but_a_continuation_does_not() {
-        let kv = kv();
-        let goal = store::set(&kv, "t1", "ship it", None).await.unwrap();
-        store::set_continuation_suppressed_if(&kv, "t1", &goal.goal_id, true)
-            .await
-            .unwrap();
-
-        // The continuation's own accounting must not clear its one-shot flag,
-        // or the loop would never stop.
-        account_turn(&kv, "t1", 10, 10, 1, false).await.unwrap();
-        assert!(
-            store::get(&kv, "t1")
-                .await
-                .unwrap()
-                .unwrap()
-                .continuation_suppressed
-        );
-
-        // A person re-engaging re-arms the next idle continuation.
-        account_turn(&kv, "t1", 10, 10, 1, true).await.unwrap();
-        assert!(
-            !store::get(&kv, "t1")
-                .await
-                .unwrap()
-                .unwrap()
-                .continuation_suppressed
-        );
-    }
 
     #[test]
     fn a_guard_is_only_armed_for_an_active_goal_with_a_budget() {

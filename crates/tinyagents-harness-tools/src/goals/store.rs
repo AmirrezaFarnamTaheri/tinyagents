@@ -127,7 +127,6 @@ async fn compute_and_put_set(
     let goal = match load(store, thread_id).await? {
         Some(mut existing) if existing.objective == objective => {
             existing.token_budget = token_budget;
-            existing.continuation_suppressed = false;
             existing.updated_at_ms = now;
             existing.status = if existing.over_budget() {
                 ThreadGoalStatus::BudgetLimited
@@ -148,7 +147,6 @@ async fn compute_and_put_set(
                 time_used_seconds: 0,
                 created_at_ms,
                 updated_at_ms: now,
-                continuation_suppressed: false,
             }
         }
     };
@@ -235,7 +233,6 @@ where
 pub async fn complete(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal> {
     mutate(store, thread_id, |g| {
         g.status = ThreadGoalStatus::Complete;
-        g.continuation_suppressed = true;
     })
     .await
 }
@@ -256,41 +253,9 @@ pub async fn resume(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoa
     mutate(store, thread_id, |g| {
         if matches!(g.status, ThreadGoalStatus::Paused) {
             g.status = ThreadGoalStatus::Active;
-            g.continuation_suppressed = false;
         }
     })
     .await
-}
-
-/// Set `continuation_suppressed` only when the thread's current goal still
-/// matches `expected_goal_id` and is still active (compare-and-set). Returns the
-/// goal as it stands after the (possibly skipped) write, or `None` when the
-/// thread has no goal.
-///
-/// The guard means a goal completed or replaced during a continuation iteration
-/// is never suppressed by a late post-iteration write.
-pub async fn set_continuation_suppressed_if(
-    store: &Arc<dyn Store>,
-    thread_id: &str,
-    expected_goal_id: &str,
-    suppressed: bool,
-) -> Result<Option<ThreadGoal>> {
-    let thread_id = validate_thread_id(thread_id)?;
-    let lock = thread_lock(&thread_id);
-    let _guard = lock.lock().await;
-    let Some(mut goal) = load(store, &thread_id).await? else {
-        return Ok(None);
-    };
-    if goal.goal_id != expected_goal_id
-        || !goal.status.is_active()
-        || goal.continuation_suppressed == suppressed
-    {
-        return Ok(Some(goal));
-    }
-    goal.continuation_suppressed = suppressed;
-    goal.updated_at_ms = now_ms();
-    save(store, &goal).await?;
-    Ok(Some(goal))
 }
 
 /// Account token + time usage against the goal, applying the budget constraint.
