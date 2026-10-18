@@ -646,21 +646,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
         }
         match verdict {
             GateVerdict::Proceed { ticket } => {
+                let Some(resolver) = &self.resolver else {
+                    if let Some(result) = self
+                        .post_gate
+                        .as_ref()
+                        .and_then(|post_gate| post_gate(ctx, &call))
+                    {
+                        return Ok(MiddlewareToolOutcome::Result(result));
+                    }
+                    return next.run(ctx, state, call).await;
+                };
+                let mut guard = TicketGuard::new(resolver.as_ref(), ticket);
                 if let Some(result) = self
                     .post_gate
                     .as_ref()
                     .and_then(|post_gate| post_gate(ctx, &call))
                 {
-                    let outcome = MiddlewareToolOutcome::Result(result);
-                    if let Some(resolver) = &self.resolver {
-                        record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);
-                    }
-                    return Ok(outcome);
+                    guard.complete(ApprovalExecutionOutcome::Result(&result));
+                    return Ok(MiddlewareToolOutcome::Result(result));
                 }
-                let Some(resolver) = &self.resolver else {
-                    return next.run(ctx, state, call).await;
-                };
-                let mut guard = TicketGuard::new(resolver.as_ref(), ticket);
                 match next.run(ctx, state, call).await {
                     Ok(outcome) => {
                         match &outcome {

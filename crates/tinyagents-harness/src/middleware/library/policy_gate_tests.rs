@@ -392,6 +392,25 @@ async fn approved_post_gate_response_records_the_approval_once() {
 }
 
 #[tokio::test]
+async fn approved_post_gate_response_records_one_terminal_callback() {
+    let resolver = Arc::new(TerminalResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(|_ctx, _call| {
+                Some(ToolResult::success("short-circuit"))
+            })),
+    );
+    let (result, runs) = run(middleware, "send", false).await;
+    assert_eq!(result.output(), "short-circuit");
+    assert_eq!(runs, 0);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("ticket".into(), "result")]
+    );
+}
+
+#[tokio::test]
 async fn session_ceiling_deny_precedes_builder_allow_and_post_gate() {
     let post_calls = Arc::new(Mutex::new(0));
     let observed = post_calls.clone();
