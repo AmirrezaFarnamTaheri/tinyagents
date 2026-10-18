@@ -42,10 +42,10 @@ fn typed_halts_preserve_classes_operations_and_legacy_verdicts() {
     let typed = typed_identical.record_with_cause(DEFAULT_IDENTICAL_HALT_THRESHOLD, &attempt);
     assert_eq!(typed.verdict, legacy);
     assert_eq!(
-        typed.failure_cause.as_ref().map(|cause| (
-            cause.class.as_str(),
-            cause.operation.as_str()
-        )),
+        typed
+            .failure_cause
+            .as_ref()
+            .map(|cause| (cause.class.as_str(), cause.operation.as_str())),
         Some(("repeated_failure", "read_file"))
     );
 
@@ -59,10 +59,10 @@ fn typed_halts_preserve_classes_operations_and_legacy_verdicts() {
         assert_eq!(typed.verdict, legacy);
         if step == NO_PROGRESS_HALT_THRESHOLD {
             assert_eq!(
-                typed.failure_cause.as_ref().map(|cause| (
-                    cause.class.as_str(),
-                    cause.operation.as_str()
-                )),
+                typed
+                    .failure_cause
+                    .as_ref()
+                    .map(|cause| (cause.class.as_str(), cause.operation.as_str())),
                 Some(("varied_failures", "tool"))
             );
         }

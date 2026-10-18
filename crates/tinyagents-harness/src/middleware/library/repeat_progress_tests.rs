@@ -245,7 +245,9 @@ async fn successful_repeat_halt_carries_typed_operation_into_the_run() {
     }
 
     assert_eq!(drain_pause_count(&handle), 1);
-    let cause = ctx.take_halted_by_guard_cause().expect("typed repeat cause");
+    let cause = ctx
+        .take_halted_by_guard_cause()
+        .expect("typed repeat cause");
     assert_eq!(cause.class, "repeating_step");
     assert_eq!(cause.operation, "lookup");
     assert!(cause.summary.contains("successful tool-call batch"));

@@ -237,11 +237,7 @@ impl NoProgressTracker {
 
     /// Record an outcome and preserve the ladder's structured terminal class
     /// and operation beside its existing human-readable verdict.
-    pub fn record_with_cause(
-        &self,
-        step: usize,
-        attempt: &ToolAttempt,
-    ) -> NoProgressAssessment {
+    pub fn record_with_cause(&self, step: usize, attempt: &ToolAttempt) -> NoProgressAssessment {
         // Fingerprint before taking the lock: it scans the whole line.
         let err_identity = attempt.error.map(|err| self.fingerprinter.fingerprint(err));
         let mut state = self.state.lock().unwrap();
@@ -344,7 +340,12 @@ impl NoProgressTracker {
         {
             state.nudged_streak = true;
             return NoProgressAssessment {
-                verdict: NoProgress::Nudge(varied_nudge(step, attempt.tool, state.consecutive, err)),
+                verdict: NoProgress::Nudge(varied_nudge(
+                    step,
+                    attempt.tool,
+                    state.consecutive,
+                    err,
+                )),
                 failure_cause: None,
             };
         }

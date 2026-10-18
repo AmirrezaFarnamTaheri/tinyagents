@@ -19,8 +19,8 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 use tinyagents_harness::no_progress::ClassifiedStopCause;
+use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
 
 use tinyagents_harness::middleware::library::{
     RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary,
@@ -130,7 +130,15 @@ impl StopLatch {
 
     /// The classified cause that currently owns this latch, if any.
     pub fn current_classified_cause(&self) -> Option<ClassifiedStopCause> {
-        self.own_cause.lock().ok().and_then(|cause| cause.clone())
+        let slot = self.slot.lock().ok()?;
+        let own = self.own.lock().ok()?;
+        let cause = self.own_cause.lock().ok()?;
+        match (slot.as_deref(), own.as_deref(), cause.as_ref()) {
+            (Some(slot), Some(own), Some(cause)) if slot == own && slot == cause.summary => {
+                Some(cause.clone())
+            }
+            _ => None,
+        }
     }
 
     /// Record classified-stop bookkeeping without sending a pause. Use this

@@ -220,10 +220,7 @@ impl RepeatProgressMiddleware {
     }
 }
 
-fn repeat_stop_cause(
-    summary: String,
-    operation: &str,
-) -> crate::no_progress::ClassifiedStopCause {
+fn repeat_stop_cause(summary: String, operation: &str) -> crate::no_progress::ClassifiedStopCause {
     crate::no_progress::ClassifiedStopCause {
         class: "repeating_step".into(),
         operation: operation.to_owned(),
@@ -389,10 +386,7 @@ impl<C: Send + Sync> Middleware<(), C> for RepeatProgressMiddleware {
                     .get_mut(&run_id)
                     .is_none_or(|batch| !std::mem::replace(&mut batch.halted, true));
                 if first {
-                    self.halt_classified(
-                        ctx,
-                        repeat_stop_cause(summary.clone(), &call.name),
-                    );
+                    self.halt_classified(ctx, repeat_stop_cause(summary.clone(), &call.name));
                 }
                 Err(TinyAgentsError::ToolFailed(summary))
             }

@@ -61,12 +61,8 @@ impl FailureScopePolicy<()> for Policy {
         call.name == "repeat_guard" && result.is_error
     }
 
-    fn record_guard_refusal(
-        &self,
-        _ctx: &RunContext<()>,
-    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+    fn record_guard_refusal(&self, _ctx: &RunContext<()>) {
         self.guard_refusals.fetch_add(1, Ordering::SeqCst);
-        None
     }
 }
 
@@ -128,14 +124,8 @@ impl FailureScopePolicy<()> for ResetAndCallCopyPolicy {
         format!("{}: {summary}", call.name)
     }
 
-    fn record_progress(
-        &self,
-        _ctx: &RunContext<()>,
-        _call: &ToolCall,
-        _scope: &FailureScope,
-    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+    fn record_progress(&self, _ctx: &RunContext<()>, _call: &ToolCall, _scope: &FailureScope) {
         self.progress.fetch_add(1, Ordering::SeqCst);
-        None
     }
 
     fn reset_no_progress_before_failure(

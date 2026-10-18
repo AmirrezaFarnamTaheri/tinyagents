@@ -156,19 +156,17 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
 
     /// Host adapter for shared repeat-stop state, called when a guard refusal
     /// is observed.
-    fn record_guard_refusal(
-        &self,
-        _ctx: &RunContext<Ctx>,
-    ) -> Option<crate::no_progress::ClassifiedStopCause> {
-        None
-    }
+    fn record_guard_refusal(&self, _ctx: &RunContext<Ctx>) {}
 
     /// Host adapter for shared repeat-stop state, called after useful progress.
-    fn record_progress(
+    fn record_progress(&self, _ctx: &RunContext<Ctx>, _call: &ToolCall, _scope: &FailureScope) {}
+
+    /// Current typed cause owned by host stop-latch state after its bookkeeping
+    /// callback. Implementations should return a cause only while they still
+    /// own the run's current stop note.
+    fn current_halt_cause(
         &self,
         _ctx: &RunContext<Ctx>,
-        _call: &ToolCall,
-        _scope: &FailureScope,
     ) -> Option<crate::no_progress::ClassifiedStopCause> {
         None
     }
@@ -209,8 +207,7 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
         _call: &ToolCall,
         _repeated: bool,
         _error: &str,
-    ) -> Option<crate::no_progress::ClassifiedStopCause> {
-        None
+    ) {
     }
 
     /// Called when the run ends or errors so a host stop-latch adapter can
@@ -326,9 +323,10 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             slot.get_or_insert(summary).clone()
         };
+        let owns_first = cause.as_ref().is_some_and(|cause| cause.summary == first);
         if ctx.halted_by_guard.is_none() {
             ctx.halted_by_guard = Some(first);
-            ctx.halted_by_guard_cause = cause;
+            ctx.halted_by_guard_cause = owns_first.then_some(cause).flatten();
         }
         self.handle.send(SteeringCommand::Pause);
     }
@@ -343,7 +341,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
     ) {
         let tool = invocation.tool_name();
         if self.policy.is_repeat_guard_refusal(ctx, &call, result) {
-            if let Some(cause) = self.policy.record_guard_refusal(ctx) {
+            self.policy.record_guard_refusal(ctx);
+            if let Some(cause) = self.policy.current_halt_cause(ctx) {
+                ctx.halted_by_guard = Some(cause.summary.clone());
                 ctx.halted_by_guard_cause = Some(cause);
             }
             return;
@@ -370,7 +370,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 let _ = run.tracker.record(step, &attempt);
                 run.recoverable.reset_streak();
                 clear_recovered(&run.classified, tool, &scope.scope);
-                if let Some(cause) = self.policy.record_progress(ctx, &call, &scope) {
+                self.policy.record_progress(ctx, &call, &scope);
+                if let Some(cause) = self.policy.current_halt_cause(ctx) {
+                    ctx.halted_by_guard = Some(cause.summary.clone());
                     ctx.halted_by_guard_cause = Some(cause);
                 }
             }
@@ -396,8 +398,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     tool,
                     &argument_key,
                     &error,
-                )
-                {
+                ) {
                     let summary = self.policy.halt_copy_for_call(
                         ctx,
                         FailureStopKind::Recoverable,
@@ -408,10 +409,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                     self.halt(
                         ctx,
                         summary.clone(),
-                        Some(crate::no_progress::ClassifiedStopCause {
-                            summary,
-                            ..cause
-                        }),
+                        Some(crate::no_progress::ClassifiedStopCause { summary, ..cause }),
                     );
                     run.recoverable.reset_streak();
                 }
@@ -444,7 +442,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             &error,
                             &call,
                         );
-                        let latch_cause = self.policy.classified_halt(
+                        self.policy.classified_halt(
                             ctx,
                             &summary,
                             &class,
@@ -452,18 +450,14 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             repeated_failure,
                             &error,
                         );
-                        let cause = latch_cause.unwrap_or_else(|| {
+                        let cause = self.policy.current_halt_cause(ctx).unwrap_or_else(|| {
                             crate::no_progress::ClassifiedStopCause {
                                 summary: summary.clone(),
                                 ..cause
                             }
                         });
                         let summary = cause.summary.clone();
-                        self.halt(
-                            ctx,
-                            summary.clone(),
-                            Some(cause),
-                        );
+                        self.halt(ctx, summary.clone(), Some(cause));
                     }
                 }
             }
@@ -506,11 +500,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             &error,
                             &call,
                         );
-                        let cause = cause.map(|cause| {
-                            crate::no_progress::ClassifiedStopCause {
-                                summary: summary.clone(),
-                                ..cause
-                            }
+                        let cause = cause.map(|cause| crate::no_progress::ClassifiedStopCause {
+                            summary: summary.clone(),
+                            ..cause
                         });
                         self.halt(ctx, summary, cause);
                     }
