@@ -29,7 +29,6 @@ mod ops;
 mod roster;
 mod status;
 mod status_map;
-mod steer;
 mod types;
 
 pub use completion::{
@@ -52,10 +51,6 @@ pub use roster::{
     task_id_for_session_in_records,
 };
 pub use status::{wait_detached, wait_error_from_registry};
-pub use steer::{
-    SteerAccess, SteerError, SteerReceipt, SteerRoute, cancel_for_thread, distinct_parent_threads,
-    queue_lane_name, steer_detached, steer_detached_with_request_id, steering_command_for_lane,
-};
 pub use types::{
     DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome, SpawnedSubagent,
     SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitError, WaitOutcome,
@@ -64,9 +59,6 @@ pub use types::{
 #[cfg(test)]
 #[path = "completion_tests.rs"]
 mod completion_test;
-#[cfg(test)]
-#[path = "steer_tests.rs"]
-mod steer_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
