@@ -303,7 +303,10 @@ async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
         .await
         .unwrap();
 
-    assert!(matches!(stream.next().await, Some(ModelStreamItem::Started)));
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Started)
+    ));
     assert!(recorder.0.lock().unwrap().is_empty());
     assert!(matches!(
         stream.next().await,
