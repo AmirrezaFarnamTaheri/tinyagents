@@ -1,8 +1,8 @@
 use super::*;
 
+use futures::StreamExt;
 use std::sync::Mutex;
 use tinyinference_llm::model::ModelResponse;
-use futures::StreamExt;
 
 #[derive(Default)]
 struct Recorder(Mutex<Vec<PhysicalDispatchOutcome>>);
@@ -51,21 +51,13 @@ struct StreamingModel;
 
 #[async_trait::async_trait]
 impl ChatModel<()> for StreamingModel {
-    async fn invoke(
-        &self,
-        _: &(),
-        _: ModelRequest,
-    ) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
         Ok(ModelResponse::assistant("invoke fallback"))
     }
 
-    async fn stream(
-        &self,
-        _: &(),
-        _: ModelRequest,
-    ) -> tinyinference_llm::Result<ModelStream> {
-        let items = futures::stream::iter([ModelStreamItem::Started])
-            .chain(futures::stream::pending());
+    async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
+        let items =
+            futures::stream::iter([ModelStreamItem::Started]).chain(futures::stream::pending());
         Ok(ModelStream::new(Box::pin(items)))
     }
 }
@@ -79,12 +71,33 @@ async fn dropping_a_stream_after_a_chunk_reports_cancellation() {
         .stream(&(), ModelRequest::new(Vec::new()))
         .await
         .unwrap();
-    assert!(matches!(stream.next().await, Some(ModelStreamItem::Started)));
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Started)
+    ));
     drop(stream);
 
     let outcomes = recorder.0.lock().unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
+}
+
+#[test]
+fn refusal_metadata_is_reported_without_including_provider_text() {
+    let response = ModelResponse {
+        raw: Some(serde_json::json!({
+            "choices": [{"message": {"refusal": "private refusal text"}}]
+        })),
+        ..ModelResponse::assistant("private refusal text")
+    };
+    let outcome = dispatch_outcome(Some(&response), true);
+
+    assert_eq!(outcome.status, PhysicalDispatchStatus::Refused);
+    assert!(outcome.refused);
+    assert_eq!(
+        format!("{outcome:?}").contains("private refusal text"),
+        false
+    );
 }
 
 #[test]
@@ -94,6 +107,7 @@ fn finishing_a_dispatch_does_not_emit_a_second_cancelled_terminal_on_drop() {
     let guard = PhysicalDispatchGuard::new(observer.on_start(&PhysicalDispatchMetadata::default()));
     guard.finish(PhysicalDispatchOutcome {
         status: PhysicalDispatchStatus::Succeeded,
+        refused: false,
         duration: Duration::ZERO,
         usage: None,
         answered_model: None,

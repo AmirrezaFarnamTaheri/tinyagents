@@ -22,6 +22,8 @@ pub struct PhysicalDispatchMetadata {
 pub struct PhysicalDispatchOutcome {
     /// Whether the provider call returned or was interrupted.
     pub status: PhysicalDispatchStatus,
+    /// Whether the provider reported a refusal response.
+    pub refused: bool,
     /// Time spent in the provider invocation.
     pub duration: Duration,
     /// Provider-reported usage, when returned.
@@ -203,13 +205,24 @@ fn dispatch_outcome(response: Option<&ModelResponse>, succeeded: bool) -> Physic
                         .and_then(serde_json::Value::as_f64)
                 }),
         });
-    let status = match response.and_then(|response| response.finish_reason.as_deref()) {
-        Some("refusal" | "content_filter") => PhysicalDispatchStatus::Refused,
-        _ if succeeded => PhysicalDispatchStatus::Succeeded,
+    let refused = response.is_some_and(|response| {
+        matches!(
+            response.finish_reason.as_deref(),
+            Some("refusal" | "content_filter")
+        ) || response
+            .raw
+            .as_ref()
+            .and_then(|raw| raw.pointer("/choices/0/message/refusal"))
+            .is_some_and(|refusal| refusal.as_str().is_some_and(|text| !text.is_empty()))
+    });
+    let status = match (refused, succeeded) {
+        (true, _) => PhysicalDispatchStatus::Refused,
+        (_, true) => PhysicalDispatchStatus::Succeeded,
         _ => PhysicalDispatchStatus::Failed,
     };
     PhysicalDispatchOutcome {
         status,
+        refused,
         duration: Duration::ZERO,
         usage,
         answered_model: raw
@@ -249,6 +262,7 @@ impl Drop for PhysicalDispatchGuard {
         if let Some(terminal) = self.terminal.take() {
             terminal.on_terminal(PhysicalDispatchOutcome {
                 status: PhysicalDispatchStatus::Cancelled,
+                refused: false,
                 duration: self.started.elapsed(),
                 usage: None,
                 answered_model: None,

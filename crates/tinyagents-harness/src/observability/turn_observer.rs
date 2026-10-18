@@ -79,6 +79,8 @@ pub enum TurnObservation {
         duration_ms: u64,
         /// Terminal outcome label.
         status: PhysicalDispatchStatus,
+        /// Whether the provider reported a refusal response.
+        refused: bool,
         /// Provider-reported usage.
         usage: Option<ObservedUsage>,
     },
@@ -258,6 +260,7 @@ impl PhysicalDispatchTerminal for DispatchTerminal {
             finish_reason: outcome.finish_reason,
             duration_ms: outcome.duration.as_millis().min(u128::from(u64::MAX)) as u64,
             status: outcome.status,
+            refused: outcome.refused,
             usage,
         });
     }
