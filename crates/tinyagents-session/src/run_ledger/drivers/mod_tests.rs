@@ -284,7 +284,10 @@ async fn file_ledger_rejects_atomic_agent_operations_without_partial_writes() {
     );
     let tasks = ledger.list_agent_team_tasks("atomic-team").await.unwrap();
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, crate::run_ledger::AgentTeamTaskStatus::Todo);
+    assert_eq!(
+        tasks[0].status,
+        crate::run_ledger::AgentTeamTaskStatus::Todo
+    );
     assert!(
         tasks[0].claimed_by_member_id.is_none(),
         "failed atomic claim leaves task unclaimed"
