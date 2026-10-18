@@ -319,6 +319,8 @@ async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
     ));
     assert!(recorder.0.lock().unwrap().is_empty());
     assert!(stream.next().await.is_none());
+    assert!(stream.next().await.is_none());
+    drop(stream);
 
     let outcomes = recorder.0.lock().unwrap().clone();
     assert_eq!(outcomes.len(), 1);
