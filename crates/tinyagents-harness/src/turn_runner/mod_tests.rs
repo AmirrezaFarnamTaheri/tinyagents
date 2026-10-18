@@ -2183,3 +2183,121 @@ async fn cancelled_run_unwinds_within_the_cancel_grace() {
 async fn cancelled_run_is_dropped_at_once_without_a_cancel_grace() {
     assert!(!cancel_unwinding_turn(std::time::Duration::ZERO).await);
 }
+
+#[tokio::test]
+async fn live_turns_snapshot_and_scoped_cancel_report_every_turn() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let host = Arc::new(Host {
+        started: Some(started.clone()),
+        release: Some(release.clone()),
+        ..Host::default()
+    });
+    let runner = Arc::new(runner(
+        host.clone(),
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        Arc::new(Events::default()),
+    ));
+    let primary_request = request(QueueDisposition::Interrupt, false);
+    let scope = primary_request.scope.clone();
+    let thread = primary_request.thread_id.clone();
+    let primary = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(primary_request).await })
+    };
+    started.notified().await;
+    let mut parallel_request = request(QueueDisposition::Parallel, false);
+    parallel_request.request_id = "parallel-a".into();
+    let parallel = {
+        let runner = runner.clone();
+        tokio::spawn(async move { runner.run(parallel_request).await })
+    };
+    started.notified().await;
+
+    let mut queued = request(QueueDisposition::Followup, false);
+    queued.request_id = "queued-a".into();
+    assert!(matches!(
+        runner.run(queued).await,
+        Err(TurnRunnerError::Queued)
+    ));
+
+    let mut live = runner.live_turns().await;
+    live.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    assert_eq!(
+        live.iter()
+            .map(|turn| (turn.request_id.as_str(), turn.parallel))
+            .collect::<Vec<_>>(),
+        [("parallel-a", true), ("request-a", false)]
+    );
+    assert!(
+        live.iter()
+            .all(|turn| turn.scope == scope && turn.thread_id == thread)
+    );
+
+    let snapshot = runner.queue_snapshot(&scope, &thread).await;
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].0, QueueLane::Followup);
+    assert_eq!(snapshot[0].1.request_id, "queued-a");
+    assert!(
+        runner
+            .queue_snapshot(&scope, "other-thread")
+            .await
+            .is_empty()
+    );
+
+    // A scoped cancel names exactly the parallel turn.
+    assert_eq!(
+        runner
+            .cancel_requests(&scope, &thread, Some("parallel-a"))
+            .await,
+        ["parallel-a"]
+    );
+    assert!(matches!(
+        parallel.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    // An unscoped cancel then stops the primary turn and drops its queue.
+    assert_eq!(
+        runner.cancel_requests(&scope, &thread, None).await,
+        ["request-a"]
+    );
+    assert!(matches!(
+        primary.await.unwrap(),
+        Err(TurnRunnerError::Cancelled)
+    ));
+    assert!(runner.live_turns().await.is_empty());
+    assert!(
+        runner
+            .cancel_requests(&scope, &thread, None)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn failed_terminal_event_carries_the_raw_error() {
+    let events = Arc::new(Events::default());
+    let host = Arc::new(Host {
+        fail_run: true,
+        ..Host::default()
+    });
+    let runner = runner(
+        host,
+        Arc::new(Ingress::default()),
+        Arc::new(Replies::default()),
+        events.clone(),
+    );
+    assert!(matches!(
+        runner
+            .run(request(QueueDisposition::Interrupt, false))
+            .await,
+        Err(TurnRunnerError::Failed(_))
+    ));
+    let terminal = events.terminal.lock().unwrap();
+    assert!(matches!(
+        terminal.as_slice(),
+        [TerminalEvent::Failed { error, message, class, .. }]
+            if error == "host run failed" && message == "host run failed" && class == "internal"
+    ));
+}
