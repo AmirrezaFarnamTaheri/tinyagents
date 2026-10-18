@@ -200,26 +200,54 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         Arc::new(ResetAndCallCopyPolicy),
         2,
     );
-    let call = |id: &'static str, reset: bool| async {
-        observe_once(
-            &middleware,
-            89,
-            id,
-            "shell",
-            json!({"reset": reset}),
-            ToolResult::error("exit status 1"),
-        )
-        .await
-    };
-
-    call("first", false).await;
-    call("second", false).await;
+    observe_once(
+        &middleware,
+        89,
+        "first",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
+    observe_once(
+        &middleware,
+        89,
+        "second",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
     assert!(halt_summary.lock().unwrap().is_none());
-    call("new-command", true).await;
+    observe_once(
+        &middleware,
+        89,
+        "new-command",
+        "shell",
+        json!({"reset": true}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
     assert!(halt_summary.lock().unwrap().is_none());
-    call("new-command-repeat", false).await;
+    observe_once(
+        &middleware,
+        89,
+        "new-command-repeat",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
     assert!(halt_summary.lock().unwrap().is_none());
-    call("new-command-repeat-again", false).await;
+    observe_once(
+        &middleware,
+        89,
+        "new-command-repeat-again",
+        "shell",
+        json!({}),
+        ToolResult::error("exit status 1"),
+    )
+    .await;
     assert_eq!(
         halt_summary.lock().unwrap().as_deref(),
         Some(
