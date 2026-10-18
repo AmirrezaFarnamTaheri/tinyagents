@@ -21,6 +21,7 @@ mod signature;
 mod timeout;
 pub mod toolset;
 mod types;
+mod snapshot;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,6 +49,7 @@ pub use shared::{
 };
 pub use signature::*;
 pub use timeout::*;
+pub use snapshot::{ToolSnapshot, ToolSnapshotError};
 pub use toolset::{ToolExposureExplanation, ToolSet};
 pub use types::ToolExecutionContext;
 

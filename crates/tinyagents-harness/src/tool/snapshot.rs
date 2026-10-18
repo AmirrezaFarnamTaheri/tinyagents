@@ -61,7 +61,7 @@ impl ToolSnapshot {
         self
     }
 
-    pub(crate) fn is_exact(&self) -> bool {
+    pub fn is_exact(&self) -> bool {
         self.exact
     }
 

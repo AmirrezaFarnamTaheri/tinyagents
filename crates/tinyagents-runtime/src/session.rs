@@ -12,7 +12,7 @@ use tinyinference_llm::message::Message;
 use crate::{
     CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, ResumePreparation, RuntimeError,
     SessionDriver, SessionHooks, SessionResume, SessionStateView, SessionTerminal,
-    SessionTurnOutcome, SessionTurnRequest, ToolSnapshot, TranscriptCodec, TranscriptCommitReceipt,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
 
