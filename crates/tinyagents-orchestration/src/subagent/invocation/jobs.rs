@@ -4,14 +4,17 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use tinyagents_harness::cancel::CancellationToken;
+use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::{TaskId, next_seq};
 use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{SteeringCommandKind, SteeringHandle, SteeringPolicy};
+use tinyagents_harness::steering::{
+    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
+};
 use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
 use tokio::sync::watch;
 
-use crate::subagent::SubagentTaskKey;
+use crate::subagent::{AppliedResult, IncompleteKind, SubagentTaskKey};
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
