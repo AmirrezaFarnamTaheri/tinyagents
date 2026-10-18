@@ -214,7 +214,11 @@ pub async fn clear(store: &Arc<dyn Store>, thread_id: &str) -> Result<bool> {
 
 /// Generic guarded mutator: load, apply `f`, persist. Returns the updated goal,
 /// or a [`Validation`](TinyAgentsError::Validation) error if the thread has none.
-async fn mutate<F>(store: &Arc<dyn Store>, thread_id: &str, f: F) -> Result<ThreadGoal>
+async fn mutate_with_before<F>(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+    f: F,
+) -> Result<(ThreadGoal, ThreadGoal)>
 where
     F: FnOnce(&mut ThreadGoal),
 {
@@ -224,10 +228,20 @@ where
     let mut goal = load(store, &thread_id).await?.ok_or_else(|| {
         TinyAgentsError::Validation(format!("no thread goal for thread '{thread_id}'"))
     })?;
+    let before = goal.clone();
     f(&mut goal);
     goal.updated_at_ms = now_ms();
     save(store, &goal).await?;
-    Ok(goal)
+    Ok((before, goal))
+}
+
+async fn mutate<F>(store: &Arc<dyn Store>, thread_id: &str, f: F) -> Result<ThreadGoal>
+where
+    F: FnOnce(&mut ThreadGoal),
+{
+    mutate_with_before(store, thread_id, f)
+        .await
+        .map(|(_, updated)| updated)
 }
 
 /// Mark the goal `Complete` (model-driven success). Suppresses further
@@ -241,7 +255,14 @@ pub async fn complete(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadG
 
 /// Pause an `Active` goal (host-driven). A no-op for goals that aren't active.
 pub async fn pause(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal> {
-    mutate(store, thread_id, |g| {
+    pause_with_before(store, thread_id).await.map(|(_, updated)| updated)
+}
+
+pub(crate) async fn pause_with_before(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+) -> Result<(ThreadGoal, ThreadGoal)> {
+    mutate_with_before(store, thread_id, |g| {
         if g.status.is_active() {
             g.status = ThreadGoalStatus::Paused;
         }
@@ -252,7 +273,14 @@ pub async fn pause(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal
 /// Resume a `Paused` goal (host-driven). A no-op for goals that aren't paused —
 /// a completed/budget-limited goal is not reactivated.
 pub async fn resume(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal> {
-    mutate(store, thread_id, |g| {
+    resume_with_before(store, thread_id).await.map(|(_, updated)| updated)
+}
+
+pub(crate) async fn resume_with_before(
+    store: &Arc<dyn Store>,
+    thread_id: &str,
+) -> Result<(ThreadGoal, ThreadGoal)> {
+    mutate_with_before(store, thread_id, |g| {
         if matches!(g.status, ThreadGoalStatus::Paused) {
             g.status = ThreadGoalStatus::Active;
         }
