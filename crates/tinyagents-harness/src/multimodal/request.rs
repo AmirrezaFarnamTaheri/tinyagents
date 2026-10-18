@@ -53,6 +53,38 @@ impl Default for MediaRequestConfig {
     }
 }
 
+/// How a media reference was represented in the original request block.
+///
+/// Hosts use this to preserve distinctions such as a local path and a URL
+/// whose text happens to look like that path. Marker strings and image URL
+/// strings are untyped because their source form is inferred by the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaSourceKind {
+    /// A marker or image string whose source kind is inferred by the host.
+    #[default]
+    Untyped,
+    /// A typed [`MediaRef::Path`] block.
+    Path,
+    /// A typed [`MediaRef::Url`] block.
+    Url,
+    /// A typed [`MediaRef::Base64`] block.
+    Base64,
+}
+
+/// Original source metadata forwarded with one media resolver call.
+///
+/// `encoded_len` is the length of the raw base64 field before it is wrapped in
+/// a data URI. Other source kinds leave it unset.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MediaSourceMetadata {
+    /// Original variant, or [`MediaSourceKind::Untyped`] for markers and images.
+    pub kind: MediaSourceKind,
+    /// MIME hint carried by the original typed block, if any.
+    pub mime_hint: Option<String>,
+    /// Raw base64 character count for [`MediaSourceKind::Base64`].
+    pub encoded_len: Option<usize>,
+}
+
 /// Resolve one media source after the host has applied its access policy.
 ///
 /// Implementations own all path authorization and source access. `max_bytes`
@@ -86,6 +118,33 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
         Scope: Sync,
     {
         self.resolve(scope, modality, source, max_bytes).await
+    }
+
+    /// Resolve one source while preserving its original typed representation.
+    ///
+    /// The default preserves compatibility with existing resolver
+    /// implementations by delegating to [`Self::resolve_with_mime_hint`].
+    /// Hosts that need to distinguish typed paths from URLs can override this
+    /// method. Marker and image-string sources use [`MediaSourceKind::Untyped`].
+    async fn resolve_with_source_metadata(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+        metadata: &MediaSourceMetadata,
+    ) -> std::result::Result<ResolvedMedia, String>
+    where
+        Scope: Sync,
+    {
+        self.resolve_with_mime_hint(
+            scope,
+            modality,
+            source,
+            max_bytes,
+            metadata.mime_hint.as_deref(),
+        )
+        .await
     }
 }
 
@@ -423,7 +482,7 @@ where
                     &source,
                     self.config.images.max_image_bytes(),
                     false,
-                    None,
+                    MediaSourceMetadata::default(),
                 )
                 .await
             {
@@ -483,7 +542,7 @@ where
                     &source,
                     self.config.files.max_file_bytes(),
                     true,
-                    None,
+                    MediaSourceMetadata::default(),
                 )
                 .await
             {
@@ -551,8 +610,16 @@ where
         scope: &Scope,
         block: ContentBlock,
     ) -> tinyinference_llm::Result<Vec<ContentBlock>> {
-        let (modality, source, hinted_mime) = match block {
-            ContentBlock::Image(image) => (InputModality::Image, image.url, image.mime_type),
+        let (modality, source, metadata) = match block {
+            ContentBlock::Image(image) => (
+                InputModality::Image,
+                image.url,
+                MediaSourceMetadata {
+                    kind: MediaSourceKind::Untyped,
+                    mime_hint: image.mime_type,
+                    encoded_len: None,
+                },
+            ),
             ContentBlock::Audio(media) => media_source(InputModality::Audio, media)?,
             ContentBlock::Video(media) => media_source(InputModality::Video, media)?,
             ContentBlock::Document(media) => media_source(InputModality::Document, media)?,
@@ -569,7 +636,7 @@ where
                 &source,
                 max_bytes,
                 false,
-                hinted_mime.as_deref(),
+                &metadata,
             )
             .await?;
         let ResolvedMedia {
@@ -577,7 +644,7 @@ where
             annotations,
         } = resolved;
         if attachment.mime == "application/octet-stream"
-            && let Some(mime) = hinted_mime
+            && let Some(mime) = metadata.mime_hint
         {
             attachment.mime = mime;
         }
@@ -664,7 +731,7 @@ where
         source: &str,
         max_bytes: usize,
         require_file_mime: bool,
-        mime_hint: Option<&str>,
+        metadata: &MediaSourceMetadata,
     ) -> tinyinference_llm::Result<ResolvedMedia> {
         let remote = source.starts_with("http://") || source.starts_with("https://");
         let remote_allowed = match modality {
@@ -678,7 +745,7 @@ where
         }
         let attachment = self
             .resolver
-            .resolve_with_mime_hint(scope, modality, source, max_bytes, mime_hint)
+            .resolve_with_source_metadata(scope, modality, source, max_bytes, metadata)
             .await
             .map_err(|error| model_error(&error))?;
         if attachment.attachment.bytes.len() > max_bytes {
@@ -1052,15 +1119,38 @@ fn count_user_media(message: &Message) -> (usize, usize) {
 fn media_source(
     modality: InputModality,
     media: MediaRef,
-) -> tinyinference_llm::Result<(InputModality, String, Option<String>)> {
+) -> tinyinference_llm::Result<(InputModality, String, MediaSourceMetadata)> {
     Ok(match media {
-        MediaRef::Path { path, media_type } => (modality, path, media_type),
-        MediaRef::Url { url, media_type } => (modality, url, media_type),
-        MediaRef::Base64 { data, media_type } => (
+        MediaRef::Path { path, media_type } => (
             modality,
-            format!("data:{media_type};base64,{data}"),
-            Some(media_type),
+            path,
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Path,
+                mime_hint: media_type,
+                encoded_len: None,
+            },
         ),
+        MediaRef::Url { url, media_type } => (
+            modality,
+            url,
+            MediaSourceMetadata {
+                kind: MediaSourceKind::Url,
+                mime_hint: media_type,
+                encoded_len: None,
+            },
+        ),
+        MediaRef::Base64 { data, media_type } => {
+            let metadata = MediaSourceMetadata {
+                kind: MediaSourceKind::Base64,
+                mime_hint: Some(media_type.clone()),
+                encoded_len: Some(data.len()),
+            };
+            (
+                modality,
+                format!("data:{media_type};base64,{data}"),
+                metadata,
+            )
+        }
     })
 }
 
