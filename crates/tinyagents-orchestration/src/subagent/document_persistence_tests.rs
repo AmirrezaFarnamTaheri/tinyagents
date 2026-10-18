@@ -305,3 +305,65 @@ async fn sqlite_reopen_keeps_terminal_and_stale_continuations_cannot_reopen_it()
     );
     assert!(store.keys_for_task("task").unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn pause_replacement_rejects_stale_continuations_and_invalid_imports() {
+    let backend = MemoryStorage::new();
+    let store = open(&backend, &Scope::local());
+    let task_key = key("replacement");
+    let original = pause(task_key.clone(), "first");
+    store.save_pause(original).await.unwrap();
+    let first = store.load(&task_key).await.unwrap().unwrap();
+    let mut next = pause(task_key.clone(), "second");
+    next.replaces = Some(first.clone());
+    assert_eq!(
+        store.save_pause(next).await.unwrap(),
+        SubagentPausePersistenceDisposition::Replaced
+    );
+    let mut stale = pause(task_key.clone(), "stale");
+    stale.replaces = Some(first.clone());
+    assert_eq!(
+        store.save_pause(stale).await.unwrap(),
+        SubagentPausePersistenceDisposition::Existing
+    );
+    assert_eq!(
+        store
+            .record_terminal(
+                &task_key,
+                &SubagentOutcome::completed("task", "stale"),
+                Some(&first)
+            )
+            .await
+            .unwrap(),
+        SubagentTerminalPersistenceDisposition::PauseExisting
+    );
+    assert_eq!(
+        store.pause_outcome(&task_key).unwrap().unwrap().output,
+        "second"
+    );
+    assert!(
+        store
+            .import_record(&key("other"), Some(pause(task_key.clone(), "bad")), None)
+            .is_err()
+    );
+    assert!(
+        store
+            .import_record_at(
+                "wrong-component",
+                Some(pause(task_key.clone(), "bad")),
+                None
+            )
+            .is_err()
+    );
+    let invalid = PersistedSubagentPause {
+        key: task_key.clone(),
+        outcome: SubagentOutcome::completed("task", "not a pause"),
+        replaces: None,
+    };
+    assert!(store.save_pause(invalid.clone()).await.is_err());
+    assert!(store.import_record(&task_key, Some(invalid), None).is_err());
+    assert_eq!(
+        store.pause_outcome(&task_key).unwrap().unwrap().output,
+        "second"
+    );
+}

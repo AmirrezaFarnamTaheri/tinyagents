@@ -97,13 +97,16 @@ async fn filesystem_policy_denial_precedes_blob_or_file_writes() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("action");
     let workspace = temp.path().join("private");
-    std::fs::create_dir_all(root.join("outputs")).expect("create output root");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR)).expect("create output root");
     std::fs::create_dir_all(&workspace).expect("create workspace");
-    let target = root.join("outputs").join("worker").join("task-1-result.md");
+    let target = root
+        .join(OUTPUTS_DIR)
+        .join("worker")
+        .join("task-1-result.md");
     std::fs::create_dir_all(target.parent().expect("target parent")).expect("create target parent");
     std::fs::write(&target, "keep the existing content").expect("seed previous output");
     let offload = ArtifactOffload::in_memory("worker", "task-1").with_path_policy(Arc::new(
-        TestPolicy::rooted_at(workspace).with_internal_suffix("/action/outputs/"),
+        TestPolicy::rooted_at(workspace).with_internal_suffix(&format!("/action/{OUTPUTS_DIR}/")),
     ));
 
     let output = "sensitive result".repeat(100);
@@ -150,7 +153,9 @@ async fn filesystem_offload_refuses_symlinked_output_directory_before_storage() 
     let outside = temp.path().join("outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside).expect("create outside");
-    std::os::unix::fs::symlink(&outside, root.join("outputs")).expect("symlink outputs");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
     let offload = ArtifactOffload::in_memory("worker", "symlink");
 
     let output = "must remain inline".repeat(100);
@@ -174,7 +179,9 @@ fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
     let outside = temp.path().join("outside");
     std::fs::create_dir_all(&root).expect("create root");
     std::fs::create_dir_all(&outside).expect("create outside");
-    std::os::unix::fs::symlink(&outside, root.join("outputs")).expect("symlink outputs");
+    std::fs::create_dir_all(root.join(OUTPUTS_DIR).parent().expect("outputs parent"))
+        .expect("create namespaced parent");
+    std::os::unix::fs::symlink(&outside, root.join(OUTPUTS_DIR)).expect("symlink outputs");
 
     let result = super::ops::atomic_write_under_dir(
         &root,
