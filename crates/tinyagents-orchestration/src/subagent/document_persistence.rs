@@ -184,12 +184,12 @@ impl DocumentSubagentPersistence {
                 .await?;
             let mut keys = Vec::new();
             for (_, record) in records {
-                if record.terminal.is_none() {
-                    if let Some(pause) = record.pause {
-                        if pause.key.task_id == task_id && !keys.contains(&pause.key) {
-                            keys.push(pause.key);
-                        }
-                    }
+                if record.terminal.is_none()
+                    && let Some(pause) = record.pause
+                    && pause.key.task_id == task_id
+                    && !keys.contains(&pause.key)
+                {
+                    keys.push(pause.key);
                 }
             }
             Ok(keys)
@@ -239,12 +239,12 @@ impl DocumentSubagentPersistence {
         pause: Option<PersistedSubagentPause>,
         terminal: Option<SubagentOutcome>,
     ) -> Result<()> {
-        if let Some(pause) = &pause {
-            if Self::key_component(&pause.key) != component || pause_resume(pause).is_none() {
-                return Err(SubagentError::Persistence(
-                    "imported pause component or status mismatch".into(),
-                ));
-            }
+        if let Some(pause) = &pause
+            && (Self::key_component(&pause.key) != component || pause_resume(pause).is_none())
+        {
+            return Err(SubagentError::Persistence(
+                "imported pause component or status mismatch".into(),
+            ));
         }
         self.update::<LifecycleRecord, ()>(format!("record/{component}"), move |record| {
             if record.terminal.is_some() {

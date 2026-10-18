@@ -115,9 +115,6 @@ impl StorageBackend for GateBackend {
         }
         self.inner.for_scope(scope)
     }
-    fn database(&self, name: &str) -> std::result::Result<Arc<dyn StorageBackend>, StorageError> {
-        self.inner.database(name)
-    }
 }
 
 #[async_trait::async_trait]
