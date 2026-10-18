@@ -203,13 +203,16 @@ where
         SteerAccess::Owner(owner) => registry.steering_handle(&key, owner),
         SteerAccess::Trusted => registry.steering_handle_trusted(&key),
     };
-    if let Some(handle) = handle.filter(|_| !snapshot.status.is_terminal())
-        && send_registered(&handle, &text, lane)
-    {
-        return Ok(SteerReceipt {
-            route: Some(SteerRoute::Registry),
-            duplicate: false,
-        });
+    match handle {
+        Ok(handle) if !snapshot.status.is_terminal() && send_registered(&handle, &text, lane) => {
+            return Ok(SteerReceipt {
+                route: Some(SteerRoute::Registry),
+                duplicate: false,
+            });
+        }
+        Err(DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone)
+        | Ok(_) => {}
+        Err(error) => return Err(error.into()),
     }
     fallback.enqueue(snapshot.metadata, lane, text).await;
     Ok(SteerReceipt {
