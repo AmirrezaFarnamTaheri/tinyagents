@@ -171,8 +171,7 @@ fn dispatch_outcome(response: Option<&ModelResponse>, succeeded: bool) -> Physic
                     if crate::cost::has_authoritative_billing_source(raw) {
                         return None;
                     }
-                    raw.pointer("/usage/cost")
-                        .and_then(serde_json::Value::as_f64)
+                    crate::cost::provider_cost_usd(raw)
                 }),
         });
     let refused = response.is_some_and(|response| {
