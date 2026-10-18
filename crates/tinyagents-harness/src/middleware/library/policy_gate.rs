@@ -115,9 +115,9 @@ pub trait ApprovalResolver<Ctx: Send + Sync = ()>: Send + Sync {
     /// waiting for a decision or an expiry).
     async fn resolve(&self, ctx: &RunContext<Ctx>, call: &ToolCall) -> ApprovalResolution;
 
-    /// Records the terminal result of an approved call. Called once, only for
-    /// an [`ApprovalResolution::Allow`] carrying a ticket whose tool call
-    /// returned a result.
+    /// Records a successful tool result for older resolvers. New resolvers
+    /// should implement [`Self::record_terminal`] to observe every terminal
+    /// outcome for an acquired ticket.
     fn record(&self, ticket: &str, result: &ToolResult);
 
     /// Records the terminal outcome of an approved call. This callback must
@@ -264,8 +264,9 @@ impl<Ctx: Send + Sync> ToolPolicyGate<Ctx> {
     }
 }
 
-/// Records the terminal result of an approved call with its resolver. A no-op
-/// when there is no ticket or the outcome is not a tool result.
+/// Records a returned tool result or control outcome. A no-op when there is no
+/// ticket. Middleware should use the terminal guard to include errors and
+/// cancellation.
 pub fn record_approved<Ctx: Send + Sync>(
     resolver: &dyn ApprovalResolver<Ctx>,
     ticket: Option<&str>,
@@ -273,15 +274,10 @@ pub fn record_approved<Ctx: Send + Sync>(
 ) {
     if let Some(ticket) = ticket {
         match outcome {
-            MiddlewareToolOutcome::Result(result) => resolver.record_terminal(
-                ticket,
-                ApprovalExecutionOutcome::Result(result),
-            ),
-            MiddlewareToolOutcome::Command { control } => resolver.record_terminal(
-                ticket,
-                ApprovalExecutionOutcome::Control(control),
-            ),
-            _ => {}
+            MiddlewareToolOutcome::Result(result) => resolver
+                .record_terminal(ticket, ApprovalExecutionOutcome::Result(result)),
+            MiddlewareToolOutcome::Command { control } => resolver
+                .record_terminal(ticket, ApprovalExecutionOutcome::Control(control)),
         }
     }
 }
