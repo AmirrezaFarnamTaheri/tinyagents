@@ -1274,7 +1274,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         "session_id",
         "message",
         "request_id",
-    );
+    ).with_owner_scope(owner_scope.clone());
     let terminal_error = ToolDispatch::<(), ()>::execute(
         &terminal_message,
         &(),
