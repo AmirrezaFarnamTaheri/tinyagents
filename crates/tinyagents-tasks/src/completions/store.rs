@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 
-use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
+use super::types::{CompletionClaim, CompletionRecord, CompletionState, CompletionReceipt, NotifyMode};
 
 fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("completion store: {what}: {err}"))
@@ -38,6 +38,20 @@ pub trait CompletionStore: Send + Sync {
     ) -> Result<Vec<CompletionRecord>> {
         let _ = (parent_key, mode, max, token, visible_after);
         Err(store_err("claim", "store does not support atomic delivery claims"))
+    }
+
+    /// Atomically claims one pending record for a live push. The default fails
+    /// closed; a process-local lock is not a substitute for backend ownership.
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Option<CompletionRecord>> {
+        let _ = (task_id, parent_key, mode, token, visible_after);
+        Err(store_err("claim task", "store does not support atomic delivery claims"))
     }
 
     /// Resolves a claim only while its token still owns the record. `None`
@@ -159,15 +173,17 @@ impl CompletionStore for InMemoryCompletionStore {
                         .as_ref()
                         .is_none_or(|claim| claim.visible_after <= now)
             })
-            .map(|record| record.task_id.clone())
+            .cloned()
             .collect();
-        candidates.sort();
+        candidates.sort_by(|a, b| {
+            a.finished_at
+                .cmp(&b.finished_at)
+                .then_with(|| a.task_id.cmp(&b.task_id))
+        });
         candidates.truncate(max);
         let mut claimed = Vec::with_capacity(candidates.len());
-        for id in candidates {
-            let Some(record) = records.get_mut(&id) else {
-                continue;
-            };
+        for candidate in candidates {
+            let Some(record) = records.get_mut(&candidate.task_id) else { continue };
             record.attempts = record.attempts.saturating_add(1);
             record.updated_at = now;
             record.claim = Some(CompletionClaim {
@@ -177,6 +193,33 @@ impl CompletionStore for InMemoryCompletionStore {
             claimed.push(record.clone());
         }
         Ok(claimed)
+    }
+
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Option<CompletionRecord>> {
+        let now = SystemTime::now();
+        let mut records = self.lock()?;
+        let Some(record) = records.get_mut(task_id) else { return Ok(None) };
+        if record.parent_key != parent_key
+            || record.state != CompletionState::Pending
+            || !mode.accepts(record.notify_mode)
+            || record.claim.as_ref().is_some_and(|claim| claim.visible_after > now)
+        {
+            return Ok(None);
+        }
+        record.attempts = record.attempts.saturating_add(1);
+        record.updated_at = now;
+        record.claim = Some(CompletionClaim {
+            token: format!("{token}:{task_id}"),
+            visible_after,
+        });
+        Ok(Some(record.clone()))
     }
 
     fn resolve_claim(
