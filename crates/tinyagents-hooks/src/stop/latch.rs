@@ -20,6 +20,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tinyagents_harness::steering::{SteeringCommand, SteeringHandle};
+use tinyagents_harness::no_progress::ClassifiedStopCause;
 
 use tinyagents_harness::middleware::library::{
     RepeatLoopWitness, is_correctable_class, repeat_loop_halt_summary,
@@ -33,6 +34,8 @@ pub struct StopLatch {
     slot: HaltSummarySlot,
     /// The note this breaker latched in the current run.
     own: Mutex<Option<String>>,
+    /// Typed cause for the current note when the breaker has one.
+    own_cause: Mutex<Option<ClassifiedStopCause>>,
     /// Repeat-guard refusals and repeated failing calls in the current run.
     witness: RepeatLoopWitness,
     /// `(tool, error line)` of a latched classified stop on an identical
@@ -42,6 +45,9 @@ pub struct StopLatch {
     /// The classified note a repeat-loop relabel replaced. A success later in
     /// the batch shows progress and puts it back.
     relabelled_from: Mutex<Option<String>>,
+    /// Typed cause paired with `relabelled_from`, restored if progress proves
+    /// the repeat-loop relabel was premature.
+    relabelled_cause: Mutex<Option<ClassifiedStopCause>>,
     /// Whether a call in the current model response's tool batch succeeded.
     /// A batch that produced anything new is never relabelled as a repeat
     /// loop, whatever order its results fold back in.
@@ -55,9 +61,11 @@ impl StopLatch {
             handle,
             slot,
             own: Mutex::default(),
+            own_cause: Mutex::default(),
             witness: RepeatLoopWitness::default(),
             candidate: Mutex::default(),
             relabelled_from: Mutex::default(),
+            relabelled_cause: Mutex::default(),
             batch_progress: AtomicBool::new(false),
         }
     }
@@ -91,6 +99,9 @@ impl StopLatch {
                     if let Ok(mut own) = self.own.lock() {
                         *own = Some(summary);
                     }
+                    if let Ok(mut cause) = self.own_cause.lock() {
+                        *cause = None;
+                    }
                     true
                 }
             },
@@ -117,6 +128,11 @@ impl StopLatch {
         self.handle.send(SteeringCommand::Pause);
     }
 
+    /// The classified cause that currently owns this latch, if any.
+    pub fn current_classified_cause(&self) -> Option<ClassifiedStopCause> {
+        self.own_cause.lock().ok().and_then(|cause| cause.clone())
+    }
+
     /// Record classified-stop bookkeeping without sending a pause. Use this
     /// when a containing driver owns the single steering action after the
     /// host has supplied classification and repeat-loop evidence.
@@ -129,22 +145,28 @@ impl StopLatch {
         error_line: impl FnOnce() -> String,
     ) {
         if !(repeated && is_correctable_class(class)) {
-            self.record_halt(summary);
+            if self.record_halt(summary.clone()) {
+                self.set_own_cause(class, tool, summary);
+            }
             return;
         }
         let error_line = error_line();
         // Only the stop that owns the note may be relabelled: a second stop
         // in the batch must not lend it its tool and error.
-        if !self.record_halt(summary) {
+        if !self.record_halt(summary.clone()) {
             return;
         }
+        self.set_own_cause(class, tool, summary);
         match self.witness.refusals() {
             0 => {
                 if let Ok(mut candidate) = self.candidate.lock() {
                     *candidate = Some((tool.to_owned(), error_line));
                 }
             }
-            refusals => self.relabel(repeat_loop_halt_summary(tool, refusals, &error_line)),
+            refusals => {
+                let summary = repeat_loop_halt_summary(tool, refusals, &error_line);
+                self.relabel(summary.clone(), repeat_cause(tool, summary));
+            }
         }
     }
 
@@ -155,7 +177,8 @@ impl StopLatch {
         let Some((tool, error_line)) = self.candidate.lock().ok().and_then(|mut c| c.take()) else {
             return;
         };
-        self.relabel(repeat_loop_halt_summary(&tool, refusals, &error_line));
+        let summary = repeat_loop_halt_summary(&tool, refusals, &error_line);
+        self.relabel(summary.clone(), repeat_cause(&tool, summary));
     }
 
     /// A call ran and succeeded. The run made progress, so neither the
@@ -173,7 +196,13 @@ impl StopLatch {
             tracing::debug!(
                 "[tinyagents::mw] a success followed a repeat-loop stop; restoring the classified stop note"
             );
-            self.replace_own_note(original);
+            if self.replace_own_note(original).is_some() {
+                if let Ok(mut current) = self.own_cause.lock() {
+                    if let Ok(mut restored) = self.relabelled_cause.lock() {
+                        *current = restored.take();
+                    }
+                }
+            }
         }
     }
 
@@ -190,6 +219,11 @@ impl StopLatch {
                 *state = None;
             }
         }
+        for state in [&self.own_cause, &self.relabelled_cause] {
+            if let Ok(mut state) = state.lock() {
+                *state = None;
+            }
+        }
         if let Ok(mut candidate) = self.candidate.lock() {
             *candidate = None;
         }
@@ -197,7 +231,7 @@ impl StopLatch {
 
     /// Replace this breaker's latched note with the repeat-loop `summary`,
     /// keeping the classified note so progress can restore it.
-    fn relabel(&self, summary: String) {
+    fn relabel(&self, summary: String, cause: ClassifiedStopCause) {
         if self.batch_progress.load(Ordering::SeqCst) {
             tracing::debug!(
                 "[tinyagents::mw] the stop's batch made progress; keeping the classified stop note"
@@ -211,6 +245,24 @@ impl StopLatch {
             if let Ok(mut relabelled_from) = self.relabelled_from.lock() {
                 relabelled_from.get_or_insert(original);
             }
+            if let Ok(mut current) = self.own_cause.lock() {
+                if let Ok(mut original) = self.relabelled_cause.lock() {
+                    if original.is_none() {
+                        *original = current.take();
+                    }
+                    *current = Some(cause);
+                }
+            }
+        }
+    }
+
+    fn set_own_cause(&self, class: &str, tool: &str, summary: String) {
+        if let Ok(mut cause) = self.own_cause.lock() {
+            *cause = Some(ClassifiedStopCause {
+                class: class.to_owned(),
+                operation: tool.to_owned(),
+                summary,
+            });
         }
     }
 
@@ -225,6 +277,14 @@ impl StopLatch {
         }
         *slot = Some(summary.clone());
         own.replace(summary)
+    }
+}
+
+fn repeat_cause(tool: &str, summary: String) -> ClassifiedStopCause {
+    ClassifiedStopCause {
+        class: "repeating_step".into(),
+        operation: tool.to_owned(),
+        summary,
     }
 }
 

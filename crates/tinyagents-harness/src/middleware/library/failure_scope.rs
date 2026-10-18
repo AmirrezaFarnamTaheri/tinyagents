@@ -156,10 +156,22 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
 
     /// Host adapter for shared repeat-stop state, called when a guard refusal
     /// is observed.
-    fn record_guard_refusal(&self, _ctx: &RunContext<Ctx>) {}
+    fn record_guard_refusal(
+        &self,
+        _ctx: &RunContext<Ctx>,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        None
+    }
 
     /// Host adapter for shared repeat-stop state, called after useful progress.
-    fn record_progress(&self, _ctx: &RunContext<Ctx>, _call: &ToolCall, _scope: &FailureScope) {}
+    fn record_progress(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _call: &ToolCall,
+        _scope: &FailureScope,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        None
+    }
 
     /// Reset the generic no-progress streak immediately before recording this
     /// deterministic failure. This handles informative new command exits
@@ -197,7 +209,8 @@ pub trait FailureScopePolicy<Ctx: Send + Sync>: FailurePolicy {
         _call: &ToolCall,
         _repeated: bool,
         _error: &str,
-    ) {
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        None
     }
 
     /// Called when the run ends or errors so a host stop-latch adapter can
@@ -330,7 +343,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
     ) {
         let tool = invocation.tool_name();
         if self.policy.is_repeat_guard_refusal(ctx, &call, result) {
-            self.policy.record_guard_refusal(ctx);
+            if let Some(cause) = self.policy.record_guard_refusal(ctx) {
+                ctx.halted_by_guard_cause = Some(cause);
+            }
             return;
         }
         let assessment = self.policy.assess(ctx, invocation, &call, &scope, result);
@@ -355,7 +370,9 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                 let _ = run.tracker.record(step, &attempt);
                 run.recoverable.reset_streak();
                 clear_recovered(&run.classified, tool, &scope.scope);
-                self.policy.record_progress(ctx, &call, &scope);
+                if let Some(cause) = self.policy.record_progress(ctx, &call, &scope) {
+                    ctx.halted_by_guard_cause = Some(cause);
+                }
             }
             FailureAssessment::Halt { summary, cause } => {
                 run.tracker.reset();
@@ -427,7 +444,7 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             &error,
                             &call,
                         );
-                        self.policy.classified_halt(
+                        let latch_cause = self.policy.classified_halt(
                             ctx,
                             &summary,
                             &class,
@@ -435,10 +452,17 @@ impl<Ctx: Send + Sync> FailureScopeMiddleware<Ctx> {
                             repeated_failure,
                             &error,
                         );
+                        let cause = latch_cause.unwrap_or_else(|| {
+                            crate::no_progress::ClassifiedStopCause {
+                                summary: summary.clone(),
+                                ..cause
+                            }
+                        });
+                        let summary = cause.summary.clone();
                         self.halt(
                             ctx,
                             summary.clone(),
-                            Some(crate::no_progress::ClassifiedStopCause { summary, ..cause }),
+                            Some(cause),
                         );
                     }
                 }

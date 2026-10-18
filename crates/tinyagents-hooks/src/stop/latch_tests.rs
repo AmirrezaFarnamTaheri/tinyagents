@@ -29,9 +29,21 @@ fn a_refusal_after_a_classified_repeat_stop_relabels_it() {
         "No such file".into()
     });
     assert_eq!(note(&slot).as_deref(), Some("classified"));
+    assert_eq!(
+        latch.current_classified_cause(),
+        Some(ClassifiedStopCause {
+            class: "not_found".into(),
+            operation: "file_read".into(),
+            summary: "classified".into(),
+        })
+    );
     latch.record_refusal();
     let relabelled = note(&slot).unwrap();
     assert!(relabelled.contains("kept re-issuing"), "{relabelled}");
+    let cause = latch.current_classified_cause().expect("relabel cause");
+    assert_eq!(cause.class, "repeating_step");
+    assert_eq!(cause.operation, "file_read");
+    assert_eq!(cause.summary, relabelled);
 }
 
 #[test]
@@ -41,8 +53,20 @@ fn a_success_in_the_batch_restores_the_classified_note() {
         "No such file".into()
     });
     latch.record_refusal();
+    assert_eq!(
+        latch.current_classified_cause().unwrap().class,
+        "repeating_step"
+    );
     latch.record_success();
     assert_eq!(note(&slot).as_deref(), Some("classified"));
+    assert_eq!(
+        latch.current_classified_cause(),
+        Some(ClassifiedStopCause {
+            class: "not_found".into(),
+            operation: "file_read".into(),
+            summary: "classified".into(),
+        })
+    );
 }
 
 #[test]
@@ -63,6 +87,9 @@ fn a_security_class_keeps_its_wording() {
     latch.record_refusal();
     latch.halt_classified("denied".into(), "policy", "shell", true, || "x".into());
     assert_eq!(note(&slot).as_deref(), Some("denied"));
+    let cause = latch.current_classified_cause().unwrap();
+    assert_eq!(cause.class, "policy");
+    assert_eq!(cause.operation, "shell");
 }
 
 #[test]
