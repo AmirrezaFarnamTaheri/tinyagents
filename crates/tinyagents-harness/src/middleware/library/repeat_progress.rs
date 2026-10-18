@@ -184,7 +184,22 @@ impl RepeatProgressMiddleware {
     /// When another guard sharing the slot already stopped the run earlier in
     /// the batch, its summary is kept: replacing it named the last guard to
     /// trip as the cause instead of the first. The pause is sent either way.
-    fn halt<C>(&self, ctx: &mut RunContext<C>, summary: String) {
+    /// Halt with a classifier-owned cause so terminal summaries can use typed
+    /// class and operation identifiers without parsing this note.
+    pub fn halt_classified<C>(
+        &self,
+        ctx: &mut RunContext<C>,
+        cause: crate::no_progress::ClassifiedStopCause,
+    ) {
+        self.halt_inner(ctx, cause.summary.clone(), Some(cause));
+    }
+
+    fn halt_inner<C>(
+        &self,
+        ctx: &mut RunContext<C>,
+        summary: String,
+        cause: Option<crate::no_progress::ClassifiedStopCause>,
+    ) {
         let first = {
             let mut slot = lock(&self.halt_summary);
             if slot.is_some() {
@@ -198,9 +213,18 @@ impl RepeatProgressMiddleware {
         // pause this causes, not a plain steering pause, with the same first
         // cause the slot keeps.
         if ctx.halted_by_guard.is_none() {
-            ctx.halted_by_guard = Some(first);
+            ctx.halted_by_guard = Some(first.clone());
+            ctx.halted_by_guard_cause = cause.filter(|cause| cause.summary == first);
         }
         self.handle.send(SteeringCommand::Pause);
+    }
+}
+
+fn repeat_stop_cause(summary: String, operation: &str) -> crate::no_progress::ClassifiedStopCause {
+    crate::no_progress::ClassifiedStopCause {
+        class: "repeating_step".into(),
+        operation: operation.to_owned(),
+        summary,
     }
 }
 
@@ -362,7 +386,7 @@ impl<C: Send + Sync> Middleware<(), C> for RepeatProgressMiddleware {
                     .get_mut(&run_id)
                     .is_none_or(|batch| !std::mem::replace(&mut batch.halted, true));
                 if first {
-                    self.halt(ctx, summary.clone());
+                    self.halt_classified(ctx, repeat_stop_cause(summary.clone(), &call.name));
                 }
                 Err(TinyAgentsError::ToolFailed(summary))
             }
@@ -470,7 +494,7 @@ impl<C: Send + Sync> Middleware<(), C> for RepeatProgressMiddleware {
             tool = tool_name,
             "[tinyagents::mw] crate successful-repeat tracker halted the run"
         );
-        self.halt(ctx, summary);
+        self.halt_classified(ctx, repeat_stop_cause(summary, tool_name));
         Ok(())
     }
 }

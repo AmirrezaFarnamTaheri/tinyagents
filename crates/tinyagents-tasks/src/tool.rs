@@ -26,6 +26,20 @@ use tinytools::{Tool, ToolResult};
 use crate::store::{TaskStore, orchestration_not_found};
 use crate::types::*;
 
+/// Host-owned durable records projected into the orchestration controls.
+///
+/// The tasks crate deliberately does not depend on a particular session or
+/// completion store. Hosts can supply their durable session summaries and
+/// collected completion records through this read-only port.
+pub trait OrchestrationStatusOverlay: Send + Sync {
+    /// Durable sessions matching the same scope/filter used for task listing.
+    fn sessions(&self, filter: &OrchestrationTaskFilter) -> Vec<Value>;
+    /// Completion records collected for the requested tasks (empty means all).
+    fn collected_tombstones(&self, task_ids: &[TaskId]) -> Vec<Value>;
+    /// Durable sessions paused for user input, optionally scoped by id.
+    fn awaiting_user(&self, task_ids: &[TaskId]) -> Vec<Value>;
+}
+
 /// A registry mapping managed task ids to the live [`SteeringHandle`] of the
 /// run executing that task.
 ///
@@ -73,6 +87,7 @@ pub struct OrchestrationTool {
     kind: OrchestrationToolKind,
     store: Arc<dyn TaskStore>,
     steering: Option<SteeringRegistry>,
+    overlay: Option<Arc<dyn OrchestrationStatusOverlay>>,
 }
 
 impl OrchestrationTool {
@@ -82,6 +97,7 @@ impl OrchestrationTool {
             kind,
             store,
             steering: None,
+            overlay: None,
         }
     }
 
@@ -89,6 +105,12 @@ impl OrchestrationTool {
     /// steering commands to the run executing a task.
     pub fn with_steering(mut self, steering: SteeringRegistry) -> Self {
         self.steering = Some(steering);
+        self
+    }
+
+    /// Adds host-provided durable session and completion snapshots to list/await.
+    pub fn with_status_overlay(mut self, overlay: Arc<dyn OrchestrationStatusOverlay>) -> Self {
+        self.overlay = Some(overlay);
         self
     }
 
@@ -106,12 +128,39 @@ pub fn orchestration_tools(store: Arc<dyn TaskStore>) -> Vec<Arc<OrchestrationTo
         .collect()
 }
 
+/// Builds every orchestration control with host-provided durable status overlays.
+pub fn orchestration_tools_with_status_overlay(
+    store: Arc<dyn TaskStore>,
+    overlay: Arc<dyn OrchestrationStatusOverlay>,
+) -> Vec<Arc<OrchestrationTool>> {
+    OrchestrationToolKind::ALL
+        .into_iter()
+        .map(|kind| {
+            Arc::new(
+                OrchestrationTool::new(kind, store.clone()).with_status_overlay(overlay.clone()),
+            )
+        })
+        .collect()
+}
+
 /// Registers every built-in orchestration control in a normal tool registry.
 pub fn register_orchestration_tools<State: Send + Sync, Ctx: Send + Sync>(
     registry: &mut ToolRegistry<State, Ctx>,
     store: Arc<dyn TaskStore>,
 ) -> &mut ToolRegistry<State, Ctx> {
     for tool in orchestration_tools(store) {
+        registry.register(tool);
+    }
+    registry
+}
+
+/// Registers every orchestration control with host-provided durable overlays.
+pub fn register_orchestration_tools_with_status_overlay<State: Send + Sync, Ctx: Send + Sync>(
+    registry: &mut ToolRegistry<State, Ctx>,
+    store: Arc<dyn TaskStore>,
+    overlay: Arc<dyn OrchestrationStatusOverlay>,
+) -> &mut ToolRegistry<State, Ctx> {
+    for tool in orchestration_tools_with_status_overlay(store, overlay) {
         registry.register(tool);
     }
     registry
@@ -186,7 +235,16 @@ impl OrchestrationTool {
                     .ok_or_else(|| orchestration_not_found(&task_id))
             })
             .collect::<Result<Vec<_>>>()?;
-        serde_json::to_value(records).map_err(Into::into)
+        if let Some(overlay) = &self.overlay {
+            let ids = task_ids_arg(args)?;
+            Ok(json!({
+                "tasks": records,
+                "collected_tombstones": overlay.collected_tombstones(&ids),
+                "awaiting_user": overlay.awaiting_user(&ids),
+            }))
+        } else {
+            serde_json::to_value(records).map_err(Into::into)
+        }
     }
 
     fn call_list(&self, args: &Value) -> Result<Value> {
@@ -200,7 +258,16 @@ impl OrchestrationTool {
             created_after: optional_epoch_ms(args, "created_after_ms")?,
             created_before: optional_epoch_ms(args, "created_before_ms")?,
         };
-        serde_json::to_value(self.store.list(filter)).map_err(Into::into)
+        let tasks = self.store.list(filter.clone());
+        if let Some(overlay) = &self.overlay {
+            Ok(json!({
+                "tasks": tasks,
+                "sessions": overlay.sessions(&filter),
+                "collected_tombstones": overlay.collected_tombstones(&[]),
+            }))
+        } else {
+            serde_json::to_value(tasks).map_err(Into::into)
+        }
     }
 
     fn call_timeout(&self, args: &Value) -> Result<Value> {

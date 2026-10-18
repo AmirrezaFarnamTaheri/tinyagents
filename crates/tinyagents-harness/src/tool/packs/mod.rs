@@ -24,19 +24,21 @@
 //! with a playbook and an owner list.
 
 mod catalog;
+mod dispatch;
 mod handle;
 mod render;
 mod tool;
 mod types;
 
 pub use catalog::PackCatalog;
+pub use dispatch::{PackDispatchSelector, UseSkillDispatch};
 pub use handle::PackRegistryHandle;
 pub use render::{
     NoSuchPackTool, named_tool, render_pack_filtered, route_sentence, scope_use_skill_spec,
 };
 pub use tool::{USE_SKILL, UseSkillTool};
 pub(crate) use types::PinnedPackCall;
-pub use types::{PackToolExtension, ToolPack};
+pub use types::{PackSelection, PackToolExtension, ToolPack};
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

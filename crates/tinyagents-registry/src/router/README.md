@@ -22,6 +22,11 @@ per-tier capability gates and same-family fallback ordering that go with them.
 Build with the infallible last-write-wins builder (`with_route`/`with_default`)
 or the duplicate-rejecting `register`.
 
+`WorkloadRouter::from_workload_routes(vision_hint)` projects TinyInference's
+shared `WORKLOAD_ROUTES` table into registry routes. Supply the host's vision
+hint spelling; the inference table remains the owner of the route data and
+whether that route requires image input.
+
 ## Design constraints
 
 - **Holds no models, drives no I/O.** It is cheap, cloneable policy read while

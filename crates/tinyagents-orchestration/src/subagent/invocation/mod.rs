@@ -73,6 +73,8 @@
 //!   typed-parent dispatcher).
 //! - `*_tests.rs` files hold the focused tests.
 
+mod delegation_tool;
+mod driver_tool;
 mod jobs;
 mod policy_run;
 mod status_map;
@@ -80,8 +82,24 @@ mod types;
 
 const LOG_PREFIX: &str = "[subagent-tool]";
 
-pub use jobs::{SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools};
+pub use delegation_tool::{
+    DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
+    DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
+    MultiTargetDelegationTool, ReviewApprovalPolicy, parse_approval, review_stage_output,
+};
+pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
+pub use jobs::{
+    SubAgentJobAction, SubAgentJobsTool, SubAgentMessageTool, register_subagent_job_tools,
+};
 pub use types::*;
+
+#[cfg(test)]
+#[path = "delegation_tool_tests.rs"]
+mod delegation_tool_tests;
+
+#[cfg(test)]
+#[path = "driver_tool_tests.rs"]
+mod driver_tool_tests;
 
 use std::sync::Arc;
 
@@ -299,6 +317,7 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         streaming: bool,
     ) -> Result<AgentRun> {
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         // Clone the sink (it shares listeners and the offset counter with the
         // context) so the completion event can be emitted after `ctx` is moved
@@ -308,6 +327,11 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
 
         let run = if streaming {
@@ -321,6 +345,9 @@ impl<State: Send + Sync, Ctx: Send + Sync + 'static> SubAgent<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         Ok(run)
@@ -371,11 +398,17 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
             return self.run_child(state, ctx, input, streaming).await;
         }
         let depth = ctx.depth();
+        let child_run_id = ctx.run_id().clone();
         let messages = self.seed_messages(input.clone());
         let events = ctx.events.clone();
         events.emit(AgentEvent::SubAgentStarted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         let run = match self
             .harness
@@ -392,6 +425,9 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgent<State, C
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
         Ok(run)
     }
@@ -541,6 +577,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         let config = self.child_config()?;
         let depth = config.depth();
         let ctx = RunContext::new(config, ctx_data).with_events(self.events.clone());
+        let child_run_id = ctx.run_id().clone();
 
         // Clone the sink so we can emit the completion event after `ctx` is
         // moved into the child agent loop.
@@ -548,6 +585,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentStarted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunStarted {
+            name: self.subagent.name.clone(),
+            depth,
+            run_id: child_run_id.clone(),
         });
         if self.turn > 0 {
             events.emit(AgentEvent::SubAgentReused {
@@ -567,6 +609,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> SubAgentSession<State, Ctx> {
         events.emit(AgentEvent::SubAgentCompleted {
             name: self.subagent.name.clone(),
             depth,
+        });
+        events.emit(AgentEvent::SubAgentRunCompleted {
+            run_id: child_run_id,
         });
 
         // Carry the produced assistant/tool messages forward. `run.messages` is
@@ -607,9 +652,11 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// for every recursive invocation.
     pub fn new(subagent: Arc<SubAgent<State, Ctx>>, child_data: ChildDataPolicy<Ctx>) -> Self {
         let tool_name = subagent.name().to_owned();
+        let tool_description = subagent.description().to_owned();
         Self {
             subagent,
             tool_name,
+            tool_description,
             child_data,
             parameters: Self::default_parameters(),
             declaration: std::sync::OnceLock::new(),
@@ -619,7 +666,102 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             role: crate::subagent::SubagentRole::default(),
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
+            driver_dispatch: None,
+            job_registry: None,
+            job_owner_scope: Arc::new(|owner| owner.to_string()),
         }
+    }
+
+    /// Converts this tool declaration to a host-planned driver invocation.
+    ///
+    /// The host request factory must construct a validated request with an
+    /// owned child context. Agent selection, authorization, prompts, tools,
+    /// workspace policy, execution and persistence remain in the driver's
+    /// planner/executor/persistence seams. A requested background call runs
+    /// detached only when `delivery_target` returns a destination; otherwise
+    /// the request is executed inline and its result is returned.
+    pub fn with_driver<H>(
+        mut self,
+        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
+        request_factory: impl Fn(
+            &State,
+            &RunContext<Ctx>,
+            &Value,
+            &tinyagents_harness::ids::CallId,
+        ) -> std::result::Result<
+            crate::subagent::SubagentRequest<Ctx, H>,
+            crate::subagent::SubagentError,
+        > + Send
+        + Sync
+        + 'static,
+        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self
+    where
+        H: Send + Sync + 'static,
+    {
+        let mut dispatch = DriverSubAgentTool::new(
+            self.tool_name.clone(),
+            self.tool_description.clone(),
+            driver,
+            request_factory,
+            delivery_target,
+        )
+        .with_parameters(self.parameters.clone())
+        .with_owner_scope(self.job_owner_scope.clone());
+        if let Some(jobs) = &self.job_registry {
+            dispatch = dispatch.with_job_registry(jobs.clone());
+        }
+        self.driver_dispatch = Some(Arc::new(dispatch));
+        self
+    }
+
+    /// Like [`Self::with_driver`], with a host callback for detached completion.
+    /// The callback receives the resolved delivery target and the neutral
+    /// outcome (or failure), allowing the host to persist/route completion.
+    pub fn with_driver_and_completion<H>(
+        mut self,
+        driver: Arc<crate::subagent::SubagentDriver<Ctx, H>>,
+        request_factory: impl Fn(
+            &State,
+            &RunContext<Ctx>,
+            &Value,
+            &tinyagents_harness::ids::CallId,
+        ) -> std::result::Result<
+            crate::subagent::SubagentRequest<Ctx, H>,
+            crate::subagent::SubagentError,
+        > + Send
+        + Sync
+        + 'static,
+        delivery_target: impl Fn(&crate::subagent::SubagentRequest<Ctx, H>) -> Option<String>
+        + Send
+        + Sync
+        + 'static,
+        completion: impl Fn(&str, std::result::Result<crate::subagent::SubagentOutcome, String>)
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self
+    where
+        H: Send + Sync + 'static,
+    {
+        let mut dispatch = DriverSubAgentTool::new(
+            self.tool_name.clone(),
+            self.tool_description.clone(),
+            driver,
+            request_factory,
+            delivery_target,
+        )
+        .with_parameters(self.parameters.clone())
+        .with_owner_scope(self.job_owner_scope.clone())
+        .with_completion_handler(completion);
+        if let Some(jobs) = &self.job_registry {
+            dispatch = dispatch.with_job_registry(jobs.clone());
+        }
+        self.driver_dispatch = Some(Arc::new(dispatch));
+        self
     }
 
     /// Applies a timeout/retry/budget policy to every spawned child.
@@ -702,7 +844,19 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
 
     /// Uses a host-shared registry for spawned jobs and control tools.
     pub fn with_job_registry(mut self, jobs: SubAgentJobRegistry) -> Self {
-        self.jobs = jobs;
+        self.jobs = jobs.clone();
+        self.job_registry = Some(jobs);
+        self
+    }
+
+    /// Resolves ephemeral turn run ids to a stable host-owned job scope.
+    /// Configure the same resolver on this spawn tool and its Jobs/Message
+    /// aliases when the host recreates run contexts between turns.
+    pub fn with_job_owner_scope(
+        mut self,
+        resolve: Arc<dyn Fn(u64) -> String + Send + Sync>,
+    ) -> Self {
+        self.job_owner_scope = resolve;
         self
     }
 
@@ -714,12 +868,21 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
         self.tool_name = name.into();
+        self.declaration = std::sync::OnceLock::new();
+        self
+    }
+
+    /// Overrides the model-facing description for a named driver alias.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.tool_description = description.into();
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
     /// Overrides the model-visible JSON Schema for the tool arguments.
     pub fn with_parameters(mut self, parameters: Value) -> Self {
         self.parameters = parameters;
+        self.declaration = std::sync::OnceLock::new();
         self
     }
 
@@ -845,7 +1008,8 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         };
         let subagent_run_id = child.run_id().as_str().to_owned();
         let tool_call_id = call_id.map(|id| id.as_str().to_owned());
-        let (job_id, steering) = self.jobs.create_with_cancellation(
+        let run_queue = Arc::new(tinyagents_harness::run_queue::RunQueue::new());
+        let (job_id, steering) = self.jobs.create_with_cancellation_and_queue(
             &self.tool_name,
             parent.instance_id(),
             child.cancellation.clone(),
@@ -853,11 +1017,14 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
                 subagent_run_id: Some(subagent_run_id.clone()),
                 parent_tool_call_id: tool_call_id.clone(),
             },
+            Some(run_queue.clone()),
         );
         tracing::debug!(
             "{LOG_PREFIX} spawn job_id={job_id} subagent_run_id={subagent_run_id} tool_call_id={tool_call_id:?}"
         );
-        let mut child = child.with_steering(steering.clone());
+        let mut child = child
+            .with_steering(steering.clone())
+            .with_run_queue(run_queue.clone());
         stamp_link_metadata(
             &mut child.config.metadata,
             &subagent_run_id,
@@ -994,6 +1161,9 @@ where
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch.tool();
+        }
         // Built once and cached (M-4): `tool()` is called several times per
         // admitted call and once per tool per run for `schemas()`, and a
         // fresh `Arc<SubAgentToolDeclaration>` with a cloned `parameters`
@@ -1002,13 +1172,16 @@ where
         Arc::clone(self.declaration.get_or_init(|| {
             Arc::new(SubAgentToolDeclaration {
                 name: self.tool_name.clone(),
-                description: self.subagent.description().to_owned(),
+                description: self.tool_description.clone(),
                 parameters: self.parameters.clone(),
             })
         }))
     }
 
     fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch.output_origin();
+        }
         tinyagents_harness::host::ContentOrigin::Agent
     }
 
@@ -1020,6 +1193,11 @@ where
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
+        if let Some(dispatch) = &self.driver_dispatch {
+            return dispatch
+                .execute(state, call_id, arguments, options, parent)
+                .await;
+        }
         self.invoke_in_parent_context_for_call(state, arguments, options, parent, Some(&call_id))
             .await
             .map_err(anyhow::Error::from)

@@ -280,6 +280,68 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     }
 }
 
+/// Resolves from models that a host has already constructed for one turn.
+///
+/// Team leads always use `lead` (the turn's selected model); delegated agents
+/// first resolve an exact definition pin, then a `hint:<name>` route, and use
+/// `primary` when neither route is available. Model construction and route
+/// names remain host-owned. In particular, this resolver does not inspect
+/// credentials, capabilities, or provider state.
+pub struct PrebuiltModelResolver<State: Send + Sync> {
+    primary: Arc<dyn ChatModel<State>>,
+    lead: Arc<dyn ChatModel<State>>,
+    routes: std::collections::HashMap<String, Arc<dyn ChatModel<State>>>,
+}
+
+impl<State: Send + Sync> PrebuiltModelResolver<State> {
+    /// Creates a resolver using `primary` as both the lead model and fallback.
+    pub fn new<I>(primary: Arc<dyn ChatModel<State>>, routes: I) -> Self
+    where
+        I: IntoIterator<Item = (String, Arc<dyn ChatModel<State>>)>,
+    {
+        Self {
+            lead: Arc::clone(&primary),
+            primary,
+            routes: routes.into_iter().collect(),
+        }
+    }
+
+    /// Sets a separately wrapped model for team leads.
+    pub fn with_lead_model(mut self, lead: Arc<dyn ChatModel<State>>) -> Self {
+        self.lead = lead;
+        self
+    }
+}
+
+impl<State: Send + Sync> std::fmt::Debug for PrebuiltModelResolver<State> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrebuiltModelResolver")
+            .field("route_count", &self.routes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<State: Send + Sync> ModelResolver<State> for PrebuiltModelResolver<State> {
+    async fn resolve(&self, req: &ModelResolveRequest) -> Result<Arc<dyn ChatModel<State>>> {
+        if req.is_team_lead {
+            return Ok(Arc::clone(&self.lead));
+        }
+
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        Ok(route
+            .and_then(|name| self.routes.get(name))
+            .cloned()
+            .unwrap_or_else(|| Arc::clone(&self.primary)))
+    }
+}
+
 #[cfg(test)]
 #[path = "model_resolver_tests.rs"]
 mod tests;

@@ -44,6 +44,46 @@ fn raw(result: &ToolResult) -> &serde_json::Value {
         .expect("orchestration tool returns a JSON payload")
 }
 
+struct DurableOverlay;
+
+impl OrchestrationStatusOverlay for DurableOverlay {
+    fn sessions(&self, _filter: &OrchestrationTaskFilter) -> Vec<serde_json::Value> {
+        vec![json!({"session_id":"session-1","status":"running"})]
+    }
+
+    fn collected_tombstones(&self, _task_ids: &[TaskId]) -> Vec<serde_json::Value> {
+        vec![json!({"task_id":"task-1","status":"completed","result":"done"})]
+    }
+
+    fn awaiting_user(&self, _task_ids: &[TaskId]) -> Vec<serde_json::Value> {
+        vec![json!({"session_id":"session-2","status":"awaiting_user","question":"Continue?"})]
+    }
+}
+
+#[tokio::test]
+async fn orchestration_list_and_await_include_host_durable_overlays() {
+    let store: Arc<dyn TaskStore> = Arc::new(InMemoryTaskStore::new());
+    store.insert(graph_spec("task-live")).unwrap();
+    let overlay = Arc::new(DurableOverlay);
+    let list = OrchestrationTool::new(OrchestrationToolKind::List, store.clone())
+        .with_status_overlay(overlay.clone());
+    let listed = run(&list, json!({})).await.unwrap();
+    let listed = raw(&listed);
+    assert_eq!(listed["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["sessions"][0]["session_id"], "session-1");
+    assert_eq!(listed["collected_tombstones"][0]["task_id"], "task-1");
+
+    let await_tool =
+        OrchestrationTool::new(OrchestrationToolKind::Await, store).with_status_overlay(overlay);
+    let awaited = run(&await_tool, json!({"task_ids":["task-live"]}))
+        .await
+        .unwrap();
+    let awaited = raw(&awaited);
+    assert_eq!(awaited["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(awaited["collected_tombstones"][0]["status"], "completed");
+    assert_eq!(awaited["awaiting_user"][0]["status"], "awaiting_user");
+}
+
 #[test]
 fn in_memory_store_tracks_task_lifecycle() {
     let store = InMemoryTaskStore::new();
@@ -129,6 +169,209 @@ async fn detached_registry_enforces_owner_and_waits_for_terminal_status() {
     );
     assert!(registry.is_empty().unwrap());
     join.abort();
+}
+
+#[tokio::test]
+async fn batch_wait_preserves_order_and_metadata_when_pruning_terminal_entries() {
+    let registry = runtime_registry();
+    let ids = [TaskId::new("batch-first"), TaskId::new("batch-second")];
+    let (first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "one".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "two".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+    first_tx
+        .send(RuntimeStatus::Completed("first".into()))
+        .unwrap();
+    second_tx
+        .send(RuntimeStatus::Completed("second".into()))
+        .unwrap();
+
+    let items = registry
+        .wait_many(&ids, "owner", Some(std::time::Duration::ZERO))
+        .await
+        .unwrap();
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.task_id.clone())
+            .collect::<Vec<_>>(),
+        ids
+    );
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.metadata.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two"]
+    );
+    assert!(
+        items
+            .iter()
+            .all(|item| matches!(item.outcome, DetachedTaskWaitOutcome::Terminal(_)))
+    );
+    assert_eq!(registry.len().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn batch_wait_stops_at_first_error_without_touching_later_ids() {
+    let registry = runtime_registry();
+    let later = TaskId::new("batch-later");
+    let (_tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            later.clone(),
+            "owner",
+            "later".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let error = registry
+        .wait_many(
+            &[TaskId::new("missing"), later.clone()],
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.task_id, TaskId::new("missing"));
+    assert_eq!(error.error, DetachedTaskRegistryError::Unknown);
+    assert_eq!(
+        registry.snapshot(&later, "owner").unwrap().metadata,
+        "later"
+    );
+}
+
+#[tokio::test]
+async fn unbounded_batch_wait_resumes_until_terminal_and_timeout_can_be_retried() {
+    let registry = runtime_registry();
+    let task_id = TaskId::new("batch-retry");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register(
+            task_id.clone(),
+            "owner",
+            "retry".into(),
+            rx,
+            cancellation,
+            join.abort_handle(),
+        )
+        .unwrap();
+
+    let timed_out = registry
+        .wait_many(
+            std::slice::from_ref(&task_id),
+            "owner",
+            Some(std::time::Duration::ZERO),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        timed_out[0].outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    ));
+    assert_eq!(registry.len().unwrap(), 1);
+
+    let waiter_registry = registry.clone();
+    let waiter_id = task_id.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(&[waiter_id], "owner", None)
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    let completed = waiter.await.unwrap();
+    assert!(matches!(
+        completed[0].outcome,
+        DetachedTaskWaitOutcome::Terminal(RuntimeStatus::Completed(_))
+    ));
+    assert_eq!(completed[0].metadata, "retry");
+    assert!(registry.is_empty().unwrap());
+}
+
+#[tokio::test(start_paused = true)]
+async fn batch_wait_uses_one_finite_deadline_for_every_child() {
+    let registry = runtime_registry();
+    let ids = [
+        TaskId::new("shared-deadline-first"),
+        TaskId::new("shared-deadline-second"),
+    ];
+    let (_first_tx, first_rx, first_cancel, first_join) = detached_handles();
+    let (_second_tx, second_rx, second_cancel, second_join) = detached_handles();
+    registry
+        .register(
+            ids[0].clone(),
+            "owner",
+            "first".into(),
+            first_rx,
+            first_cancel,
+            first_join.abort_handle(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ids[1].clone(),
+            "owner",
+            "second".into(),
+            second_rx,
+            second_cancel,
+            second_join.abort_handle(),
+        )
+        .unwrap();
+
+    let waiter_registry = registry.clone();
+    let waiter_ids = ids.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_registry
+            .wait_many(
+                &waiter_ids,
+                "owner",
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(10)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        waiter.is_finished(),
+        "second child must not receive a fresh timeout budget"
+    );
+    let outcomes = waiter.await.unwrap();
+    assert_eq!(outcomes.len(), 2);
+    assert!(outcomes.iter().all(|item| matches!(
+        item.outcome,
+        DetachedTaskWaitOutcome::TimedOut(RuntimeStatus::Running)
+    )));
+    assert_eq!(
+        registry.len().unwrap(),
+        2,
+        "timeout must leave both entries available"
+    );
 }
 
 #[tokio::test]

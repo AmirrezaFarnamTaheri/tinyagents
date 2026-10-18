@@ -2,7 +2,11 @@
 //!
 //! These helpers do not replace a lossless host [`crate::TranscriptCodec`].
 //! They intentionally project provider-neutral execution fields; hosts retain
-//! durable dialects, raw argument strings, metadata, and legacy marker policy.
+//! durable dialects, raw argument strings, and product-specific attachment
+//! handling.
+use tinyagents_harness::tinytools_agent::dialect::{
+    DialectMessage, DialectRole, ToolResultEntry, TranscriptEntry,
+};
 use tinyagents_session::transcript::{
     TranscriptMediaRef, TranscriptMessage, TranscriptPart, TranscriptToolCall,
 };
@@ -11,6 +15,58 @@ use tinyinference_llm::message::{
     ToolMessage, UserMessage,
 };
 use tinyinference_llm::tool::ToolCall as TaToolCall;
+
+/// The result of merging inference history with its lossless native rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReconciledTranscript {
+    /// Complete next logical durable rows, preserving matched prior rows.
+    pub rows: Vec<TranscriptMessage>,
+    /// Parallel to `rows`; `true` only for a newly projected model message.
+    pub fresh: Vec<bool>,
+}
+
+/// Reconciles a native transcript projection with the prior model history.
+///
+/// Each next message matches at most one equal prior position. The original
+/// durable row is retained verbatim for a match; only fresh rows receive
+/// `request_id`. Custom messages have no native row and are skipped. Hosts
+/// with additional metadata can call this helper, mutate only `fresh` rows,
+/// and return the resulting `rows` from their codec override.
+pub fn reconcile_native_transcript(
+    prior: &[TranscriptMessage],
+    previous: &[Message],
+    next: &[Message],
+    request_id: Option<&str>,
+) -> ReconciledTranscript {
+    let mut rows = next
+        .iter()
+        .filter_map(|message| message_to_native_transcript(message).map(|row| (row, message)))
+        .collect::<Vec<_>>();
+    let mut consumed = vec![false; previous.len().min(prior.len())];
+    let mut fresh = Vec::with_capacity(rows.len());
+    for (row, message) in &mut rows {
+        let matched =
+            previous
+                .iter()
+                .enumerate()
+                .take(consumed.len())
+                .find_map(|(index, candidate)| {
+                    (!consumed[index] && candidate == *message).then_some(index)
+                });
+        if let Some(index) = matched {
+            *row = prior[index].clone();
+            consumed[index] = true;
+            fresh.push(false);
+        } else {
+            row.request_id = request_id.map(str::to_owned);
+            fresh.push(true);
+        }
+    }
+    ReconciledTranscript {
+        rows: rows.into_iter().map(|(row, _)| row).collect(),
+        fresh,
+    }
+}
 
 /// Conventional provider reasoning field carried by durable assistant rows.
 pub const REASONING_EXT_KEY: &str = "reasoning_content";
@@ -139,9 +195,11 @@ fn assistant_extra_metadata(
 /// message is what stops the harness re-sending orphan `tool` messages, which
 /// native providers reject (`assistant message with 'tool_calls' must be
 /// followed by tool messages`).
-/// Convert one typed durable row to a provider-neutral execution message.
-/// Untyped user text stays literal; hosts apply any legacy marker policy.
-/// Project one row without sequence validation.
+/// Convert one durable row to a provider-neutral execution message.
+///
+/// In addition to typed transcript parts, untyped user text accepts legacy
+/// `[IMAGE:<reference>]` markers and lifts ready references into image blocks.
+/// Malformed or empty markers remain literal text.
 ///
 /// Native provider replay must use [`native_transcript_to_messages`] to validate
 /// complete tool declaration/result rounds. Display projections are not replay input.
@@ -228,10 +286,131 @@ pub fn transcript_to_message(msg: &TranscriptMessage) -> Message {
         _ => Message::User(UserMessage {
             content: match msg.parts.as_deref() {
                 Some(parts) => user_blocks_from_parts(parts),
-                None => vec![ContentBlock::Text(text)],
+                None => user_content_blocks(text),
             },
         }),
     }
+}
+
+/// Project durable transcript rows into execution messages without validating
+/// native tool-call sequence completeness.
+///
+/// Use [`native_transcript_to_messages`] when replaying a native provider
+/// history, where orphan or unanswered tool calls must be rejected.
+pub fn transcript_to_messages(rows: &[TranscriptMessage]) -> Vec<Message> {
+    rows.iter().map(transcript_to_message).collect()
+}
+
+/// Project execution messages into display transcript rows, omitting messages
+/// that have no transcript representation.
+pub fn messages_to_display_transcript(messages: &[Message]) -> Vec<TranscriptMessage> {
+    messages
+        .iter()
+        .filter_map(message_to_display_transcript)
+        .collect()
+}
+
+/// Return the messages after the latest user message, or all messages when
+/// there is no user message.
+pub fn messages_since_last_user(messages: &[Message]) -> &[Message] {
+    let start = messages
+        .iter()
+        .rposition(|message| matches!(message, Message::User(_)))
+        .map_or(0, |index| index + 1);
+    &messages[start..]
+}
+
+/// Return the messages appended after a turn's captured request boundary.
+///
+/// The boundary is clamped to the transcript length if it exceeds the current
+/// length, matching the historical host behavior when a future runner trims
+/// the transcript.
+pub fn messages_since_request(messages: &[Message], base_len: usize) -> &[Message] {
+    let start = base_len.min(messages.len());
+    if start != base_len {
+        tracing::warn!(
+            base_len,
+            transcript_len = messages.len(),
+            "transcript request boundary exceeds transcript length; clamping"
+        );
+    }
+    &messages[start..]
+}
+
+/// Convert execution messages into provider-neutral dialect transcript entries.
+///
+/// Consecutive tool results remain grouped as one `ToolResults` entry. Custom
+/// execution messages are omitted because they are host-side annotations, not
+/// conversation history.
+pub fn messages_to_conversation(messages: &[Message]) -> Vec<TranscriptEntry> {
+    let mut entries = Vec::new();
+    let mut pending_results = Vec::new();
+
+    fn flush(entries: &mut Vec<TranscriptEntry>, pending: &mut Vec<ToolResultEntry>) {
+        if !pending.is_empty() {
+            entries.push(TranscriptEntry::ToolResults(std::mem::take(pending)));
+        }
+    }
+
+    fn chat(
+        role: DialectRole,
+        content: String,
+        metadata: Option<serde_json::Value>,
+    ) -> TranscriptEntry {
+        TranscriptEntry::Chat(DialectMessage::new(role, content).with_metadata(metadata))
+    }
+
+    for message in messages {
+        match message {
+            Message::Tool(tool) => pending_results.push(ToolResultEntry {
+                tool_call_id: tool.tool_call_id.clone(),
+                content: message.text(),
+                trusted_verbatim: false,
+            }),
+            Message::System(_) => {
+                flush(&mut entries, &mut pending_results);
+                entries.push(chat(DialectRole::System, message.text(), None));
+            }
+            Message::User(_) => {
+                flush(&mut entries, &mut pending_results);
+                entries.push(chat(DialectRole::User, message.text(), None));
+            }
+            Message::Assistant(assistant) => {
+                flush(&mut entries, &mut pending_results);
+                let reasoning = reasoning_from_content(&assistant.content);
+                let metadata = reasoning
+                    .as_ref()
+                    .map(|text| serde_json::json!({ REASONING_EXT_KEY: text }));
+                if assistant.tool_calls.is_empty() {
+                    entries.push(chat(DialectRole::Assistant, message.text(), metadata));
+                } else {
+                    let text = message.text();
+                    entries.push(TranscriptEntry::AssistantToolCalls {
+                        text: (!text.is_empty()).then_some(text),
+                        tool_calls: assistant
+                            .tool_calls
+                            .iter()
+                            .map(|call| {
+                                tinyagents_harness::tinytools_agent::dialect::NativeToolCall {
+                                    id: call.id.clone(),
+                                    name: call.name.clone(),
+                                    arguments: call.arguments.to_string(),
+                                    extra_content: None,
+                                }
+                            })
+                            .collect(),
+                        reasoning_content: reasoning,
+                        extra_metadata: metadata,
+                    });
+                }
+            }
+            Message::Custom(custom) => {
+                tracing::trace!(kind = %custom.kind, "dropping custom transcript projection");
+            }
+        }
+    }
+    flush(&mut entries, &mut pending_results);
+    entries
 }
 
 /// The content blocks of a user row's typed `parts`, in source order.
@@ -260,6 +439,81 @@ fn user_blocks_from_parts(parts: &[TranscriptPart]) -> Vec<ContentBlock> {
     } else {
         blocks
     }
+}
+
+/// Build content blocks from legacy user text, lifting ready
+/// `[IMAGE:<reference>]` markers in source order.
+///
+/// Text around images is trimmed at image boundaries to match the historical
+/// provider bridge. Invalid, empty, and unterminated markers stay in text.
+/// When no marker is lifted, the original text is returned as one block
+/// without trimming.
+pub fn user_content_blocks(text: String) -> Vec<ContentBlock> {
+    match lift_image_markers(&text, true) {
+        Some(blocks) => blocks,
+        None => vec![ContentBlock::Text(text)],
+    }
+}
+
+/// Parse an untyped user turn with the legacy image marker syntax, preserving
+/// surrounding prose exactly. Returns a plain text user message when no image
+/// marker can be lifted.
+pub fn user_message_from_text(text: &str) -> Message {
+    match lift_image_markers(text, false) {
+        Some(content) => Message::User(UserMessage { content }),
+        None => Message::user(text),
+    }
+}
+
+fn lift_image_markers(text: &str, trim_text: bool) -> Option<Vec<ContentBlock>> {
+    const PREFIX: &str = "[IMAGE:";
+    if !text.contains(PREFIX) {
+        return None;
+    }
+
+    fn flush_text(pending: &mut String, blocks: &mut Vec<ContentBlock>, trim: bool) {
+        let text = if trim {
+            pending.trim()
+        } else {
+            pending.as_str()
+        };
+        if !text.is_empty() {
+            blocks.push(ContentBlock::Text(text.to_string()));
+        }
+        pending.clear();
+    }
+
+    let mut blocks = Vec::new();
+    let mut pending = String::new();
+    let mut rest = text;
+    let mut lifted = 0;
+
+    while let Some(start) = rest.find(PREFIX) {
+        pending.push_str(&rest[..start]);
+        let after = &rest[start + PREFIX.len()..];
+        let Some(end) = after.find(']') else {
+            pending.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let marker_end = start + PREFIX.len() + end + 1;
+        let reference = after[..end].trim();
+        if reference.is_empty() {
+            pending.push_str(&rest[start..marker_end]);
+        } else {
+            flush_text(&mut pending, &mut blocks, trim_text);
+            blocks.push(ContentBlock::Image(ImageRef {
+                url: reference.to_string(),
+                mime_type: data_uri_mime(reference),
+            }));
+            lifted += 1;
+        }
+        rest = &after[end + 1..];
+    }
+
+    pending.push_str(rest);
+    flush_text(&mut pending, &mut blocks, trim_text);
+    (lifted > 0).then_some(blocks)
 }
 
 fn data_uri_mime(reference: &str) -> Option<String> {

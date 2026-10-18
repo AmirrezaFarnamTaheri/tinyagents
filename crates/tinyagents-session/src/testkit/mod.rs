@@ -36,3 +36,25 @@ pub mod conformance;
 
 mod in_memory_transcript;
 pub use in_memory_transcript::InMemoryTranscriptHistory;
+
+/// Creates an empty driver-backed transcript locator over in-memory storage.
+///
+/// Use this when a test needs the same locator interface used by production
+/// session stores, but should not touch the filesystem.
+pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
+    use crate::port::{DriverSessionStores, SessionStoreProvider};
+    use std::sync::Arc;
+    use tinystoragedrivers_core::MemoryStorage;
+
+    DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()),
+        tinystoragedrivers_core::Scope::local(),
+    )
+    .expect("driver session stores over memory")
+    .for_agent("test")
+    .transcripts
+}
+
+#[cfg(test)]
+#[path = "in_memory_transcript_tests.rs"]
+mod tests;

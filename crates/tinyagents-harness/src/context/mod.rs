@@ -33,11 +33,16 @@
 //! assert_eq!(ctx.limits.model_calls(), 1);
 //! ```
 
+mod agents_md;
 mod depth;
 mod host_ext;
 mod stats;
 mod types;
 
+pub use agents_md::{
+    AGENTS_MD_FILENAME, AgentsMdContent, MAX_AGENTS_MD_READ_BYTES, load_agents_md,
+    load_agents_md_layers,
+};
 pub use depth::{current_run_depth, with_run_depth};
 pub use host_ext::HostExtensions;
 pub use stats::*;
@@ -331,6 +336,7 @@ impl<Ctx> RunContext<Ctx> {
             terminal_observer: None,
             turns: crate::agent_loop::TurnTracker::default(),
             halted_by_guard: None,
+            halted_by_guard_cause: None,
             last_limit: std::sync::Mutex::new(None),
             active_model_call: None,
             provider_started: false,
@@ -525,6 +531,15 @@ impl<Ctx> RunContext<Ctx> {
     /// instead when it is shared across runs.
     pub fn instance_id(&self) -> u64 {
         self.instance_id
+    }
+
+    /// A weak liveness token for middleware that keeps per-run state.
+    ///
+    /// The token becomes un-upgradeable when this context is dropped. Middleware
+    /// can use it to reclaim state when callers abandon a run before terminal
+    /// callbacks fire.
+    pub fn lifecycle_token(&self) -> std::sync::Weak<()> {
+        std::sync::Arc::downgrade(&self.lifecycle)
     }
 
     /// Records that the middleware stack already dispatched `on_error` for the
@@ -961,6 +976,21 @@ impl<Ctx> RunContext<Ctx> {
     /// Takes the repeat-progress guard's halt summary, if one was latched.
     pub fn take_halted_by_guard(&mut self) -> Option<String> {
         self.halted_by_guard.take()
+    }
+
+    /// Record a classified guard halt, preserving its typed root cause.
+    pub fn halt_with_cause(&mut self, cause: crate::no_progress::ClassifiedStopCause) {
+        if self.halted_by_guard.is_none() {
+            self.halted_by_guard = Some(cause.summary.clone());
+            self.halted_by_guard_cause = Some(cause);
+        }
+    }
+
+    /// Take the typed cause recorded with a classified guard halt.
+    pub fn take_halted_by_guard_cause(
+        &mut self,
+    ) -> Option<crate::no_progress::ClassifiedStopCause> {
+        self.halted_by_guard_cause.take()
     }
 
     /// Resets lifecycle tracking for a run whose input already contains seed messages.

@@ -93,6 +93,28 @@ impl WorkloadRouter {
         Self::default()
     }
 
+    /// Projects TinyInference's workload table into registry routing policy.
+    ///
+    /// `vision_hint` is supplied by the host so this shared layer does not
+    /// encode a product's hint spelling. The image capability remains gated
+    /// only for the designated route when the inference table marks it as
+    /// requiring image input.
+    pub fn from_workload_routes(vision_hint: &str) -> Self {
+        tinyinference_llm::model::workload::WORKLOAD_ROUTES
+            .iter()
+            .fold(Self::new(), |router, spec| {
+                let mut route = WorkloadRoute::new(spec.name, spec.name)
+                    .with_fallbacks(spec.fallbacks.iter().copied());
+                if spec.requires_image_in && spec.name == vision_hint {
+                    route = route.requiring(CapabilitySet {
+                        image_in: true,
+                        ..CapabilitySet::default()
+                    });
+                }
+                router.with_route(route)
+            })
+    }
+
     /// Adds a route, returning `self` for chaining (builder style).
     ///
     /// A later route with the same alias **overwrites** the earlier one (last

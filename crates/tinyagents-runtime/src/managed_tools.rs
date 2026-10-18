@@ -7,6 +7,70 @@ use tinytools::ToolSpec;
 
 use crate::PrefixSnapshot;
 
+/// The host-neutral visibility sets for a turn's managed tools.
+///
+/// `visible` is the executable model surface, `deferred` is searchable but
+/// omitted from that surface, and `permanent` is always directly visible.
+/// Hosts still decide which tools are managed and which discovery policy to
+/// apply; this type keeps the set algebra consistent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ManagedToolNames {
+    /// Tools advertised directly to the model.
+    pub visible: HashSet<String>,
+    /// Tools available through a discovery/search mechanism.
+    pub deferred: HashSet<String>,
+    /// Tools that remain directly advertised across synthesized refreshes.
+    pub permanent: HashSet<String>,
+}
+
+impl ManagedToolNames {
+    /// Reconciles the synthesized portion of visibility at a turn boundary.
+    /// Revoked names are always removed. New names are admitted only when the
+    /// host's existing wildcard policy opts into them; existing deferred names
+    /// remain deferred. Permanent names are restored unless they are also in
+    /// the revoked synthesized set (which signals an authoritative revocation).
+    pub fn refresh_synthesized(
+        &mut self,
+        previous: &HashSet<String>,
+        next: &HashSet<String>,
+        auto_include_new: bool,
+    ) {
+        let revoked = previous.difference(next).cloned().collect::<HashSet<_>>();
+        for name in &revoked {
+            self.visible.remove(name);
+            self.deferred.remove(name);
+            self.permanent.remove(name);
+        }
+        if auto_include_new {
+            self.visible.extend(next.difference(previous).cloned());
+        }
+        self.visible.extend(self.permanent.iter().cloned());
+        self.deferred.retain(|name| !self.permanent.contains(name));
+    }
+
+    /// Applies deferred classification to synthesized names. Hidden names
+    /// stay hidden because this only moves names already in `visible`.
+    pub fn defer_visible(&mut self, names: &HashSet<String>) {
+        let moved = self
+            .visible
+            .intersection(names)
+            .filter(|name| !self.permanent.contains(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in moved {
+            self.visible.remove(&name);
+            self.deferred.insert(name);
+        }
+    }
+
+    /// Promotes names to permanent visibility and removes them from deferred.
+    pub fn make_permanent(&mut self, names: impl IntoIterator<Item = String>) {
+        self.permanent.extend(names);
+        self.visible.extend(self.permanent.iter().cloned());
+        self.deferred.retain(|name| !self.permanent.contains(name));
+    }
+}
+
 /// Rebuild `prefix` so its trailing system message (opened by `marker`) lists
 /// the named tools, leaving every other prefix message untouched.
 ///

@@ -70,7 +70,8 @@ pub use contract::{
 pub use ops::{
     ArtifactOffload, HANDOFF_STAGE_CONSUMED, HANDOFF_STAGE_RECORDED, build_abstract,
     effective_offload_threshold, extract_artifact_paths, note_artifact_handoff,
-    offload_oversized_result, render_artifact_pointer, should_offload,
+    offload_oversized_result, offload_oversized_result_to_fs, render_artifact_pointer,
+    should_offload,
 };
 pub use paths::{resolve_artifact_key, sanitize_component};
 pub use policy::{ArtifactPathPolicy, ArtifactRedactor, NoRedaction, OpenPathPolicy, Redacted};

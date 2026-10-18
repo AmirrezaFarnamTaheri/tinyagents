@@ -13,6 +13,7 @@ use tinyagents_harness::ids::new_call_id;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::tool::ToolDispatch;
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse};
+use tinytools::Tool;
 
 pub(super) struct PanickingModel;
 
@@ -111,6 +112,28 @@ async fn cancelling_one_job_leaves_its_sibling_running() {
     release.add_permits(1);
     let done = wait_for_terminal(&jobs, &second, owner).await;
     assert_eq!(done.status, SubAgentJobStatus::Completed);
+}
+
+#[tokio::test]
+async fn jobs_await_waits_for_the_terminal_snapshot() {
+    let (tool, started, release) = blocked_tool();
+    let jobs = SubAgentJobsTool::new(tool.job_registry().clone());
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let id = spawn(&tool, &parent).await;
+    let _started = started.acquire().await.unwrap();
+    let waiter = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        new_call_id(),
+        json!({"action":"await","job_id":id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    release.add_permits(1);
+    let result = waiter.await.unwrap();
+    let value: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["output"], "finished later");
 }
 
 #[tokio::test]
@@ -247,6 +270,73 @@ async fn message_request_ids_are_bounded_per_job() {
 }
 
 #[tokio::test]
+async fn message_tool_can_recover_from_a_terminal_job_selector_when_enabled() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    jobs.cancel_owned(job_id.as_str(), parent.instance_id())
+        .expect("the owned job can be cancelled");
+    jobs.mark_result(&job_id, Err(TinyAgentsError::Cancelled));
+
+    let args = json!({"job_id": job_id.as_str(), "message": "please continue"});
+    let recovering = SubAgentMessageTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &recovering,
+        &(),
+        new_call_id(),
+        args.clone(),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a completed job cannot receive a message");
+    assert!(matches!(
+        error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
+
+    let recovering_jobs = SubAgentJobsTool::new(jobs.clone()).recover_selector_errors();
+    let error = ToolDispatch::<(), ()>::execute(
+        &recovering_jobs,
+        &(),
+        new_call_id(),
+        json!({"action": "cancel", "job_id": job_id.as_str()}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("a terminal job cannot be cancelled again");
+    assert!(matches!(
+        error.downcast_ref::<TinyAgentsError>(),
+        Some(TinyAgentsError::ModelRetry(_))
+    ));
+
+    let default = SubAgentMessageTool::new(jobs);
+    let error = ToolDispatch::<(), ()>::execute(
+        &default,
+        &(),
+        new_call_id(),
+        args,
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect_err("default message tools preserve the typed terminal error");
+    assert!(matches!(
+        error.downcast_ref::<SubAgentJobError>(),
+        Some(SubAgentJobError::Terminal { .. })
+    ));
+}
+
+#[test]
+fn registry_lock_failures_are_not_selector_denials() {
+    let error =
+        super::jobs::registry_failure(tinyagents_tasks::DetachedTaskRegistryError::LockPoisoned);
+    assert!(matches!(error, SubAgentJobError::Registry(_)));
+    assert!(!super::jobs::is_recoverable_selector_denial(&error));
+}
+
+#[tokio::test]
 async fn terminal_jobs_never_return_to_running() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);
@@ -338,4 +428,353 @@ async fn a_budget_overrun_that_raced_an_owner_cancel_settles_cancelled() {
     let job = jobs.get(job_id.as_str()).unwrap();
     assert_eq!(job.status, SubAgentJobStatus::Cancelled);
     assert!(job.incomplete_kind.is_none() && job.output.is_none());
+}
+
+#[tokio::test]
+async fn named_job_alias_uses_configured_operation_and_identifier_fields() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    let schema = json!({
+        "type": "object",
+        "required": ["task_id"],
+        "properties": {"task_id": {"type": "string"}}
+    });
+    let tool = SubAgentJobsTool::new(jobs.clone())
+        .with_tool_name("list_subagents")
+        .with_description("List or query subagent work.")
+        .with_parameters(schema.clone())
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_field("task_id");
+
+    assert_eq!(tool.name(), "list_subagents");
+    assert_eq!(tool.description(), "List or query subagent work.");
+    assert_eq!(tool.parameters_schema(), schema);
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task_id": job_id.as_str(), "action": "cancel"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("alias queries the requested job");
+    let returned: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(returned["id"], job_id.as_str());
+    assert_eq!(
+        jobs.get_owned(job_id.as_str(), parent.instance_id())
+            .unwrap()
+            .status,
+        SubAgentJobStatus::Queued,
+        "the caller cannot replace a configured query with a cancel action"
+    );
+}
+
+#[tokio::test]
+async fn fixed_job_alias_rejects_missing_identifiers_and_defaults_stay_compatible() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let alias = SubAgentJobsTool::new(jobs.clone())
+        .with_tool_name("cancel_subagent")
+        .with_fixed_action(SubAgentJobAction::Cancel)
+        .with_identifier_field("task_id");
+    let missing = ToolDispatch::<(), ()>::execute(
+        &alias,
+        &(),
+        new_call_id(),
+        json!({"action": "query"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await;
+    assert!(
+        missing.is_err(),
+        "fixed cancel still requires its mapped task id"
+    );
+
+    let default_jobs = SubAgentJobsTool::new(jobs);
+    assert_eq!(default_jobs.name(), "subagent_jobs");
+    assert_eq!(
+        default_jobs.parameters_schema()["properties"]["action"]["enum"],
+        json!(["query", "cancel", "close", "await"])
+    );
+    let default_message = SubAgentMessageTool::new(SubAgentJobRegistry::new());
+    assert_eq!(default_message.name(), "subagent_message");
+    assert_eq!(
+        default_message.parameters_schema()["properties"]["job_id"]["type"],
+        "string"
+    );
+}
+
+#[test]
+fn await_alias_timeout_policy_matches_its_validated_deadline() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_await_timeout_field("timeout_secs", 120, 3600);
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": 1})),
+        tinytools::ToolTimeout::Millis(1_000)
+    );
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": 5000})),
+        tinytools::ToolTimeout::Millis(3_600_000)
+    );
+    assert_eq!(
+        jobs.timeout_policy(&json!({"timeout_secs": "invalid"})),
+        tinytools::ToolTimeout::Millis(120_000)
+    );
+    assert_eq!(
+        SubAgentJobsTool::new(SubAgentJobRegistry::new()).timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Inherit
+    );
+}
+
+#[test]
+fn named_aliases_preserve_configured_execution_metadata() {
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new()).with_metadata(
+        tinytools::PermissionLevel::Execute,
+        tinytools::ToolScope::AgentOnly,
+        tinytools::ToolCategory::System,
+        tinytools::ToolTimeout::Unbounded,
+    );
+    assert_eq!(jobs.permission_level(), tinytools::PermissionLevel::Execute);
+    assert_eq!(jobs.scope(), tinytools::ToolScope::AgentOnly);
+    assert_eq!(jobs.category(), tinytools::ToolCategory::System);
+    assert_eq!(
+        jobs.timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Unbounded
+    );
+
+    let message = SubAgentMessageTool::new(SubAgentJobRegistry::new()).with_metadata(
+        tinytools::PermissionLevel::Execute,
+        tinytools::ToolScope::CliRpcOnly,
+        tinytools::ToolCategory::Workflow,
+        tinytools::ToolTimeout::Millis(5_000),
+    );
+    assert_eq!(
+        message.permission_level(),
+        tinytools::PermissionLevel::Execute
+    );
+    assert_eq!(message.scope(), tinytools::ToolScope::CliRpcOnly);
+    assert_eq!(message.category(), tinytools::ToolCategory::Workflow);
+    assert_eq!(
+        message.timeout_policy(&json!({})),
+        tinytools::ToolTimeout::Millis(5_000)
+    );
+}
+
+#[tokio::test]
+async fn job_alias_falls_back_to_durable_session_identifier() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    let alias = SubAgentJobsTool::new(jobs)
+        .with_tool_name("wait_subagent")
+        .with_fixed_action(SubAgentJobAction::Query)
+        .with_identifier_fields("task_id", "subagent_session_id")
+        .with_required_identifier();
+
+    assert_eq!(
+        alias.parameters_schema()["properties"]["task_id"]["type"],
+        "string"
+    );
+    assert_eq!(
+        alias.parameters_schema()["properties"]["subagent_session_id"]["type"],
+        "string"
+    );
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &alias,
+        &(),
+        new_call_id(),
+        json!({"task_id":"", "subagent_session_id":job_id.as_str()}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&result.output()).unwrap()["id"],
+        job_id.as_str()
+    );
+}
+
+#[tokio::test]
+async fn named_message_alias_routes_mapped_id_and_message_fields() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, steering) = jobs.create("worker", parent.instance_id());
+    let schema = json!({
+        "type": "object",
+        "required": ["task_id", "text"],
+        "properties": {
+            "task_id": {"type": "string"},
+            "text": {"type": "string"}
+        }
+    });
+    let tool = SubAgentMessageTool::new(jobs)
+        .with_tool_name("steer_subagent")
+        .with_description("Send the worker a steering message.")
+        .with_parameters(schema.clone())
+        .with_argument_fields("task_id", "session_id", "text", "request_key");
+    assert_eq!(tool.name(), "steer_subagent");
+    assert_eq!(tool.description(), "Send the worker a steering message.");
+    assert_eq!(tool.parameters_schema(), schema);
+
+    let result = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        new_call_id(),
+        json!({"task_id": job_id.as_str(), "text": "focus on the test"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("alias sends the mapped message");
+    let returned: serde_json::Value = serde_json::from_str(&result.output()).unwrap();
+    assert_eq!(returned["job_id"], job_id.as_str());
+    assert_eq!(returned["status"], "message_queued");
+    assert_eq!(steering.pending(), 1);
+}
+
+#[tokio::test]
+async fn lane_alias_routes_to_the_child_run_queue_and_default_message_stays_steering() {
+    use tinyagents_harness::run_queue::{QueueLane, RunQueue};
+
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    for (mode, lane) in [("steer", QueueLane::Steer), ("collect", QueueLane::Collect)] {
+        let run_queue = Arc::new(RunQueue::new());
+        let (job_id, steering) = jobs.create_with_cancellation_and_queue(
+            "worker",
+            parent.instance_id(),
+            tinyagents_harness::cancel::CancellationToken::new(),
+            JobLink::default(),
+            Some(run_queue.clone()),
+        );
+        let alias = SubAgentMessageTool::new(jobs.clone())
+            .with_tool_name("queue_message")
+            .with_argument_fields("task_id", "session_id", "text", "request_key")
+            .with_lane_field("mode");
+        ToolDispatch::<(), ()>::execute(
+            &alias,
+            &(),
+            new_call_id(),
+            json!({"task_id":job_id.as_str(), "text":"follow this lane", "mode":mode}),
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .expect("lane alias enqueues a message");
+        let queued = run_queue.drain_now(lane);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].text(), "follow this lane");
+        assert_eq!(steering.pending(), 0, "lane alias uses the run queue");
+    }
+
+    let run_queue = Arc::new(RunQueue::new());
+    let (job_id, _) = jobs.create_with_cancellation_and_queue(
+        "worker",
+        parent.instance_id(),
+        tinyagents_harness::cancel::CancellationToken::new(),
+        JobLink::default(),
+        Some(run_queue.clone()),
+    );
+    let alias = SubAgentMessageTool::new(jobs.clone())
+        .with_argument_fields("task_id", "session_id", "text", "request_key")
+        .with_lane_field("mode");
+    ToolDispatch::<(), ()>::execute(
+        &alias,
+        &(),
+        new_call_id(),
+        json!({"task_id":job_id.as_str(), "text":"unknown uses steer", "mode":"bogus"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("legacy unknown lane defaults to steer");
+    assert_eq!(
+        run_queue.drain_now(QueueLane::Steer)[0].text(),
+        "unknown uses steer"
+    );
+    assert!(run_queue.drain_now(QueueLane::Collect).is_empty());
+
+    let (job_id, steering) = jobs.create("worker", parent.instance_id());
+    let generic = SubAgentMessageTool::new(jobs).with_argument_fields(
+        "task_id",
+        "session_id",
+        "text",
+        "request_key",
+    );
+    ToolDispatch::<(), ()>::execute(
+        &generic,
+        &(),
+        new_call_id(),
+        json!({"task_id":job_id.as_str(), "text":"legacy steering"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .expect("generic message keeps its old steering path");
+    assert_eq!(steering.pending(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn bounded_await_returns_still_running_without_cancelling_and_observes_terminal_race() {
+    let jobs = SubAgentJobRegistry::new();
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let (job_id, _) = jobs.create("worker", parent.instance_id());
+    let wait = SubAgentJobsTool::new(jobs.clone())
+        .with_tool_name("wait_subagent")
+        .with_fixed_action(SubAgentJobAction::Await)
+        .with_identifier_field("task_id")
+        .with_required_identifier()
+        .with_await_timeout_field("timeout_seconds", 120, 3600);
+    let waiting = ToolDispatch::<(), ()>::execute(
+        &wait,
+        &(),
+        new_call_id(),
+        json!({"task_id":job_id.as_str(),"timeout_seconds":1}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    tokio::pin!(waiting);
+    tokio::select! {
+        biased;
+        result = &mut waiting => panic!("job unexpectedly completed before timeout: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    let still_running = waiting.await.expect("timeout is a normal job snapshot");
+    let value: Value = serde_json::from_str(&still_running.output()).unwrap();
+    assert_eq!(value["status"], "queued");
+    assert!(jobs.holds_live_cancellation(&job_id));
+    assert_eq!(
+        jobs.get(job_id.as_str()).unwrap().status,
+        SubAgentJobStatus::Queued
+    );
+
+    let (terminal_id, _) = jobs.create("worker", parent.instance_id());
+    let terminal_wait = ToolDispatch::<(), ()>::execute(
+        &wait,
+        &(),
+        new_call_id(),
+        json!({"task_id":terminal_id.as_str(),"timeout_seconds":1}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    );
+    tokio::pin!(terminal_wait);
+    tokio::select! {
+        biased;
+        result = &mut terminal_wait => panic!("job unexpectedly completed before timeout: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    jobs.mark_aborted(&terminal_id, true);
+    let terminal = terminal_wait
+        .await
+        .expect("timeout race returns latest state");
+    let value: Value = serde_json::from_str(&terminal.output()).unwrap();
+    assert_eq!(value["status"], "failed");
 }

@@ -156,6 +156,83 @@ pub struct PromptBudget {
     pub max_tokens: usize,
 }
 
+/// Relative stability of a system-prompt section. Sections are emitted in
+/// this order so a changing tail cannot invalidate an earlier cacheable prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PromptTier {
+    /// Build- and agent-stable instructions.
+    Stable,
+    /// Context fixed for a session, such as project instructions.
+    Context,
+    /// Content that may change between turns.
+    Volatile,
+}
+
+/// One rendered prompt slice assigned to a cache tier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TieredPromptPart {
+    /// Cache tier for this slice.
+    pub tier: PromptTier,
+    /// Already-rendered UTF-8 text.
+    pub content: String,
+}
+
+impl TieredPromptPart {
+    /// Creates a prompt slice for `tier`.
+    pub fn new(tier: PromptTier, content: impl Into<String>) -> Self {
+        Self {
+            tier,
+            content: content.into(),
+        }
+    }
+}
+
+/// A section whose output depends on caller-owned context.
+///
+/// Implementations should return only non-empty slices. The composer calls
+/// each section once per build and groups slices by tier after rendering.
+pub trait DynamicPromptSection<C>: Send + Sync {
+    /// Stable section label, used for diagnostics and future provenance.
+    fn name(&self) -> &str;
+    /// Render this section using the context supplied by the host.
+    fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>>;
+}
+
+impl<C, F> DynamicPromptSection<C> for F
+where
+    F: Fn(&C) -> crate::Result<Vec<TieredPromptPart>> + Send + Sync,
+{
+    fn name(&self) -> &str {
+        "dynamic"
+    }
+    fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>> {
+        self(context)
+    }
+}
+
+impl<C, T> DynamicPromptSection<C> for std::sync::Arc<T>
+where
+    T: DynamicPromptSection<C> + ?Sized,
+{
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+    fn render(&self, context: &C) -> crate::Result<Vec<TieredPromptPart>> {
+        (**self).render(context)
+    }
+}
+
+/// Fully rendered system prompt with stable/context/volatile cache boundaries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TieredPrompt {
+    /// Flattened text, with one trailing newline when non-empty.
+    pub text: String,
+    /// Byte offsets at the ends of stable and context tiers when later bytes follow.
+    pub breakpoints: Vec<usize>,
+    /// Rendered tier content in stable, context, volatile order.
+    pub parts: Vec<(PromptTier, String)>,
+}
+
 // ---------------------------------------------------------------------------
 // Private internals
 // ---------------------------------------------------------------------------

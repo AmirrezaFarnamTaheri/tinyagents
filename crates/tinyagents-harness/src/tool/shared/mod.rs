@@ -156,6 +156,10 @@ impl Tool for CanonicalSharedToolAdapter {
         self.resolved_tool().and_then(Tool::family)
     }
 
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.resolved_tool().and_then(Tool::host_extension)
+    }
+
     // Tool rules read these: a dropped tag lets a tag rule miss, and a
     // dropped indirect target lets a dispatcher's real target escape.
     fn tags(&self) -> Vec<String> {

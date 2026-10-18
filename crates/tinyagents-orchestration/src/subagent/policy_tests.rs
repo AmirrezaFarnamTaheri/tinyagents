@@ -113,6 +113,19 @@ fn retry_attempts_inherit_the_first_attempts_host_extensions() {
 }
 
 #[test]
+fn retry_attempts_keep_tool_scope_and_skill_filter() {
+    let prepared = prepared_with_origin(false)
+        .with_tool_scope(tinyagents_definition::ToolScope::Named(vec![
+            "docs__search".into(),
+        ]))
+        .with_skill_filter("docs");
+    let mut source = AttemptSource::from_prepared(&prepared);
+    let retry = source.next(1, CancellationToken::new()).unwrap();
+    assert_eq!(retry.tool_scope, prepared.tool_scope);
+    assert_eq!(retry.skill_filter.as_deref(), Some("docs"));
+}
+
+#[test]
 fn retry_factory_host_extensions_win_over_the_inherited_ones() {
     let mut source = AttemptSource::from_prepared(&prepared_with_origin(true));
     let retry = source.next(1, CancellationToken::new()).unwrap();
