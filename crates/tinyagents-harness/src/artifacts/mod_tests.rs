@@ -185,7 +185,7 @@ fn atomic_materialization_does_not_create_descendants_through_a_symlink() {
 
     let result = super::ops::atomic_write_under_dir(
         &root,
-        Path::new("outputs/worker"),
+        &Path::new(OUTPUTS_DIR).join("worker"),
         std::ffi::OsStr::new("result.md"),
         b"body",
     );
