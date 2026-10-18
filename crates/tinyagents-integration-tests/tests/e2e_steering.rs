@@ -110,18 +110,19 @@ async fn detached_steer_dispatch_reaches_the_registered_child_harness() {
 
     // Run the actual child harness with the handle found by public detached
     // steering; its model request must contain the delivered instruction.
-    let ctx = RunContext::new(RunConfig::new("detached-child"), ())
-        .with_steering(steering);
+    let ctx = RunContext::new(RunConfig::new("detached-child"), ()).with_steering(steering);
     harness
         .invoke_in_context(&(), ctx, vec![Message::user("Hello")])
         .await
         .expect("child run completes");
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0]
-        .messages
-        .iter()
-        .any(|message| message.text().contains("Use the child run's live handle")));
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|message| message.text().contains("Use the child run's live handle"))
+    );
 
     status_tx
         .send(DetachedSubagentStatus::Completed {
