@@ -658,7 +658,6 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
             role: crate::subagent::SubagentRole::default(),
             delegation_tools: Vec::new(),
             result_policy: crate::subagent::ResultPolicy::default(),
-            driver_dispatch: None,
             job_registry: None,
             job_owner_scope: Arc::new(|owner| owner.to_string()),
         }
@@ -765,22 +764,6 @@ impl<State: Clone + Send + Sync + 'static, Ctx: Send + Sync + 'static> SubAgentT
         &self.jobs
     }
 
-    /// Returns the stable owner-key resolver used for jobs from this tool.
-    pub fn job_owner_scope(&self) -> Arc<dyn Fn(u64) -> String + Send + Sync> {
-        Arc::clone(&self.job_owner_scope)
-    }
-
-    /// Installs a host-created invocation dispatcher for this subagent tool.
-    ///
-    /// Generic driver-backed tool implementations live in `tinyagents-harness-tools`;
-    /// this setter lets them attach without making orchestration depend on that crate.
-    pub fn with_driver_dispatch(
-        mut self,
-        dispatch: Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>,
-    ) -> Self {
-        self.driver_dispatch = Some(dispatch);
-        self
-    }
 
     /// Overrides the model-visible tool name.
     pub fn with_tool_name(mut self, name: impl Into<String>) -> Self {
@@ -1078,9 +1061,6 @@ where
     Ctx: Send + Sync + 'static,
 {
     fn tool(&self) -> Arc<dyn tinytools::Tool> {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch.tool();
-        }
         // Built once and cached (M-4): `tool()` is called several times per
         // admitted call and once per tool per run for `schemas()`, and a
         // fresh `Arc<SubAgentToolDeclaration>` with a cloned `parameters`
@@ -1096,9 +1076,6 @@ where
     }
 
     fn output_origin(&self) -> tinyagents_harness::host::ContentOrigin {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch.output_origin();
-        }
         tinyagents_harness::host::ContentOrigin::Agent
     }
 
@@ -1110,11 +1087,6 @@ where
         options: tinytools::ToolCallOptions,
         parent: &RunContext<Ctx>,
     ) -> anyhow::Result<tinytools::ToolResult> {
-        if let Some(dispatch) = &self.driver_dispatch {
-            return dispatch
-                .execute(state, call_id, arguments, options, parent)
-                .await;
-        }
         self.invoke_in_parent_context_for_call(state, arguments, options, parent, Some(&call_id))
             .await
             .map_err(anyhow::Error::from)

@@ -191,8 +191,6 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) delegation_tools: Vec<String>,
     /// Trim/check applied to the child's final output.
     pub(crate) result_policy: crate::subagent::ResultPolicy,
-    /// Optional host-planned invocation installed by `with_driver`.
-    pub(crate) driver_dispatch: Option<Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>>,
     /// Optional shared job/control registry bridged by driver-backed aliases.
     pub(crate) job_registry: Option<SubAgentJobRegistry>,
     /// Host-owned stable owner key for jobs that outlive a single run context.
