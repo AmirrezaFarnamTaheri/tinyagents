@@ -8,12 +8,14 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
+use tinyagents_harness::tinyinference_llm::{
+    message::Message, providers::MockModel, tool::ToolCall,
+};
 use tinyagents_harness::{
     runtime::AgentHarness,
     testkit,
     tool::{BoundToolCall, ToolCallBinding, ToolDispatch},
 };
-use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";
 
