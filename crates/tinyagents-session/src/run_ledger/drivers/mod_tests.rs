@@ -1,8 +1,10 @@
 use super::*;
 use crate::run_ledger::LedgerError;
+use crate::run_ledger::RunLedgerStore;
 use chrono::Duration;
 use serde_json::json;
-use tinystoragedrivers_core::{ErrorKind, MemoryStorage, StorageBackend};
+use std::sync::Arc;
+use tinystoragedrivers_core::{ErrorKind, MemoryStorage, Scope, StorageBackend};
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
@@ -19,6 +21,45 @@ pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
                 .unwrap(),
         ),
     )
+}
+
+async fn assert_ledger_conformance_and_scope_isolation(backend: &dyn StorageBackend) {
+    use crate::testkit::conformance::run_ledger_conformance;
+
+    let scoped = |name: &str| {
+        Arc::new(DriverRunLedger::new(
+            backend.for_scope(&Scope::new(name).unwrap()).unwrap(),
+        )) as Arc<dyn RunLedgerStore>
+    };
+    run_ledger_conformance(scoped("session-contract-agent")).await;
+    assert!(
+        scoped("session-contract-peer")
+            .list_agent_runs(&AgentRunListRequest::default())
+            .await
+            .unwrap()
+            .runs
+            .is_empty(),
+        "a separate scope cannot list the conformance agent's runs"
+    );
+}
+
+#[tokio::test]
+async fn driver_run_ledger_conformance_and_scope_isolation_pass_on_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = tinystoragedrivers_file::FileStorage::open(dir.path()).unwrap();
+    assert_ledger_conformance_and_scope_isolation(&backend).await;
+}
+
+/// Run with `TSD_MONGO_URL=... cargo test -p tinyagents-session --all-features
+/// mongodb_run_ledger_conformance -- --ignored` against a local replica set.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires a local MongoDB replica set; run explicitly with TSD_MONGO_URL"]
+async fn mongodb_run_ledger_conformance_and_scope_isolation() {
+    let (uri, database) = crate::testkit::local_mongo_test_target("run_ledger");
+    let backend = tinystoragedrivers_mongodb::MongoStorage::connect(&uri, &database)
+        .await
+        .expect("local MongoDB replica set is reachable");
+    assert_ledger_conformance_and_scope_isolation(&backend).await;
 }
 
 /// A known workflow input whose first SQL revision is zero.
