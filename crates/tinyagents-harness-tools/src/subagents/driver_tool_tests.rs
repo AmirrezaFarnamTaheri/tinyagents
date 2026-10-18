@@ -840,18 +840,7 @@ fn subagent_driver_alias_preserves_host_name_description_and_schema() {
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
     });
-    let tool = SubAgentTool::new(
-        Arc::new(SubAgent::new(
-            "worker",
-            "generic child description",
-            Arc::new(AgentHarness::new()),
-        )),
-        ChildDataPolicy::new(|_: &()| ()),
-    )
-    .with_tool_name("delegate_to")
-    .with_description("Delegate to an allowed specialist.")
-    .with_parameters(schema.clone())
-    .with_driver(
+    let tool = DriverSubAgentTool::new("delegate_to", "Delegate to an allowed specialist.", 
         driver(),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
@@ -867,7 +856,7 @@ fn subagent_driver_alias_preserves_host_name_description_and_schema() {
             )
         },
         |_| None,
-    );
+    ).with_parameters(schema.clone());
     let declaration = ToolDispatch::<(), ()>::tool(&tool);
     assert_eq!(declaration.name(), "delegate_to");
     assert_eq!(
@@ -889,11 +878,7 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
         "worker description",
         Arc::new(harness),
     ));
-    let tool = tinyagents_orchestration::subagent::SubAgentTool::new(
-        legacy,
-        tinyagents_orchestration::subagent::ChildDataPolicy::new(|_| ()),
-    )
-    .with_driver(
+    let tool = DriverSubAgentTool::new("subagent", "worker description", 
         driver(),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
