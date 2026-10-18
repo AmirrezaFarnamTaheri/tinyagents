@@ -3,7 +3,7 @@
 //! One `tsd.kv` value contains both pause and terminal state, so independent
 //! processes cannot commit competing lifecycle transitions. The neutral
 //! `subagents/lifecycle-neutral` namespace leaves host-specific legacy records
-//! available for the host to convert through [`Self::import_record_at`].
+//! available for the host to convert through [`DocumentSubagentPersistence::import_record_at`].
 
 use std::sync::Arc;
 
@@ -86,7 +86,13 @@ impl DocumentSubagentPersistence {
         if encoded.len() <= 180 {
             encoded
         } else {
-            format!("sha256-{:x}", Sha256::digest(encoded.as_bytes()))
+            format!(
+                "sha256-{}",
+                Sha256::digest(encoded.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            )
         }
     }
 
