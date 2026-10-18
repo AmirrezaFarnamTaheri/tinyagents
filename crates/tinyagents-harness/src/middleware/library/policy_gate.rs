@@ -305,9 +305,24 @@ async fn run_approved<State: Send + Sync, Ctx: Send + Sync>(
             Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
         }
         ApprovalResolution::Allow { ticket } => {
-            let outcome = next.run(ctx, state, call).await?;
-            record_approved(resolver, ticket.as_deref(), &outcome);
-            Ok(outcome)
+            let mut guard = TicketGuard::new(resolver, ticket);
+            match next.run(ctx, state, call).await {
+                Ok(outcome) => {
+                    match &outcome {
+                        MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
+                        MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                    }
+                    Ok(outcome)
+                }
+                Err(error) => {
+                    if matches!(error, TinyAgentsError::Cancelled) {
+                        guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                    } else {
+                        guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                    }
+                    Err(error)
+                }
+            }
         }
     }
 }
@@ -640,11 +655,27 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolMiddleware<State, Ctx>
                     }
                     return Ok(outcome);
                 }
-                let outcome = next.run(ctx, state, call).await?;
-                if let Some(resolver) = &self.resolver {
-                    record_approved(resolver.as_ref(), ticket.as_deref(), &outcome);
+                let Some(resolver) = &self.resolver else {
+                    return next.run(ctx, state, call).await;
+                };
+                let mut guard = TicketGuard::new(resolver.as_ref(), ticket);
+                match next.run(ctx, state, call).await {
+                    Ok(outcome) => {
+                        match &outcome {
+                            MiddlewareToolOutcome::Result(result) => guard.complete(ApprovalExecutionOutcome::Result(result)),
+                            MiddlewareToolOutcome::Command { control } => guard.complete(ApprovalExecutionOutcome::Control(control)),
+                        }
+                        Ok(outcome)
+                    }
+                    Err(error) => {
+                        if matches!(error, TinyAgentsError::Cancelled) {
+                            guard.complete(ApprovalExecutionOutcome::Cancelled(&error));
+                        } else {
+                            guard.complete(ApprovalExecutionOutcome::Failed(&error));
+                        }
+                        Err(error)
+                    }
                 }
-                Ok(outcome)
             }
             GateVerdict::Refused { reason } => {
                 Ok(MiddlewareToolOutcome::Result(ToolResult::error(reason)))
