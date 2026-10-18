@@ -227,7 +227,7 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     handle.bind(Arc::downgrade(&original));
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
     let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(outer);
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
     let pinned = dispatch.bind_call(&args).unwrap().unwrap();
@@ -263,7 +263,7 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
 
     let _full_catalog = UseSkillTool::new(handle.clone(), CATALOG);
     let prefix_catalog = UseSkillTool::new(handle.clone(), PackCatalog::new(&PACKS[..1], MARKER));
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(Arc::new(prefix_catalog));
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
     let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});
@@ -278,7 +278,7 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
 struct LiveParentDispatch(Arc<dyn Tool>);
 
 #[async_trait]
-impl crate::tool::ToolDispatch<(), String> for LiveParentDispatch {
+impl tinyagents_harness::tool::ToolDispatch<(), String> for LiveParentDispatch {
     fn tool(&self) -> Arc<dyn Tool> {
         self.0.clone()
     }
@@ -286,10 +286,10 @@ impl crate::tool::ToolDispatch<(), String> for LiveParentDispatch {
     async fn execute(
         &self,
         _state: &(),
-        call_id: crate::CallId,
+        call_id: tinyagents_harness::CallId,
         arguments: Value,
         _options: tinytools::ToolCallOptions,
-        parent: &crate::context::RunContext<String>,
+        parent: &tinyagents_harness::context::RunContext<String>,
     ) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success(format!(
             "run={};call={call_id};args={arguments}",
@@ -323,11 +323,11 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
     let replacement = Arc::new(vec![Box::new(FakeTool::plain("a_two")) as Box<dyn Tool>]);
     handle.bind(Arc::downgrade(&replacement));
 
-    let parent = crate::context::RunContext::new(
-        crate::context::RunConfig::new("parent-run"),
+    let parent = tinyagents_harness::context::RunContext::new(
+        tinyagents_harness::context::RunConfig::new("parent-run"),
         "live-parent".to_string(),
     );
-    let call_id = crate::CallId::new("admitted-call");
+    let call_id = tinyagents_harness::CallId::new("admitted-call");
     let result = bound
         .execute(
             &(),
@@ -381,8 +381,8 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
             ])),
         )
         .register_tool_dispatch(dispatch);
-    let parent = crate::context::RunContext::new(
-        crate::context::RunConfig::new("outer-run"),
+    let parent = tinyagents_harness::context::RunContext::new(
+        tinyagents_harness::context::RunConfig::new("outer-run"),
         "live-parent-state".to_owned(),
     );
     let run = harness
@@ -436,8 +436,8 @@ async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch(
             ])),
         )
         .register_tool_dispatch(Arc::new(UseSkillDispatch::new(outer, selector)));
-    let policy = crate::runtime::RunPolicy {
-        tool_rules: crate::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
+    let policy = tinyagents_harness::runtime::RunPolicy {
+        tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
             tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["a_one"]),
         )),
         ..Default::default()
@@ -468,7 +468,7 @@ struct RecordingParentDispatch {
 }
 
 #[async_trait]
-impl crate::tool::ToolDispatch<(), String> for RecordingParentDispatch {
+impl tinyagents_harness::tool::ToolDispatch<(), String> for RecordingParentDispatch {
     fn tool(&self) -> Arc<dyn Tool> {
         self.tool.clone()
     }
@@ -476,10 +476,10 @@ impl crate::tool::ToolDispatch<(), String> for RecordingParentDispatch {
     async fn execute(
         &self,
         _state: &(),
-        _call_id: crate::CallId,
+        _call_id: tinyagents_harness::CallId,
         _arguments: Value,
         _options: tinytools::ToolCallOptions,
-        _parent: &crate::context::RunContext<String>,
+        _parent: &tinyagents_harness::context::RunContext<String>,
     ) -> anyhow::Result<ToolResult> {
         self.executed
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -496,10 +496,10 @@ fn packed_binding_preserves_outer_policy_transform_approval() {
     handle.bind(Arc::downgrade(&inner));
 
     let outer = Arc::new(
-        crate::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(handle, CATALOG)))
+        tinyagents_harness::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(handle, CATALOG)))
             .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
     );
-    let mut registry = crate::tool::ToolRegistry::<(), ()>::new();
+    let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(outer);
     let dispatch = registry.model_dispatch(USE_SKILL).unwrap();
     let arguments = json!({"skill": "alpha", "tool": "a_one", "args": {}});

@@ -30,12 +30,6 @@ pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools
 mod time_parse_tests;
 
 #[cfg(test)]
-#[path = "ask_clarification_tests.rs"]
-mod ask_clarification_tests;
-#[cfg(test)]
-#[path = "plan_exit_tests.rs"]
-mod plan_exit_tests;
-#[cfg(test)]
 #[path = "time_tests.rs"]
 mod time_tests;
 #[cfg(test)]
