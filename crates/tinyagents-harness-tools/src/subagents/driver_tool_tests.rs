@@ -1087,6 +1087,17 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         .with_identifier_field("task_id")
         .with_owner_scope(owner_scope.clone())
         .with_required_identifier();
+    let missing_identifier = ToolDispatch::<(), ()>::execute(
+        &query,
+        &(),
+        CallId::new("query-without-identifier"),
+        json!({"task_id":null}),
+        tinytools::ToolCallOptions::default(),
+        &next_turn,
+    )
+    .await
+    .expect_err("a fixed query alias requires its configured identifier");
+    assert!(missing_identifier.to_string().contains("task_id"));
     let listed = ToolDispatch::<(), ()>::execute(
         &query,
         &(),
@@ -1285,7 +1296,7 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         Some(TinyAgentsError::ModelRetry(_))
     ));
     let cancel = SubAgentJobsTool::new(jobs.clone())
-        .with_argument_names("action", "task_id", None)
+        .with_identifier_field("task_id")
         .with_owner_scope(owner_scope.clone())
         .recover_selector_errors();
     let cancel_error = ToolDispatch::<(), ()>::execute(
@@ -1665,6 +1676,60 @@ async fn cancel_driver_job_by_full_key_checks_owner_and_waits_for_settlement() {
         jobs.cancel_key_owned(&key, "parent-a"),
         Err(SubAgentJobError::Terminal { .. })
     ));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn parent_cancellation_cascades_to_running_driver_jobs() {
+    let jobs = SubAgentJobRegistry::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let parent = RunContext::new(RunConfig::new("parent-cancel-cascade"), ());
+    let tool = DriverSubAgentTool::new(
+        "worker",
+        "worker description",
+        blocking_driver(started.clone(), release, calls.clone()),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("parent-cancel-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "parent-cancel-task",
+                (),
+                args["input"].as_str().unwrap_or_default(),
+                None,
+            )
+        },
+        |_| Some("parent-cancel-thread".into()),
+    )
+    .with_job_registry(jobs.clone());
+    let spawned = ToolDispatch::<(), ()>::execute(
+        &tool,
+        &(),
+        CallId::new("spawn-parent-cancel"),
+        json!({"input":"work", "mode":"background"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let task_id = serde_json::from_str::<Value>(&spawned.output()).unwrap()["task_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    started.notified().await;
+    parent.cancellation.cancel();
+    let terminal = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        jobs.wait_owned(&task_id, parent.instance_id().to_string()),
+    )
+    .await
+    .expect("parent cancellation settles the child job")
+    .unwrap();
+    assert_eq!(terminal.status, SubAgentJobStatus::Cancelled);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
