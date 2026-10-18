@@ -341,12 +341,13 @@ pub trait CompactionSink: Send + Sync {
 ```
 
 Every successful compaction — threshold-triggered (`before_model`) or
-overflow-triggered (`wrap_model`) — builds a `CompactionRecord` and, when a
-`CompactionSink` is attached to the run
-(`RunContext::compaction_sink` / `RunContext::with_compaction_sink`),
-persists it. The harness does not prescribe a persistence backend for
-`CompactionSink`; a host may attach any implementation that stores its
-`CompactionRecord`s.
+overflow-triggered (`wrap_model`) — builds a `CompactionRecord`. The harness
+attempts to persist it only when both a `CompactionSink` is attached to the run
+(`RunContext::compaction_sink` / `RunContext::with_compaction_sink`) and the
+compaction has a trusted live boundary to anchor the record. An overflow
+compaction without that boundary is not persisted. The harness does not
+prescribe a persistence backend for `CompactionSink`; a host may attach any
+implementation that stores eligible `CompactionRecord`s.
 
 `AgentEvent::Compacted { reason, tokens_before, tokens_after }` is emitted for
 every compaction, in addition to the pre-existing

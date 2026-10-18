@@ -703,8 +703,8 @@ fn legacy_compaction_placement() -> SummaryPlacement {
     SummaryPlacement::System
 }
 
-/// A durable sink a host attaches to a [`crate::context::RunContext`] so
-/// every [`CompactionRecord`] a run produces is persisted somewhere durable
+/// A durable sink a host attaches to a [`crate::context::RunContext`] to
+/// persist [`CompactionRecord`]s from compactions with a trusted live boundary
 /// through a host-provided store,
 /// instead of only living as long as the in-process
 /// [`crate::middleware::ContextCompressionMiddleware::records`] buffer.
@@ -713,8 +713,8 @@ fn legacy_compaction_placement() -> SummaryPlacement {
 /// what [`crate::context::RunContext::compaction_sink`] holds.
 pub trait CompactionSink: Send + Sync {
     /// Persists `record`. Implementations should be idempotent-safe to call
-    /// once per compaction (the compaction step calls this exactly once per
-    /// successful compaction) and should not block the run indefinitely — a
+    /// once per record received (the compaction step calls this at most once
+    /// for each successful compaction) and should not block the run indefinitely — a
     /// slow or failing sink should return promptly with an error rather than
     /// stall the agent loop.
     fn persist(&self, record: &CompactionRecord) -> Result<()>;

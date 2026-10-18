@@ -85,6 +85,7 @@ fn classic(dir: &Path) -> std::path::PathBuf {
     path
 }
 
+/// Adds retired entry-table names with sentinel rows to an existing classic database.
 fn add_retired_tables(path: &Path) {
     let entries = ["entry", "_tree", "_entries"].concat();
     let labels = ["entry", "_tree", "_labels"].concat();
@@ -257,6 +258,7 @@ async fn a_full_database_imports_every_family_with_its_ids() {
     assert_eq!(unresolved[0].idempotency_key.as_deref(), Some("idem-1"));
 }
 
+/// Importing a classic database leaves rows in retired tables untouched.
 #[tokio::test]
 async fn importing_a_store_with_retired_tables_leaves_them_untouched() {
     let dir = tempfile::tempdir().unwrap();
