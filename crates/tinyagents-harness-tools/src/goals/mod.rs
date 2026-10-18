@@ -6,11 +6,10 @@
 //! is exhausted, or a host pauses it. This module owns the data model
 //! (`types`), harness-[`Store`](tinyagents_harness::store::Store)-backed
 //! persistence ([`store`]), the model-facing controls exposed as harness tools
-//! (`tool`), the graph-native continuation surface (`continuation`), and
-//! budget enforcement ([`budget`]) — charging a finished turn against the goal
+//! (`tool`), observed runtime operations (`runtime`), and budget enforcement ([`budget`]) — charging a finished turn against the goal
 //! and stopping an in-flight one that would overrun its ceiling.
 //!
-//! It is the graph analogue of OpenHuman's `thread_goals`, minus the
+//! It is the harness-level counterpart of OpenHuman's `thread_goals`, minus the
 //! app-specific coupling (event bus, RPC envelopes, heartbeat scheduler): the
 //! primitive is provider-neutral and drives off the graph runtime.
 

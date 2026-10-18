@@ -41,15 +41,6 @@ impl RuleTool {
         Self::build(name, ToolExposure::Deferred, ToolPolicy::read_only(), false)
     }
 
-    fn approval_gated(name: &'static str) -> Arc<Self> {
-        Self::build(
-            name,
-            ToolExposure::Direct,
-            ToolPolicy::classified().requiring_approval(),
-            false,
-        )
-    }
-
     fn dispatcher(name: &'static str) -> Arc<Self> {
         Self::build(name, ToolExposure::Direct, ToolPolicy::read_only(), true)
     }
@@ -409,25 +400,6 @@ async fn an_indirect_target_is_checked_against_the_rules() {
     assert_eq!(execute.calls(), 1, "only the allowed action ran");
     assert!(tool_text(&run.messages, "c1").contains("rule 'no-delete'"));
     assert_eq!(tool_text(&run.messages, "c2"), "execute ran");
-}
-
-struct PackedRuleTool(Arc<Mutex<Vec<Value>>>);
-
-#[async_trait]
-impl Tool for PackedRuleTool {
-    fn name(&self) -> &str {
-        "packed_delete"
-    }
-    fn description(&self) -> &str {
-        "packed rule fixture"
-    }
-    fn parameters_schema(&self) -> Value {
-        json!({"type": "object"})
-    }
-    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        self.0.lock().unwrap().push(args);
-        Ok(ToolResult::success("ran"))
-    }
 }
 
 struct FamilyTool(&'static str);

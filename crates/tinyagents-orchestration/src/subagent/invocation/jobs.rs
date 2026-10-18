@@ -75,23 +75,6 @@ impl SubAgentJobRegistry {
         &self.tasks
     }
 
-    /// Whether the job still holds a live (unreleased) cancellation token.
-    #[cfg(test)]
-    pub(crate) fn holds_live_cancellation(&self, id: &SubAgentJobId) -> bool {
-        self.tasks
-            .holds_cancellation(&TaskId::new(id.as_str()))
-            .unwrap_or(false)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn drain_lane_for_test(&self, id: &SubAgentJobId, lane: QueueLane) -> Vec<Message> {
-        self.controls()
-            .get(id)
-            .and_then(|control| control.run_queue.as_ref())
-            .map(|queue| queue.drain_now(lane))
-            .unwrap_or_default()
-    }
-
     #[allow(dead_code)]
     pub(crate) fn create(&self, agent: &str, owner: u64) -> (SubAgentJobId, SteeringHandle) {
         self.create_with_cancellation(agent, owner, CancellationToken::new(), JobLink::default())
