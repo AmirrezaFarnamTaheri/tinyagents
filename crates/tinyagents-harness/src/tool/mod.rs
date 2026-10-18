@@ -507,3 +507,7 @@ mod timeout_test;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "binding_tests.rs"]
+mod binding_tests;
