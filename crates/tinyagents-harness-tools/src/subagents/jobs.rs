@@ -4,26 +4,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::{RunId, TaskId, next_seq};
+use tinyagents_harness::ids::RunId;
 use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{
-    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
-};
 use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyagents_orchestration::subagent::{
-    AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, DurableSubagentStatus,
-    IncompleteKind, InlineJobGuard, SubAgentJob, SubAgentJobError, SubAgentJobId,
-    SubAgentJobRegistry, SubAgentJobStatus, SubagentAwaitingUser, SubagentSessionStore, WaitError,
-    WaitOutcome, list_subagent_records, record_agent_id, record_subagent_session_id,
-    record_to_wait_outcome, subagent_record_for_task, task_id_for_session_in_records,
+    DetachedSubagentStatus, DurableSubagentSessionSummary, DurableSubagentStatus, SubAgentJobError,
+    SubAgentJobRegistry, SubagentAwaitingUser, SubagentSessionStore, WaitError, WaitOutcome,
+    list_subagent_records, record_agent_id, record_subagent_session_id, record_to_wait_outcome,
+    subagent_record_for_task, task_id_for_session_in_records,
 };
-use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
-use tinyinference_llm::message::Message;
+use tinyagents_tasks::{OrchestrationTaskFilter, TaskStore};
 use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
-use tokio::sync::watch;
 
 type SessionOverlay = (
     Arc<dyn SubagentSessionStore>,
@@ -31,17 +24,7 @@ type SessionOverlay = (
 );
 type TaskOverlay = (Arc<dyn TaskStore>, Arc<dyn Fn(u64) -> RunId + Send + Sync>);
 
-const LOG_PREFIX: &str = "[subagent-jobs]";
 const SELECTOR_RETRY_HINT: &str = "The selected subagent job or session is unavailable to this run. Check the identifier and try again.";
-
-pub(super) fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
-    SubAgentJobError::Registry(error.to_string())
-}
-struct JobExecutionControls {
-    cancellation: CancellationToken,
-    steering: SteeringHandle,
-    run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-}
 
 /// A fixed operation for a host-named alias of [`SubAgentJobsTool`].
 ///
