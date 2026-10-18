@@ -75,7 +75,7 @@ fn lane_names_and_commands_are_literal() {
 }
 
 #[tokio::test]
-async fn steer_rejects_followup_unknown_unowned_and_terminal() {
+async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering.clone());
     let tx = add(&reg, "t1", "p1", None);
