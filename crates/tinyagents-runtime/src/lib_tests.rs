@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use tinyagents_harness::tool::ToolSnapshot;
+use tinyagents_harness::tool::{ToolSnapshot, ToolSnapshotError};
 
 use std::{
     collections::VecDeque,
@@ -602,7 +602,7 @@ async fn trailing_input_is_deduplicated_and_tool_collisions_fail_closed() {
                 parameters: serde_json::json!({})
             },
         ]),
-        Err(RuntimeError::ToolNameCollision(_))
+        Err(ToolSnapshotError::NameCollision(_))
     ));
 }
 
