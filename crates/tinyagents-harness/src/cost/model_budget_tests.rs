@@ -42,44 +42,6 @@ impl ChatModel<()> for MalformedBuyerChargeModel {
 #[tokio::test]
 async fn explicit_dispatch_observer_runs_after_charge_normalization() {
     use crate::observability::turn_observer::TurnObservation;
-    use crate::observability::{
-        PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome,
-        PhysicalDispatchTerminal,
-    };
-
-    struct ExplicitObserver(Arc<RecordingObserver>);
-    struct ExplicitTerminal(Arc<RecordingObserver>);
-    impl PhysicalDispatchObserver for ExplicitObserver {
-        fn on_start(&self, _: &PhysicalDispatchMetadata) -> Box<dyn PhysicalDispatchTerminal> {
-            Box::new(ExplicitTerminal(self.0.clone()))
-        }
-    }
-    impl PhysicalDispatchTerminal for ExplicitTerminal {
-        fn on_terminal(self: Box<Self>, outcome: PhysicalDispatchOutcome) {
-            if let Some(usage) = outcome.usage {
-                crate::observability::turn_observer::Observer::on_event(
-                    self.0.as_ref(),
-                    &TurnObservation::ModelDispatch {
-                        run_id: "explicit".into(),
-                        call_id: None,
-                        requested_model: None,
-                        answered_model: None,
-                        finish_reason: None,
-                        duration_ms: 0,
-                        status: outcome.status,
-                        refused: outcome.refused,
-                        usage: Some(crate::observability::turn_observer::ObservedUsage {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            cached_tokens: usage.cached_tokens,
-                            reasoning_tokens: usage.reasoning_tokens,
-                            cost_usd: usage.cost_usd,
-                        }),
-                    },
-                );
-            }
-        }
-    }
 
     let observer = Arc::new(RecordingObserver(std::sync::Mutex::new(Vec::new())));
     let ambient = Arc::new(RecordingObserver(std::sync::Mutex::new(Vec::new())));
@@ -100,7 +62,7 @@ async fn explicit_dispatch_observer_runs_after_charge_normalization() {
     );
     let wrapped = budget.wrap_model_with_observer(
         Arc::new(ChargedModel),
-        Some(Arc::new(ExplicitObserver(observer.clone()))),
+        Some(Arc::new(ExplicitDispatchObserver(observer.clone()))),
     );
     crate::observability::turn_observer::with_observer(scope, async {
         wrapped
@@ -135,6 +97,45 @@ struct RecordingObserver(
 impl crate::observability::turn_observer::Observer for RecordingObserver {
     fn on_event(&self, event: &crate::observability::turn_observer::TurnObservation) {
         self.0.lock().unwrap().push(event.clone());
+    }
+}
+
+struct ExplicitDispatchObserver(Arc<RecordingObserver>);
+struct ExplicitDispatchTerminal(Arc<RecordingObserver>);
+
+impl crate::observability::PhysicalDispatchObserver for ExplicitDispatchObserver {
+    fn on_start(
+        &self,
+        _: &crate::observability::PhysicalDispatchMetadata,
+    ) -> Box<dyn crate::observability::PhysicalDispatchTerminal> {
+        Box::new(ExplicitDispatchTerminal(self.0.clone()))
+    }
+}
+
+impl crate::observability::PhysicalDispatchTerminal for ExplicitDispatchTerminal {
+    fn on_terminal(self: Box<Self>, outcome: crate::observability::PhysicalDispatchOutcome) {
+        use crate::observability::turn_observer::{ObservedUsage, TurnObservation};
+
+        crate::observability::turn_observer::Observer::on_event(
+            self.0.as_ref(),
+            &TurnObservation::ModelDispatch {
+                run_id: "explicit".into(),
+                call_id: None,
+                requested_model: None,
+                answered_model: outcome.answered_model,
+                finish_reason: outcome.finish_reason,
+                duration_ms: outcome.duration.as_millis() as u64,
+                status: outcome.status,
+                refused: outcome.refused,
+                usage: outcome.usage.map(|usage| ObservedUsage {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cached_tokens: usage.cached_tokens,
+                    reasoning_tokens: usage.reasoning_tokens,
+                    cost_usd: usage.cost_usd,
+                }),
+            },
+        );
     }
 }
 
