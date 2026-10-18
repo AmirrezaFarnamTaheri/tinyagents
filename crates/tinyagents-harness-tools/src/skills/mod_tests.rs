@@ -100,19 +100,16 @@ impl Tool for FakeTool {
 
 /// A durable registry holding `tools` plus a bound `use_skill`.
 fn bound(tools: Vec<FakeTool>) -> Arc<Vec<Box<dyn Tool>>> {
+    bound_with_handle(tools).0
+}
+
+fn bound_with_handle(tools: Vec<FakeTool>) -> (Arc<Vec<Box<dyn Tool>>>, PackRegistryHandle) {
     let handle = PackRegistryHandle::default();
     let mut all: Vec<Box<dyn Tool>> = tools.into_iter().map(|t| Box::new(t) as _).collect();
     all.push(Box::new(UseSkillTool::new(handle.clone(), CATALOG)));
     let all = Arc::new(all);
     handle.bind(Arc::downgrade(&all));
-    all
-}
-
-fn handle_of(tools: &[Box<dyn Tool>]) -> &PackRegistryHandle {
-    find(tools, USE_SKILL)
-        .host_extension()
-        .and_then(|any| any.downcast_ref::<PackRegistryHandle>())
-        .expect("use_skill preserves PackRegistryHandle as its host extension")
+    (all, handle)
 }
 
 fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {
@@ -245,11 +242,9 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
     let args = json!({"skill": "alpha", "tool": "a_one", "args": {}});
     let pinned = bind_call(outer.clone(), &args);
     assert!(pinned.tool().supports_markdown());
-    assert!(
-        outer
-            .host_extension()
-            .is_some_and(|extension| extension.is::<PackRegistryHandle>())
-    );
+    assert!(outer
+        .host_extension()
+        .is_some_and(|extension| extension.is::<ToolCallBinding>()));
     let authorization = pinned.tool().prepare_authorization(&args).await.unwrap();
 
     let mut replacement: Vec<Box<dyn Tool>> = vec![Box::new(RebindingTool("replacement"))];
@@ -310,8 +305,7 @@ impl tinyagents_harness::tool::ToolDispatch<(), String> for LiveParentDispatch {
 
 #[tokio::test]
 async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
-    let tools = bound(vec![FakeTool::plain("a_one")]);
-    let handle = handle_of(&tools).clone();
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
     let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(|selection| {
         assert_eq!(selection.tool_name(), "a_one");
@@ -358,8 +352,7 @@ async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
 
 #[tokio::test]
 async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_and_live_parent() {
-    let tools = bound(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
-    let handle = handle_of(&tools).clone();
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
     let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
     let selected_for_selector = selected.clone();
@@ -417,8 +410,7 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
 
 #[tokio::test]
 async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch() {
-    let tools = bound(vec![FakeTool::plain("a_one")]);
-    let handle = handle_of(&tools).clone();
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
     let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
     let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let executed_for_selector = executed.clone();
@@ -577,9 +569,9 @@ async fn an_unbound_handle_reports_the_registry_unavailable() {
 /// must be reachable, and rebinding it must repoint the handle.
 #[tokio::test]
 async fn a_tool_in_the_synthesised_set_is_reachable_and_rebinding_repoints() {
-    let durable = bound(vec![]);
+    let (durable, handle) = bound_with_handle(vec![]);
     let first: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(FakeTool::plain("a_one"))]);
-    handle_of(&durable).bind_synthesized(Arc::downgrade(&first));
+    handle.bind_synthesized(Arc::downgrade(&first));
     let use_skill = find(&durable, USE_SKILL);
 
     let ran = use_skill
@@ -589,7 +581,7 @@ async fn a_tool_in_the_synthesised_set_is_reachable_and_rebinding_repoints() {
     assert!(!ran.is_error, "{}", ran.text());
 
     let second: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(FakeTool::plain("a_two"))]);
-    handle_of(&durable).bind_synthesized(Arc::downgrade(&second));
+    handle.bind_synthesized(Arc::downgrade(&second));
     drop(first);
     let ran = use_skill
         .execute(json!({"skill": "alpha", "tool": "a_two", "args": {}}))
@@ -605,8 +597,7 @@ async fn a_tool_in_the_synthesised_set_is_reachable_and_rebinding_repoints() {
 
 #[test]
 fn resolve_registry_for_enforces_pack_membership() {
-    let durable = bound(vec![FakeTool::plain("a_one")]);
-    let handle = handle_of(&durable);
+    let (_durable, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
     assert!(
         handle
             .resolve_registry_for(&CATALOG, "alpha", "a_one")
@@ -626,8 +617,7 @@ fn resolve_registry_for_enforces_pack_membership() {
 
 #[tokio::test]
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
-    let tools = bound(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
-    let handle = handle_of(&tools);
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
     let listing = render_pack_filtered(&CATALOG, "alpha", handle, &|name| name == "a_one", "")
         .expect("one callable tool");
     assert!(listing.contains("## `a_one`"));
