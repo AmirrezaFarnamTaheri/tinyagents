@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 tinyagents-graph = { path = "../tinyagents-graph" }
 tinyagents-harness = { path = "../tinyagents-harness" }
+tinyagents-harness-tools = { path = "../tinyagents-harness-tools" }
 tinyagents-orchestration = { path = "../tinyagents-orchestration" }
 tinyagents-definition = { path = "../tinyagents-definition" }
 tinyagents-registry = { path = "../tinyagents-registry" }
@@ -33,9 +34,7 @@ tokio = { workspace = true, default-features = true, features = ["macros", "rt-m
 default = []
 # Retained as a no-op: SQLite persistence is the tinystoragedrivers SQLite driver.
 sqlite = []
-# `tools` is kept as the forwarded feature name for backward compatibility
-# (see `tinyagents-harness`'s deprecated `tools` alias for `builtin-tools`).
-tools = ["tinyagents-harness/builtin-tools"]
+tools = ["tinyagents-harness-tools/todos", "tinyagents-harness-tools/goals", "tinyagents-harness-tools/skills"]
 multimodal = ["tinyagents-harness/multimodal"]
 claude-code = ["tinyagents-harness/claude-code"]
 langfuse = ["tinyagents-harness/langfuse"]
