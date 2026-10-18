@@ -28,6 +28,13 @@ impl DocumentStore for DeleteProbeDocs {
         self.inner.capabilities()
     }
 
+    async fn validate_collection_spec(
+        &self,
+        required: &CollectionSpec,
+    ) -> tinystoragedrivers_core::Result<()> {
+        self.inner.validate_collection_spec(required).await
+    }
+
     async fn ensure_collection(
         &self,
         spec: &CollectionSpec,
@@ -130,6 +137,14 @@ impl DocumentStore for DeleteProbeDocs {
         patch: &serde_json::Value,
     ) -> tinystoragedrivers_core::Result<Option<Versioned<serde_json::Value>>> {
         self.inner.claim(collection, filter, sort, patch).await
+    }
+
+    async fn atomic_batch_checked(
+        &self,
+        checks: Vec<tinystoragedrivers_core::ReadCheck>,
+        ops: Vec<tinystoragedrivers_core::WriteOp>,
+    ) -> tinystoragedrivers_core::Result<Vec<tinystoragedrivers_core::WriteResult>> {
+        self.inner.atomic_batch_checked(checks, ops).await
     }
 
     async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_core::Result<()> {
