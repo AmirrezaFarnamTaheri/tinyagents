@@ -68,6 +68,7 @@ struct Resolver {
     calls: AtomicUsize,
     scopes: Mutex<Vec<String>>,
     resolved_sources: Mutex<Vec<String>>,
+    mime_hints: Mutex<Vec<Option<String>>>,
 }
 
 #[derive(Default)]
@@ -94,12 +95,40 @@ impl MediaSourceResolver<String> for Resolver {
     async fn resolve(
         &self,
         scope: &String,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        self.mime_hints.lock().unwrap().push(None);
+        self.resolve_source(scope, modality, source, max_bytes)
+    }
+
+    async fn resolve_with_mime_hint(
+        &self,
+        scope: &String,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+        mime_hint: Option<&str>,
+    ) -> std::result::Result<ResolvedMedia, String> {
+        self.mime_hints
+            .lock()
+            .unwrap()
+            .push(mime_hint.map(str::to_owned));
+        self.resolve_source(scope, modality, source, max_bytes)
+    }
+}
+
+impl Resolver {
+    fn resolve_source(
+        &self,
+        scope: &str,
         _modality: InputModality,
         source: &str,
         max_bytes: usize,
     ) -> std::result::Result<ResolvedMedia, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.scopes.lock().unwrap().push(scope.clone());
+        self.scopes.lock().unwrap().push(scope.to_owned());
         self.resolved_sources
             .lock()
             .unwrap()
@@ -340,6 +369,58 @@ async fn hard_zero_rejects_before_any_source_read() {
 
     assert!(error.to_string().contains("attachments are disabled"));
     assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn typed_mime_hints_are_forwarded_per_block_but_markers_have_none() {
+    let model = Arc::new(CaptureModel::new(false));
+    let resolver = Arc::new(Resolver {
+        sources: HashMap::from([(
+            "shared.bin".into(),
+            attachment("shared.bin", "text/plain", b"content"),
+        )]),
+        ..Resolver::default()
+    });
+    let wrapped = wrapper(
+        model,
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    );
+    let typed = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Document(MediaRef::Path {
+                path: "shared.bin".into(),
+                media_type: Some("application/pdf".into()),
+            }),
+            ContentBlock::Document(MediaRef::Path {
+                path: "shared.bin".into(),
+                media_type: Some("text/markdown".into()),
+            }),
+        ],
+    })]);
+
+    wrapped.invoke(&"tenant-a".into(), typed).await.unwrap();
+    let marker = wrapper(
+        Arc::new(CaptureModel::new(false)),
+        MediaRequestConfig::default(),
+        resolver.clone(),
+        Arc::default(),
+    );
+    let stream = marker
+        .stream(&"tenant-a".into(), request("[FILE:shared.bin]"))
+        .await
+        .unwrap();
+    let _: Vec<ModelStreamItem> = stream.collect().await;
+
+    assert_eq!(
+        *resolver.mime_hints.lock().unwrap(),
+        vec![
+            Some("application/pdf".into()),
+            Some("text/markdown".into()),
+            None,
+        ]
+    );
 }
 
 #[tokio::test]

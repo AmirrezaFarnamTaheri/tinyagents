@@ -69,6 +69,24 @@ pub trait MediaSourceResolver<Scope>: Send + Sync {
         source: &str,
         max_bytes: usize,
     ) -> std::result::Result<ResolvedMedia, String>;
+
+    /// Resolve typed media while preserving its per-block MIME hint.
+    ///
+    /// Marker references pass `None`. Existing resolvers remain
+    /// source-compatible because the default delegates to [`Self::resolve`].
+    async fn resolve_with_mime_hint(
+        &self,
+        scope: &Scope,
+        modality: InputModality,
+        source: &str,
+        max_bytes: usize,
+        _mime_hint: Option<&str>,
+    ) -> std::result::Result<ResolvedMedia, String>
+    where
+        Scope: Sync,
+    {
+        self.resolve(scope, modality, source, max_bytes).await
+    }
 }
 
 /// A resolved attachment plus host-authored context to preserve beside it.
@@ -405,6 +423,7 @@ where
                     &source,
                     self.config.images.max_image_bytes(),
                     false,
+                    None,
                 )
                 .await
             {
@@ -464,6 +483,7 @@ where
                     &source,
                     self.config.files.max_file_bytes(),
                     true,
+                    None,
                 )
                 .await
             {
@@ -543,7 +563,14 @@ where
             _ => self.config.files.max_file_bytes(),
         };
         let resolved = self
-            .resolve(scope, modality, &source, max_bytes, false)
+            .resolve(
+                scope,
+                modality,
+                &source,
+                max_bytes,
+                false,
+                hinted_mime.as_deref(),
+            )
             .await?;
         let ResolvedMedia {
             mut attachment,
@@ -637,6 +664,7 @@ where
         source: &str,
         max_bytes: usize,
         require_file_mime: bool,
+        mime_hint: Option<&str>,
     ) -> tinyinference_llm::Result<ResolvedMedia> {
         let remote = source.starts_with("http://") || source.starts_with("https://");
         let remote_allowed = match modality {
@@ -650,7 +678,7 @@ where
         }
         let attachment = self
             .resolver
-            .resolve(scope, modality, source, max_bytes)
+            .resolve_with_mime_hint(scope, modality, source, max_bytes, mime_hint)
             .await
             .map_err(|error| model_error(&error))?;
         if attachment.attachment.bytes.len() > max_bytes {
