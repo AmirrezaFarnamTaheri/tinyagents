@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinyagents_graph::goals::{BudgetVerdict, GoalBudgetGuard, ThreadGoal};
+use tinyagents_harness_tools::goals::{BudgetVerdict, GoalBudgetGuard, ThreadGoal};
 use tinyagents_harness::cost::TurnCost;
 use tinyagents_harness::store::Store;
 

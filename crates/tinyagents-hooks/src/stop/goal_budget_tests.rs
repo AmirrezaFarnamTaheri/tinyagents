@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::Arc;
-use tinyagents_graph::goals::store;
+use tinyagents_harness_tools::goals::store;
 use tinyagents_harness::store::{InMemoryStore, Store};
 
 #[tokio::test]
@@ -27,7 +27,7 @@ async fn active_goal_budget_stops_when_in_flight_usage_reaches_the_cap() {
 
 #[test]
 fn inactive_or_unbudgeted_goals_do_not_install_a_hook() {
-    use tinyagents_graph::goals::{ThreadGoal, ThreadGoalStatus};
+    use tinyagents_harness_tools::goals::{ThreadGoal, ThreadGoalStatus};
     let goal = ThreadGoal {
         thread_id: "thread".into(),
         goal_id: "goal".into(),
@@ -36,9 +36,9 @@ fn inactive_or_unbudgeted_goals_do_not_install_a_hook() {
         token_budget: Some(10),
         tokens_used: 0,
         time_used_seconds: 0,
+        time_used_subsec_nanos: 0,
         created_at_ms: 0,
         updated_at_ms: 0,
-        continuation_suppressed: false,
     };
     let store: Arc<dyn Store> = Arc::new(InMemoryStore::new());
     assert!(GoalBudgetStopHook::for_goal(store, &goal).is_none());
