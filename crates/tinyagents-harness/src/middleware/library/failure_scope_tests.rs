@@ -200,7 +200,7 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
         Arc::new(ResetAndCallCopyPolicy),
         2,
     );
-    let call = |id: &str, reset: bool| {
+    let call = |id: &'static str, reset: bool| async {
         observe_once(
             &middleware,
             89,
@@ -209,6 +209,7 @@ async fn reset_failure_starts_new_ladder_without_host_progress_callback() {
             json!({"reset": reset}),
             ToolResult::error("exit status 1"),
         )
+        .await
     };
 
     call("first", false).await;
