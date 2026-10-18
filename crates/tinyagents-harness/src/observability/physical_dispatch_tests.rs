@@ -340,12 +340,12 @@ async fn stream_eof_reports_failure_with_latest_cumulative_usage() {
         Some(ModelStreamItem::UsageDelta(usage)) if usage.input_tokens == 9
     ));
     assert!(recorder.0.lock().unwrap().is_empty());
-    assert!(matches!(
-        stream.next().await,
-        Some(ModelStreamItem::UsageDelta(_))
-    ));
-    assert!(recorder.0.lock().unwrap().is_empty());
     assert!(stream.next().await.is_none());
+    let outcomes = recorder.0.lock().unwrap().clone();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Failed);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().input_tokens, 9);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().output_tokens, 4);
     assert!(stream.next().await.is_none());
     drop(stream);
 
