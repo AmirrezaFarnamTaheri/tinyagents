@@ -2037,7 +2037,6 @@ dependencies = [
 name = "tinyagents-graph"
 version = "2.2.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "futures",
  "serde",
@@ -2062,7 +2061,6 @@ dependencies = [
  "base64 0.22.1",
  "cap-std",
  "chrono",
- "chrono-tz",
  "dirs",
  "flate2",
  "futures",
@@ -2097,6 +2095,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyagents-harness-tools"
+version = "2.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tinyagents-harness",
+ "tinyagents-orchestration",
+ "tinyagents-tasks",
+ "tinyinference-llm",
+ "tinytools",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tinyagents-hooks"
 version = "2.2.0"
 dependencies = [
@@ -2106,8 +2124,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tinyagents-graph",
  "tinyagents-harness",
+ "tinyagents-harness-tools",
  "tinyinference-llm",
  "tinytools",
  "tokio",
@@ -2129,9 +2147,11 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-graph",
  "tinyagents-harness",
+ "tinyagents-harness-tools",
  "tinyagents-orchestration",
  "tinyagents-registry",
  "tinyagents-session",
+ "tinyagents-tasks",
  "tinyinference-embeddings",
  "tinyinference-llm",
  "tinystoragedrivers-core",
@@ -2173,7 +2193,6 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-registry",
- "tinyagents-runtime",
  "tinyagents-session",
  "tinyagents-tasks",
  "tinyinference-llm",
@@ -2252,8 +2271,6 @@ dependencies = [
 name = "tinyagents-tasks"
 version = "2.2.0"
 dependencies = [
- "anyhow",
- "async-trait",
  "serde",
  "serde_json",
  "tempfile",
@@ -2261,7 +2278,6 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools",
  "tokio",
  "tracing",
 ]

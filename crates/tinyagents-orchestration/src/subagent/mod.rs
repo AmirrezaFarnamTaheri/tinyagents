@@ -34,19 +34,16 @@ pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,
     DetachedCompletionTarget, DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome,
-    SpawnedSubagent, SteerAccess, SteerError, SteerReceipt, SteerRoute, SubagentIdentity,
-    SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError, WaitOutcome,
-    cancel_detached_or_durable, cancel_detached_or_durable_with_owners, cancel_for_thread,
-    distinct_parent_threads, list_subagent_records, orphaned_subagent_reason, queue_lane_name,
-    record_agent_id, record_cancelled, record_detached_completion, record_parent_session,
-    record_spawned, record_status, record_subagent_session_id, record_to_wait_outcome,
-    resolve_detached_or_durable, resolve_detached_or_durable_with_owners, resume_ref_for_task,
-    resume_ref_from_record, snapshot_for_owner, spawn_status_watcher,
-    spawn_status_watcher_with_completions, steer_detached, steer_detached_with_request_id,
-    steering_command_for_lane, subagent_record_for_task, task_id_for_session,
-    task_id_for_session_in_records, task_status_label, wait_all_detached,
-    wait_all_detached_with_owners, wait_detached, wait_detached_or_durable,
-    wait_detached_or_durable_with_owners, wait_error_from_registry,
+    SpawnedSubagent, SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError,
+    WaitOutcome, cancel_detached_or_durable, cancel_detached_or_durable_with_owners,
+    list_subagent_records, orphaned_subagent_reason, record_agent_id, record_cancelled,
+    record_detached_completion, record_parent_session, record_spawned, record_status,
+    record_subagent_session_id, record_to_wait_outcome, resolve_detached_or_durable,
+    resolve_detached_or_durable_with_owners, resume_ref_for_task, resume_ref_from_record,
+    snapshot_for_owner, spawn_status_watcher, spawn_status_watcher_with_completions,
+    subagent_record_for_task, task_id_for_session, task_id_for_session_in_records,
+    task_status_label, wait_all_detached, wait_all_detached_with_owners, wait_detached,
+    wait_detached_or_durable, wait_detached_or_durable_with_owners, wait_error_from_registry,
 };
 pub use document_persistence::DocumentSubagentPersistence;
 pub use driver::{SubagentCapabilities, SubagentDriver, SubagentInFlight};
@@ -55,11 +52,10 @@ pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
-    DriverSubAgentTool, MultiTargetDelegationTool, ReviewApprovalPolicy, SUBAGENT_MODE_FIELD,
-    SubAgent, SubAgentJob, SubAgentJobAction, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
-    SubAgentJobStatus, SubAgentJobsTool, SubAgentMessageTool, SubAgentMode, SubAgentSession,
-    SubAgentTool, SubagentDriverToolHost, parse_approval, register_subagent_job_tools,
-    review_stage_output,
+    DriverJobRegistration, InlineJobGuard, MultiTargetDelegationTool, ReviewApprovalPolicy,
+    SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError, SubAgentJobId,
+    SubAgentJobRegistry, SubAgentJobStatus, SubAgentMode, SubAgentSession, SubAgentTool,
+    parse_approval, review_stage_output,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;

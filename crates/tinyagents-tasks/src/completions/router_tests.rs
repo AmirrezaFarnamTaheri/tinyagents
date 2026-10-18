@@ -4,7 +4,6 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
 use tinyinference_llm::message::Message;
 
 use super::*;
-use crate::{RecoveryChild, build_restart_recovery_note};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -321,53 +320,6 @@ async fn pending_for_lists_only_undelivered_records_of_the_parent() {
     assert_eq!(ids(&router.pending_for("p")), ["t2"]);
 }
 
-#[tokio::test]
-async fn recovery_note_lists_pending_completions_and_interrupted_children() {
-    let router = router();
-    router
-        .record(record("done", "p").with_label("indexer"))
-        .await
-        .unwrap();
-    let children = vec![RecoveryChild {
-        task_id: "lost".into(),
-        kind: "sub_agent".into(),
-        label: "crawler".into(),
-        last_status: "running".into(),
-        interrupted_reason: "restart".into(),
-    }];
-    let note = router.restart_recovery_note("p", &children);
-    assert!(note.contains("crawler"));
-    assert!(note.contains("<completed_child_tasks>"));
-    assert!(note.contains("result of done"));
-    assert!(note.contains(crate::RESTART_RECOVERY_INSTRUCTION));
-}
-
-#[tokio::test]
-async fn recovery_note_without_completions_matches_the_existing_note() {
-    let router = router();
-    let children = vec![RecoveryChild {
-        task_id: "lost".into(),
-        kind: "sub_agent".into(),
-        label: "crawler".into(),
-        last_status: "running".into(),
-        interrupted_reason: "restart".into(),
-    }];
-    assert_eq!(
-        router.restart_recovery_note("p", &children),
-        build_restart_recovery_note(&children)
-    );
-    assert_eq!(router.restart_recovery_note("p", &[]), "");
-}
-
-#[tokio::test]
-async fn completions_alone_produce_a_note() {
-    let router = router();
-    router.record(record("done", "p")).await.unwrap();
-    let note = router.restart_recovery_note("p", &[]);
-    assert!(note.contains("result of done"));
-    assert!(!note.contains("Interrupted child tasks"));
-}
-
 #[test]
 fn neutral_formatter_escapes_child_text() {
     let hostile = CompletionRecord::new(
@@ -526,22 +478,6 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
         destination.get("\u{1}parent-cancelled:q").unwrap().state,
         CompletionState::Tombstoned
     );
-}
-
-#[tokio::test]
-async fn recovery_note_skips_pull_only_and_leased_records() {
-    let router = router();
-    router
-        .record(record("off", "p").with_notify_mode(NotifyMode::Off))
-        .await
-        .unwrap();
-    router.record(record("leased", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
-    router.record(record("open", "p")).await.unwrap();
-    let note = router.restart_recovery_note("p", &[]);
-    assert!(note.contains("result of open"));
-    assert!(!note.contains("result of off"));
-    assert!(!note.contains("result of leased"));
 }
 
 #[tokio::test]

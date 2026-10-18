@@ -151,9 +151,10 @@ pub struct SubAgentSession<State: Send + Sync, Ctx: Send + Sync = ()> {
 /// [`SubAgentJobId`]. By default it never waits for the child's final answer;
 /// the optional `mode: "inline"` argument ([`SubAgentMode::Inline`]) instead
 /// awaits the child and returns its final result in the same call. Hosts share
-/// the tool's [`SubAgentJobRegistry`] with [`super::SubAgentJobsTool`] and
-/// [`super::SubAgentMessageTool`] so callers can query completion or inject a message
-/// at the child's next steering checkpoint.
+/// the tool's [`SubAgentJobRegistry`] with the feature-gated `SubAgentJobsTool`
+/// and `SubAgentMessageTool` from the `tinyagents-harness-tools` crate so
+/// callers can query completion or inject a message at the child's next
+/// steering checkpoint.
 ///
 /// Register this with [`tinyagents_harness::tool::ToolRegistry::register_dispatch`]. The
 /// agent loop calls it with the live parent [`tinyagents_harness::context::RunContext`], so
@@ -191,8 +192,6 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) delegation_tools: Vec<String>,
     /// Trim/check applied to the child's final output.
     pub(crate) result_policy: crate::subagent::ResultPolicy,
-    /// Optional host-planned invocation installed by `with_driver`.
-    pub(crate) driver_dispatch: Option<Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>>,
     /// Optional shared job/control registry bridged by driver-backed aliases.
     pub(crate) job_registry: Option<SubAgentJobRegistry>,
     /// Host-owned stable owner key for jobs that outlive a single run context.
@@ -346,8 +345,23 @@ impl Default for SubAgentJobRegistry {
 }
 
 /// Application metadata kept with each job in the detached registry.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct JobMeta;
+
+impl Clone for JobMeta {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        if PANIC_ON_JOB_META_CLONE.with(std::cell::Cell::get) {
+            panic!("poison subagent detached registry during metadata clone");
+        }
+        Self
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PANIC_ON_JOB_META_CLONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// The adapter-owned half of a job: the status publisher and cancel flag.
 pub(crate) struct JobControl {
@@ -356,19 +370,19 @@ pub(crate) struct JobControl {
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
     /// Optional loop-consumed message queue for typed message aliases.
-    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
     pub(crate) steering: tinyagents_harness::steering::SteeringHandle,
-    pub(crate) cancellation: CancellationToken,
+    pub cancellation: CancellationToken,
 }
 
-pub(crate) struct DriverJobRegistration {
-    pub(crate) key: crate::subagent::SubagentTaskKey,
-    pub(crate) agent: String,
-    pub(crate) owner: String,
-    pub(crate) cancellation: CancellationToken,
-    pub(crate) steering: Option<tinyagents_harness::steering::SteeringHandle>,
-    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
-    pub(crate) continuing: bool,
+pub struct DriverJobRegistration {
+    pub key: crate::subagent::SubagentTaskKey,
+    pub agent: String,
+    pub owner: String,
+    pub cancellation: CancellationToken,
+    pub steering: Option<tinyagents_harness::steering::SteeringHandle>,
+    pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub continuing: bool,
 }
 
 /// Error returned by job lookup or live-message delivery.

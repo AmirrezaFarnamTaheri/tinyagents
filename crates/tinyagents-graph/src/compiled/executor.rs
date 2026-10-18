@@ -15,7 +15,7 @@ use super::*;
 use crate::compiled::boundary::StepBoundary;
 use crate::compiled::run_ctx::{ResumeSeed, RunCtx};
 use crate::compiled::step::StepRunner;
-use crate::thread_locks::ThreadLockMap;
+use crate::execution_locks::RunLockMap;
 use std::sync::OnceLock;
 
 /// Default TTL for the durable execution lease claimed in [`CompiledGraph::execute`]
@@ -32,9 +32,9 @@ const THREAD_LEASE_TTL: Duration = Duration::from_secs(300);
 /// the gap the review's C3 finding describes (`executor.rs` took no lock of
 /// its own). Keyed on `thread_id` *and* namespace so a parent run and a
 /// subgraph run sharing a thread id never contend on each other's lock.
-fn execution_lock_map() -> &'static ThreadLockMap {
-    static LOCKS: OnceLock<ThreadLockMap> = OnceLock::new();
-    LOCKS.get_or_init(|| ThreadLockMap::new("graph executor per-thread run lock"))
+fn execution_lock_map() -> &'static RunLockMap {
+    static LOCKS: OnceLock<RunLockMap> = OnceLock::new();
+    LOCKS.get_or_init(RunLockMap::default)
 }
 
 /// Builds the in-process lock map key for `thread_id` scoped to `namespace`.

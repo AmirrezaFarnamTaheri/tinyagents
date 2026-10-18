@@ -1,8 +1,8 @@
 # `tinyagents-orchestration` — subagent orchestration
 
-This crate is the single home for TinyAgents subagent behavior. It builds on
-the lower-level harness and runtime crates without making those crates depend
-on orchestration policy.
+This crate owns subagent orchestration policy and job lifecycle. Generic tool
+shells for its registry live in `tinyagents-harness-tools`, which depends on
+this crate only under its `subagents` feature.
 
 ## Public surface
 
@@ -10,16 +10,15 @@ on orchestration policy.
   lineage, cancellation, events, host authority, and recursion limits.
 - `subagent::SubAgentTool` starts a child asynchronously through typed
   parent-context tool dispatch and immediately returns a stable job id. Hosts
-  can configure `with_driver` to route the existing tool through
-  `SubagentDriver`; `with_driver_and_completion` also routes detached outcomes
-  to a host delivery callback.
+  Hosts that use the prepared lifecycle construct
+  `tinyagents_harness_tools::subagents::DriverSubAgentTool` directly.
 - `subagent::SubAgentJobRegistry` records queued, running, completed, failed,
   and cancelled jobs on top of `tinyagents_tasks::DetachedTaskRegistry`.
-  `SubAgentJobsTool` queries them and
+  `tinyagents_harness_tools::subagents::SubAgentJobsTool` queries them and
   `SubAgentMessageTool` sends messages to live children.
-- `subagent::SubAgentJobsTool::with_sessions` overlays scoped durable sessions
+- `tinyagents_harness_tools::subagents::SubAgentJobsTool::with_sessions` overlays scoped durable sessions
   on list/query/close/await; `with_task_store` adds parent-run task records.
-  `SubAgentMessageTool::with_sessions` accepts durable session ids for live
+  `tinyagents_harness_tools::subagents::SubAgentMessageTool::with_sessions` accepts durable session ids for live
   steering. The host supplies parent-scope mapping closures so durable stores
   do not decide authorization.
 - `subagent::MultiTargetDelegationTool` exposes a configured target enum and
@@ -49,6 +48,12 @@ on orchestration policy.
   It is the single engine for an agent step: team member steps and workflow
   agent children run through it too (`subagent::run_agent_step`), so they get
   the same spawn admission, policy, result policy and typed outcome.
+- `steering::{steer_detached, steer_detached_with_request_id}` sends lane-checked
+  steering to a live child handle, or delegates it to the host's
+  `SteerFallback` when the handle is absent or the retained task has finished.
+  `SteeringRegistry` remains in `tinyagents-tasks`, where
+  `DetachedTaskRegistry` receives it at construction. `steering::cancel_for_thread`
+  cancels registered children belonging to a parent thread.
 
 The direct invocation implementation and its tool-focused tests live in
 `subagent/invocation/`. Durable lifecycle files live beside it in `subagent/`.
