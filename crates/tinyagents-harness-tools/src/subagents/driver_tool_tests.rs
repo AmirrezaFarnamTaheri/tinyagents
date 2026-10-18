@@ -502,16 +502,15 @@ impl SubagentExecutor<()> for BlockingExecutor {
     ) -> std::result::Result<SubagentOutcome, SubagentError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.started.notify_one();
-        let permit = self
-            .release
-            .acquire()
-            .await
-            .map_err(|error| SubagentError::Execution(error.to_string()))?;
-        permit.forget();
-        Ok(SubagentOutcome::completed(
-            execution.prepared.task_id,
-            "controlled completion",
-        ))
+        let task_id = execution.prepared.task_id;
+        tokio::select! {
+            _ = execution.cancellation.cancelled() => Err(SubagentError::Cancelled),
+            permit = self.release.acquire() => {
+                let permit = permit.map_err(|error| SubagentError::Execution(error.to_string()))?;
+                permit.forget();
+                Ok(SubagentOutcome::completed(task_id, "controlled completion"))
+            }
+        }
     }
 }
 
