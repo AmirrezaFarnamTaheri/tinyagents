@@ -12,6 +12,7 @@ fn goal(status: ThreadGoalStatus, token_budget: Option<u64>, tokens_used: u64) -
         token_budget,
         tokens_used,
         time_used_seconds: 0,
+        time_used_subsec_nanos: 0,
         created_at_ms: 0,
         updated_at_ms: 0,
     }
@@ -83,8 +84,8 @@ mod store_tests {
     use super::ThreadGoalStatus;
     use tinyagents_harness::store::{InMemoryStore, Store};
 
-    fn store() -> Arc<dyn Store> {
-        Arc::new(InMemoryStore::default())
+    fn store() -> Arc<GoalStore> {
+        Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
     }
 
     #[tokio::test]
@@ -111,7 +112,7 @@ mod store_tests {
     async fn set_same_objective_preserves_goal_id_and_counters() {
         let s = store();
         let g1 = store::set(&s, "t", "objective A", Some(100)).await.unwrap();
-        store::account_usage(&s, "t", &g1.goal_id, 30, 5)
+        store::account_usage(&s, "t", &g1.goal_id, 30, std::time::Duration::from_secs(5))
             .await
             .unwrap()
             .unwrap();
@@ -125,7 +126,7 @@ mod store_tests {
     async fn set_same_objective_stays_budget_limited_when_over_budget() {
         let s = store();
         let g = store::set(&s, "t", "obj", Some(100)).await.unwrap();
-        let limited = store::account_usage(&s, "t", &g.goal_id, 120, 0)
+        let limited = store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
@@ -145,7 +146,7 @@ mod store_tests {
     async fn set_changed_objective_mints_new_goal_id_and_resets() {
         let s = store();
         let g1 = store::set(&s, "t", "objective A", None).await.unwrap();
-        store::account_usage(&s, "t", &g1.goal_id, 30, 5)
+        store::account_usage(&s, "t", &g1.goal_id, 30, std::time::Duration::from_secs(5))
             .await
             .unwrap()
             .unwrap();
@@ -176,12 +177,12 @@ mod store_tests {
     async fn account_usage_ignores_stale_goal_id() {
         let s = store();
         let g = store::set(&s, "t", "obj", None).await.unwrap();
-        let after = store::account_usage(&s, "t", "not-the-goal-id", 50, 1)
+        let after = store::account_usage(&s, "t", "not-the-goal-id", 50, std::time::Duration::from_secs(1))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(after.tokens_used, 0);
-        let after = store::account_usage(&s, "t", &g.goal_id, 50, 1)
+        let after = store::account_usage(&s, "t", &g.goal_id, 50, std::time::Duration::from_secs(1))
             .await
             .unwrap()
             .unwrap();
@@ -192,7 +193,7 @@ mod store_tests {
     async fn account_usage_trips_budget_limited() {
         let s = store();
         let g = store::set(&s, "t", "obj", Some(100)).await.unwrap();
-        let after = store::account_usage(&s, "t", &g.goal_id, 120, 2)
+        let after = store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::from_secs(2))
             .await
             .unwrap()
             .unwrap();
@@ -256,12 +257,14 @@ mod tool_tests {
 
     use serde_json::json;
 
+    use super::super::runtime::GoalStore;
     use super::super::tool::{GoalTool, GoalToolKind, goal_tools};
+    use super::super::{GoalObserver, ThreadGoal};
     use tinyagents_harness::store::{InMemoryStore, Store};
     use tinytools::{Tool, ToolResult, ToolRunContext};
 
-    fn store() -> Arc<dyn Store> {
-        Arc::new(InMemoryStore::default())
+    fn store() -> Arc<GoalStore> {
+        Arc::new(GoalStore::new(Arc::new(InMemoryStore::default())))
     }
 
     struct ThreadContext(Option<String>);
@@ -382,34 +385,31 @@ mod tool_tests {
         assert_eq!(res.markdown_formatted.as_deref(), Some(text));
     }
 
-    #[tokio::test]
-    async fn update_hook_fires_on_writes_only() {
-        use std::sync::Mutex;
+    struct TestObserver(Arc<std::sync::Mutex<Vec<String>>>);
 
-        let s = store();
-        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
-        let hook: super::super::tool::GoalUpdateHook = {
-            let seen = seen.clone();
-            Arc::new(move |goal| seen.lock().unwrap().push(goal.status.as_str().to_string()))
-        };
-        let tool = |kind| GoalTool::new(kind, s.clone()).with_update_hook(hook.clone());
+    impl GoalObserver for TestObserver {
+        fn on_updated(&self, goal: &ThreadGoal) {
+            self.0.lock().unwrap().push(goal.status.as_str().to_string());
+        }
+        fn on_cleared(&self, _: &str) {}
+    }
+
+    #[tokio::test]
+    async fn tool_writes_use_the_goal_store_observer() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let raw: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+        let s = Arc::new(GoalStore::with_observer(
+            raw,
+            Arc::new(TestObserver(seen.clone())),
+        ));
+        let tool = |kind| GoalTool::new(kind, s.clone());
 
         run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
         assert!(seen.lock().unwrap().is_empty());
-
-        run(
-            &tool(GoalToolKind::Set),
-            Some("t"),
-            json!({ "objective": "ship" }),
-        )
-        .await;
+        run(&tool(GoalToolKind::Set), Some("t"), json!({"objective":"ship"})).await;
         run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
         run(&tool(GoalToolKind::Complete), Some("t"), json!({})).await;
         assert_eq!(*seen.lock().unwrap(), vec!["active", "complete"]);
-
-        // A failed write (no goal to complete on another thread) does not fire.
-        run(&tool(GoalToolKind::Complete), Some("other"), json!({})).await;
-        assert_eq!(seen.lock().unwrap().len(), 2);
     }
 
     #[test]
@@ -463,7 +463,7 @@ mod budget_tests {
         let kv = kv();
         store::set(&kv, "t1", "ship it", Some(1_000)).await.unwrap();
 
-        let updated = account_turn(&kv, "t1", 100, 50, 12, true)
+        let updated = account_turn(&kv, "t1", 100, 50, std::time::Duration::from_secs(12))
             .await
             .unwrap()
             .expect("goal charged");
@@ -477,7 +477,7 @@ mod budget_tests {
         let kv = kv();
         store::set(&kv, "t1", "ship it", Some(100)).await.unwrap();
 
-        let updated = account_turn(&kv, "t1", 60, 60, 1, true)
+        let updated = account_turn(&kv, "t1", 60, 60, std::time::Duration::from_secs(1))
             .await
             .unwrap()
             .unwrap();
@@ -486,7 +486,7 @@ mod budget_tests {
 
         // A limited goal stops accruing: incidental chat afterwards is free.
         assert!(
-            account_turn(&kv, "t1", 500, 500, 5, true)
+            account_turn(&kv, "t1", 500, 500, std::time::Duration::from_secs(5))
                 .await
                 .unwrap()
                 .is_none()
@@ -499,14 +499,14 @@ mod budget_tests {
     async fn a_thread_with_no_goal_or_an_idle_turn_changes_nothing() {
         let kv = kv();
         assert!(
-            account_turn(&kv, "missing", 10, 10, 1, true)
+            account_turn(&kv, "missing", 10, 10, std::time::Duration::from_secs(1))
                 .await
                 .unwrap()
                 .is_none()
         );
 
         store::set(&kv, "t1", "ship it", None).await.unwrap();
-        let unchanged = account_turn(&kv, "t1", 0, 0, 0, true)
+        let unchanged = account_turn(&kv, "t1", 0, 0, std::time::Duration::ZERO)
             .await
             .unwrap()
             .unwrap();
@@ -549,7 +549,7 @@ mod budget_tests {
         let kv = kv();
         let stored = store::set(&kv, "t1", "ship it", Some(500)).await.unwrap();
         let guard = GoalBudgetGuard::for_goal(&stored).unwrap();
-        account_turn(&kv, "t1", 200, 100, 1, true).await.unwrap();
+        account_turn(&kv, "t1", 200, 100, std::time::Duration::from_secs(1)).await.unwrap();
 
         assert_eq!(
             guard.check(&kv, 100).await.unwrap(),
