@@ -22,8 +22,7 @@ fn local_mongo_url() -> String {
     let url = reqwest::Url::parse(&value).expect("TSD_MONGO_URL must be a valid URI");
     assert_eq!(url.scheme(), "mongodb", "MongoDB SRV URLs are not accepted");
     assert!(
-        matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
-            && url.port().is_some(),
+        matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1")) && url.port().is_some(),
         "TSD_MONGO_URL must point to a local MongoDB server with an explicit port"
     );
     assert!(
@@ -50,11 +49,9 @@ async fn local_backend(label: &str) -> MongoStorage {
 #[ignore = "requires local MongoDB; run explicitly with TSD_MONGO_URL and --ignored"]
 async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
     let backend: Arc<dyn StorageBackend> = Arc::new(local_backend("session_store").await);
-    let stores = DriverSessionStores::new(
-        backend,
-        Scope::tenant("session_store_conformance").unwrap(),
-    )
-    .unwrap();
+    let stores =
+        DriverSessionStores::new(backend, Scope::tenant("session_store_conformance").unwrap())
+            .unwrap();
     session_store_conformance(&stores).await;
     session_store_isolation_conformance(&stores).await;
 }
@@ -70,10 +67,12 @@ async fn mongodb_run_ledger_contract_and_scope_isolation() {
     };
     let ledger = scoped("run_ledger_conformance");
     run_ledger_conformance(ledger.clone()).await;
-    assert!(scoped("run_ledger_peer")
-        .list_agent_runs(&AgentRunListRequest::default())
-        .await
-        .unwrap()
-        .runs
-        .is_empty());
+    assert!(
+        scoped("run_ledger_peer")
+            .list_agent_runs(&AgentRunListRequest::default())
+            .await
+            .unwrap()
+            .runs
+            .is_empty()
+    );
 }
