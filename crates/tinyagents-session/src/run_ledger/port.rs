@@ -16,7 +16,6 @@
 
 use super::error::LedgerResult as Result;
 use chrono::{DateTime, Utc};
-use tinyagents_harness::tinyinference_llm::Message;
 
 use super::command_center::{AgentWorkRow, CommandCenterView, ControlVerb};
 use super::tool_effects::{ToolEffectRow, ToolEffectSettle, ToolEffectStart};
