@@ -100,6 +100,24 @@ async fn cancelling_a_later_attempt_keeps_the_first_attempt_usage() {
 
 struct StreamingModel;
 
+struct EventSequenceModel(Mutex<Option<Vec<ModelStreamItem>>>);
+
+#[async_trait::async_trait]
+impl ChatModel<()> for EventSequenceModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        Ok(ModelResponse::assistant("unused"))
+    }
+
+    async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
+        let items = self.0.lock().unwrap().take().expect("one stream call");
+        Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
+    }
+}
+
+fn event_sequence_model(items: Vec<ModelStreamItem>) -> Arc<dyn ChatModel<()>> {
+    Arc::new(EventSequenceModel(Mutex::new(Some(items))))
+}
+
 #[async_trait::async_trait]
 impl ChatModel<()> for StreamingModel {
     async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
@@ -131,6 +149,141 @@ async fn dropping_a_stream_after_a_chunk_reports_cancellation() {
     let outcomes = recorder.0.lock().unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn dispatch_stream_reports_success_only_after_completed_item() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let response = ModelResponse {
+        usage: Some(Usage::new(7, 4)),
+        ..ModelResponse::assistant("done")
+    };
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::MessageDelta(Default::default()),
+            ModelStreamItem::Completed(response),
+        ]),
+        observer,
+    );
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Started)
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::MessageDelta(_))
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Completed(_))
+    ));
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Succeeded);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().input_tokens, 7);
+}
+
+#[tokio::test]
+async fn dispatch_stream_failed_item_is_the_single_terminal() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::Started,
+            ModelStreamItem::MessageDelta(Default::default()),
+            ModelStreamItem::Failed("private failure".into()),
+        ]),
+        observer,
+    );
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Started)
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::MessageDelta(_))
+    ));
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Failed(_))
+    ));
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Failed);
+}
+
+#[tokio::test]
+async fn stream_failure_keeps_latest_cumulative_usage_delta() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::UsageDelta(Usage::new(5, 2)),
+            ModelStreamItem::UsageDelta(Usage::new(9, 4)),
+            ModelStreamItem::Failed("private failure".into()),
+        ]),
+        observer,
+    );
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    while stream.next().await.is_some() {}
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Failed);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().input_tokens, 9);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().output_tokens, 4);
+}
+
+#[tokio::test]
+async fn cancelled_stream_keeps_latest_cumulative_usage_delta() {
+    let recorder = Arc::new(Recorder::default());
+    let observer: Arc<dyn PhysicalDispatchObserver> = Arc::new(Observer(recorder.clone()));
+    let model = ObservedChatModel::new(
+        event_sequence_model(vec![
+            ModelStreamItem::UsageDelta(Usage::new(5, 2)),
+            ModelStreamItem::UsageDelta(Usage::new(9, 4)),
+            ModelStreamItem::MessageDelta(Default::default()),
+        ]),
+        observer,
+    );
+    let mut stream = model
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::UsageDelta(_))
+    ));
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::UsageDelta(_))
+    ));
+    drop(stream);
+
+    let outcomes = recorder.0.lock().unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PhysicalDispatchStatus::Cancelled);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().input_tokens, 9);
+    assert_eq!(outcomes[0].usage.as_ref().unwrap().output_tokens, 4);
 }
 
 #[test]
