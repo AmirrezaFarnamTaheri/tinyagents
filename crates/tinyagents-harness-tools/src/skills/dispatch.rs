@@ -99,6 +99,15 @@ struct BoundUseSkillDispatch<State: Send + Sync + 'static, Ctx: Send + Sync + 's
 }
 
 #[async_trait]
+impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> BoundUseSkillDispatch<State, Ctx> {
+    fn selection(&self) -> Option<PackSelection> {
+        self.pinned
+            .as_any()
+            .downcast_ref::<PinnedPackCall>()
+            .and_then(PinnedPackCall::selection)
+    }
+}
+
 impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<State, Ctx>
     for BoundUseSkillDispatch<State, Ctx>
 {
@@ -123,13 +132,12 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
 
     fn call_options(&self, arguments: &Value) -> ToolCallOptions {
         let inner_arguments = self
-            .pinned
             .selection()
             .map(|selection| selection.arguments().clone())
             .unwrap_or_else(|| arguments.clone());
         self.selected.as_ref().map_or_else(
             || {
-                if self.pinned.supports_markdown() {
+                if self.pinned.tool().supports_markdown() {
                     ToolCallOptions {
                         prefer_markdown: true,
                     }
@@ -162,6 +170,7 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
 
         let context = ToolExecutionContext::from_run_context(parent, call_id);
         self.pinned
+            .tool()
             .execute_with_context(Value::Null, options, Some(&context))
             .await
     }

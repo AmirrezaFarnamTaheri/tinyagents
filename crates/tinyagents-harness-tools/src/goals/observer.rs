@@ -14,7 +14,7 @@ pub trait GoalObserver: Send + Sync {
     fn on_cleared(&self, thread_id: &str);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PublishedGoal {
     goal_id: String,
     status: ThreadGoalStatus,
