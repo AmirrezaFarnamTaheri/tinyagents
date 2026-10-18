@@ -40,6 +40,49 @@ pub use model_guidance::{
 };
 pub use types::*;
 
+/// Marker that changes a dynamic prompt body's following text to the context tier.
+pub const PROMPT_TIER_CONTEXT_MARKER: &str = "<!--prompt-tier:context-->";
+/// Marker that changes a dynamic prompt body's following text to the volatile tier.
+pub const PROMPT_TIER_VOLATILE_MARKER: &str = "<!--prompt-tier:volatile-->";
+
+/// Split a dynamic prompt body into typed cache-tier parts.
+///
+/// Marker lines are recognized after trimming for comparison and are omitted
+/// from the returned content. All other line bytes are preserved exactly,
+/// except whitespace-only slices between markers, which are discarded. An
+/// unmarked body stays in `default_tier`.
+#[must_use]
+pub fn split_prompt_tiers(body: &str, default_tier: PromptTier) -> Vec<TieredPromptPart> {
+    let mut parts = Vec::new();
+    let mut tier = default_tier;
+    let mut current = String::new();
+    for line in body.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let next = if trimmed == PROMPT_TIER_CONTEXT_MARKER {
+            Some(PromptTier::Context)
+        } else if trimmed == PROMPT_TIER_VOLATILE_MARKER {
+            Some(PromptTier::Volatile)
+        } else {
+            None
+        };
+        match next {
+            Some(next_tier) => {
+                if !current.trim().is_empty() {
+                    parts.push(TieredPromptPart::new(tier, std::mem::take(&mut current)));
+                } else {
+                    current.clear();
+                }
+                tier = next_tier;
+            }
+            None => current.push_str(line),
+        }
+    }
+    if !current.trim().is_empty() {
+        parts.push(TieredPromptPart::new(tier, current));
+    }
+    parts
+}
+
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 

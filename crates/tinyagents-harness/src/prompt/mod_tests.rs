@@ -9,6 +9,47 @@ use serde_json::{Map, json};
 use tinyinference_llm::model::ModelProfile;
 
 #[test]
+fn dynamic_prompt_tier_markers_preserve_literal_body_slices() {
+    let body = format!(
+        "é stable\n{context}\r\n\n<!--prompt-tier:unknown-->\n{volatile}\n📎 tail",
+        context = PROMPT_TIER_CONTEXT_MARKER,
+        volatile = PROMPT_TIER_VOLATILE_MARKER,
+    );
+
+    assert_eq!(
+        split_prompt_tiers(&body, PromptTier::Volatile),
+        vec![
+            TieredPromptPart::new(PromptTier::Volatile, "é stable\n"),
+            TieredPromptPart::new(
+                PromptTier::Context,
+                "\n<!--prompt-tier:unknown-->\n",
+            ),
+            TieredPromptPart::new(PromptTier::Volatile, "📎 tail"),
+        ],
+        "marker lines are removed, while unknown comments and non-whitespace body bytes stay literal"
+    );
+}
+
+#[test]
+fn dynamic_prompt_tier_markers_keep_defaults_and_discard_empty_slices() {
+    assert_eq!(
+        split_prompt_tiers("  only this body  ", PromptTier::Stable),
+        vec![TieredPromptPart::new(
+            PromptTier::Stable,
+            "  only this body  ",
+        )]
+    );
+    assert_eq!(
+        split_prompt_tiers(
+            &format!("{context}\n{context}\ncontent", context = PROMPT_TIER_CONTEXT_MARKER),
+            PromptTier::Volatile,
+        ),
+        vec![TieredPromptPart::new(PromptTier::Context, "content")]
+    );
+    assert!(split_prompt_tiers(" \n ", PromptTier::Stable).is_empty());
+}
+
+#[test]
 fn tiered_prompt_composition_keeps_stable_prefix_when_later_context_changes() {
     struct Section(&'static str, PromptTier);
     impl DynamicPromptSection<String> for Section {
