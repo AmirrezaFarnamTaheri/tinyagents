@@ -116,6 +116,7 @@ impl GoalStore {
         output_tokens: u64,
         elapsed: Duration,
     ) -> Result<Option<ThreadGoal>> {
+        let _notifications = self.notifications.lock().await;
         let Some((before, updated)) = store::account_turn_atomic(
             &self.store,
             thread_id,
