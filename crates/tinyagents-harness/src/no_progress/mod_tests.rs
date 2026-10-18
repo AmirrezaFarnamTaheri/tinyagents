@@ -48,60 +48,6 @@ fn identical_failure_nudges_then_halts() {
 }
 
 #[test]
-fn typed_halts_preserve_the_ladder_class_and_operation() {
-    let policy = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
-    let hard_reject = ToolAttempt::failure("shell", "same", "blocked").hard_reject();
-    assert!(matches!(
-        policy.record_with_cause(1, &hard_reject).verdict,
-        NoProgress::Continue
-    ));
-    let policy_halt = policy.record_with_cause(2, &hard_reject);
-    assert_eq!(
-        policy_halt.failure_cause,
-        Some(ClassifiedStopCause {
-            class: "policy".into(),
-            operation: "shell".into(),
-            summary: match policy_halt.verdict.clone() {
-                NoProgress::Halt(summary) => summary,
-                other => panic!("expected policy halt, got {other:?}"),
-            },
-        })
-    );
-
-    let identical = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
-    for step in 1..DEFAULT_IDENTICAL_HALT_THRESHOLD {
-        let _ = identical.record_with_cause(step, &fail("read_file", "a", "missing"));
-    }
-    let repeated = identical.record_with_cause(
-        DEFAULT_IDENTICAL_HALT_THRESHOLD,
-        &fail("read_file", "a", "missing"),
-    );
-    assert_eq!(
-        repeated.failure_cause.as_ref().map(|cause| (
-            cause.class.as_str(),
-            cause.operation.as_str()
-        )),
-        Some(("repeated_failure", "read_file"))
-    );
-
-    let varied = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
-    let mut last = None;
-    for step in 1..=NO_PROGRESS_HALT_THRESHOLD {
-        last = Some(varied.record_with_cause(
-            step,
-            &fail("tool", &step.to_string(), "unavailable"),
-        ));
-    }
-    assert_eq!(
-        last.unwrap().failure_cause.as_ref().map(|cause| (
-            cause.class.as_str(),
-            cause.operation.as_str()
-        )),
-        Some(("varied_failures", "tool"))
-    );
-}
-
-#[test]
 fn a_success_resets_the_ladder() {
     let t = NoProgressTracker::new(DEFAULT_IDENTICAL_HALT_THRESHOLD);
     let _ = t.record(1, &fail("t", "a", "boom"));

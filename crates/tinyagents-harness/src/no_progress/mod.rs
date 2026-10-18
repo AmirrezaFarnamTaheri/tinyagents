@@ -408,3 +408,7 @@ fn truncate_for_halt(text: &str) -> String {
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "typed_halt_tests.rs"]
+mod typed_halt_tests;
