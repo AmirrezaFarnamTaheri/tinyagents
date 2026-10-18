@@ -138,6 +138,13 @@ fn status_classifier_uses_typed_status_precedence_and_conservative_retryability(
         OutcomeClass::RetryableFailure
     );
     assert_eq!(
+        classifier.classify(
+            "tool",
+            &ToolResult::error("could not reach the model endpoint")
+        ),
+        OutcomeClass::RetryableFailure
+    );
+    assert_eq!(
         classifier.classify("tool", &ToolResult::error("timed out")),
         OutcomeClass::PermanentFailure,
         "the classifier cannot know whether repeating a timed-out effect is safe"
@@ -149,5 +156,61 @@ fn status_classifier_uses_typed_status_precedence_and_conservative_retryability(
     assert_eq!(
         classifier.classify("tool", &ToolResult::success("an error was found")),
         OutcomeClass::Success
+    );
+}
+
+#[test]
+fn status_classifier_can_retry_timeouts_only_for_host_approved_tools() {
+    let classifier = ToolStatusClassifier.with_retry_safe_timeouts(|name| name == "safe_read");
+
+    assert_eq!(
+        classifier.classify("safe_read", &ToolResult::error("timed out")),
+        OutcomeClass::RetryableFailure
+    );
+    assert_eq!(
+        classifier.classify("unsafe_write", &ToolResult::error("timed out")),
+        OutcomeClass::PermanentFailure
+    );
+    assert_eq!(
+        ToolStatusClassifier.classify("safe_read", &ToolResult::error("timed out")),
+        OutcomeClass::PermanentFailure,
+        "the existing unit classifier keeps its conservative default"
+    );
+}
+
+#[test]
+fn status_classifier_uses_the_dispatched_name_and_only_consults_timeout_policy_for_timeouts() {
+    let consulted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let consulted_by_callback = consulted.clone();
+    let classifier = ToolStatusClassifier.with_retry_safe_timeouts(move |name| {
+        consulted_by_callback
+            .lock()
+            .expect("callback log")
+            .push(name.to_owned());
+        name == "dispatched_safe_read"
+    });
+
+    assert_eq!(
+        classifier.classify("dispatched_safe_read", &ToolResult::error("timed out")),
+        OutcomeClass::RetryableFailure
+    );
+    assert_eq!(
+        classifier.classify("service", &ToolResult::error("service unavailable")),
+        OutcomeClass::RetryableFailure
+    );
+    assert_eq!(
+        classifier.classify("success", &ToolResult::success("timed out")),
+        OutcomeClass::Success
+    );
+    assert_eq!(
+        classifier.classify(
+            "policy",
+            &ToolResult::error("[policy-denied] approval timed out")
+        ),
+        OutcomeClass::PermanentFailure
+    );
+    assert_eq!(
+        *consulted.lock().expect("callback log"),
+        ["dispatched_safe_read"]
     );
 }

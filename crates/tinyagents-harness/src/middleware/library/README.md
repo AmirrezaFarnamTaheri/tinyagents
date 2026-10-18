@@ -64,8 +64,10 @@ Grouped by extension shape:
   resolver handles one or both approval requirements. `with_session_listing`
   and `visible_tool_names` let a host scope a session-specific skill listing
   to the tools already available to the run.
-  `structured_denial_renderer` formats host-authored blocked, why, workaround,
-  and relay text while leaving marker wording under host control.
+  `structured_denial_renderer` formats host-authored blocked, reason,
+  workaround, and relay text while leaving marker wording under host control.
+  `StructuredDenialRenderOptions` lets hosts customize the reason label and
+  separator before the relay instruction while preserving the shared renderer.
 
 ### Budget (`Middleware` lifecycle hooks)
 

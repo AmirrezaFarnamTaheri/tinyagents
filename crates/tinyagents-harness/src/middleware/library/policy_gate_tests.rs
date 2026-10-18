@@ -6,6 +6,13 @@ use async_trait::async_trait;
 
 use super::*;
 
+use crate::context::{RunConfig, RunContext};
+use crate::middleware::{
+    BoxToolFuture, MiddlewareStack, MiddlewareToolOutcome, ToolBaseCall, ToolMiddleware,
+};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::ToolResult;
+
 #[test]
 fn structured_denial_renderer_preserves_host_marker_and_sections() {
     let rendered = StructuredDenialParts::new(
@@ -21,12 +28,31 @@ fn structured_denial_renderer_preserves_host_marker_and_sections() {
     assert!(rendered.contains("Workaround: choose a permitted alternative."));
     assert!(rendered.ends_with("Tell the user what was blocked and why."));
 }
-use crate::context::{RunConfig, RunContext};
-use crate::middleware::{
-    BoxToolFuture, MiddlewareStack, MiddlewareToolOutcome, ToolBaseCall, ToolMiddleware,
-};
-use tinyinference_llm::tool::ToolCall;
-use tinytools::ToolResult;
+
+#[test]
+fn structured_denial_parts_keep_the_legacy_rendered_bytes() {
+    let rendered =
+        StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now").render();
+
+    assert_eq!(
+        rendered,
+        "Blocked: [blocked] no. Why: why. Workaround: try this. relay now"
+    );
+}
+
+#[test]
+fn structured_denial_parts_support_host_section_label_and_relay_separator() {
+    let rendered = StructuredDenialParts::new("[blocked] no", "why", "try this", "relay now")
+        .render_with_options(&StructuredDenialRenderOptions {
+            reason_label: "Reason",
+            relay_separator: " ",
+        });
+
+    assert_eq!(
+        rendered,
+        "Blocked: [blocked] no. Reason: why. Workaround: try this relay now"
+    );
+}
 
 /// Host context stand-in: the policy reads the channel from it.
 struct Host {
