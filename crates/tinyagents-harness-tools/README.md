@@ -21,8 +21,9 @@ available without optional features.
   `TodoSequenceMiddleware`.
 - `skills` provides `UseSkillTool`, `PackCatalog`, `PackRegistryHandle`, and
   `UseSkillDispatch` for binding a selected tool from a named pack.
-- `subagents` provides `SubAgentJobsTool` and `SubAgentMessageTool` over the
-  orchestration crate's shared `SubAgentJobRegistry`.
+- `subagents` provides `DriverSubAgentTool`, `SubAgentJobsTool`, and
+  `SubAgentMessageTool` over the orchestration crate's shared
+  `SubAgentJobRegistry`.
 - `thread_locks` provides the public `ThreadLockMap` concurrency primitive.
 - The crate root exports `CurrentTimeTool`, `ResolveTimeTool`,
   `AskClarificationTool`, `PlanExitTool`, and the `per_call` binding adapter.
