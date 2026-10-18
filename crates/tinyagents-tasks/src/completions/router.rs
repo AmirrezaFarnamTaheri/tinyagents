@@ -8,10 +8,11 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
-use super::store::CompletionStore;
+use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore};
 use super::types::{CompletionRecord, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
+const CLAIM_VISIBILITY: Duration = Duration::from_secs(30);
 
 /// Delivery attempts before a record gives up, unless overridden.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 5;
@@ -65,6 +66,8 @@ struct RouterState {
     /// purpose: after a restart nobody holds a lease, so everything still
     /// pending is claimable again.
     leased: HashSet<String>,
+    /// Durable claim tokens owned by this router, used to reject stale settles.
+    claim_tokens: HashMap<String, String>,
     /// Live parents and their steering queues.
     parents: HashMap<String, RunQueueHandle>,
 }
@@ -90,6 +93,7 @@ impl CompletionRouter {
             state: Mutex::new(RouterState {
                 store,
                 leased: HashSet::new(),
+                claim_tokens: HashMap::new(),
                 parents: HashMap::new(),
             }),
         }
@@ -187,6 +191,11 @@ impl CompletionRouter {
     fn release_parent_locked(&self, state: &mut RouterState, parent_key: &str) {
         for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
+            if let Some(token) = state.claim_tokens.remove(&record.task_id) {
+                let _ = state
+                    .store
+                    .resolve_claim(&record.task_id, &token, ClaimResolution::Release);
+            }
         }
     }
 
@@ -196,7 +205,13 @@ impl CompletionRouter {
     pub fn release<S: AsRef<str>>(&self, task_ids: &[S]) {
         if let Ok(mut state) = self.lock() {
             for id in task_ids {
-                state.leased.remove(id.as_ref());
+                let id = id.as_ref();
+                state.leased.remove(id);
+                if let Some(token) = state.claim_tokens.remove(id) {
+                    let _ = state
+                        .store
+                        .resolve_claim(id, &token, ClaimResolution::Release);
+                }
             }
         }
     }
@@ -448,64 +463,62 @@ impl CompletionRouter {
     /// batch, oldest first, counting an attempt on each. A claimed record is
     /// leased until [`Self::mark_delivered`] or [`Self::mark_failed`].
     pub fn claim_pending(&self, parent_key: &str, max: usize) -> Result<Vec<CompletionRecord>> {
-        self.claim(parent_key, max, |mode| {
-            matches!(mode, NotifyMode::Followup | NotifyMode::Collect)
-        })
+        self.claim(parent_key, max, CompletionClaimMode::Followup)
     }
 
     /// Claims the `HoldForNextTurn` completions for the turn that is starting.
     pub fn begin_turn(&self, parent_key: &str) -> Result<Vec<CompletionRecord>> {
-        self.claim(parent_key, usize::MAX, |mode| {
-            mode == NotifyMode::HoldForNextTurn
-        })
+        self.claim(parent_key, usize::MAX, CompletionClaimMode::HoldForNextTurn)
     }
 
     /// Claims up to `max` `Off` completions the parent asked to pull.
     pub fn pull(&self, parent_key: &str, max: usize) -> Result<Vec<CompletionRecord>> {
-        self.claim(parent_key, max, |mode| mode == NotifyMode::Off)
+        self.claim(parent_key, max, CompletionClaimMode::Pull)
     }
 
     fn claim(
         &self,
         parent_key: &str,
         max: usize,
-        eligible: impl Fn(NotifyMode) -> bool,
+        mode: CompletionClaimMode,
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
-        let mut candidates: Vec<_> = state
-            .store
-            .list(Some(parent_key))
-            .into_iter()
-            .filter(|r| {
-                r.state == CompletionState::Pending
-                    && eligible(r.notify_mode)
-                    && !state.leased.contains(&r.task_id)
-            })
-            .collect();
+        static NEXT_CLAIM: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let nonce = NEXT_CLAIM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let token = format!(
+            "{}-{}-{nonce}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
+        let mut candidates = state.store.claim_pending(
+            parent_key,
+            mode,
+            max,
+            &token,
+            visible_after,
+        )?;
         sort_oldest_first(&mut candidates);
-        candidates.truncate(max);
-        let mut claimed: Vec<CompletionRecord> = Vec::with_capacity(candidates.len());
-        for mut record in candidates {
-            record.attempts = record.attempts.saturating_add(1);
-            record.updated_at = SystemTime::now();
-            if let Err(error) = state.store.put(&record) {
-                // The caller gets no ids on error, so none may stay leased.
-                for done in &claimed {
-                    state.leased.remove(&done.task_id);
-                }
-                return Err(error);
-            }
+        for record in &candidates {
             state.leased.insert(record.task_id.clone());
-            claimed.push(record);
+            if let Some(claim) = &record.claim {
+                state
+                    .claim_tokens
+                    .insert(record.task_id.clone(), claim.token.clone());
+            }
         }
-        if !claimed.is_empty() {
+        if !candidates.is_empty() {
             tracing::debug!(
                 parent_key = %parent_key,
-                claimed = claimed.len(),
+                claimed = candidates.len(),
                 "{LOG_PREFIX} claimed"
             );
         }
-        Ok(claimed)
+        Ok(candidates)
     }
 
     /// Settles claimed (or pulled) records as delivered. Returns how many
@@ -516,6 +529,16 @@ impl CompletionRouter {
         for id in task_ids {
             let id = id.as_ref();
             state.leased.remove(id);
+            if let Some(token) = state.claim_tokens.remove(id) {
+                if state
+                    .store
+                    .resolve_claim(id, &token, ClaimResolution::Delivered)?
+                    .is_some()
+                {
+                    changed += 1;
+                }
+                continue;
+            }
             if let Some(mut record) = state.store.get(id)
                 && record.state == CompletionState::Pending
             {
@@ -539,6 +562,25 @@ impl CompletionRouter {
         for id in task_ids {
             let id = id.as_ref();
             state.leased.remove(id);
+            if let Some(token) = state.claim_tokens.remove(id) {
+                if let Some(record) = state.store.resolve_claim(
+                    id,
+                    &token,
+                    ClaimResolution::Failed {
+                        max_attempts: self.max_attempts,
+                    },
+                )? && record.state == CompletionState::GaveUp
+                {
+                    tracing::warn!(
+                        task_id = %record.task_id,
+                        parent_key = %record.parent_key,
+                        attempts = record.attempts,
+                        "{LOG_PREFIX} gave up"
+                    );
+                    gave_up.push(record);
+                }
+                continue;
+            }
             let Some(mut record) = state.store.get(id) else {
                 continue;
             };
