@@ -249,10 +249,18 @@ async fn malformed_authoritative_buyer_charge_stays_unknown_for_both_observers()
     assert_eq!(budget.ledger.snapshot().spent.cost_micros, 10);
     for recorder in [explicit, ambient] {
         let events = recorder.0.lock().unwrap();
-        let usage = events.iter().find_map(|event| match event {
-            TurnObservation::ModelDispatch { usage, .. } => usage.as_ref(),
-            _ => None,
-        });
-        assert_eq!(usage.and_then(|usage| usage.cost_usd), None);
+        let dispatches = events
+            .iter()
+            .filter_map(|event| match event {
+                TurnObservation::ModelDispatch { usage, .. } => Some(usage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(dispatches.len(), 1, "each observer sees one dispatch");
+        let usage = dispatches[0]
+            .as_ref()
+            .expect("dispatch retains token usage");
+        assert_eq!((usage.input_tokens, usage.output_tokens), (2, 3));
+        assert_eq!(usage.cost_usd, None);
     }
 }

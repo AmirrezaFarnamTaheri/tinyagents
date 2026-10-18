@@ -385,7 +385,9 @@ fn malformed_managed_charge_blocks_provider_cost_fallback() {
     let outcome = dispatch_outcome(Some(&response), true);
 
     assert_eq!(outcome.status, PhysicalDispatchStatus::Succeeded);
-    assert_eq!(outcome.usage.unwrap().cost_usd, None);
+    let usage = outcome.usage.expect("response token usage is retained");
+    assert_eq!((usage.input_tokens, usage.output_tokens), (2, 3));
+    assert_eq!(usage.cost_usd, None);
 }
 
 #[test]
