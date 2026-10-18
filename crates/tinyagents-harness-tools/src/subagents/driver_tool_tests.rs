@@ -1591,47 +1591,45 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
         "properties":{"prompt":{"type":"string"}}
     });
     let make_tool = |background: bool| {
-        let tool = DriverSubAgentTool::new("subagent", "worker description", driver.clone(), |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-                    let child = parent
-                        .child(RunConfig::new("mixed-child"), ())
-                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-                    SubagentRequest::fresh_from_parent(
-                        parent,
-                        child,
-                        "mixed-mode-task",
-                        (),
-                        args["prompt"].as_str().unwrap_or_default(),
-                        None,
-                    )
-                    .map(|request| request.with_target("worker"))
-                }, |_| Some("parent-thread".into())).with_completion_handler({
-                    let completions = completions.clone();
-                    let completion_notified = completion_notified.clone();
-                    move |_, result| {
-                        assert!(result.is_ok());
-                        completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        completion_notified.notify_one();
-                    }
-                }).with_parameters(schema.clone()).with_job_registry(jobs.clone())
-        } else {
-            tool.with_driver(
-                driver.clone(),
-                |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
-                    let child = parent
-                        .child(RunConfig::new("mixed-child"), ())
-                        .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
-                    SubagentRequest::fresh_from_parent(
-                        parent,
-                        child,
-                        "mixed-mode-task",
-                        (),
-                        args["prompt"].as_str().unwrap_or_default(),
-                        None,
-                    )
-                    .map(|request| request.with_target("worker"))
-                },
-                |_| None,
+        let request = |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+            let child = parent
+                .child(RunConfig::new("mixed-child"), ())
+                .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
+            SubagentRequest::fresh_from_parent(
+                parent,
+                child,
+                "mixed-mode-task",
+                (),
+                args["prompt"].as_str().unwrap_or_default(),
+                None,
             )
+            .map(|request| request.with_target("worker"))
+        };
+        let name = if background { "spawn_async_subagent" } else { "spawn_subagent" };
+        let delivery = if background {
+            Some("parent-thread".to_owned())
+        } else {
+            None
+        };
+        let tool = DriverSubAgentTool::new(
+            name,
+            "worker description",
+            driver.clone(),
+            request,
+            move |_| delivery.clone(),
+        )
+        .with_parameters(schema.clone())
+        .with_job_registry(jobs.clone());
+        if background {
+            let completions = completions.clone();
+            let completion_notified = completion_notified.clone();
+            tool.with_completion_handler(move |_, result| {
+                assert!(result.is_ok());
+                completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                completion_notified.notify_one();
+            })
+        } else {
+            tool
         }
     };
     let background = make_tool(true);
