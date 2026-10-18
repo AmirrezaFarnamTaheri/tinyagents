@@ -162,6 +162,27 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for VerifyBeforeFinishMidd
         "verify_before_finish"
     }
 
+    fn observe_tool_execution(
+        &self,
+        ctx: &RunContext<C>,
+        _state: &S,
+        _invocation: &crate::middleware::ToolInvocationIdentity,
+        target: &dyn tinytools::Tool,
+        arguments: &serde_json::Value,
+    ) {
+        if let Ok(mut runs) = self.runs.lock() {
+            let activity = &mut state_for(&mut runs, ctx).activity;
+            activity.tools_executed.insert(target.name().to_owned());
+            if target.permission_level_with_args(arguments) > tinytools::PermissionLevel::ReadOnly
+                || target.external_effect_with_args(arguments)
+            {
+                activity
+                    .tools_with_side_effects
+                    .insert(target.name().to_owned());
+            }
+        }
+    }
+
     async fn before_agent(&self, ctx: &mut RunContext<C>, _state: &S) -> Result<()> {
         if let Some(results) = ctx.deferred_results.as_ref()
             && let Ok(mut runs) = self.runs.lock()
@@ -301,3 +322,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for VerifyBeforeFinishMidd
 #[cfg(test)]
 #[path = "middleware_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "middleware_execution_tests.rs"]
+mod execution_tests;

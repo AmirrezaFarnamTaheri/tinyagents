@@ -485,6 +485,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
         Ok(())
     }
 
+    /// Observes actual executor entry in registration order.
+    ///
+    /// See [`Middleware::observe_tool_execution`] for the attempt and identity
+    /// contract. Observation does not request control or synthesize lifecycle
+    /// events; the executor remains the sole source of execution evidence.
+    pub fn run_observe_tool_execution(
+        &self,
+        ctx: &RunContext<Ctx>,
+        state: &State,
+        invocation: &ToolInvocationIdentity,
+        target: &dyn tinytools::Tool,
+        arguments: &serde_json::Value,
+    ) {
+        for mw in &self.middlewares {
+            mw.observe_tool_execution(ctx, state, invocation, target, arguments);
+        }
+    }
+
     /// Runs every middleware's [`Middleware::on_tool_delta`] in registration
     /// order for one streamed tool-progress delta.
     ///
@@ -503,7 +521,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> MiddlewareStack<State, Ctx> {
     /// bookkeeping events per streamed tool-progress delta — noise a
     /// `ModelCompleted`-based exporter had to filter, for a hook that (unlike
     /// `before_tool`/`after_tool`) can fire many times per call. Both delta
-    /// hooks now agree: bracket every non-delta hook, skip both delta hooks.
+    /// hooks now agree: bracket lifecycle hooks, skip both delta hooks and
+    /// the synchronous executor-entry observer.
     /// A caller that needs to observe delta-level middleware activity should
     /// instrument the hook implementation itself.
     pub async fn run_on_tool_delta(

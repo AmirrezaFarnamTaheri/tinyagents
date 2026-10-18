@@ -20,6 +20,7 @@ use tinyagents_harness::events::EventSink;
 use tinyagents_harness::runtime::AgentHarness;
 use tokio::sync::watch;
 
+use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tinyinference_llm::message::Message;
 
@@ -164,6 +165,8 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) subagent: Arc<SubAgent<State, Ctx>>,
     /// Tool name exposed to the model (defaults to the sub-agent name).
     pub(crate) tool_name: String,
+    /// Tool description exposed to the model; defaults to the child description.
+    pub(crate) tool_description: String,
     /// Explicit parent-to-child application-data policy.
     pub(crate) child_data: ChildDataPolicy<Ctx>,
     /// JSON Schema describing the tool's model-visible arguments.
@@ -188,6 +191,12 @@ pub struct SubAgentTool<State: Send + Sync, Ctx: Send + Sync = ()> {
     pub(crate) delegation_tools: Vec<String>,
     /// Trim/check applied to the child's final output.
     pub(crate) result_policy: crate::subagent::ResultPolicy,
+    /// Optional host-planned invocation installed by `with_driver`.
+    pub(crate) driver_dispatch: Option<Arc<dyn tinyagents_harness::tool::ToolDispatch<State, Ctx>>>,
+    /// Optional shared job/control registry bridged by driver-backed aliases.
+    pub(crate) job_registry: Option<SubAgentJobRegistry>,
+    /// Host-owned stable owner key for jobs that outlive a single run context.
+    pub(crate) job_owner_scope: Arc<dyn Fn(u64) -> String + Send + Sync>,
 }
 
 /// Stable identifier returned immediately when a subagent job is spawned.
@@ -215,6 +224,8 @@ pub enum SubAgentJobStatus {
     Queued,
     /// The child agent loop is executing.
     Running,
+    /// The durable child is paused for host/user input and can be resumed.
+    AwaitingInput,
     /// The child completed successfully.
     Completed,
     /// The child failed.
@@ -260,6 +271,14 @@ pub struct SubAgentJob {
     /// existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_run_id: Option<String>,
+    /// Durable worker conversation id supplied by the host executor, when
+    /// available for projecting a product-facing result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_thread_id: Option<String>,
+    /// Host-owned result metadata carried through the neutral outcome
+    /// extension map (for example, iteration count or durable session id).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub extensions: std::collections::BTreeMap<String, serde_json::Value>,
     /// Id of the parent tool call that spawned this job, when the dispatcher
     /// supplied one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -306,6 +325,8 @@ pub struct SubAgentJobRegistry {
     /// Status senders and cancel flags. Also the transition gate: every
     /// mutation holds this lock, so a settle and a cancel never interleave.
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
+    /// Scoped bridge from driver task identity to the public job control id.
+    pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -319,6 +340,7 @@ impl Default for SubAgentJobRegistry {
             }),
             steering,
             controls: Arc::default(),
+            driver_jobs: Arc::default(),
         }
     }
 }
@@ -333,6 +355,20 @@ pub(crate) struct JobControl {
     /// Whether cancellation was requested while the child was still running.
     /// The job remains non-terminal until the child reports its result.
     pub(crate) cancellation_requested: bool,
+    /// Optional loop-consumed message queue for typed message aliases.
+    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub(crate) steering: tinyagents_harness::steering::SteeringHandle,
+    pub(crate) cancellation: CancellationToken,
+}
+
+pub(crate) struct DriverJobRegistration {
+    pub(crate) key: crate::subagent::SubagentTaskKey,
+    pub(crate) agent: String,
+    pub(crate) owner: String,
+    pub(crate) cancellation: CancellationToken,
+    pub(crate) steering: Option<tinyagents_harness::steering::SteeringHandle>,
+    pub(crate) run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+    pub(crate) continuing: bool,
 }
 
 /// Error returned by job lookup or live-message delivery.
@@ -342,6 +378,15 @@ pub enum SubAgentJobError {
     /// No job exists for the supplied id.
     #[error("unknown subagent job `{0}`")]
     NotFound(String),
+    /// A lane-aware message was requested for a job without a message queue.
+    #[error("subagent job `{0}` has no lane-aware message queue")]
+    LaneUnavailable(String),
+    /// A job with this public id is already registered.
+    #[error("subagent job `{0}` is already registered")]
+    AlreadyExists(String),
+    /// The underlying detached task registry rejected a driver bridge.
+    #[error("subagent job registry failed: {0}")]
+    Registry(String),
     /// Messages and cancellation only apply while a job is queued or running.
     #[error("subagent job `{job_id}` is already {status:?}")]
     Terminal {

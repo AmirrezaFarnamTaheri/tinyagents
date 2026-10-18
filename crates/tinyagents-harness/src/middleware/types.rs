@@ -35,11 +35,13 @@ use tinytools::ToolResult;
 
 // ── AgentRun ────────────────────────────────────────────────────────────────
 
-/// Harness-owned identity for one completed tool invocation.
+/// Harness-owned identity for one admitted tool invocation.
 ///
-/// [`Middleware::after_tool`] receives this separately from
-/// [`ToolResult`][tinytools::ToolResult] so canonical TinyTools results remain
-/// correlation-free and a tool cannot forge its own execution identity.
+/// [`Middleware::observe_tool_execution`] and [`Middleware::after_tool`]
+/// receive this separately from the concrete target or
+/// [`ToolResult`][tinytools::ToolResult], so packed execution can preserve the
+/// outer transcript identity and canonical TinyTools results remain
+/// correlation-free.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolInvocationIdentity {
     call_id: CallId,
@@ -47,7 +49,7 @@ pub struct ToolInvocationIdentity {
 }
 
 impl ToolInvocationIdentity {
-    /// Creates an identity for a completed invocation.
+    /// Creates an identity for an admitted invocation.
     pub fn new(call_id: impl Into<CallId>, tool_name: impl Into<String>) -> Self {
         Self {
             call_id: call_id.into(),
@@ -107,6 +109,8 @@ pub struct AgentRun {
     /// Recovery messages for denied, unknown, or invalid calls intentionally do
     /// not appear here: they produced a transcript response but never acted.
     pub executed_tools: Vec<String>,
+    /// Content-free outcome summaries for completed calls.
+    pub tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
     /// Number of loop iterations (model/tool super-steps) executed.
     pub steps: usize,
     /// Set when the run stopped because steering latched a **pause** rather
@@ -165,6 +169,9 @@ pub struct AgentRun {
     /// string parsing. `None` only while the run is still in flight, or when a
     /// wrapping middleware replaced the loop.
     pub terminal: Option<crate::terminal::TerminalOutcome>,
+    /// Typed classified-failure cause when a repeat/no-progress guard halted
+    /// this run. Kept separate from the human-readable terminal message.
+    pub failure_cause: Option<crate::no_progress::ClassifiedStopCause>,
 }
 
 /// Host-only metadata one tool call returned, as recorded on
@@ -308,6 +315,40 @@ pub trait Middleware<State: Send + Sync, Ctx: Send + Sync = ()>: Send + Sync {
         _call: &mut ToolCall,
     ) -> Result<()> {
         Ok(())
+    }
+
+    /// Observes one attempt as the admitted tool executor starts.
+    ///
+    /// Called inside the innermost tool-wrap future, after admission, argument
+    /// validation, rules, approvals, and host authorization. A request denied
+    /// or deferred before executor entry, or short-circuited by a wrapper,
+    /// does not reach this hook. A retry that invokes the executor again
+    /// produces another observation; an attempt that starts and then fails
+    /// or is cancelled is still an execution.
+    ///
+    /// `invocation` preserves the admitted outer call's transcript identity.
+    /// `target` and `arguments` describe the actual bound executor and its
+    /// effective arguments. For `use_skill`, they are the pinned inner tool
+    /// and inner arguments, even if wrap middleware later rewrites the outer
+    /// call. A disclosure or missing packed target observes only the dispatcher.
+    /// Ordinary calls use the registered tool and the final arguments passed
+    /// by the wrap onion. The hook also observes nested calls.
+    ///
+    /// This synchronous, read-only hook cannot refuse or rewrite execution.
+    /// Keep it short and use interior mutability for bookkeeping: invocations
+    /// can overlap. It runs in the same future poll as executor entry, so an
+    /// async observer cannot create evidence and then suspend before execution.
+    /// An observation establishes an attempt, not successful completion or a
+    /// confirmed side effect. Use the target's argument-aware permission and
+    /// external-effect declarations when distinguishing previews from writes.
+    fn observe_tool_execution(
+        &self,
+        _ctx: &RunContext<Ctx>,
+        _state: &State,
+        _invocation: &ToolInvocationIdentity,
+        _target: &dyn tinytools::Tool,
+        _arguments: &serde_json::Value,
+    ) {
     }
 
     /// Observes each [`ToolDelta`] of progress a tool reported through

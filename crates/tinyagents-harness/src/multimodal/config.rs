@@ -15,11 +15,9 @@
 //!
 //! ## The one asymmetry worth knowing
 //!
-//! `max_files == 0` is a **hard-disable sentinel**, and it is checked before
-//! the clamp rather than after. The clamp lifts `0` to `1`, so a caller that
-//! only consulted [`FileLimits::effective`] would admit a single file marker
-//! from a source that asked for none. [`FileLimits::files_disabled`] is the
-//! check that must run first; [`resolve`](super::resolve) does exactly that.
+//! `max_files == 0` is a **hard-disable sentinel**. It remains zero in the
+//! effective limits, so every caller can enforce the same hard stop before
+//! resolving a source.
 
 use serde::{Deserialize, Serialize};
 
@@ -76,9 +74,8 @@ impl ImageLimits {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FileLimits {
-    /// Maximum files accepted in one turn. Clamped to `1..=16` — except `0`,
-    /// which is the hard-disable sentinel checked by
-    /// [`FileLimits::files_disabled`] before any clamp applies.
+    /// Maximum files accepted in one turn. Clamped to `1..=16`; `0` disables
+    /// file resolution outright.
     pub max_files: usize,
     /// Maximum size of a single file, in MiB. Clamped to `1..=50`.
     pub max_file_size_mb: usize,
@@ -128,10 +125,15 @@ pub fn default_allowed_file_mime_types() -> Vec<String> {
 
 impl FileLimits {
     /// Clamp configured values into runtime bounds:
-    /// `(max_files, max_file_size_mb, max_extracted_text_chars)`.
+    /// `(max_files, max_file_size_mb, max_extracted_text_chars)`. A zero file
+    /// count is preserved as the hard-disable setting.
     pub fn effective(&self) -> (usize, usize, usize) {
         (
-            self.max_files.clamp(1, 16),
+            if self.max_files == 0 {
+                0
+            } else {
+                self.max_files.clamp(1, 16)
+            },
             self.max_file_size_mb.clamp(1, 50),
             self.max_extracted_text_chars.clamp(1_000, 200_000),
         )
@@ -144,10 +146,9 @@ impl FileLimits {
 
     /// `true` when file markers are disabled outright.
     ///
-    /// The sentinel exists so a host can refuse `[FILE:…]` resolution for a
-    /// turn whose text came from somewhere it does not trust, without editing
-    /// the operator's own allowlist. It must be consulted **before**
-    /// [`FileLimits::effective`], whose clamp lifts `0` to `1`.
+    /// The sentinel lets a host refuse media resolution for an untrusted turn
+    /// without editing the operator's own allowlist. It is also preserved by
+    /// [`FileLimits::effective`].
     pub fn files_disabled(&self) -> bool {
         self.max_files == 0
     }

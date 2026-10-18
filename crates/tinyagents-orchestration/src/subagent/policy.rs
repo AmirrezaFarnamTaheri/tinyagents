@@ -55,6 +55,8 @@ struct Template<C> {
     role: SubagentRole,
     tool_ceiling: Option<ToolSnapshot>,
     delegation_tools: Vec<String>,
+    tool_scope: Option<tinyagents_definition::ToolScope>,
+    skill_filter: Option<String>,
     policy: SubAgentPolicy,
     result_policy: ResultPolicy,
     factory: AttemptContextFactory<C>,
@@ -77,6 +79,8 @@ impl<C> AttemptSource<C> {
                 role: prepared.role,
                 tool_ceiling: prepared.tool_ceiling.clone(),
                 delegation_tools: prepared.delegation_tools.clone(),
+                tool_scope: prepared.tool_scope.clone(),
+                skill_filter: prepared.skill_filter.clone(),
                 policy: prepared.policy.clone(),
                 result_policy: prepared.result_policy.clone(),
                 factory,
@@ -119,6 +123,8 @@ impl<C> AttemptSource<C> {
         .with_result_policy(template.result_policy.clone())
         .with_retry_context(template.factory.clone());
         prepared.tool_ceiling = template.tool_ceiling.clone();
+        prepared.tool_scope = template.tool_scope.clone();
+        prepared.skill_filter = template.skill_filter.clone();
         Ok(prepared)
     }
 }

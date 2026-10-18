@@ -22,6 +22,7 @@ zip = { version = "2", default-features = false, features = ["deflate-flate2", "
 flate2 = { version = "1", optional = true }
 oxipng = { version = "9", default-features = false, optional = true }
 futures = { workspace = true }
+libc = "0.2"
 regex = "1"
 reqwest = { workspace = true, features = ["stream", "http2"], optional = true }
 serde = { workspace = true }
@@ -29,7 +30,7 @@ serde_json = { workspace = true }
 sha2 = "0.11"
 thiserror = "2"
 tracing = { workspace = true }
-tinyagents-definition = { path = "../tinyagents-definition", version = "2.1.4" }
+tinyagents-definition = { path = "../tinyagents-definition", version = "2.2.0" }
 tinytools-agent = { path = "../../vendor/tinytools/crates/tinytools-agent", version = "0.5.0", default-features = false }
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tinyinference-core = { path = "../../vendor/tinyinference/crates/tinyinference-core", version = "0.4.1" }
@@ -46,6 +47,15 @@ tinystoragedrivers-core = { workspace = true }
 tempfile = { workspace = true }
 wait-timeout = { version = "0.2", optional = true }
 uuid = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
+cap-std.workspace = true
+
+[dev-dependencies.cap-std]
+workspace = true
 
 [features]
 default = ["claude-code", "langfuse"]

@@ -51,6 +51,8 @@ pub(crate) struct TerminalRunSummary {
     /// Names of calls that reached a tool executor, in execution order.
     /// Mirrors [`crate::middleware::AgentRun::executed_tools`].
     pub(crate) executed_tools: Vec<String>,
+    /// Per-tool outcome records forwarded to the learning sink.
+    pub(crate) tool_outcomes: Vec<crate::host::ToolOutcomeRecord>,
 }
 
 impl TerminalRunSummary {
@@ -60,6 +62,7 @@ impl TerminalRunSummary {
             text: run.text(),
             usage: run.usage,
             executed_tools: run.executed_tools.clone(),
+            tool_outcomes: run.tool_outcomes.clone(),
         }
     }
 }
@@ -503,6 +506,9 @@ pub struct RunContext<Ctx = ()> {
     /// Set by a no-progress / repeat guard that paused the run, holding its
     /// root-cause summary, so the loop can report `TerminalReason::Halted`.
     pub(crate) halted_by_guard: Option<String>,
+    /// Typed classifier cause for a guard halt, preserved independently from
+    /// the human-readable summary.
+    pub(crate) halted_by_guard_cause: Option<crate::no_progress::ClassifiedStopCause>,
     /// The kind of the most recent `LimitReached` event this run emitted.
     pub(crate) last_limit: std::sync::Mutex<Option<crate::events::LimitKind>>,
     /// The [`CallId`] the agent loop minted for the model call currently in

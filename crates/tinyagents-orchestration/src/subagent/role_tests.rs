@@ -12,6 +12,16 @@ fn snapshot(names: &[&str]) -> ToolSnapshot {
     ToolSnapshot::new(names.iter().map(|n| spec(n)).collect()).unwrap()
 }
 
+#[test]
+fn tool_snapshot_deduplicates_repeated_identical_specs_before_restriction() {
+    let snapshot = ToolSnapshot::new(vec![spec("read"), spec("read")]).unwrap();
+    assert_eq!(names(&snapshot), ["read"]);
+    assert_eq!(
+        names(&restrict_tools(&snapshot, SubagentRole::Leaf, None, &[])),
+        ["read"]
+    );
+}
+
 fn names(snapshot: &ToolSnapshot) -> Vec<String> {
     snapshot.specs().iter().map(|s| s.name.clone()).collect()
 }
@@ -45,6 +55,24 @@ fn a_child_can_never_widen_the_tool_set_it_inherits() {
 }
 
 #[test]
+fn tool_scope_and_skill_filter_narrow_declarations_together() {
+    let tools = snapshot(&["notion__search", "notion__write", "gmail__send", "read"]);
+    let out = restrict_tools_with_scope(
+        &tools,
+        SubagentRole::Orchestrator,
+        None,
+        &[],
+        Some(&tinyagents_definition::ToolScope::Named(vec![
+            "notion__search".into(),
+            "notion__write".into(),
+            "read".into(),
+        ])),
+        Some("notion"),
+    );
+    assert_eq!(names(&out), ["notion__search", "notion__write"]);
+}
+
+#[test]
 fn restriction_preserves_a_one_off_snapshot() {
     let tools = snapshot(&["read", SUBAGENT_JOBS_TOOL]).exact();
     let out = restrict_tools(&tools, SubagentRole::Leaf, None, &[]);
@@ -61,6 +89,19 @@ fn framing_tells_a_leaf_it_cannot_delegate_and_who_it_reports_to() {
     assert!(text.contains("not the end user"));
     assert!(text.contains("background"));
     assert!(text.contains("cannot spawn"));
+    for heading in [
+        "Answer",
+        "Evidence used",
+        "Actions taken",
+        "Open uncertainties",
+        "Failed tool calls",
+        "Recommended next step",
+    ] {
+        assert!(
+            text.contains(heading),
+            "missing result-contract heading {heading}"
+        );
+    }
 }
 
 #[test]
@@ -87,4 +128,29 @@ fn authored_tiers_map_to_runtime_delegation_roles() {
         SubagentRole::Orchestrator
     );
     assert_eq!(SubagentRole::from(AgentTier::Worker), SubagentRole::Leaf);
+}
+
+#[test]
+fn fleet_tools_follow_named_scope_and_deny_patterns() {
+    let fleet = FleetToolSet::from_scope(
+        &tinyagents_definition::ToolScope::Named(vec![
+            "wait_subagent".into(),
+            "list_subagents".into(),
+            "read".into(),
+        ]),
+        &["list_*".into()],
+    );
+    assert!(fleet.has("wait_subagent"));
+    assert!(!fleet.has("list_subagents"));
+    assert!(!fleet.has("read"));
+    assert!(fleet.can_wait());
+}
+
+#[test]
+fn wildcard_fleet_visibility_can_use_effective_visible_names() {
+    let names = ["wait_subagent".to_owned()].into_iter().collect();
+    let fleet = FleetToolSet::from_visible_tool_names(&names);
+    assert!(fleet.has("wait_subagent"));
+    assert!(!fleet.has("close_subagent"));
+    assert!(!fleet.has("continue_subagent"));
 }

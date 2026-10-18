@@ -1309,6 +1309,9 @@ async fn finish_host_turn<State: Send + Sync, Ctx: Send + Sync + 'static>(
     for tool in &run.executed_tools {
         summary.record_tool(tool);
     }
+    for outcome in &run.tool_outcomes {
+        summary.record_tool_outcome(outcome.clone());
+    }
     if let Some(memory) = &prepared.binding.host.memory {
         let item = crate::host::NewMemory::new(&output)
             .with_thread(prepared.thread_id.clone())

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased: dedicated hooks crate (tinyagents#470)
+
+**Breaking.** Stop-hook and lifecycle-hook APIs now live in
+`tinyagents_hooks::{stop,lifecycle}`. `tinyagents-runtime::command_hooks`
+remains as a one-release compatibility re-export; new integrations should
+depend on `tinyagents-hooks` directly. The workspace version is bumped to
+`2.2.0` for this package-boundary change.
+
+- Added `tinyagents-hooks` with typed tool hooks, command hooks, stop policies,
+  lifecycle middleware, per-scope hook lists, and safe tool-output summaries.
+- Added `BudgetStopHook`, the optional `goals`-feature
+  `GoalBudgetStopHook`, and `StopHookMiddleware::with_halt_summary`.
+- Added per-tool outcome records to completed-turn summaries.
+
 ## Unreleased: Langfuse v4 trace export over OTLP
 
 Langfuse v4 ingests traces only over OTLP, and Langfuse Cloud removes the

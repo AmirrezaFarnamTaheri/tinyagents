@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinytools::{Tool, ToolResult};
+use tinytools::{PermissionLevel, Tool, ToolResult};
 
 use super::{catalog::PackCatalog, handle::ToolVec, render::render_pack};
 
@@ -19,13 +19,45 @@ pub(crate) struct PinnedPackCall {
     pub(super) target: PackTarget,
 }
 
+/// The immutable packed target selected for one admitted `use_skill` call.
+///
+/// Hosts may use the registry and tool name to build the same typed dispatch
+/// they would register for a directly advertised tool. The selected registry
+/// is retained so a concurrent rebind cannot change this call's target.
+#[derive(Clone)]
+pub struct PackSelection {
+    pub(super) tools: ToolVec,
+    pub(super) index: usize,
+    pub(super) arguments: Value,
+}
+
+impl PackSelection {
+    /// Name of the packed tool selected by the call.
+    pub fn tool_name(&self) -> &str {
+        self.tools[self.index].name()
+    }
+
+    /// Effective arguments passed to the selected packed tool.
+    pub fn arguments(&self) -> &Value {
+        &self.arguments
+    }
+
+    /// The exact registry allocation from which the tool was selected.
+    pub fn registry(&self) -> Arc<Vec<Box<dyn Tool>>> {
+        Arc::clone(&self.tools)
+    }
+}
+
 pub(super) enum PackTarget {
     Execute {
         tools: ToolVec,
         index: usize,
         arguments: Value,
     },
-    Answer(ToolResult),
+    Answer {
+        result: ToolResult,
+        permission: PermissionLevel,
+    },
 }
 
 pub(super) enum ResolvedPackCall {

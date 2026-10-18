@@ -7,10 +7,12 @@ journal.
 
 ## Design
 
-Nothing here performs I/O. The host owns credentials, URL resolution, the HTTP
-transport, and the progress-event collector that builds `TraceSpan`s during a
-run. This module only shapes data, so every function is deterministic apart
-from id minting and is unit-tested without a network or a clock.
+Nothing here performs I/O. Hosts own credentials, URL resolution, transport
+selection, and product metadata. The [`collector::SpanCollector`] folds the
+harness's native durable `AgentObservation` stream into spans, so hosts do not
+need to translate those events into a second progress vocabulary. Event
+timestamps supply lifecycle timing, and incomplete calls are handled
+deterministically when the collector is finished.
 
 Product identity stays out of the crate: the host passes an `ExportBrand`
 (product slug and version), which becomes the OTLP `service.name`, the
@@ -21,6 +23,13 @@ Product identity stays out of the crate: the host passes an `ExportBrand`
 - `types` (re-exported at the module root): `TraceSpan`, `SpanKind`,
   `SpanStatus`, `RunType`, `TraceContext`, `trace_session_id`.
 - `ExportBrand`: product identity stamped onto exported telemetry.
+- `collector::SpanCollector`: event-driven generation, tool, subagent and run
+  spans with payload capture gated by `TraceContext`. Feed root and child
+  observations through `record`; `record_event` is a root-run convenience for
+  live events without observation identity. Hosts can add provider/pricing
+  metadata to a completed generation with `enrich_generation(run_id, call_id,
+  GenerationEnrichment)`, while native charged usage and recorded costs remain
+  authoritative.
 - `serialize`: content caps (`MAX_TOOL_CONTENT_CHARS`,
   `MAX_ERROR_MESSAGE_CHARS`, `MAX_MODEL_CONTENT_CHARS`),
   `capture_model_content` (keeps a large request structured, newest messages

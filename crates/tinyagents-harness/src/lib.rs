@@ -66,6 +66,7 @@ pub mod cancel;
 mod canonical_json;
 pub mod capability;
 pub mod catalog;
+pub mod close;
 pub mod config;
 pub mod context;
 pub mod cost;
@@ -169,3 +170,4 @@ pub use steering::{
 pub use storage::storage_schema;
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
+pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

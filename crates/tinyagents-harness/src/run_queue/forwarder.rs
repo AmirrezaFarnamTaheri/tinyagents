@@ -114,18 +114,183 @@ fn lock_gate(gate: &ClosedGate) -> std::sync::MutexGuard<'_, bool> {
     }
 }
 
+struct ForwardedItem {
+    id: Option<String>,
+    message: TaMessage,
+}
+
+trait QueueAdapter: Send + Sync {
+    fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem>;
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage;
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane);
+    fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String>;
+}
+
+struct BorrowedQueue<'a, T>(&'a RunQueue<T>);
+
+impl<T: QueuedMessage> QueueAdapter for BorrowedQueue<'_, T> {
+    fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem> {
+        self.0
+            .drain_now(lane)
+            .into_iter()
+            .map(|item| ForwardedItem {
+                id: Some(item.id().to_owned()),
+                message: TaMessage::user(item.text().to_owned()),
+            })
+            .collect()
+    }
+
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        TaMessage::user(format!("{}{}", lane_prefix(lane), message.text()))
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        let text = message.text();
+        if let Some(text) = text.strip_prefix(STEER_PREFIX) {
+            (TaMessage::user(text), QueueLane::Steer)
+        } else if let Some(text) = text.strip_prefix(COLLECT_PREFIX) {
+            (TaMessage::user(text), QueueLane::Collect)
+        } else {
+            (TaMessage::user(text), QueueLane::Steer)
+        }
+    }
+
+    fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.0.push_now(
+            lane,
+            T::requeued(id.clone(), message.text(), thread_label, now_ms()),
+        );
+        Some(id)
+    }
+}
+
+struct SharedQueue<T>(Arc<RunQueue<T>>);
+
+impl<T: QueuedMessage> QueueAdapter for SharedQueue<T> {
+    fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem> {
+        BorrowedQueue(self.0.as_ref()).drain(lane)
+    }
+
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        BorrowedQueue(self.0.as_ref()).frame(lane, message)
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        BorrowedQueue(self.0.as_ref()).unframe(message)
+    }
+
+    fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
+        BorrowedQueue(self.0.as_ref()).requeue(lane, message, thread_label)
+    }
+}
+
+struct BorrowedMessageQueue<'a>(&'a RunQueue<TaMessage>);
+
+impl QueueAdapter for BorrowedMessageQueue<'_> {
+    fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem> {
+        self.0
+            .drain_where_now(lane, |message| matches!(message, TaMessage::User(_)))
+            .into_iter()
+            .map(|message| ForwardedItem { id: None, message })
+            .collect()
+    }
+
+    fn frame(&self, lane: QueueLane, mut message: TaMessage) -> TaMessage {
+        if let TaMessage::User(user) = &mut message {
+            let prefix = lane_prefix(lane);
+            match user.content.first_mut() {
+                Some(tinyinference_llm::message::ContentBlock::Text(text)) if !text.is_empty() => {
+                    text.insert_str(0, prefix);
+                }
+                _ => user.content.insert(
+                    0,
+                    tinyinference_llm::message::ContentBlock::Text(prefix.into()),
+                ),
+            }
+        }
+        message
+    }
+
+    fn unframe(&self, mut message: TaMessage) -> (TaMessage, QueueLane) {
+        let lane = match &message {
+            TaMessage::User(user) => match user.content.first() {
+                Some(tinyinference_llm::message::ContentBlock::Text(text))
+                    if text.starts_with(STEER_PREFIX) =>
+                {
+                    QueueLane::Steer
+                }
+                Some(tinyinference_llm::message::ContentBlock::Text(text))
+                    if text.starts_with(COLLECT_PREFIX) =>
+                {
+                    QueueLane::Collect
+                }
+                _ => QueueLane::Steer,
+            },
+            _ => QueueLane::Steer,
+        };
+        if let TaMessage::User(user) = &mut message
+            && let Some(tinyinference_llm::message::ContentBlock::Text(text)) = user.content.first()
+            && text.starts_with(lane_prefix(lane))
+        {
+            let text = match &mut user.content[0] {
+                tinyinference_llm::message::ContentBlock::Text(text) => text,
+                _ => unreachable!("the checked first block is text"),
+            };
+            let stripped = text[lane_prefix(lane).len()..].to_owned();
+            if stripped.is_empty() {
+                user.content.remove(0);
+            } else {
+                *text = stripped;
+            }
+        }
+        (message, lane)
+    }
+
+    fn requeue(&self, lane: QueueLane, message: TaMessage, _thread_label: &str) -> Option<String> {
+        self.0.push_now(lane, message);
+        None
+    }
+}
+
+struct SharedMessageQueue(Arc<RunQueue<TaMessage>>);
+
+impl QueueAdapter for SharedMessageQueue {
+    fn drain(&self, lane: QueueLane) -> Vec<ForwardedItem> {
+        BorrowedMessageQueue(self.0.as_ref()).drain(lane)
+    }
+
+    fn frame(&self, lane: QueueLane, message: TaMessage) -> TaMessage {
+        BorrowedMessageQueue(self.0.as_ref()).frame(lane, message)
+    }
+
+    fn unframe(&self, message: TaMessage) -> (TaMessage, QueueLane) {
+        BorrowedMessageQueue(self.0.as_ref()).unframe(message)
+    }
+
+    fn requeue(&self, lane: QueueLane, message: TaMessage, thread_label: &str) -> Option<String> {
+        BorrowedMessageQueue(self.0.as_ref()).requeue(lane, message, thread_label)
+    }
+}
+
+fn lane_prefix(lane: QueueLane) -> &'static str {
+    match lane {
+        QueueLane::Steer | QueueLane::Followup => STEER_PREFIX,
+        QueueLane::Collect => COLLECT_PREFIX,
+    }
+}
+
 /// Drain `lane` and forward it into `handle`. With a `gate`, the drain and
 /// the delivery both happen while holding it, so once the gate is closed no
 /// item is ever out of the queue without being in the handle; returns `false`
 /// when the gate is already closed (the caller should stop polling).
 #[allow(clippy::too_many_arguments)]
-fn forward_lane<T: QueuedMessage>(
-    queue: &RunQueue<T>,
+fn forward_lane(
+    queue: &dyn QueueAdapter,
     handle: &SteeringHandle,
     thread_label: &str,
     lane: QueueLane,
     mode: &'static str,
-    prefix: &str,
     sink: &ForwardEventSink,
     gate: Option<&ClosedGate>,
 ) -> bool {
@@ -134,19 +299,18 @@ fn forward_lane<T: QueuedMessage>(
         if closed.as_deref().copied().unwrap_or(false) {
             return false;
         }
-        let drained = queue.drain_now(lane);
+        let drained = queue.drain(lane);
         if drained.is_empty() {
             return true;
         }
         for msg in &drained {
-            handle.send(SteeringCommand::InjectMessage(TaMessage::user(format!(
-                "{prefix}{}",
-                msg.text()
-            ))));
+            handle.send(SteeringCommand::InjectMessage(
+                queue.frame(lane, msg.message.clone()),
+            ));
         }
         let (item_id, text) = drained
             .first()
-            .map(|msg| (Some(msg.id().to_string()), Some(msg.text().to_string())))
+            .map(|msg| (msg.id.clone(), Some(msg.message.text())))
             .unwrap_or((None, None));
         (drained.len(), item_id, text)
     };
@@ -177,12 +341,11 @@ pub async fn forward_steers<T: QueuedMessage>(
     sink: &ForwardEventSink,
 ) {
     forward_lane(
-        queue,
+        &BorrowedQueue(queue),
         handle,
         thread_label,
         QueueLane::Steer,
         "steer",
-        STEER_PREFIX,
         sink,
         None,
     );
@@ -203,52 +366,67 @@ pub async fn forward_collects<T: QueuedMessage>(
     sink: &ForwardEventSink,
 ) {
     forward_lane(
-        queue,
+        &BorrowedQueue(queue),
         handle,
         thread_label,
         QueueLane::Collect,
         "collect",
-        COLLECT_PREFIX,
         sink,
         None,
     );
 }
 
-/// Stop-on-drop guard around the steering-forwarder poll task.
-///
-/// Held across the harness drive future so its `Drop` runs on **every** exit
-/// path (normal return, error, and drop-cancellation), stopping the poll task,
-/// running the host cleanup, and requeuing residual steers.
-pub struct SteeringForwarderGuard<T: QueuedMessage> {
-    /// The spawned poll task. `None` after drop so a double-drop is a no-op.
+/// Forward native `Message` values from a queue into a steering handle.
+pub async fn forward_message_steers(
+    queue: &RunQueue<TaMessage>,
+    handle: &SteeringHandle,
+    thread_label: &str,
+    sink: &ForwardEventSink,
+) {
+    forward_lane(
+        &BorrowedMessageQueue(queue),
+        handle,
+        thread_label,
+        QueueLane::Steer,
+        "steer",
+        sink,
+        None,
+    );
+}
+
+/// Forward native `Message` collect values into a steering handle.
+pub async fn forward_message_collects(
+    queue: &RunQueue<TaMessage>,
+    handle: &SteeringHandle,
+    thread_label: &str,
+    sink: &ForwardEventSink,
+) {
+    forward_lane(
+        &BorrowedMessageQueue(queue),
+        handle,
+        thread_label,
+        QueueLane::Collect,
+        "collect",
+        sink,
+        None,
+    );
+}
+
+/// Shared poll and residual-recovery lifecycle for all queue payload adapters.
+struct SteeringForwarderCore {
     forwarder: Option<tokio::task::JoinHandle<()>>,
-    /// Closed by `Drop` before it drains the handle; see [`ClosedGate`].
     closed: Arc<ClosedGate>,
-    /// A clone of the run's steering handle, drained on drop to recover
-    /// delivered-but-unapplied steers.
     handle: SteeringHandle,
-    /// The session-owned run queue, used to requeue residual steers on drop.
-    /// `None` after the requeue so a double-drop is a no-op.
-    run_queue: Option<Arc<RunQueue<T>>>,
-    /// Host cleanup run exactly once on drop.
+    run_queue: Option<Arc<dyn QueueAdapter>>,
     cleanup: Option<ForwarderCleanup>,
-    /// Best-effort thread label for observability + requeued-message metadata.
     thread_label: String,
     sink: ForwardEventSink,
 }
 
-impl<T: QueuedMessage> SteeringForwarderGuard<T> {
-    /// Arm the guard: spawn the poll loop when a `run_queue` is present and wrap
-    /// all cleanup in an abort-on-drop scope.
-    ///
-    /// `run_queue` is `None` for a steering-only run (a sub-agent controlled
-    /// purely through a steering registry, with no queue lane): no poll task is
-    /// spawned, but the guard still runs `cleanup` on every exit path so an
-    /// aborted run cannot leak a registry entry. Must be called inside a tokio
-    /// runtime when `run_queue` is `Some`.
-    pub fn new(
+impl SteeringForwarderCore {
+    fn new(
         handle: SteeringHandle,
-        run_queue: Option<Arc<RunQueue<T>>>,
+        run_queue: Option<Arc<dyn QueueAdapter>>,
         cleanup: Option<ForwarderCleanup>,
         thread_label: String,
         sink: ForwardEventSink,
@@ -261,15 +439,9 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
             let loop_sink = sink.clone();
             let loop_closed = closed.clone();
             tokio::spawn(async move {
-                // Not aborted on drop; the loop exits on its own at its next
-                // check once the gate is closed. It drains and delivers under
-                // the gate, so a closed gate means it takes nothing more.
-                for (lane, mode, prefix) in [
-                    (QueueLane::Steer, "steer", STEER_PREFIX),
-                    (QueueLane::Collect, "collect", COLLECT_PREFIX),
-                ]
-                .into_iter()
-                .cycle()
+                for (lane, mode) in [(QueueLane::Steer, "steer"), (QueueLane::Collect, "collect")]
+                    .into_iter()
+                    .cycle()
                 {
                     if lane == QueueLane::Steer {
                         tokio::time::sleep(POLL_INTERVAL).await;
@@ -277,17 +449,15 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
                     if *lock_gate(&loop_closed) {
                         break;
                     }
-                    let open = forward_lane(
-                        &loop_queue,
+                    if !forward_lane(
+                        loop_queue.as_ref(),
                         &loop_handle,
                         &loop_label,
                         lane,
                         mode,
-                        prefix,
                         &loop_sink,
                         Some(&loop_closed),
-                    );
-                    if !open {
+                    ) {
                         break;
                     }
                 }
@@ -310,91 +480,111 @@ impl<T: QueuedMessage> SteeringForwarderGuard<T> {
     }
 }
 
-impl<T: QueuedMessage> Drop for SteeringForwarderGuard<T> {
+impl Drop for SteeringForwarderCore {
     fn drop(&mut self) {
-        // 1. Close the gate so the poll loop can no longer deliver into this
-        //    handle or race the next turn's forwarder for the shared,
-        //    session-owned run queue. Anything it drains from now on goes back
-        //    to the queue, and it exits at its next check.
         *lock_gate(&self.closed) = true;
-        if self.forwarder.take().is_some() {
+        if let Some(forwarder) = self.forwarder.take() {
+            forwarder.abort();
             tracing::debug!(
                 thread_id = self.thread_label.as_str(),
                 "[run_queue] closed steering forwarder (guard drop)"
             );
         }
-
-        // 2. Host cleanup (e.g. deregister a sub-agent steering handle so an
-        //    aborted run does not leak a registry entry keyed by a dead handle).
         if let Some(cleanup) = self.cleanup.take() {
             cleanup();
             tracing::debug!("[run_queue] ran forwarder cleanup (guard drop)");
         }
 
-        // 3. Recover residual steers: messages the poll loop already delivered
-        //    into the handle but that the harness ended/cancelled before
-        //    applying at a checkpoint. Strip the delivery prefix so the next
-        //    turn's forwarder re-frames them cleanly (no double prefix).
-        //    Control-flow-only commands (Pause/Resume/Cancel/...) are meaningless
-        //    once the run is gone and are intentionally dropped.
+        let Some(queue) = self.run_queue.take() else {
+            self.handle.drain();
+            return;
+        };
         let residual = self.handle.drain();
-        // Each residual steer gets its requeued id minted here (Drop is
-        // synchronous) so the `Requeued` event below and the item pushed onto
-        // the queue agree on the same id.
-        let requeue_items: Vec<(String, QueueLane, String)> = residual
+        let requeue_items: Vec<_> = residual
             .into_iter()
-            .filter_map(|cmd| match cmd {
-                SteeringCommand::InjectMessage(msg) => {
-                    let text = msg.text();
-                    // The prefix that matched tells us the lane: preserve it so a
-                    // delivered-but-unapplied collect line re-enters as Collect
-                    // rather than being re-labeled as user Steer. Default to
-                    // Steer when neither prefix is present (a raw, unframed steer).
-                    let (text, lane) = if let Some(rest) = text.strip_prefix(STEER_PREFIX) {
-                        (rest.to_string(), QueueLane::Steer)
-                    } else if let Some(rest) = text.strip_prefix(COLLECT_PREFIX) {
-                        (rest.to_string(), QueueLane::Collect)
-                    } else {
-                        (text.to_string(), QueueLane::Steer)
-                    };
-                    Some((text, lane, uuid::Uuid::new_v4().to_string()))
-                }
+            .filter_map(|command| match command {
+                SteeringCommand::InjectMessage(message) => Some(queue.unframe(message)),
                 _ => None,
             })
             .collect();
-
-        let Some(queue) = self.run_queue.take() else {
-            return;
-        };
         if requeue_items.is_empty() {
             return;
         }
+
         let requeued = requeue_items.len();
-        let thread_label = self.thread_label.clone();
-        let (item_id, text) = requeue_items
-            .first()
-            .map(|(text, _lane, id)| (Some(id.clone()), Some(text.clone())))
-            .unwrap_or((None, None));
-
-        // Pushed synchronously, before `drop` returns, so a host reading the
-        // queue once the turn has ended finds every residual steer there.
-        // Appended, not prepended: a later guard's residuals must not jump
-        // ahead of these, and successive drops each add theirs behind the last.
-        for (text, lane, id) in requeue_items {
-            queue.push_now(lane, T::requeued(id, text, &thread_label, now_ms()));
+        let text = requeue_items.first().map(|(message, _)| message.text());
+        let mut item_id = None;
+        for (message, lane) in requeue_items {
+            let id = queue.requeue(lane, message, &self.thread_label);
+            if item_id.is_none() {
+                item_id = id;
+            }
         }
-
         tracing::debug!(
-            thread_id = thread_label.as_str(),
+            thread_id = self.thread_label.as_str(),
             requeued,
             "[run_queue] requeued residual steer(s) as next-turn input (guard drop)"
         );
         (self.sink)(ForwardEvent::Requeued {
-            thread_label,
+            thread_label: self.thread_label.clone(),
             requeued,
             item_id,
             text,
         });
+    }
+}
+
+/// Stop-on-drop guard for host-defined queued payloads.
+pub struct SteeringForwarderGuard<T: QueuedMessage> {
+    _core: SteeringForwarderCore,
+    _payload: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: QueuedMessage> SteeringForwarderGuard<T> {
+    /// Arm the guard; cleanup still runs when there is no queue.
+    pub fn new(
+        handle: SteeringHandle,
+        run_queue: Option<Arc<RunQueue<T>>>,
+        cleanup: Option<ForwarderCleanup>,
+        thread_label: String,
+        sink: ForwardEventSink,
+    ) -> Self {
+        Self {
+            _core: SteeringForwarderCore::new(
+                handle,
+                run_queue.map(|queue| Arc::new(SharedQueue(queue)) as Arc<dyn QueueAdapter>),
+                cleanup,
+                thread_label,
+                sink,
+            ),
+            _payload: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Stop-on-drop guard for a driver's native `RunQueue<Message>`.
+pub struct MessageSteeringForwarderGuard {
+    _core: SteeringForwarderCore,
+}
+
+impl MessageSteeringForwarderGuard {
+    /// Arm the native-message queue forwarder without flattening user content.
+    pub fn new(
+        handle: SteeringHandle,
+        run_queue: Option<Arc<RunQueue<TaMessage>>>,
+        cleanup: Option<ForwarderCleanup>,
+        thread_label: String,
+        sink: ForwardEventSink,
+    ) -> Self {
+        Self {
+            _core: SteeringForwarderCore::new(
+                handle,
+                run_queue.map(|queue| Arc::new(SharedMessageQueue(queue)) as Arc<dyn QueueAdapter>),
+                cleanup,
+                thread_label,
+                sink,
+            ),
+        }
     }
 }
 

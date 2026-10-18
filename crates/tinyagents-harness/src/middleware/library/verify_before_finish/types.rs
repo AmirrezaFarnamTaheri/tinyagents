@@ -20,12 +20,39 @@ pub struct FinishActivity {
     pub tool_rounds: usize,
     /// Names of every tool those rounds requested.
     pub tools_called: BTreeSet<String>,
+    /// Concrete tool names whose executors actually started in this run.
+    ///
+    /// Packed calls contribute the pinned inner name; refused and
+    /// wrapper-short-circuited calls contribute nothing. An execution attempt
+    /// can fail, time out, or be cancelled after entry, so membership does not
+    /// establish success. Legacy resume state defaults to an empty set rather
+    /// than treating transcript requests as execution evidence.
+    #[serde(default)]
+    pub tools_executed: BTreeSet<String>,
+    /// Started targets that declared a permission above `ReadOnly` or an
+    /// external effect for their actual execution arguments.
+    ///
+    /// Literal read-only previews remain in [`Self::tools_executed`] without
+    /// appearing here. This is conservative evidence that a mutating attempt
+    /// started, not proof that the attempted mutation succeeded.
+    #[serde(default)]
+    pub tools_with_side_effects: BTreeSet<String>,
 }
 
 impl FinishActivity {
     /// Whether the run requested `tool` at least once.
     pub fn called(&self, tool: &str) -> bool {
         self.tools_called.contains(tool)
+    }
+
+    /// Whether the concrete `tool` executor started at least once.
+    pub fn executed(&self, tool: &str) -> bool {
+        self.tools_executed.contains(tool)
+    }
+
+    /// Whether `tool` started with arguments declaring potential side effects.
+    pub fn executed_with_side_effects(&self, tool: &str) -> bool {
+        self.tools_with_side_effects.contains(tool)
     }
 
     /// Trigger predicate: at least `min_rounds` tool rounds, or `tool` was

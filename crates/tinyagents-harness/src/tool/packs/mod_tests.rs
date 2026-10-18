@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use tinytools::{PermissionLevel, Tool, ToolResult, ToolSpec, ToolTimeout};
 
 use super::*;
+use crate::{runtime::AgentHarness, testkit, tool::ToolDispatch};
+use tinyinference_llm::{message::Message, providers::MockModel, tool::ToolCall};
 
 const MARKER: &str = "[not_found]";
 
@@ -103,6 +105,25 @@ fn find<'a>(tools: &'a [Box<dyn Tool>], name: &str) -> &'a dyn Tool {
         .find(|t| t.name() == name)
         .map(AsRef::as_ref)
         .unwrap_or_else(|| panic!("{name} missing"))
+}
+
+#[test]
+fn a_pinned_disclosure_has_no_executable_selection() {
+    // A pinned disclosure is an Answer struct variant, never a packed
+    // execution target. Only Execute may expose an admitted inner tool.
+    let pinned = super::types::PinnedPackCall {
+        outer: Arc::new(FakeTool::plain("use_skill")),
+        target: super::types::PackTarget::Answer {
+            result: ToolResult::success("pack schema"),
+            permission: PermissionLevel::ReadOnly,
+        },
+    };
+    assert!(pinned.selection().is_none());
+    assert!(pinned.admission_target().is_none());
+    assert_eq!(
+        pinned.permission_level_with_args(&Value::Null),
+        PermissionLevel::ReadOnly,
+    );
 }
 
 #[test]
@@ -273,6 +294,218 @@ async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     assert!(result.text().contains("catalog is unavailable"));
 }
 
+struct LiveParentDispatch(Arc<dyn Tool>);
+
+#[async_trait]
+impl crate::tool::ToolDispatch<(), String> for LiveParentDispatch {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.0.clone()
+    }
+
+    async fn execute(
+        &self,
+        _state: &(),
+        call_id: crate::CallId,
+        arguments: Value,
+        _options: tinytools::ToolCallOptions,
+        parent: &crate::context::RunContext<String>,
+    ) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success(format!(
+            "run={};call={call_id};args={arguments}",
+            parent.data
+        )))
+    }
+}
+
+#[tokio::test]
+async fn typed_use_skill_dispatch_pins_the_selected_target_and_live_parent() {
+    let tools = bound(vec![FakeTool::plain("a_one")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(|selection| {
+        assert_eq!(selection.tool_name(), "a_one");
+        assert_eq!(selection.arguments(), &json!({"marker": "inside"}));
+        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain(
+            "a_one",
+        )))))
+    });
+    let dispatch = UseSkillDispatch::new(outer, selector);
+    let outer_args = json!({
+        "skill": "alpha",
+        "tool": "a_one",
+        "args": {"marker": "inside"}
+    });
+    let bound = dispatch.bind_call(&outer_args).unwrap().unwrap();
+
+    // Rebinding the live registry after admission must not change this call's
+    // already authorized target or args.
+    let replacement = Arc::new(vec![Box::new(FakeTool::plain("a_two")) as Box<dyn Tool>]);
+    handle.bind(Arc::downgrade(&replacement));
+
+    let parent = crate::context::RunContext::new(
+        crate::context::RunConfig::new("parent-run"),
+        "live-parent".to_string(),
+    );
+    let call_id = crate::CallId::new("admitted-call");
+    let result = bound
+        .execute(
+            &(),
+            call_id,
+            outer_args,
+            tinytools::ToolCallOptions::default(),
+            &parent,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.text(),
+        "run=live-parent;call=admitted-call;args={\"marker\":\"inside\"}"
+    );
+    assert_eq!(bound.admission_target().unwrap().0.name(), "a_one");
+}
+
+#[tokio::test]
+async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_and_live_parent() {
+    let tools = bound(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let selected = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let selected_for_selector = selected.clone();
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(move |selection| {
+        let name = selection.tool_name().to_owned();
+        selected_for_selector.lock().unwrap().push(name.clone());
+        let target_name = match name.as_str() {
+            "a_one" => "a_one",
+            "a_two" => "a_two",
+            _ => return None,
+        };
+        Some(Arc::new(LiveParentDispatch(Arc::new(FakeTool::plain(
+            target_name,
+        )))))
+    });
+    let dispatch = Arc::new(UseSkillDispatch::new(outer, selector));
+    let response = testkit::tool_call_response(ToolCall::new(
+        "packed-call-17",
+        USE_SKILL,
+        json!({"skill":"alpha", "tool":"a_one", "args":{"marker":"one"}}),
+    ));
+    let mut harness: AgentHarness<(), String> = AgentHarness::new();
+    harness
+        .register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                response,
+                testkit::text_response("finished"),
+            ])),
+        )
+        .register_tool_dispatch(dispatch);
+    let parent = crate::context::RunContext::new(
+        crate::context::RunConfig::new("outer-run"),
+        "live-parent-state".to_owned(),
+    );
+    let run = harness
+        .invoke_in_context(&(), parent, vec![Message::user("run the packed tool")])
+        .await
+        .expect("the harness admits and executes the selected packed tool");
+
+    assert_eq!(selected.lock().unwrap().as_slice(), &["a_one"]);
+    let tool_result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    let result_text = serde_json::to_string(&tool_result.content).unwrap();
+    assert!(result_text.contains("run=live-parent-state"));
+    assert!(result_text.contains("call=packed-call-17"));
+    assert!(result_text.contains("marker"));
+}
+
+#[tokio::test]
+async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch() {
+    let tools = bound(vec![FakeTool::plain("a_one")]);
+    let handle = handle_of(&tools).clone();
+    let outer: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle, CATALOG));
+    let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let executed_for_selector = executed.clone();
+    let selector: Arc<PackDispatchSelector<(), String>> = Arc::new(move |selection| {
+        if selection.tool_name() != "a_one" {
+            return None;
+        }
+        let dispatch = RecordingParentDispatch {
+            tool: Arc::new(FakeTool::plain("a_one")),
+            executed: executed_for_selector.clone(),
+        };
+        Some(Arc::new(dispatch))
+    });
+    let mut harness: AgentHarness<(), String> = AgentHarness::new();
+    harness
+        .register_model(
+            "mock",
+            Arc::new(MockModel::with_responses(vec![
+                testkit::tool_call_response(ToolCall::new(
+                    "denied-call",
+                    USE_SKILL,
+                    json!({"skill":"alpha", "tool":"a_one", "args":{}}),
+                )),
+                testkit::text_response("finished"),
+            ])),
+        )
+        .register_tool_dispatch(Arc::new(UseSkillDispatch::new(outer, selector)));
+    let policy = crate::runtime::RunPolicy {
+        tool_rules: crate::tool::ToolRulePolicy::new(tinytools::ToolRuleSet::single(
+            tinytools::ToolRules::from_allow_deny(Vec::<String>::new(), ["a_one"]),
+        )),
+        ..Default::default()
+    };
+    harness.with_policy(policy);
+
+    let run = harness
+        .invoke_default(&(), vec![Message::user("call the denied target")])
+        .await
+        .expect("tool rule denial is reported in the transcript");
+
+    assert_eq!(executed.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let tool_result = run
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            Message::Tool(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    let result_text = serde_json::to_string(&tool_result.content).unwrap();
+    assert!(result_text.contains("not permitted"), "{result_text}");
+}
+
+struct RecordingParentDispatch {
+    tool: Arc<dyn Tool>,
+    executed: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl crate::tool::ToolDispatch<(), String> for RecordingParentDispatch {
+    fn tool(&self) -> Arc<dyn Tool> {
+        self.tool.clone()
+    }
+
+    async fn execute(
+        &self,
+        _state: &(),
+        _call_id: crate::CallId,
+        _arguments: Value,
+        _options: tinytools::ToolCallOptions,
+        _parent: &crate::context::RunContext<String>,
+    ) -> anyhow::Result<ToolResult> {
+        self.executed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(ToolResult::success("executed"))
+    }
+}
+
 #[test]
 fn packed_binding_preserves_outer_policy_transform_approval() {
     let handle = PackRegistryHandle::default();
@@ -324,6 +557,7 @@ fn permission_level_is_the_inner_tools_not_the_proxys() {
         ..FakeTool::plain("a_one")
     }]);
     let use_skill = find(&tools, USE_SKILL);
+    assert_eq!(use_skill.permission_level(), PermissionLevel::ReadOnly);
     assert_eq!(
         use_skill.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
         PermissionLevel::Dangerous
@@ -364,7 +598,11 @@ fn external_effect_and_timeout_are_forwarded() {
 #[test]
 fn an_unbound_handle_degrades_closed() {
     let tool = UseSkillTool::new(PackRegistryHandle::default(), CATALOG);
-    assert_eq!(tool.permission_level(), PermissionLevel::Dangerous);
+    assert_eq!(tool.permission_level(), PermissionLevel::ReadOnly);
+    assert_eq!(
+        tool.permission_level_with_args(&json!({"skill": "alpha", "tool": "a_one"})),
+        PermissionLevel::Dangerous
+    );
 }
 
 #[tokio::test]

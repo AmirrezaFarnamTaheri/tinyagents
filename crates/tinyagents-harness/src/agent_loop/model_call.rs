@@ -1894,6 +1894,8 @@ pub(super) struct ToolCallBase<'h, State: Send + Sync, Ctx: Send + Sync> {
     /// nested `n` deep.
     pub(super) level: usize,
     pub(super) dispatch: Arc<dyn crate::tool::ToolDispatch<State, Ctx>>,
+    /// Admitted outer identity, unaffected by call rewrites inside the wrap onion.
+    pub(super) invocation: crate::middleware::ToolInvocationIdentity,
     pub(super) options: tinytools::ToolCallOptions,
     pub(super) timeout_settings: Option<crate::tool::ToolTimeoutSettings>,
     /// Nested-call ids, refusal budget and summaries for this logical call,
@@ -1927,13 +1929,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolBaseCall<State, Ctx>
                 &self.nested_state,
                 self.gate_held,
             );
-            let future = super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
-                state,
-                CallId::new(call.id),
-                call.arguments,
-                self.options,
-                ctx,
-            ));
+            let future = async {
+                let declaration = self.dispatch.tool();
+                let (target, arguments) = self
+                    .dispatch
+                    .admission_target()
+                    .unwrap_or((declaration.as_ref(), &call.arguments));
+                self.harness.middleware.run_observe_tool_execution(
+                    ctx,
+                    state,
+                    &self.invocation,
+                    target,
+                    arguments,
+                );
+                super::tools::execute_tool_recovering_model_retry(self.dispatch.execute(
+                    state,
+                    CallId::new(call.id),
+                    call.arguments,
+                    self.options,
+                    ctx,
+                ))
+                .await
+            };
             let bounded = async {
                 match timeout.and_then(|resolved| resolved.deadline) {
                     Some(deadline) => match tokio::time::timeout(deadline, future).await {

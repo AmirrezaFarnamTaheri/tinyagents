@@ -71,3 +71,11 @@ fn root_run_keeps_spawn_tools() {
     };
     assert_eq!(plan_registration(["spawn"], &admission).admitted, ["spawn"]);
 }
+
+#[test]
+fn tool_surface_diff_reports_refresh_changes_in_stable_order() {
+    let diff = tool_surface_diff(&set(&["keep", "revoke", "a"]), &set(&["keep", "new", "b"]));
+    assert_eq!(diff.added, ["b", "new"]);
+    assert_eq!(diff.removed, ["a", "revoke"]);
+    assert_eq!(diff.retained, ["keep"]);
+}

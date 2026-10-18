@@ -49,12 +49,12 @@ embedding, not as a way to fake "unconfigured."
 | `HostCapabilities<State>` | `mod.rs` | The bundle handed to a session: four required + six optional capabilities. |
 | `ContextComposer`, `StaticContextComposer`, `TurnContextRequest` | `context_composer` | Builds a turn's system prompt and preamble (required). |
 | `SecurityGate`, `AllowAllSecurityGate`, `GateDecision`, `ScreenOutcome`, `ToolCallRequest`, `ContentOrigin` | `security_gate` | Authorizes tool calls, screens untrusted text (required). |
-| `ModelResolver<State>`, `FixedModelResolver`, `ModelResolveRequest` | `model_resolver` | Chooses the model for a turn (required). |
+| `ModelResolver<State>`, `FixedModelResolver`, `PrebuiltModelResolver`, `ModelResolveRequest` | `model_resolver` | Chooses the model for a turn (required). |
 | `AgentMemory`, `InMemoryAgentMemory`, `MemoryId`, `MemoryItem`, `NewMemory`, `RecallRequest` | `agent_memory` | Durable user memory (optional). |
 | `BudgetGate`, `UnlimitedBudgetGate`, `Permit`, `CallEstimate`, `ContextState`, `CompressionHint` | `budget_gate` | Admission, spend accounting, compression advice (optional). |
 | `ProgressSink`, `NoopProgressSink`, `RecordingProgressSink`, `ProgressEvent` | `progress_sink` | Coarse turn progress for a UI (optional). |
 | `LearningSink`, `NoopLearningSink`, `TurnSummary` | `learning_sink` | Post-turn reflection hook (optional). |
-| `ToolOutcomeClassifier`, `ErrorFieldClassifier`, `OutcomeClass` | `tool_outcome_classifier` | Classifies a tool result as success/retryable/permanent (optional). |
+| `ToolOutcomeClassifier`, `ErrorFieldClassifier`, `ToolStatusClassifier`, `OutcomeClass` | `tool_outcome_classifier` | Classifies a tool result as success/retryable/permanent (optional); `ToolStatusClassifier` can opt named tools into retrying timeouts. |
 | `ExperienceStore`, `InMemoryExperienceStore`, `Experience` | `experience_store` | Procedural memory of prior task attempts (optional). |
 
 ## Files
@@ -67,10 +67,10 @@ embedding, not as a way to fake "unconfigured."
 | `context_composer.rs` | `ContextComposer` trait, `TurnContextRequest`, `StaticContextComposer`. |
 | `experience_store.rs` | `ExperienceStore` trait, `Experience`, `InMemoryExperienceStore`. |
 | `learning_sink.rs` | `LearningSink` trait, `TurnSummary`, `NoopLearningSink`. |
-| `model_resolver.rs` | `ModelResolver<State>` trait, `ModelResolveRequest`, `FixedModelResolver`. |
+| `model_resolver.rs` | `ModelResolver<State>` trait, `ModelResolveRequest`, `FixedModelResolver`, and `PrebuiltModelResolver` for lead/pin/hint routes. |
 | `progress_sink.rs` | `ProgressEvent`, `ProgressSink` trait, `NoopProgressSink`, `RecordingProgressSink`. |
 | `security_gate.rs` | `SecurityGate` trait, `ToolCallRequest`, `GateDecision`, `ScreenOutcome`, `ContentOrigin`. |
-| `tool_outcome_classifier.rs` | `ToolOutcomeClassifier` trait, `OutcomeClass`, `ErrorFieldClassifier`. |
+| `tool_outcome_classifier.rs` | `ToolOutcomeClassifier` trait, `OutcomeClass`, safe-default `ErrorFieldClassifier` and `ToolStatusClassifier` with an opt-in timeout policy. |
 | `mod_tests.rs` | Bundle-level tests: the required/optional split and the hand-written `Clone`. |
 
 ## Value types are inert

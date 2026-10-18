@@ -1053,7 +1053,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 next_len,
             }
         };
-        Ok(Some(TranscriptCommitReceipt { path, delta }))
+        let rows = if extends {
+            raw[previous_len..next_len].to_vec()
+        } else {
+            raw.to_vec()
+        };
+        Ok(Some(TranscriptCommitReceipt { path, delta, rows }))
     }
 
     /// Records the declarations a successfully completed ordinary turn sent.

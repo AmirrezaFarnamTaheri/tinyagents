@@ -16,6 +16,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
+use super::GenerationEnrichment;
 use crate::cost::CostTotals;
 use crate::ids::{CallId, ComponentId, EventId, ExecutionStatus, HarnessPhase, RunId, ThreadId};
 use tinyinference_llm::message::MessageDelta;
@@ -94,6 +95,18 @@ pub enum AgentEvent {
         /// exporter can render the completion in a generation's Output panel.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<serde_json::Value>,
+    },
+
+    /// Content-free provider, pricing, and estimate metadata for one call.
+    ///
+    /// Hosts emit this after the facts are known. It may precede
+    /// [`AgentEvent::ModelCompleted`] in durable observations; the trace
+    /// collector retains it only while that exact call is still open.
+    GenerationEnriched {
+        /// Call identity, scoped by the enclosing observation's run.
+        call_id: CallId,
+        /// Validated host metadata for this model generation.
+        enrichment: GenerationEnrichment,
     },
 
     /// The agent loop fixed the run's **pre-middleware** tool surface: how
@@ -517,6 +530,17 @@ pub enum AgentEvent {
         key: String,
     },
 
+    /// A model response was served from a cache without an exposed cache key.
+    ///
+    /// This records the cache fact for adapters that do not own the harness
+    /// response-cache key. The provider was not invoked for this response.
+    /// Adapters must omit cached provider charges from [`AgentEvent::UsageRecorded`];
+    /// this event has no call linkage for that run-level aggregate.
+    ModelResponseCached {
+        /// Identifier for the model call satisfied by the cached response.
+        call_id: CallId,
+    },
+
     /// A response-cache lookup missed, so the provider is being invoked and the
     /// result will be stored under `key`.
     CacheMiss {
@@ -611,6 +635,24 @@ pub enum AgentEvent {
         name: String,
         /// Depth of the child run in the recursion tree.
         depth: usize,
+    },
+
+    /// Links a sub-agent lifecycle span to the child's exact run identity.
+    /// Kept additive so existing consumers can continue matching the legacy
+    /// name/depth lifecycle events without source changes.
+    SubAgentRunStarted {
+        /// Name of the sub-agent being invoked.
+        name: String,
+        /// Depth of the child run in the recursion tree.
+        depth: usize,
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
+    },
+
+    /// Marks the successful completion of the linked child run.
+    SubAgentRunCompleted {
+        /// Exact identity used by observations emitted from the child run.
+        run_id: RunId,
     },
 
     /// An existing sub-agent was *reused* for a follow-up turn rather than
@@ -1012,6 +1054,28 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<crate::terminal::TerminalOutcome>,
     },
+
+    /// The host durably committed the result of a run.
+    ///
+    /// This follows a terminal event and allows exporters to extend an
+    /// already-closed run span to include host persistence, without changing
+    /// its terminal status or inventing an outcome.
+    RunFinalized {
+        /// Identity of the run whose host-side persistence finished.
+        run_id: RunId,
+    },
+
+    /// A completed turn was stopped early by a typed harness stop cause.
+    ///
+    /// This may be emitted after `RunCompleted`; the run identity and lineage
+    /// come from the enclosing observation record. `turn` is the 1-based
+    /// model-attempt ordinal within that run.
+    TurnStopped {
+        /// 1-based model-attempt ordinal for the stopped turn.
+        turn: u32,
+        /// Content-free reason that stopped the turn.
+        stop: crate::turn_stop::TurnStop,
+    },
 }
 
 /// Names the kind of run limit that tripped in an [`AgentEvent::LimitReached`].
@@ -1049,6 +1113,7 @@ impl AgentEvent {
             AgentEvent::ModelStarted { .. } => "model.started",
             AgentEvent::ModelDelta { .. } => "model.delta",
             AgentEvent::ModelCompleted { .. } => "model.completed",
+            AgentEvent::GenerationEnriched { .. } => "generation.enriched",
             AgentEvent::ControlApplied { .. } => "control.applied",
             AgentEvent::ToolsAdvertised { .. } => "tool.advertised",
             AgentEvent::ToolSearched { .. } => "tool.searched",
@@ -1076,6 +1141,7 @@ impl AgentEvent {
             AgentEvent::MiddlewareStarted { .. } => "middleware.started",
             AgentEvent::MiddlewareCompleted { .. } => "middleware.completed",
             AgentEvent::CacheHit { .. } => "cache.hit",
+            AgentEvent::ModelResponseCached { .. } => "model.response_cached",
             AgentEvent::CacheMiss { .. } => "cache.miss",
             AgentEvent::PromptCacheMiss { .. } => "cache.prompt_miss",
             AgentEvent::RetryScheduled { .. } => "retry.scheduled",
@@ -1085,6 +1151,8 @@ impl AgentEvent {
             AgentEvent::FallbackSkipped { .. } => "model.fallback_skipped",
             AgentEvent::SubAgentStarted { .. } => "subagent.started",
             AgentEvent::SubAgentCompleted { .. } => "subagent.completed",
+            AgentEvent::SubAgentRunStarted { .. } => "subagent.run.started",
+            AgentEvent::SubAgentRunCompleted { .. } => "subagent.run.completed",
             AgentEvent::SubAgentReused { .. } => "subagent.reused",
             AgentEvent::Steered { .. } => "agent.steered",
             AgentEvent::Compressed { .. } => "context.compressed",
@@ -1111,6 +1179,8 @@ impl AgentEvent {
             AgentEvent::StreamClosed => "stream.closed",
             AgentEvent::RunCompleted { .. } => "run.completed",
             AgentEvent::RunFailed { .. } => "run.failed",
+            AgentEvent::RunFinalized { .. } => "run.finalized",
+            AgentEvent::TurnStopped { .. } => "turn.stopped",
         }
     }
 }
