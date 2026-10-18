@@ -102,6 +102,16 @@ pub struct CompletionClaim {
     pub visible_after: SystemTime,
 }
 
+/// Capability carried by the consumer that owns one specific delivery attempt.
+/// A task id alone never authorizes settling a completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionReceipt {
+    /// The completion this attempt owns.
+    pub task_id: String,
+    /// The opaque token for this attempt.
+    pub token: String,
+}
+
 /// A neutral reference to a host-owned artifact holding the full output.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompletionArtifact {
@@ -218,6 +228,14 @@ impl CompletionRecord {
     pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
         self.finished_at = finished_at;
         self
+    }
+
+    /// Returns the receipt for this delivery attempt, if this record is claimed.
+    pub fn receipt(&self) -> Option<CompletionReceipt> {
+        self.claim.as_ref().map(|claim| CompletionReceipt {
+            task_id: self.task_id.clone(),
+            token: claim.token.clone(),
+        })
     }
 
     /// A tombstone for a task whose completion has not been recorded yet.
