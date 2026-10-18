@@ -840,7 +840,9 @@ fn subagent_driver_alias_preserves_host_name_description_and_schema() {
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
     });
-    let tool = DriverSubAgentTool::new("delegate_to", "Delegate to an allowed specialist.", 
+    let tool = DriverSubAgentTool::new(
+        "delegate_to",
+        "Delegate to an allowed specialist.",
         driver(),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
@@ -856,7 +858,8 @@ fn subagent_driver_alias_preserves_host_name_description_and_schema() {
             )
         },
         |_| None,
-    ).with_parameters(schema.clone());
+    )
+    .with_parameters(schema.clone());
     let declaration = ToolDispatch::<(), ()>::tool(&tool);
     assert_eq!(declaration.name(), "delegate_to");
     assert_eq!(
@@ -878,7 +881,9 @@ async fn existing_subagent_tool_builder_routes_execution_through_the_driver() {
         "worker description",
         Arc::new(harness),
     ));
-    let tool = DriverSubAgentTool::new("subagent", "worker description", 
+    let tool = DriverSubAgentTool::new(
+        "subagent",
+        "worker description",
         driver(),
         |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
@@ -924,7 +929,11 @@ async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let tx = Arc::new(std::sync::Mutex::new(Some(tx)));
     let callback_tx = tx.clone();
-    let tool = DriverSubAgentTool::new("subagent", "worker description", driver(), |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "subagent",
+        "worker description",
+        driver(),
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("worker-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -936,12 +945,15 @@ async fn existing_subagent_tool_routes_detached_completion_to_host_callback() {
                 args["input"].as_str().unwrap_or_default(),
                 None,
             )
-        }, |_| Some("parent-session".into())).with_completion_handler(move |target, result| {
-            if let Some(tx) = callback_tx.lock().unwrap().take() {
-                let output = result.map(|outcome| (target.to_owned(), outcome.output));
-                let _ = tx.send(output);
-            }
-        });
+        },
+        |_| Some("parent-session".into()),
+    )
+    .with_completion_handler(move |target, result| {
+        if let Some(tx) = callback_tx.lock().unwrap().take() {
+            let output = result.map(|outcome| (target.to_owned(), outcome.output));
+            let _ = tx.send(output);
+        }
+    });
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let response = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1016,7 +1028,11 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"mode":{"type":"string"}}
     });
-    let tool = DriverSubAgentTool::new("spawn_async_subagent", "Run the allowed worker in the background.", driver, |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "spawn_async_subagent",
+        "Run the allowed worker in the background.",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -1029,12 +1045,18 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }, |_| Some("parent-thread".into())).with_completion_handler({
-            let completions = completions.clone();
-            move |_, _| {
-                completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }).with_parameters(schema).with_job_registry(jobs.clone()).with_owner_scope(owner_scope.clone());
+        },
+        |_| Some("parent-thread".into()),
+    )
+    .with_completion_handler({
+        let completions = completions.clone();
+        move |_, _| {
+            completions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    })
+    .with_parameters(schema)
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(owner_scope.clone());
     let parent = RunContext::new(RunConfig::new("parent"), ());
     let next_turn = RunContext::new(RunConfig::new("parent-next-turn"), ());
     let foreign = RunContext::new(RunConfig::new("foreign-parent"), ());
@@ -1306,7 +1328,11 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
         "required":["agent_id","prompt"],
         "properties":{"agent_id":{"type":"string"},"prompt":{"type":"string"},"continue":{"type":"boolean"}}
     });
-    let tool = DriverSubAgentTool::new("spawn_async_subagent", "worker description", driver, move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "spawn_async_subagent",
+        "worker description",
+        driver,
+        move |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("child-run"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -1331,7 +1357,12 @@ async fn driver_alias_pause_stays_nonterminal_and_continues_on_the_same_job() {
             .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?
             .with_target("worker");
             Ok(request)
-        }, |_| Some("parent-thread".into())).with_parameters(schema).with_job_registry(jobs.clone()).with_owner_scope(owner_scope.clone());
+        },
+        |_| Some("parent-thread".into()),
+    )
+    .with_parameters(schema)
+    .with_job_registry(jobs.clone())
+    .with_owner_scope(owner_scope.clone());
 
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,
@@ -1509,7 +1540,11 @@ fn inline_blocking_alias(
     jobs: SubAgentJobRegistry,
     driver: Arc<SubagentDriver<(), ()>>,
 ) -> impl ToolDispatch<(), ()> {
-    DriverSubAgentTool::new("spawn_subagent", "worker description", driver, |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    DriverSubAgentTool::new(
+        "spawn_subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("inline-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -1522,11 +1557,15 @@ fn inline_blocking_alias(
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }, |_| None).with_parameters(json!({
+        },
+        |_| None,
+    )
+    .with_parameters(json!({
         "type":"object",
         "required":["prompt"],
         "properties":{"prompt":{"type":"string"}}
-    })).with_job_registry(jobs)
+    }))
+    .with_job_registry(jobs)
 }
 
 #[tokio::test(start_paused = true)]
@@ -1605,7 +1644,11 @@ async fn immediate_inline_replay_waits_for_background_winner_and_emits_one_compl
             )
             .map(|request| request.with_target("worker"))
         };
-        let name = if background { "spawn_async_subagent" } else { "spawn_subagent" };
+        let name = if background {
+            "spawn_async_subagent"
+        } else {
+            "spawn_subagent"
+        };
         let delivery = if background {
             Some("parent-thread".to_owned())
         } else {
@@ -1726,7 +1769,11 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         })
         .unwrap(),
     );
-    let tool = DriverSubAgentTool::new("spawn_async_subagent", "worker description", driver, |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
+    let tool = DriverSubAgentTool::new(
+        "spawn_async_subagent",
+        "worker description",
+        driver,
+        |_: &(), parent: &RunContext<()>, args: &Value, _: &CallId| {
             let child = parent
                 .child(RunConfig::new("panic-child"), ())
                 .map_err(|error| SubagentError::InvalidRequest(error.to_string()))?;
@@ -1739,11 +1786,15 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
                 None,
             )
             .map(|request| request.with_target("worker"))
-        }, |_| Some("parent-thread".into())).with_parameters(json!({
+        },
+        |_| Some("parent-thread".into()),
+    )
+    .with_parameters(json!({
         "type":"object",
         "required":["prompt"],
         "properties":{"prompt":{"type":"string"}}
-    })).with_job_registry(jobs.clone());
+    }))
+    .with_job_registry(jobs.clone());
     let parent = RunContext::new(RunConfig::new("panic-parent"), ());
     let spawned = ToolDispatch::<(), ()>::execute(
         &tool,

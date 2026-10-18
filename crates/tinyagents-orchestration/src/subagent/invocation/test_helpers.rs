@@ -5,7 +5,11 @@ pub(super) struct PanickingModel;
 
 #[async_trait]
 impl ChatModel<()> for PanickingModel {
-    async fn invoke(&self, _state: &(), _request: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(
+        &self,
+        _state: &(),
+        _request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
         panic!("child model exploded");
     }
 }

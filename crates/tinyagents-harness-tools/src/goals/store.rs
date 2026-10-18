@@ -255,7 +255,9 @@ pub async fn complete(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadG
 
 /// Pause an `Active` goal (host-driven). A no-op for goals that aren't active.
 pub async fn pause(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal> {
-    pause_with_before(store, thread_id).await.map(|(_, updated)| updated)
+    pause_with_before(store, thread_id)
+        .await
+        .map(|(_, updated)| updated)
 }
 
 pub(crate) async fn pause_with_before(
@@ -273,7 +275,9 @@ pub(crate) async fn pause_with_before(
 /// Resume a `Paused` goal (host-driven). A no-op for goals that aren't paused —
 /// a completed/budget-limited goal is not reactivated.
 pub async fn resume(store: &Arc<dyn Store>, thread_id: &str) -> Result<ThreadGoal> {
-    resume_with_before(store, thread_id).await.map(|(_, updated)| updated)
+    resume_with_before(store, thread_id)
+        .await
+        .map(|(_, updated)| updated)
 }
 
 pub(crate) async fn resume_with_before(

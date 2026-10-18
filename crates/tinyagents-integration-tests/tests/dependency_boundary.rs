@@ -678,10 +678,8 @@ fn harness_tools_dependencies_stay_within_the_harness_boundary() {
         .parent()
         .and_then(Path::parent)
         .expect("integration crate is nested under the TinyAgents workspace");
-    let manifest = fs::read_to_string(
-        workspace.join("crates/tinyagents-harness-tools/Cargo.toml"),
-    )
-    .expect("harness-tools manifest is readable");
+    let manifest = fs::read_to_string(workspace.join("crates/tinyagents-harness-tools/Cargo.toml"))
+        .expect("harness-tools manifest is readable");
     let dependencies = manifest
         .split("[dependencies]")
         .nth(1)

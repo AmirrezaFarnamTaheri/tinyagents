@@ -13,14 +13,31 @@ async fn prepared_budget_guard_tracks_atomic_accounting_and_limited_status() {
     goals.set("thread", "finish", Some(10)).await.unwrap();
     let prepared = goals.prepare_turn("thread").await.unwrap();
     let guard = prepared.budget_guard.unwrap();
-    assert_eq!(guard.check(&goals.backing_store(), 9).await.unwrap(), BudgetVerdict::Continue);
+    assert_eq!(
+        guard.check(&goals.backing_store(), 9).await.unwrap(),
+        BudgetVerdict::Continue
+    );
 
-    let update = goals.account_turn("thread", 6, 0, Duration::from_millis(500)).await.unwrap().unwrap();
+    let update = goals
+        .account_turn("thread", 6, 0, Duration::from_millis(500))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(update.tokens_used, 6);
     assert_eq!(update.status, ThreadGoalStatus::Active);
-    assert!(guard.check(&goals.backing_store(), 4).await.unwrap().is_stop());
+    assert!(
+        guard
+            .check(&goals.backing_store(), 4)
+            .await
+            .unwrap()
+            .is_stop()
+    );
 
-    let limited = goals.account_turn("thread", 4, 0, Duration::from_millis(500)).await.unwrap().unwrap();
+    let limited = goals
+        .account_turn("thread", 4, 0, Duration::from_millis(500))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(limited.status, ThreadGoalStatus::BudgetLimited);
     assert!(limited.over_budget());
     assert_eq!(limited.time_used_subsec_nanos, 0);

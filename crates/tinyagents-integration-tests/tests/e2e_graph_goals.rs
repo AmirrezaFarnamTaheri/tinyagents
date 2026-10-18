@@ -18,11 +18,26 @@ async fn prepared_goal_exposes_context_and_budget_for_a_host_turn() {
 
     let prepared = goals.prepare_turn("thread-goal").await.expect("prepare");
     assert_eq!(prepared.goal.as_ref().unwrap().goal_id, goal.goal_id);
-    assert_eq!(prepared.goal.as_ref().unwrap().status, ThreadGoalStatus::Active);
-    assert!(prepared.context_block.as_deref().unwrap().contains("process every item"));
+    assert_eq!(
+        prepared.goal.as_ref().unwrap().status,
+        ThreadGoalStatus::Active
+    );
+    assert!(
+        prepared
+            .context_block
+            .as_deref()
+            .unwrap()
+            .contains("process every item")
+    );
     assert!(prepared.budget_guard.is_some());
 
-    goals.account_turn("thread-goal", 10, 5, Duration::from_millis(500)).await.unwrap();
+    goals
+        .account_turn("thread-goal", 10, 5, Duration::from_millis(500))
+        .await
+        .unwrap();
     goals.complete("thread-goal").await.expect("complete");
-    assert_eq!(goals.get("thread-goal").await.unwrap().unwrap().status, ThreadGoalStatus::Complete);
+    assert_eq!(
+        goals.get("thread-goal").await.unwrap().unwrap().status,
+        ThreadGoalStatus::Complete
+    );
 }

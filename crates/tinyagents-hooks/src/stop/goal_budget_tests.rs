@@ -1,7 +1,7 @@
 use super::*;
 use std::sync::Arc;
-use tinyagents_harness_tools::goals::store;
 use tinyagents_harness::store::{InMemoryStore, Store};
+use tinyagents_harness_tools::goals::store;
 
 #[tokio::test]
 async fn active_goal_budget_stops_when_in_flight_usage_reaches_the_cap() {

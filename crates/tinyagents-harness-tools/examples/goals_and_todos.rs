@@ -18,7 +18,10 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let prepared = goals.prepare_turn("release-thread").await?;
-    println!("Goal context: {}", prepared.context_block.unwrap_or_default());
+    println!(
+        "Goal context: {}",
+        prepared.context_block.unwrap_or_default()
+    );
     println!("Budget hook required: {}", prepared.budget_guard.is_some());
 
     let todo = TodoTool::new(store);

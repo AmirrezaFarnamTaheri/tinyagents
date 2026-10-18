@@ -2,9 +2,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tinyagents_harness_tools::goals::{BudgetVerdict, GoalBudgetGuard, ThreadGoal};
 use tinyagents_harness::cost::TurnCost;
 use tinyagents_harness::store::Store;
+use tinyagents_harness_tools::goals::{BudgetVerdict, GoalBudgetGuard, ThreadGoal};
 
 use super::{StopDecision, StopHook, TurnState};
 

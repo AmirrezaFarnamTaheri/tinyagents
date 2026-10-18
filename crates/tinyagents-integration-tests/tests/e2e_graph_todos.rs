@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use tinyagents_harness_tools::todos::{TodoTool, TodoStatus, store as todo_store};
 use tinyagents_harness::context::RunConfig;
 use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::store::{InMemoryStore, Store};
 use tinyagents_harness::*;
+use tinyagents_harness_tools::todos::{TodoStatus, TodoTool, store as todo_store};
 use tinyagents_registry::*;
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::ModelResponse;
