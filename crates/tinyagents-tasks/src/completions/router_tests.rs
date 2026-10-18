@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
 use tinyinference_llm::message::Message;
@@ -111,6 +112,76 @@ async fn claim_counts_attempts_and_does_not_hand_out_a_leased_record_twice() {
         router.claim_pending("p", 10).unwrap().is_empty(),
         "an unresolved claim is leased"
     );
+}
+
+#[tokio::test]
+async fn another_router_cannot_ack_or_fail_an_active_claim_by_task_id() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let owner = CompletionRouter::new(store.clone()).with_max_attempts(1);
+    let stranger = CompletionRouter::new(store);
+    owner.record(record("owned", "p")).await.unwrap();
+    let claimed = owner.claim_pending("p", 1).unwrap();
+    assert_eq!(stranger.mark_delivered(&["owned"]).unwrap(), 0);
+    assert_eq!(stranger.mark_failed(&["owned"]).unwrap().len(), 0);
+    assert_eq!(owner.pending_for("p").len(), 1);
+    assert_eq!(owner.mark_delivered(&["owned"]).unwrap(), 1);
+    assert_eq!(claimed.len(), 1);
+}
+
+#[tokio::test]
+async fn an_old_claim_receipt_cannot_settle_a_reclaimed_attempt() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router = CompletionRouter::new(store.clone());
+    router.record(record("reclaimed", "p")).await.unwrap();
+    let old = router.claim_pending("p", 1).unwrap().remove(0);
+
+    // Simulate another process reclaiming the durable row after visibility.
+    store
+        .claim_pending(
+            "p",
+            CompletionClaimMode::Followup,
+            1,
+            "new-owner",
+            SystemTime::now() + std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+
+    assert_eq!(router.mark_delivered(&[old.task_id.as_str()]).unwrap(), 0);
+    assert_eq!(router.pending_for("p").len(), 1);
+}
+
+#[tokio::test]
+async fn live_push_uses_the_same_durable_claim_as_batch_delivery() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let live = CompletionRouter::new(store.clone());
+    let other = CompletionRouter::new(store);
+    live.attach_parent("p", queue());
+    live.record(record("live", "p")).await.unwrap();
+
+    assert!(other.claim_pending("p", 1).unwrap().is_empty());
+}
+
+#[test]
+fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
+    let store = InMemoryCompletionStore::new();
+    let now = SystemTime::now();
+    store
+        .put(&record("z-older", "p").with_finished_at(now))
+        .unwrap();
+    store
+        .put(&record("a-newer", "p").with_finished_at(now + std::time::Duration::from_secs(1)))
+        .unwrap();
+
+    let claimed = store
+        .claim_pending(
+            "p",
+            CompletionClaimMode::Followup,
+            1,
+            "owner",
+            now + std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+    assert_eq!(ids(&claimed), ["z-older"]);
 }
 
 #[tokio::test]
