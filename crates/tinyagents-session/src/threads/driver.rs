@@ -417,3 +417,7 @@ mod schema_tests;
 #[cfg(test)]
 #[path = "driver_append_tests.rs"]
 mod append_tests;
+
+#[cfg(test)]
+#[path = "driver_purge_callback_tests.rs"]
+mod purge_callback_tests;
