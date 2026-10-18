@@ -15,8 +15,8 @@ use tinyagents_harness::steering::{
 use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
 use tinyagents_orchestration::subagent::{
     AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, IncompleteKind,
-    InlineJobGuard, SubAgentJob, SubAgentJobAction, SubAgentJobError, SubAgentJobId,
-    SubAgentJobRegistry, SubAgentJobStatus, SubagentSessionStore, WaitError, WaitOutcome,
+    InlineJobGuard, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry,
+    SubAgentJobStatus, SubagentAwaitingUser, SubagentSessionStore, WaitError, WaitOutcome,
     list_subagent_records, record_agent_id, record_subagent_session_id, record_to_wait_outcome,
     subagent_record_for_task, task_id_for_session_in_records,
 };
@@ -537,13 +537,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                     }
                     let awaiting_user = if let Some((sessions, key)) = &self.sessions {
                         sessions.list_for_parent(&key(parent.instance_id()), None).await?.into_iter()
-                            .filter(|session| session.status == crate::subagent::DurableSubagentStatus::AwaitingUser)
+                            .filter(|session| session.status == DurableSubagentStatus::AwaitingUser)
                         .map(|session| {
                             let question = session.latest_history.as_ref()
                                 .and_then(|history| history.last())
                                 .map(tinyinference_llm::message::Message::text)
                                 .unwrap_or_default();
-                            let envelope = crate::subagent::SubagentAwaitingUser {
+                            let envelope = SubagentAwaitingUser {
                                 task_id: session.current_task_id.clone().unwrap_or_default(),
                                 agent_id: session.agent_id.clone(),
                                 worker_thread_id: session.worker_thread_id.clone(),
@@ -691,15 +691,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .await?
                         .filter(|session| session.parent_session == key(parent.instance_id()))
                 {
-                    let awaiting_user =
-                        session.status == crate::subagent::DurableSubagentStatus::AwaitingUser;
+                    let awaiting_user = session.status == DurableSubagentStatus::AwaitingUser;
                     let question = session
                         .latest_history
                         .as_ref()
                         .and_then(|history| history.last())
                         .map(tinyinference_llm::message::Message::text)
                         .unwrap_or_default();
-                    let envelope = crate::subagent::SubagentAwaitingUser {
+                    let envelope = SubagentAwaitingUser {
                         task_id: session.current_task_id.clone().unwrap_or_default(),
                         agent_id: session.agent_id.clone(),
                         worker_thread_id: session.worker_thread_id.clone(),

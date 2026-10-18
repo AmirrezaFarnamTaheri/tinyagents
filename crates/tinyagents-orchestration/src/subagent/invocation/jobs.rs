@@ -2,29 +2,16 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tinyagents_harness::cancel::CancellationToken;
-use tinyagents_harness::context::RunContext;
-use tinyagents_harness::error::TinyAgentsError;
-use tinyagents_harness::ids::{RunId, TaskId, next_seq};
+use tinyagents_harness::ids::{TaskId, next_seq};
 use tinyagents_harness::run_queue::QueueLane;
-use tinyagents_harness::steering::{
-    SteeringCommand, SteeringCommandKind, SteeringHandle, SteeringPolicy,
-};
-use tinyagents_harness::tool::{ToolDispatch, ToolRegistry};
+use tinyagents_harness::steering::{SteeringCommandKind, SteeringHandle, SteeringPolicy};
+use tinyagents_tasks::DetachedTaskRegistryError;
 use tinyinference_llm::message::Message;
-use tinytools::{PermissionLevel, Tool, ToolCategory, ToolResult, ToolScope, ToolTimeout};
-
-use crate::subagent::{
-    AppliedResult, DetachedSubagentStatus, DurableSubagentSessionSummary, IncompleteKind,
-    SubagentSessionStore, WaitError, WaitOutcome, list_subagent_records, record_agent_id,
-    record_subagent_session_id, record_to_wait_outcome, subagent_record_for_task,
-    task_id_for_session_in_records,
-};
-
-use tinyagents_tasks::{DetachedTaskRegistryError, OrchestrationTaskFilter, TaskStore};
 use tokio::sync::watch;
+
+use crate::subagent::SubagentTaskKey;
 
 use super::types::{DriverJobRegistration, JobControl, JobMeta};
 use super::{
@@ -32,7 +19,6 @@ use super::{
 };
 
 const LOG_PREFIX: &str = "[subagent-jobs]";
-const SELECTOR_RETRY_HINT: &str = "The selected subagent job or session is unavailable to this run. Check the identifier and try again.";
 
 fn registry_failure(error: DetachedTaskRegistryError) -> SubAgentJobError {
     SubAgentJobError::Registry(error.to_string())
