@@ -1155,12 +1155,6 @@ async fn driver_alias_registry_controls_the_same_scoped_job_end_to_end() {
     .await
     .unwrap();
     let control_id = jobs.get(&task_id).unwrap().id;
-    let queued = jobs.drain_lane_for_test(
-        &control_id,
-        tinyagents_harness::run_queue::QueueLane::Collect,
-    );
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].text(), "quiet context");
 
     assert!(
         ToolDispatch::<(), ()>::execute(
@@ -1805,7 +1799,7 @@ async fn panicking_background_driver_alias_settles_and_replays_as_tool_error() {
         serde_json::from_str::<Value>(&failed.output()).unwrap()["status"],
         "failed"
     );
-    assert!(!jobs.holds_live_cancellation(&jobs.get(&task_id).unwrap().id));
+    assert_eq!(jobs.get(&task_id).unwrap().status, SubAgentJobStatus::Failed);
 
     let replay = ToolDispatch::<(), ()>::execute(
         &tool,

@@ -357,7 +357,7 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
         .unwrap();
 
     let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::default())
-        .with_fixed_action(crate::subagents::SubAgentJobAction::Await)
+        .with_fixed_action(SubAgentJobAction::Await)
         .with_identifier_fields("task_id", "subagent_session_id")
         .with_task_store(task_store.clone(), move |_| owner.clone())
         .with_task_thread_scope(|_| Some("thread-a".into()));
@@ -411,7 +411,7 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
     assert_eq!(failed["agent"], "reviewer");
 
     let foreign_jobs = SubAgentJobsTool::new(SubAgentJobRegistry::default())
-        .with_fixed_action(crate::subagents::SubAgentJobAction::Await)
+        .with_fixed_action(SubAgentJobAction::Await)
         .with_identifier_field("task_id")
         .with_task_store(task_store.clone(), |_| {
             tinyagents_harness::ids::RunId::new("foreign-owner")

@@ -3,7 +3,7 @@
 mod driver_tool;
 mod jobs;
 
-use tinyagents_orchestration::subagent::SubAgentJobRegistry;
+pub use tinyagents_orchestration::subagent::SubAgentJobRegistry;
 pub use driver_tool::{DriverSubAgentTool, SubagentDriverToolHost};
 #[cfg(test)]
 #[path = "driver_tool_tests.rs"]
