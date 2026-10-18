@@ -659,12 +659,8 @@ impl CompactionReason {
 /// [`CompactionSink`] is attached to the run, handed to it for persistence.
 ///
 /// Mirrors pi's `CompactionEntry{summary, firstKeptEntryId, tokensBefore,
-/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5); the session
-/// crate's `tinyagents_session::entry_tree::CompactionEntry` is the durable,
-/// tree-anchored counterpart that a session-backed [`CompactionSink`] writes
-/// this record into, translating [`Self::first_kept_index`] (a position in
-/// the message slice compaction operated over) into that entry tree's
-/// `EntryId`.
+/// usage, details}` (`docs/runtime-comparison/pi.md` §4.5). A host that needs
+/// durable records can persist this value through [`CompactionSink`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompactionRecord {
     /// The replacement summary text installed as the new leading context.
@@ -709,14 +705,12 @@ fn legacy_compaction_placement() -> SummaryPlacement {
 
 /// A durable sink a host attaches to a [`crate::context::RunContext`] so
 /// every [`CompactionRecord`] a run produces is persisted somewhere durable
-/// (typically a session's `tinyagents_session::entry_tree::EntryTree`),
+/// through a host-provided store,
 /// instead of only living as long as the in-process
 /// [`crate::middleware::ContextCompressionMiddleware::records`] buffer.
 ///
-/// `tinyagents-harness` cannot depend on `tinyagents-session` (the dependency
-/// runs the other way), so this trait — not a concrete `Arc<EntryTree>` slot
-/// — is what [`crate::context::RunContext::compaction_sink`] holds; a
-/// session-backed implementation lives in `tinyagents-session`.
+/// The harness does not prescribe the persistence backend, so this trait is
+/// what [`crate::context::RunContext::compaction_sink`] holds.
 pub trait CompactionSink: Send + Sync {
     /// Persists `record`. Implementations should be idempotent-safe to call
     /// once per compaction (the compaction step calls this exactly once per
