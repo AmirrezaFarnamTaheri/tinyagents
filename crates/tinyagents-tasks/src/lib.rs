@@ -12,8 +12,8 @@ mod completions;
 mod driver_store;
 mod reconcile;
 mod runtime;
-mod steering_registry;
 mod status;
+mod steering_registry;
 mod storage;
 mod store;
 mod store_registry;
@@ -35,12 +35,12 @@ pub use reconcile::{
     ReconcileOutcome, ReconcileReport, ReconciledTask, reconcile_orphaned_tasks, task_status_label,
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
+pub use steering_registry::SteeringRegistry;
 pub use storage::storage_schema;
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,
 };
-pub use steering_registry::SteeringRegistry;
 pub use types::*;
 
 #[cfg(test)]

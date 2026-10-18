@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-
 use super::*;
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::ids::TaskId;

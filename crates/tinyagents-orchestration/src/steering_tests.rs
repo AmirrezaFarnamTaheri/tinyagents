@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use std::future::Ready;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::QueueLane;
 use tinyagents_harness::steering::SteeringHandle;
 use tinyagents_tasks::{DetachedTaskRegistry, SteeringRegistry};
 use tokio::sync::watch;
-use std::future::Ready;
 
 use super::*;
 
@@ -154,7 +154,10 @@ async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
         *delivered.lock().unwrap(),
         Some(("researcher".to_string(), QueueLane::Steer, "x".to_string()))
     );
-    assert!(handle.drain().is_empty(), "terminal children never use stale handles");
+    assert!(
+        handle.drain().is_empty(),
+        "terminal children never use stale handles"
+    );
 }
 
 #[tokio::test]

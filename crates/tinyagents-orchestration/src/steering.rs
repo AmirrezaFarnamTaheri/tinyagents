@@ -210,7 +210,9 @@ where
                 duplicate: false,
             });
         }
-        Err(DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone)
+        Err(
+            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
+        )
         | Ok(_) => {}
         Err(error) => return Err(error.into()),
     }

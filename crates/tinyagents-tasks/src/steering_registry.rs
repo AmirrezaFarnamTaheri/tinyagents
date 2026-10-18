@@ -31,11 +31,17 @@ impl SteeringRegistry {
 
     /// Removes and returns the handle registered for `task_id`, if any.
     pub fn deregister(&self, task_id: &TaskId) -> Option<SteeringHandle> {
-        self.inner.lock().ok().and_then(|mut guard| guard.remove(task_id))
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.remove(task_id))
     }
 
     /// Returns the handle registered for `task_id`, if any.
     pub fn get(&self, task_id: &TaskId) -> Option<SteeringHandle> {
-        self.inner.lock().ok().and_then(|guard| guard.get(task_id).cloned())
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|guard| guard.get(task_id).cloned())
     }
 }

@@ -567,8 +567,6 @@ impl CompletionRouter {
         tracing::debug!(dropped, "{LOG_PREFIX} compacted");
         Ok(dropped)
     }
-
-
 }
 
 fn sort_oldest_first(records: &mut [CompletionRecord]) {
