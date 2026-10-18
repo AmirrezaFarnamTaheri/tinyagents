@@ -49,46 +49,21 @@ impl BudgetVerdict {
     }
 }
 
-/// Fold a finished turn's usage into the thread's goal.
+/// Atomically fold a finished active turn into the thread's goal.
 ///
-/// Only an **active** goal is charged: a paused, complete, or budget-limited
-/// goal does not accrue usage from incidental conversation. Returns the goal as
-/// it stands afterwards (including a flip to
-/// [`BudgetLimited`](ThreadGoalStatus::BudgetLimited)), or `None` when the
-/// thread has no goal or its goal is not active.
-///
-/// `user_initiated` distinguishes a person's turn from an autonomous
-/// continuation. A user turn clears the one-shot `continuation_suppressed`
-/// flag; a continuation must not clear its own suppression, or it would loop.
+/// Inactive goals are not charged. The returned value is the goal after
+/// accounting, or `None` when no active goal exists. Elapsed time retains
+/// subsecond precision.
 pub async fn account_turn(
     store: &Arc<dyn Store>,
     thread_id: &str,
     input_tokens: u64,
     output_tokens: u64,
-    elapsed_secs: u64,
-    user_initiated: bool,
+    elapsed: std::time::Duration,
 ) -> Result<Option<ThreadGoal>> {
-    let Some(goal) = store::get(store, thread_id).await? else {
-        return Ok(None);
-    };
-    if !goal.status.is_active() {
-        return Ok(None);
-    }
-
-    let mut current = goal;
-    if current.continuation_suppressed
-        && user_initiated
-        && let Some(updated) =
-            store::set_continuation_suppressed_if(store, thread_id, &current.goal_id, false).await?
-    {
-        current = updated;
-    }
-
-    let delta = turn_tokens(input_tokens, output_tokens);
-    if delta == 0 && elapsed_secs == 0 {
-        return Ok(Some(current));
-    }
-    store::account_usage(store, thread_id, &current.goal_id, delta, elapsed_secs).await
+    Ok(store::account_turn_atomic(store, thread_id, input_tokens, output_tokens, elapsed)
+        .await?
+        .map(|(_, updated)| updated))
 }
 
 /// Mid-turn budget check, armed for one specific version of a goal.

@@ -1,5 +1,6 @@
-use tinyagents_harness::tool::ToolSnapshot;
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use tinyagents_harness::tool::ToolSnapshot;
 
 use std::{
     collections::VecDeque,
