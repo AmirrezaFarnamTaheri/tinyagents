@@ -204,12 +204,11 @@ impl StopLatch {
             tracing::debug!(
                 "[tinyagents::mw] a success followed a repeat-loop stop; restoring the classified stop note"
             );
-            if self.replace_own_note(original).is_some() {
-                if let Ok(mut current) = self.own_cause.lock() {
-                    if let Ok(mut restored) = self.relabelled_cause.lock() {
-                        *current = restored.take();
-                    }
-                }
+            if self.replace_own_note(original).is_some()
+                && let Ok(mut current) = self.own_cause.lock()
+                && let Ok(mut restored) = self.relabelled_cause.lock()
+            {
+                *current = restored.take();
             }
         }
     }
@@ -253,13 +252,13 @@ impl StopLatch {
             if let Ok(mut relabelled_from) = self.relabelled_from.lock() {
                 relabelled_from.get_or_insert(original);
             }
-            if let Ok(mut current) = self.own_cause.lock() {
-                if let Ok(mut original) = self.relabelled_cause.lock() {
-                    if original.is_none() {
-                        *original = current.take();
-                    }
-                    *current = Some(cause);
+            if let Ok(mut current) = self.own_cause.lock()
+                && let Ok(mut original) = self.relabelled_cause.lock()
+            {
+                if original.is_none() {
+                    *original = current.take();
                 }
+                *current = Some(cause);
             }
         }
     }
