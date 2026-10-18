@@ -137,7 +137,8 @@ pub use output_cap::{
 };
 pub use output_ladder::{CompactedOutput, OutputLadderInput, OutputProcessor, run_output_ladder};
 pub use policy_gate::{
-    ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver, DenialRenderer, GateVerdict,
+    ApprovalExecutionOutcome, ApprovalGateMiddleware, ApprovalResolution, ApprovalResolver,
+    DenialRenderer, GateVerdict,
     PolicyDecision, SessionToolCeiling, SessionToolListing, StructuredDenialParts,
     StructuredDenialRenderOptions, ToolCallPolicy, ToolPolicyGate, ToolPolicyGateMiddleware,
     ToolPolicyPostGate, record_approved, structured_denial_renderer,
