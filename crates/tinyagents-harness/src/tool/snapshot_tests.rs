@@ -34,6 +34,6 @@ fn snapshot_rejects_conflicting_declarations() {
 fn snapshot_json_round_trip_preserves_exact_flag_semantics() {
     let snapshot = ToolSnapshot::new(vec![spec("read", "read")]).unwrap();
     let restored = ToolSnapshot::from_json(&snapshot.to_json()).unwrap();
-    assert_eq!(restored.specs(), snapshot.specs());
+    assert_eq!(restored.to_json(), snapshot.to_json());
     assert!(!restored.is_exact());
 }

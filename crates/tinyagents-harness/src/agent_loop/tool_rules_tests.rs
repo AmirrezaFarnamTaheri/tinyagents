@@ -12,16 +12,12 @@ use std::sync::{
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::host::{
-    AllowAllSecurityGate, FixedModelResolver, HostCapabilities, StaticContextComposer,
-};
-use crate::runtime::{AgentInvocation, AgentTurnRequest, RunPolicy};
+use crate::runtime::RunPolicy;
 use crate::testkit::ScriptedModel;
 use crate::tool::ToolRulePolicy;
-use tinyagents_definition::{AgentDefinition, InMemoryDefinitionRegistry};
 use tinyinference_llm::model::ModelResponse;
 use tinytools::{
-    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRuleSet, ToolRules,
+    IndirectCall, RuleContext, Tool, ToolExposure, ToolPolicy, ToolResult, ToolRules,
     ToolSubject,
 };
 use tokio::sync::Notify;
