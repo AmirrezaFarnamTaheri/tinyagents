@@ -177,15 +177,22 @@ mod store_tests {
     async fn account_usage_ignores_stale_goal_id() {
         let s = store();
         let g = store::set(&s, "t", "obj", None).await.unwrap();
-        let after = store::account_usage(&s, "t", "not-the-goal-id", 50, std::time::Duration::from_secs(1))
-            .await
-            .unwrap()
-            .unwrap();
+        let after = store::account_usage(
+            &s,
+            "t",
+            "not-the-goal-id",
+            50,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(after.tokens_used, 0);
-        let after = store::account_usage(&s, "t", &g.goal_id, 50, std::time::Duration::from_secs(1))
-            .await
-            .unwrap()
-            .unwrap();
+        let after =
+            store::account_usage(&s, "t", &g.goal_id, 50, std::time::Duration::from_secs(1))
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(after.tokens_used, 50);
     }
 
@@ -193,10 +200,11 @@ mod store_tests {
     async fn account_usage_trips_budget_limited() {
         let s = store();
         let g = store::set(&s, "t", "obj", Some(100)).await.unwrap();
-        let after = store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::from_secs(2))
-            .await
-            .unwrap()
-            .unwrap();
+        let after =
+            store::account_usage(&s, "t", &g.goal_id, 120, std::time::Duration::from_secs(2))
+                .await
+                .unwrap()
+                .unwrap();
         assert_eq!(after.status, ThreadGoalStatus::BudgetLimited);
         assert_eq!(after.budget_remaining(), Some(0));
     }
@@ -389,7 +397,10 @@ mod tool_tests {
 
     impl GoalObserver for TestObserver {
         fn on_updated(&self, goal: &ThreadGoal) {
-            self.0.lock().unwrap().push(goal.status.as_str().to_string());
+            self.0
+                .lock()
+                .unwrap()
+                .push(goal.status.as_str().to_string());
         }
         fn on_cleared(&self, _: &str) {}
     }
@@ -406,7 +417,12 @@ mod tool_tests {
 
         run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
         assert!(seen.lock().unwrap().is_empty());
-        run(&tool(GoalToolKind::Set), Some("t"), json!({"objective":"ship"})).await;
+        run(
+            &tool(GoalToolKind::Set),
+            Some("t"),
+            json!({"objective":"ship"}),
+        )
+        .await;
         run(&tool(GoalToolKind::Get), Some("t"), json!({})).await;
         run(&tool(GoalToolKind::Complete), Some("t"), json!({})).await;
         assert_eq!(*seen.lock().unwrap(), vec!["active", "complete"]);
@@ -427,7 +443,6 @@ mod tool_tests {
         }
     }
 }
-
 
 mod budget_tests {
     use std::sync::Arc;
@@ -513,7 +528,6 @@ mod budget_tests {
         assert_eq!(unchanged.tokens_used, 0);
     }
 
-
     #[test]
     fn a_guard_is_only_armed_for_an_active_goal_with_a_budget() {
         assert!(GoalBudgetGuard::for_goal(&goal(ThreadGoalStatus::Active, Some(100), 0)).is_some());
@@ -549,7 +563,9 @@ mod budget_tests {
         let kv = kv();
         let stored = store::set(&kv, "t1", "ship it", Some(500)).await.unwrap();
         let guard = GoalBudgetGuard::for_goal(&stored).unwrap();
-        account_turn(&kv, "t1", 200, 100, std::time::Duration::from_secs(1)).await.unwrap();
+        account_turn(&kv, "t1", 200, 100, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
 
         assert_eq!(
             guard.check(&kv, 100).await.unwrap(),

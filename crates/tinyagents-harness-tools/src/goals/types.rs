@@ -103,4 +103,3 @@ impl ThreadGoal {
         matches!(self.token_budget, Some(b) if self.tokens_used >= b)
     }
 }
-

@@ -74,7 +74,10 @@ impl GoalStore {
     pub async fn pause(&self, thread_id: &str) -> Result<ThreadGoal> {
         let before = store::get(&self.store, thread_id).await?;
         let goal = store::pause(&self.store, thread_id).await?;
-        if before.as_ref().is_none_or(|before| before.status != goal.status) {
+        if before
+            .as_ref()
+            .is_none_or(|before| before.status != goal.status)
+        {
             self.notify_updated(&goal);
         }
         Ok(goal)
@@ -84,7 +87,10 @@ impl GoalStore {
     pub async fn resume(&self, thread_id: &str) -> Result<ThreadGoal> {
         let before = store::get(&self.store, thread_id).await?;
         let goal = store::resume(&self.store, thread_id).await?;
-        if before.as_ref().is_none_or(|before| before.status != goal.status) {
+        if before
+            .as_ref()
+            .is_none_or(|before| before.status != goal.status)
+        {
             self.notify_updated(&goal);
         }
         Ok(goal)

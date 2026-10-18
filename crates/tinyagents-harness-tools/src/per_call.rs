@@ -52,9 +52,15 @@ impl<T: Tool, C: 'static> std::fmt::Debug for PerCallTool<T, C> {
 
 #[async_trait]
 impl<T: Tool, C: 'static> Tool for PerCallTool<T, C> {
-    fn name(&self) -> &str { self.prototype.name() }
-    fn description(&self) -> &str { self.prototype.description() }
-    fn parameters_schema(&self) -> Value { self.prototype.parameters_schema() }
+    fn name(&self) -> &str {
+        self.prototype.name()
+    }
+    fn description(&self) -> &str {
+        self.prototype.description()
+    }
+    fn parameters_schema(&self) -> Value {
+        self.prototype.parameters_schema()
+    }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         self.for_call(None).execute(args).await
@@ -69,7 +75,9 @@ impl<T: Tool, C: 'static> Tool for PerCallTool<T, C> {
         args: Value,
         options: ToolCallOptions,
     ) -> anyhow::Result<ToolResult> {
-        self.for_call(None).execute_with_options(args, options).await
+        self.for_call(None)
+            .execute_with_options(args, options)
+            .await
     }
 
     async fn execute_with_context(
@@ -83,18 +91,36 @@ impl<T: Tool, C: 'static> Tool for PerCallTool<T, C> {
             .await
     }
 
-    fn policy(&self) -> ToolPolicy { self.prototype.policy() }
-    fn injected_arguments(&self) -> Vec<ToolInjectedArgument> { self.prototype.injected_arguments() }
-    fn supports_markdown(&self) -> bool { self.prototype.supports_markdown() }
-    fn permission_level(&self) -> PermissionLevel { self.prototype.permission_level() }
+    fn policy(&self) -> ToolPolicy {
+        self.prototype.policy()
+    }
+    fn injected_arguments(&self) -> Vec<ToolInjectedArgument> {
+        self.prototype.injected_arguments()
+    }
+    fn supports_markdown(&self) -> bool {
+        self.prototype.supports_markdown()
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        self.prototype.permission_level()
+    }
     fn permission_level_with_args(&self, args: &Value) -> PermissionLevel {
         self.prototype.permission_level_with_args(args)
     }
-    fn scope(&self) -> ToolScope { self.prototype.scope() }
-    fn category(&self) -> ToolCategory { self.prototype.category() }
-    fn exposure(&self) -> ToolExposure { self.prototype.exposure() }
-    fn family(&self) -> Option<&str> { self.prototype.family() }
-    fn tags(&self) -> Vec<String> { self.prototype.tags() }
+    fn scope(&self) -> ToolScope {
+        self.prototype.scope()
+    }
+    fn category(&self) -> ToolCategory {
+        self.prototype.category()
+    }
+    fn exposure(&self) -> ToolExposure {
+        self.prototype.exposure()
+    }
+    fn family(&self) -> Option<&str> {
+        self.prototype.family()
+    }
+    fn tags(&self) -> Vec<String> {
+        self.prototype.tags()
+    }
     fn indirect_target(&self, args: &Value) -> Option<tinytools::rules::IndirectCall> {
         self.prototype.indirect_target(args)
     }
@@ -107,7 +133,9 @@ impl<T: Tool, C: 'static> Tool for PerCallTool<T, C> {
     fn is_concurrency_safe(&self, args: &Value) -> bool {
         self.prototype.is_concurrency_safe(args)
     }
-    fn external_effect(&self) -> bool { self.prototype.external_effect() }
+    fn external_effect(&self) -> bool {
+        self.prototype.external_effect()
+    }
     fn external_effect_with_args(&self, args: &Value) -> bool {
         self.prototype.external_effect_with_args(args)
     }

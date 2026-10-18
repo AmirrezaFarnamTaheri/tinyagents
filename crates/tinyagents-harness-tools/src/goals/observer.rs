@@ -39,13 +39,13 @@ impl GoalUpdateThrottle {
             .published
             .lock()
             .unwrap_or_else(|_| panic!("goal update throttle poisoned"));
-        let previous = published.entry(updated.thread_id.clone()).or_insert_with(|| {
-            PublishedGoal {
+        let previous = published
+            .entry(updated.thread_id.clone())
+            .or_insert_with(|| PublishedGoal {
                 goal_id: before.goal_id.clone(),
                 status: before.status,
                 tokens_used: before.tokens_used,
-            }
-        });
+            });
 
         if previous.goal_id != updated.goal_id || previous.status != updated.status {
             *previous = PublishedGoal {

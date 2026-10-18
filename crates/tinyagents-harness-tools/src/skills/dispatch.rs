@@ -56,7 +56,10 @@ impl<State: Send + Sync + 'static, Ctx: Send + Sync + 'static> ToolDispatch<Stat
             anyhow::bail!("use_skill tool is missing its pack registry extension");
         };
         let pinned = extension.bind(self.tool.clone(), arguments);
-        let selection = pinned.as_any().downcast_ref::<PinnedPackCall>().and_then(PinnedPackCall::selection);
+        let selection = pinned
+            .as_any()
+            .downcast_ref::<PinnedPackCall>()
+            .and_then(PinnedPackCall::selection);
         let selected = if let Some(selection) = selection {
             if let Some(dispatch) = (self.selector)(selection.clone()) {
                 Some(

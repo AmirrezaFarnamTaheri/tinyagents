@@ -153,10 +153,7 @@ impl GoalTool {
     ) -> std::result::Result<(Option<ThreadGoal>, String), String> {
         let stringify = |error: tinyagents_harness::error::TinyAgentsError| error.to_string();
         match self.kind {
-            GoalToolKind::Get => match self.store.get(thread_id)
-                .await
-                .map_err(stringify)?
-            {
+            GoalToolKind::Get => match self.store.get(thread_id).await.map_err(stringify)? {
                 Some(goal) => Ok((Some(goal), String::new())),
                 None => Ok((None, "no goal set for this thread".to_string())),
             },
@@ -165,33 +162,27 @@ impl GoalTool {
                     return Err("Missing 'objective' parameter".to_string());
                 };
                 let token_budget = args.get("token_budget").and_then(Value::as_u64);
-                let goal = self.store.set(thread_id, objective, token_budget)
+                let goal = self
+                    .store
+                    .set(thread_id, objective, token_budget)
                     .await
                     .map_err(stringify)?;
                 Ok((Some(goal), "Goal set.".to_string()))
             }
             GoalToolKind::Complete => {
-                let goal = self.store.complete(thread_id)
-                    .await
-                    .map_err(stringify)?;
+                let goal = self.store.complete(thread_id).await.map_err(stringify)?;
                 Ok((Some(goal), "Goal marked complete.".to_string()))
             }
             GoalToolKind::Pause => {
-                let goal = self.store.pause(thread_id)
-                    .await
-                    .map_err(stringify)?;
+                let goal = self.store.pause(thread_id).await.map_err(stringify)?;
                 Ok((Some(goal), String::new()))
             }
             GoalToolKind::Resume => {
-                let goal = self.store.resume(thread_id)
-                    .await
-                    .map_err(stringify)?;
+                let goal = self.store.resume(thread_id).await.map_err(stringify)?;
                 Ok((Some(goal), String::new()))
             }
             GoalToolKind::Clear => {
-                let removed = self.store.clear(thread_id)
-                    .await
-                    .map_err(stringify)?;
+                let removed = self.store.clear(thread_id).await.map_err(stringify)?;
                 Ok((None, format!("Goal cleared (removed={removed}).")))
             }
         }

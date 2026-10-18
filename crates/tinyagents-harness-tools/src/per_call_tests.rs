@@ -5,9 +5,15 @@ struct Probe(bool);
 
 #[async_trait]
 impl Tool for Probe {
-    fn name(&self) -> &str { "probe" }
-    fn description(&self) -> &str { "context probe" }
-    fn parameters_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "probe"
+    }
+    fn description(&self) -> &str {
+        "context probe"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success(self.0.to_string()))
     }

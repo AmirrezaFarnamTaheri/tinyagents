@@ -61,9 +61,11 @@ pub async fn account_turn(
     output_tokens: u64,
     elapsed: std::time::Duration,
 ) -> Result<Option<ThreadGoal>> {
-    Ok(store::account_turn_atomic(store, thread_id, input_tokens, output_tokens, elapsed)
-        .await?
-        .map(|(_, updated)| updated))
+    Ok(
+        store::account_turn_atomic(store, thread_id, input_tokens, output_tokens, elapsed)
+            .await?
+            .map(|(_, updated)| updated),
+    )
 }
 
 /// Mid-turn budget check, armed for one specific version of a goal.

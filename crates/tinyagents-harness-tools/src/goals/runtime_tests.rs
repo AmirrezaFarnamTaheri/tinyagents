@@ -10,10 +10,11 @@ struct RecordingObserver(Mutex<Vec<String>>);
 
 impl GoalObserver for RecordingObserver {
     fn on_updated(&self, goal: &ThreadGoal) {
-        self.0
-            .lock()
-            .unwrap()
-            .push(format!("updated:{}:{}", goal.thread_id, goal.status.as_str()));
+        self.0.lock().unwrap().push(format!(
+            "updated:{}:{}",
+            goal.thread_id,
+            goal.status.as_str()
+        ));
     }
 
     fn on_cleared(&self, thread_id: &str) {
@@ -24,10 +25,7 @@ impl GoalObserver for RecordingObserver {
 fn operations() -> (GoalStore, Arc<RecordingObserver>) {
     let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
     let observer = Arc::new(RecordingObserver::default());
-    (
-        GoalStore::with_observer(store, observer.clone()),
-        observer,
-    )
+    (GoalStore::with_observer(store, observer.clone()), observer)
 }
 
 #[tokio::test]
@@ -40,7 +38,10 @@ async fn observer_receives_resume_clear_account_and_complete_lifecycle_events() 
         .await
         .unwrap();
     goals.resume("t").await.unwrap();
-    goals.account_turn("t", 1, 0, Duration::from_millis(500)).await.unwrap();
+    goals
+        .account_turn("t", 1, 0, Duration::from_millis(500))
+        .await
+        .unwrap();
     goals.complete("t").await.unwrap();
     assert!(goals.clear("t").await.unwrap());
 
@@ -64,7 +65,10 @@ async fn account_meter_publishes_after_cumulative_usage_reaches_threshold() {
 
     for turn in 0..4 {
         goals.account_turn("t", 1, 0, Duration::ZERO).await.unwrap();
-        assert!(observer.0.lock().unwrap().is_empty(), "turn {turn} is below threshold");
+        assert!(
+            observer.0.lock().unwrap().is_empty(),
+            "turn {turn} is below threshold"
+        );
     }
     goals.account_turn("t", 1, 0, Duration::ZERO).await.unwrap();
     assert_eq!(observer.0.lock().unwrap().as_slice(), ["updated:t:active"]);
@@ -92,7 +96,10 @@ async fn concurrent_accounting_commits_once_and_notifies_once_on_budget_transiti
     assert_eq!(goal.status, ThreadGoalStatus::BudgetLimited);
     let events = observer.0.lock().unwrap();
     assert_eq!(
-        events.iter().filter(|event| *event == "updated:t:budget_limited").count(),
+        events
+            .iter()
+            .filter(|event| *event == "updated:t:budget_limited")
+            .count(),
         1
     );
 }

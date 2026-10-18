@@ -496,8 +496,10 @@ fn packed_binding_preserves_outer_policy_transform_approval() {
     handle.bind(Arc::downgrade(&inner));
 
     let outer = Arc::new(
-        tinyagents_harness::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(handle, CATALOG)))
-            .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
+        tinyagents_harness::tool::toolset::OverrideTool::new(Arc::new(UseSkillTool::new(
+            handle, CATALOG,
+        )))
+        .with_policy_transform(Arc::new(|policy| policy.requiring_approval())),
     );
     let mut registry = tinyagents_harness::tool::ToolRegistry::<(), ()>::new();
     registry.register(outer);
