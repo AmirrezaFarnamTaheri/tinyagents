@@ -626,7 +626,7 @@ async fn bounded_await_observes_terminal_state_after_deadline_before_same_future
     let observed = same_wait.await.unwrap();
     let observed: Value = serde_json::from_str(&observed.output()).unwrap();
     assert_eq!(observed["status"], "completed");
-    assert_eq!(observed["output"], "driver result");
+    assert_eq!(observed["output"], "controlled completion");
 }
 
 struct FailingSessionGet;
