@@ -14,7 +14,9 @@ use tinyagents_harness::tinyinference_llm::{
 use tinyagents_harness::{
     runtime::AgentHarness,
     testkit,
-    tool::{BoundToolCall, ToolCallBinding, ToolDispatch},
+    tool::{
+        BoundToolCall, CanonicalSharedToolAdapter, ToolCallBinding, ToolDispatch,
+    },
 };
 
 const MARKER: &str = "[not_found]";
@@ -786,4 +788,88 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
         "selected target should be refused: {result}"
     );
     assert!(result.contains("not permitted"), "{result}");
+}
+
+struct ApprovalOuterTool(Arc<dyn Tool>);
+
+#[async_trait]
+impl Tool for ApprovalOuterTool {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+
+    fn parameters_schema(&self) -> Value {
+        self.0.parameters_schema()
+    }
+
+    async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
+        self.0.execute(args).await
+    }
+
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.0.host_extension()
+    }
+
+    fn policy(&self) -> tinytools::ToolPolicy {
+        self.0.policy().requiring_approval()
+    }
+}
+
+#[tokio::test]
+async fn pinned_pack_call_merges_outer_approval_and_shared_adapter_forwards_binding() {
+    let (tools, handle) = bound_with_handle(vec![FakeTool::plain("a_one")]);
+    let selected_args = json!({"marker": "inside"});
+    let args = json!({"skill":"alpha", "tool":"a_one", "args":selected_args});
+    let outer: Arc<dyn Tool> = Arc::new(ApprovalOuterTool(Arc::new(UseSkillTool::new(
+        handle, CATALOG,
+    ))));
+    let dispatch = UseSkillDispatch::<(), ()>::new(outer.clone(), Arc::new(|_| None));
+    let bound = dispatch
+        .bind_call(&args)
+        .unwrap()
+        .expect("selected pack call is bound");
+
+    let selected = bound.admission_target().expect("selected call target");
+    assert_eq!(selected.0.name(), "a_one");
+    assert_eq!(selected.1, &selected_args);
+    assert!(!selected.0.policy().access.approval_required);
+    let pinned_policy = bound.tool().policy();
+    assert!(pinned_policy.classified);
+    assert!(pinned_policy.access.approval_required);
+
+    let adapter = Arc::new(
+        CanonicalSharedToolAdapter::for_name(vec![tools], USE_SKILL)
+            .expect("shared use_skill declaration"),
+    );
+    assert!(adapter
+        .host_extension()
+        .expect("adapter forwards the binding extension")
+        .is::<ToolCallBinding>());
+    let shared = UseSkillDispatch::<(), ()>::new(adapter, Arc::new(|_| None));
+    let shared_bound = shared
+        .bind_call(&args)
+        .unwrap()
+        .expect("shared adapter binding");
+    assert_eq!(shared_bound.tool().name(), USE_SKILL);
+    let (target, effective_args) = shared_bound.admission_target().unwrap();
+    assert_eq!(target.name(), "a_one");
+    assert_eq!(effective_args, &selected_args);
+    let result = shared_bound
+        .execute(
+            &(),
+            tinyagents_harness::ids::CallId::new("shared-pack-call"),
+            args,
+            tinytools::ToolCallOptions::default(),
+            &tinyagents_harness::context::RunContext::new(
+                tinyagents_harness::context::RunConfig::new("shared-pack"),
+                (),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.text(), "a_one:{\"marker\":\"inside\"}");
 }
