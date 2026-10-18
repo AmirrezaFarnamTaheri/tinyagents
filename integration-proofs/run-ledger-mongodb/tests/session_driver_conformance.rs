@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use tinyagents_session::{
-    port::{DriverSessionStores, SessionStoreProvider},
+    port::DriverSessionStores,
     run_ledger::{AgentRunListRequest, DriverRunLedger, RunLedgerStore},
     testkit::conformance::{
         run_ledger_conformance, session_store_conformance, session_store_isolation_conformance,

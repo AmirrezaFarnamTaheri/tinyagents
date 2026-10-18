@@ -12,7 +12,10 @@
 //!   and separately verifies that atomic agent/event/task operations return
 //!   `Unsupported(ValidatedBatch)` without partial writes; its document driver
 //!   does not provide the multi-document transaction boundary those operations
-//!   require.
+//!   require. The full MongoDB contracts run from the excluded
+//!   `integration-proofs/run-ledger-mongodb` workspace because BSON enables
+//!   `serde_json/preserve_order`, which must not alter the main workspace's
+//!   shared feature graph.
 //! * [`transcript_history_conformance`] exercises
 //!   [`crate::transcript::TranscriptHistory`]/[`crate::transcript::TranscriptRead`],
 //!   which — unlike the ledger — genuinely has two independent
