@@ -266,7 +266,7 @@ mod tool_tests {
     use serde_json::json;
 
     use super::super::runtime::GoalStore;
-    use super::super::tool::{GoalTool, GoalToolKind, goal_tools};
+    use super::super::tool::{GoalTool, GoalToolKind};
     use super::super::{GoalObserver, ThreadGoal};
     use tinyagents_harness::store::{InMemoryStore, Store};
     use tinytools::{Tool, ToolResult, ToolRunContext};
@@ -288,13 +288,6 @@ mod tool_tests {
         tool.execute_with_context(args, Default::default(), Some(&context))
             .await
             .unwrap()
-    }
-
-    #[test]
-    fn goal_tools_builds_the_model_facing_set() {
-        let tools = goal_tools(store());
-        let names: Vec<&str> = tools.iter().map(|t| Tool::name(t.as_ref())).collect();
-        assert_eq!(names, vec!["goal_get", "goal_set", "goal_complete"]);
     }
 
     #[tokio::test]

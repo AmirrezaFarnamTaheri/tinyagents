@@ -20,7 +20,6 @@ use super::store;
 use super::types::{TodoItem, TodoStatus, TodosSnapshot, parse_status};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::store::Store;
-use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
 pub(super) const TODO_TOOL_NAME: &str = "todo";
@@ -266,20 +265,6 @@ fn parameters_schema() -> Value {
 
 fn error_result(message: impl Into<String>) -> ToolResult {
     ToolResult::error(message)
-}
-
-/// Builds the `todo` tool backed by `store`.
-pub fn todo_tools(store: Arc<dyn Store>) -> Vec<Arc<TodoTool>> {
-    vec![Arc::new(TodoTool::new(store))]
-}
-
-/// Registers the `todo` tool into a tool registry.
-pub fn register_todo_tools<State: Send + Sync, Ctx: Send + Sync>(
-    registry: &mut ToolRegistry<State, Ctx>,
-    store: Arc<dyn Store>,
-) -> &mut ToolRegistry<State, Ctx> {
-    registry.register(Arc::new(TodoTool::new(store)));
-    registry
 }
 
 #[async_trait]

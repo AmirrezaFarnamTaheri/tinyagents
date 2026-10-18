@@ -19,7 +19,7 @@ mod tool;
 mod types;
 
 pub use middleware::{DEFAULT_REMINDER_ROUNDS, TodoSequenceMiddleware};
-pub use tool::{TodoTool, register_todo_tools, todo_tools};
+pub use tool::TodoTool;
 pub use types::{
     TodoItem, TodoList, TodoStatus, TodosSnapshot, normalise_list, parse_status, render_markdown,
 };

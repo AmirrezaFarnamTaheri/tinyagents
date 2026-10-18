@@ -5,7 +5,7 @@
 //! or replace it (`goal_set`), and mark it done (`goal_complete`). Pause /
 //! resume / clear are host-driven controls — constructible as tools for a host
 //! that wants to expose them, but not part of the default model-facing set
-//! returned by [`goal_tools`].
+//! constructed by the host from `GoalToolKind`.
 //!
 //! Every control answers with the JSON `{ "goal": <ThreadGoal|null>, "text":
 //! <rendered block> }`: `goal` is the structured camelCase goal a UI can draw
@@ -27,7 +27,6 @@ use serde_json::{Value, json};
 
 use super::runtime::GoalStore;
 use super::types::ThreadGoal;
-use tinyagents_harness::tool::ToolRegistry;
 use tinytools::{PermissionLevel, Tool, ToolPolicy, ToolResult, ToolRunContext, ToolSideEffects};
 
 /// Which thread-goal control a [`GoalTool`] implements.
@@ -223,26 +222,6 @@ fn render_goal(goal: &ThreadGoal) -> String {
 
 fn error_result(message: impl Into<String>) -> ToolResult {
     ToolResult::error(message)
-}
-
-/// Builds the default **model-facing** goal controls (`goal_get`, `goal_set`,
-/// `goal_complete`).
-pub fn goal_tools(store: Arc<GoalStore>) -> Vec<Arc<GoalTool>> {
-    GoalToolKind::MODEL_FACING
-        .into_iter()
-        .map(|kind| Arc::new(GoalTool::new(kind, store.clone())))
-        .collect()
-}
-
-/// Registers the default model-facing goal controls into a tool registry.
-pub fn register_goal_tools<State: Send + Sync, Ctx: Send + Sync>(
-    registry: &mut ToolRegistry<State, Ctx>,
-    store: Arc<GoalStore>,
-) -> &mut ToolRegistry<State, Ctx> {
-    for tool in goal_tools(store) {
-        registry.register(tool);
-    }
-    registry
 }
 
 #[async_trait]

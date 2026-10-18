@@ -339,7 +339,7 @@ mod tool_tests {
 
     use serde_json::json;
 
-    use super::super::tool::{TodoTool, todo_tools};
+    use super::super::tool::TodoTool;
     use tinyagents_harness::store::{InMemoryStore, Store};
     use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
@@ -412,13 +412,6 @@ mod tool_tests {
                 && description.contains("before starting the next"),
             "each step is ticked before the next starts: {description}"
         );
-    }
-
-    #[test]
-    fn todo_tools_builds_a_single_tool() {
-        let tools = todo_tools(store());
-        assert_eq!(tools.len(), 1);
-        assert_eq!(Tool::name(tools[0].as_ref()), "todo");
     }
 
     #[test]
