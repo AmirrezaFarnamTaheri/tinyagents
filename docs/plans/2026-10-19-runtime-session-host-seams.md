@@ -603,8 +603,9 @@ the resolver trait in `runtime/identity.rs`, and the resolver on
 used by every transcript-reading path. `Session::turn` calls it after
 `before_resume` and `apply_resume_preparation`, so hook-provided target
 replacements are visible, but before locks or locator methods. Public
-`Session::resume` calls it before any locator method and never reuses a prior
-operation's identity. Both then call private `resume_bound`. A
+`Session::resume` has no hook in its existing contract; it calls the same
+helper directly before any locator method and never reuses a prior operation's
+identity. Both then call private `resume_admitted`. A
 resolver-enabled session rejects absent identity, conflicting
 `TurnOptions::session`, or changed hook-selected target before
 `head_generation`, `read_session_transcript`, legacy adoption, and lock lookup.
@@ -818,18 +819,16 @@ public `Session::resume` calls it before the first locator access. This order
 is intentional: hooks may prepare a lazy target but cannot grant authority to
 change its destination.
 
-Extract the existing public `Session::resume` implementation into a private
-`resume_bound` helper only after extracting its pre-resume hook/preparation
-portion into `prepare_resume`. Both public `resume` and `turn_inner` must use
-this sequence: run `before_resume`, apply its `ResumePreparation`, validate
-`TurnOptions::session`, resolve actor admission, compare the hook-selected
-target to the admitted destination, then acquire the turn lock or call any
-locator method. This prevents `options.session` from selecting an old
-target before binding and prevents a hook from opening a replacement target
-before validation. The helper receives the already-validated preparation and
-does no hook, resolver, lock, or locator work before that validation. Keep
-`Session::resume` as a full public path through this same sequence; do not
-leave it as a resolver-only shortcut.
+Extract the storage-reading body of `Session::resume` into private
+`resume_admitted`. Public `resume` invokes `resolve_and_bind(options, None)`
+and then `resume_admitted`; it must not add hooks or a synthetic request.
+`turn_inner` retains its existing `before_resume` and preparation calls, then
+calls `resolve_and_bind(options, self.target.as_ref())`, acquires
+`lock_turn(options)`, and calls `resume_admitted` directly. Both paths share
+one authority predicate without changing public resume hook semantics. The
+private reader performs no hook, resolver, lock, or target-selection work.
+Validate `TurnOptions::session` and any hook-selected target before the lock
+or any locator operation.
 
 The request has logical naming inputs only; there is no caller-provided
 agent/tenant scope field. The resolver uses `options.run_context.data` to
@@ -1011,6 +1010,7 @@ async fn direct_resume_resolves_and_uses_the_admitted_lease() {
     });
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(Arc::new(Codec::default()))
+        .transcript(foreign.clone(), "foreign-fallback", meta())
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
     let mut options = TurnOptions::default();
@@ -1077,7 +1077,7 @@ async fn hook_cannot_replace_the_identity_locator() {
 }
 
 #[tokio::test]
-async fn public_resume_validates_hook_replacement_before_locator_access() {
+async fn public_resume_rejects_foreign_session_before_locator_access() {
     use tinyagents_session::port::DriverSessionStores;
     use tinystoragedrivers_core::{MemoryStorage, Scope};
     let provider = Arc::new(DriverSessionStores::new(
@@ -1087,19 +1087,17 @@ async fn public_resume_validates_hook_replacement_before_locator_access() {
         provider, calls: Arc::new(Mutex::new(0)),
         agent_id: Arc::new(Mutex::new("agent-resolved".into())),
     });
-    let (wrong, wrong_history) = locator(None);
+    let (foreign, foreign_history) = locator(None);
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(Arc::new(Codec::default()))
-        .hooks(Arc::new(ReplaceTargetHook {
-            target: wrong.clone(), session_override: None,
-        }))
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
-    let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    let mut options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    options.session = Some(SessionRef::scoped("foreign-thread", "agent-resolved"));
     assert!(matches!(session.resume(&options).await,
         Err(RuntimeError::InvalidSessionState(_))));
-    assert!(wrong.latest_agents.lock().unwrap().is_empty());
-    assert_eq!(*wrong_history.opens.lock().unwrap(), 0);
+    assert!(foreign.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*foreign_history.opens.lock().unwrap(), 0);
 }
 
 #[tokio::test]
