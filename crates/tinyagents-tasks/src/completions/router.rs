@@ -507,8 +507,9 @@ impl CompletionRouter {
     /// Drops every pending completion for `parent_key` and everything that
     /// finishes for it later, until [`Self::resume_parent`]. For a deleted or
     /// stopped parent. A message already pushed onto the parent's queue is not
-    /// retracted (the host clears that queue when it stops the parent). The flag is stored durably, so it holds across a restart
-    /// (until [`Self::compact`] drops it after its retention window). Returns how many pending records were withdrawn.
+    /// retracted; queued generations must be rejected when the parent turn is
+    /// admitted. The flag is durable and survives completion compaction and
+    /// process restarts. Returns how many pending records were withdrawn.
     pub fn cancel_parent(&self, parent_key: &str) -> Result<usize> {
         self.close_parent(parent_key, CompletionState::Tombstoned)
     }
@@ -539,12 +540,27 @@ impl CompletionRouter {
         Ok(withdrawn)
     }
 
-    /// Lets completions for `parent_key` through again after
-    /// [`Self::cancel_parent`] (a stopped thread that the user reopened).
+    /// Reopens a parent stopped with [`Self::cancel_parent`]. Calling this on
+    /// an already open parent is idempotent. A parent closed with
+    /// [`Self::delete_parent`] cannot be reopened.
     pub fn resume_parent(&self, parent_key: &str) {
         let result = self.lock().and_then(|state| {
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-            Self::set_parent_marker(&state, parent_key, CompletionState::Delivered, gate.claim())
+            let marker_id = Self::parent_marker_id(parent_key);
+            match state.store.try_get(&marker_id)? {
+                Some(marker) if marker.state == CompletionState::Delivered => Ok(()),
+                Some(marker) if marker.state == CompletionState::ParentDeleted => {
+                    Err(TinyAgentsError::Graph(format!(
+                        "completion router: deleted parent {parent_key:?} cannot be resumed"
+                    )))
+                }
+                _ => Self::set_parent_marker(
+                    &state,
+                    parent_key,
+                    CompletionState::Delivered,
+                    gate.claim(),
+                ),
+            }
         });
         if let Err(error) = result {
             tracing::warn!(parent_key = %parent_key, error = %error, "{LOG_PREFIX} could not resume parent");
