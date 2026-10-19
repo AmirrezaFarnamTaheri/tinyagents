@@ -35,8 +35,8 @@ use tinystoragedrivers_core::{
 use tokio::sync::OnceCell;
 
 use super::store::{
-    ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim, PendingClaimRequest,
-    ResolveClaimRequest, TaskClaimRequest,
+    ClaimResolution, CompletionStore, ParentGateClaim, PendingClaimRequest, ResolveClaimRequest,
+    TaskClaimRequest,
 };
 use super::types::{CompletionRecord, CompletionState};
 use crate::storage::{

@@ -1090,7 +1090,7 @@ impl CompletionRouter {
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, _gate.claim())?
+        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, &_gate)?
         else {
             return Ok(Vec::new());
         };
