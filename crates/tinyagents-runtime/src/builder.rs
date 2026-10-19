@@ -3,12 +3,12 @@ use tinyagents_harness::tool::ToolSnapshot;
 
 use tinyagents_session::transcript::{SessionRef, TranscriptLocator, TranscriptMeta, session_stem};
 
+use crate::SessionIdentityResolver;
+use crate::identity::IdentityConfig;
 use crate::{
     NoopSessionHooks, PrefixSnapshot, RuntimeError, Session, SessionDriver, SessionHooks,
     TranscriptCodec,
 };
-use crate::identity::IdentityConfig;
-use crate::SessionIdentityResolver;
 
 /// Configures a directly-owned, reusable [`Session`].
 pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {

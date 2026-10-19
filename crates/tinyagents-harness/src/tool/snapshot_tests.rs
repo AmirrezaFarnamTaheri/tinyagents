@@ -46,11 +46,15 @@ struct HostBeta(&'static str);
 #[test]
 fn typed_extensions_survive_snapshot_copies_without_changing_json() {
     let original_json = serde_json::json!([]);
-    let snapshot = ToolSnapshot::from_json(&original_json).unwrap()
+    let snapshot = ToolSnapshot::from_json(&original_json)
+        .unwrap()
         .with_extension(HostAlpha(7))
         .with_extension(HostBeta("host-owned"));
     assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
-    assert_eq!(snapshot.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
+    assert_eq!(
+        snapshot.extension::<HostBeta>(),
+        Some(&HostBeta("host-owned"))
+    );
     assert_eq!(snapshot.to_json(), original_json);
 
     let clone = snapshot.clone();
@@ -69,10 +73,19 @@ fn typed_extensions_survive_snapshot_copies_without_changing_json() {
 
 #[test]
 fn exact_snapshot_never_retains_recorded_declarations() {
-    let exact = ToolSnapshot::new(vec![spec("live", "live")]).unwrap().exact();
+    let exact = ToolSnapshot::new(vec![spec("live", "live")])
+        .unwrap()
+        .exact();
     let recorded = ToolSnapshot::new(vec![spec("recorded", "recorded")]).unwrap();
     let (merged, count) = exact.with_retained(&recorded).unwrap();
     assert_eq!(count, 0);
     assert!(merged.is_exact());
-    assert_eq!(merged.specs().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["live"]);
+    assert_eq!(
+        merged
+            .specs()
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["live"]
+    );
 }

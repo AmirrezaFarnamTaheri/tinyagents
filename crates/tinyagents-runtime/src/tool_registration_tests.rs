@@ -16,7 +16,9 @@ struct CountingPolicy(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl ToolCallPolicy<()> for CountingPolicy {
-    fn name(&self) -> &str { "counting-host" }
+    fn name(&self) -> &str {
+        "counting-host"
+    }
     async fn check(&self, _: &RunContext<()>, _: &ToolCall) -> PolicyDecision {
         self.0.fetch_add(1, Ordering::SeqCst);
         PolicyDecision::Allow
@@ -36,22 +38,32 @@ fn policy_call(name: &str) -> ToolCall {
 async fn host_only_policy_denies_before_delegating_and_allows_named_calls() {
     let calls = Arc::new(AtomicUsize::new(0));
     let policy = HostOnlyToolPolicy::new(
-        ["read_file".to_owned()], Some(Arc::new(CountingPolicy(calls.clone()))),
+        ["read_file".to_owned()],
+        Some(Arc::new(CountingPolicy(calls.clone()))),
     );
-    let context = RunContext::new(tinyagents_harness::context::RunConfig::new("host-only-test"), ());
+    let context = RunContext::new(
+        tinyagents_harness::context::RunConfig::new("host-only-test"),
+        (),
+    );
     let denied = policy.check(&context, &policy_call("write_file")).await;
     assert!(matches!(denied, PolicyDecision::Deny { .. }));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert_eq!(policy.check(&context, &policy_call("read_file")).await, PolicyDecision::Allow);
+    assert_eq!(
+        policy.check(&context, &policy_call("read_file")).await,
+        PolicyDecision::Allow
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     let empty = HostOnlyToolPolicy::new(Vec::<String>::new(), None);
-    assert!(matches!(empty.check(&context, &policy_call("read_file")).await,
-        PolicyDecision::Deny { .. }));
+    assert!(matches!(
+        empty.check(&context, &policy_call("read_file")).await,
+        PolicyDecision::Deny { .. }
+    ));
 }
 
 fn tool_spec(name: &str, description: &str) -> Arc<ToolSpec> {
     Arc::new(ToolSpec {
-        name: name.into(), description: description.into(),
+        name: name.into(),
+        description: description.into(),
         parameters: serde_json::json!({"type":"object"}),
     })
 }

@@ -432,7 +432,8 @@ async fn host_only_tool_policy_blocks_unknown_calls_in_the_turn_plan() {
     let tools: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool(executions.clone(), "danger"))];
     let configure: Configure = Arc::new(|plan| {
         plan.tool_policy = Some(Arc::new(crate::HostOnlyToolPolicy::new(
-            Vec::<String>::new(), None,
+            Vec::<String>::new(),
+            None,
         )));
     });
     let mut session = session(&model, tools, &["danger"], configure);

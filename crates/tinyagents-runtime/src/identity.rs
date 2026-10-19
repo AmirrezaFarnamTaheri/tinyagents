@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use tinyagents_session::transcript::TranscriptMeta;
 
-use crate::types::{ResolvedSessionStores, SessionIdentity, SessionIdentityRequest};
 use crate::RuntimeError;
+use crate::types::{ResolvedSessionStores, SessionIdentity, SessionIdentityRequest};
 
 /// Resolves logical session naming inputs against host-authorized storage.
 ///

@@ -272,8 +272,12 @@ pub struct SessionIdentity {
 }
 
 impl SessionIdentity {
-    pub fn session(&self) -> &SessionRef { &self.session }
-    pub fn agent_id(&self) -> &str { &self.agent_id }
+    pub fn session(&self) -> &SessionRef {
+        &self.session
+    }
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
 }
 
 /// The shape of a successful logical transcript transition.

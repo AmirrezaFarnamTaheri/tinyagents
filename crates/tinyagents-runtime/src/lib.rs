@@ -27,8 +27,8 @@ pub use builder::SessionBuilder;
 pub use capability_projection::{project_descriptors, register_admitted_projected};
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
-pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
 pub use hooks::PostCommitSink;
+pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
 pub use identity::SessionIdentityResolver;
 pub use managed_tools::{ManagedToolNames, refresh_prefix, reject_synthesized_collisions};
 pub use permanent_tool::PermanentTool;
@@ -41,9 +41,8 @@ pub use tool_registration::{
     register_admitted, tool_surface_diff,
 };
 pub use types::{
-    CommitReceipt, PostCommitObservation, ResumeMode, ResumePreparation, SessionResume,
-    SessionStateView, SessionTerminal,
-    ResolvedSessionStores, SessionIdentity, SessionIdentityRequest,
+    CommitReceipt, PostCommitObservation, ResolvedSessionStores, ResumeMode, ResumePreparation,
+    SessionIdentity, SessionIdentityRequest, SessionResume, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };

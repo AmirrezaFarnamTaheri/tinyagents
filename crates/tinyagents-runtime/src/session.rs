@@ -9,13 +9,13 @@ use tinyagents_session::transcript::{
 };
 use tinyinference_llm::message::Message;
 
+use crate::identity::{IdentityConfig, same_admission};
 use crate::{
     CommitReceipt, DriverRequest, PrefixSnapshot, ResumeMode, ResumePreparation, RuntimeError,
     SessionDriver, SessionHooks, SessionResume, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
-use crate::identity::{IdentityConfig, same_admission};
 
 /// How long a cancelled turn waits for its driver to return the rounds it
 /// completed before the driver is dropped. Short, so Stop still feels instant.
@@ -143,7 +143,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             parent: config.parent.clone(),
             child_key: config.child_key.clone(),
         };
-        let resolved = config.resolver.resolve(&request, &options.run_context.data)?;
+        let resolved = config
+            .resolver
+            .resolve(&request, &options.run_context.data)?;
         if resolved.agent_id.is_empty() {
             return Err(RuntimeError::InvalidSessionState(
                 "resolver returned empty agent id".into(),
@@ -163,9 +165,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             agent_id: resolved.agent_id,
             stores: resolved.stores,
         };
-        if options.session.as_ref().is_some_and(|selected| {
-            selected.first_generation() != first_session.first_generation()
-        }) {
+        if options
+            .session
+            .as_ref()
+            .is_some_and(|selected| selected.first_generation() != first_session.first_generation())
+        {
             return Err(RuntimeError::InvalidSessionState(
                 "TurnOptions.session conflicts with resolved identity".into(),
             ));
@@ -827,11 +831,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .as_ref()
                 .map(|identity| identity.agent_id().to_owned()),
         };
-        let finalization = terminal_guard.finalize_commit(
-            receipt,
-            observation,
-            self.post_commit_sinks.clone(),
-        );
+        let finalization =
+            terminal_guard.finalize_commit(receipt, observation, self.post_commit_sinks.clone());
         // This await deliberately does not observe cancellation. If this turn
         // future is dropped, dropping `JoinHandle` detaches rather than aborts
         // the owned finalization task.

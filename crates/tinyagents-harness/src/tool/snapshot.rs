@@ -33,7 +33,9 @@ pub trait ToolSnapshotExtension: std::any::Any + fmt::Debug + Send + Sync {
 }
 
 impl<T: std::any::Any + fmt::Debug + Send + Sync> ToolSnapshotExtension for T {
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Clone, Default)]
@@ -55,7 +57,11 @@ impl ToolSnapshotExtensions {
     }
 
     pub fn get<T: ToolSnapshotExtension>(&self) -> Option<&T> {
-        self.values.get(&TypeId::of::<T>())?.as_ref().as_any().downcast_ref::<T>()
+        self.values
+            .get(&TypeId::of::<T>())?
+            .as_ref()
+            .as_any()
+            .downcast_ref::<T>()
     }
 }
 

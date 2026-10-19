@@ -23,10 +23,16 @@ pub struct ContextConfig {
     #[serde(default = "default_tool_result_budget_bytes")]
     pub tool_result_budget_bytes: usize,
     /// Payload size at which a host may start a summary operation.
-    #[serde(default = "default_summarizer_payload_threshold_tokens", alias = "summarizer_payload_threshold_bytes")]
+    #[serde(
+        default = "default_summarizer_payload_threshold_tokens",
+        alias = "summarizer_payload_threshold_bytes"
+    )]
     pub summarizer_payload_threshold_tokens: usize,
     /// Maximum payload size passed to a summary operation.
-    #[serde(default = "default_summarizer_max_payload_tokens", alias = "summarizer_max_payload_bytes")]
+    #[serde(
+        default = "default_summarizer_max_payload_tokens",
+        alias = "summarizer_max_payload_bytes"
+    )]
     pub summarizer_max_payload_tokens: usize,
     /// Optional model hint for hosts that provide summarization.
     #[serde(default)]
@@ -84,14 +90,24 @@ impl CompactionStrategy {
     }
 }
 
-fn default_enabled() -> bool { true }
-fn default_true() -> bool { true }
-fn default_microcompact_keep_recent() -> usize { DEFAULT_KEEP_RECENT_TOOL_RESULTS }
+fn default_enabled() -> bool {
+    true
+}
+fn default_true() -> bool {
+    true
+}
+fn default_microcompact_keep_recent() -> usize {
+    DEFAULT_KEEP_RECENT_TOOL_RESULTS
+}
 fn default_tool_result_budget_bytes() -> usize {
     crate::config::TurnConfig::default().tool_result_budget_bytes
 }
-fn default_summarizer_payload_threshold_tokens() -> usize { 4_000 }
-fn default_summarizer_max_payload_tokens() -> usize { 64_000 }
+fn default_summarizer_payload_threshold_tokens() -> usize {
+    4_000
+}
+fn default_summarizer_max_payload_tokens() -> usize {
+    64_000
+}
 
 impl Default for ContextConfig {
     fn default() -> Self {

@@ -394,9 +394,9 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
         }
         let outcome_sink = tinyagents_harness::turn_outcome::new_tool_outcome_sink();
         harness.push_middleware(Arc::new(
-            tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(
-                Arc::clone(&outcome_sink),
-            ),
+            tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(Arc::clone(
+                &outcome_sink,
+            )),
         ));
         for middleware in context {
             harness.push_middleware(middleware);
