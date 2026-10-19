@@ -118,12 +118,22 @@ fn failed_and_open_spans_keep_status_and_timing_shape() {
             .finish(BASE + 4, SpanState::Error)
             .with_status_message("failed operation"),
         Span::new("open", "run-1", "running", BASE + 5),
+        Span::new("ok-note", "run-1", "completed", BASE + 6)
+            .finish(BASE + 7, SpanState::Ok)
+            .with_status_message("completed with note"),
+        Span::new("open-note", "run-1", "still running", BASE + 8)
+            .with_status_message("in progress"),
     ];
     let batch = build_ingestion_batch(LangfuseTraceConfig::default(), &spans).unwrap();
     let events = batch["batch"].as_array().unwrap();
     assert_eq!(events[1]["body"]["level"], "ERROR");
     assert_eq!(events[1]["body"]["statusMessage"], "failed operation");
     assert!(events[2]["body"].get("endTime").is_none());
+    assert_eq!(events[3]["body"]["statusMessage"], "completed with note");
+    assert!(events[3]["body"].get("level").is_none());
+    assert_eq!(events[4]["body"]["statusMessage"], "in progress");
+    assert!(events[4]["body"].get("level").is_none());
+    assert!(events[4]["body"].get("endTime").is_none());
 }
 
 #[test]
