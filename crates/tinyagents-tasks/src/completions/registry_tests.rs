@@ -153,11 +153,21 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
         )))
     });
     let first = pool.get_or_open(&"workspace").unwrap();
-    assert_eq!(
-        first.admit_child_generation("parent").unwrap(),
-        Some(1)
+    assert_eq!(first.admit_child_generation("parent").unwrap(), Some(1));
+    let mut queued = CompletionRecord::new(
+        "queued-child",
+        "parent",
+        "worker",
+        crate::completions::CompletionStatus::Success,
+        crate::completions::CompletionResult::default(),
     );
+    queued.parent_epoch = 1;
+    let old_admission = CompletionAdmission::for_router(&first, &queued);
+    let permit = tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission)
+        .expect("the current lifecycle admits its queued child");
+    drop(permit);
     first.cancel_parent("parent").unwrap();
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission).is_err());
 
     pool.clear().unwrap();
     let reopened = pool.get_or_open(&"workspace").unwrap();
@@ -166,6 +176,63 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
         !reopened.admit_child("parent").unwrap(),
         "clearing the router cache must not implicitly reopen a stopped parent"
     );
+
+    reopened.resume_parent("parent");
+    assert_eq!(
+        reopened.admit_child_generation("parent").unwrap(),
+        Some(3),
+        "only explicit resume opens a new generation"
+    );
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission).is_err());
+    let mut current = queued;
+    current.parent_epoch = 3;
+    let current_admission = CompletionAdmission::for_router(&reopened, &current);
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&current_admission).is_ok());
+}
+
+#[test]
+fn deleted_parent_stays_deleted_across_pool_clear() {
+    let pool = CompletionRouterPool::new(|_| {
+        Arc::new(CompletionRouter::new(Arc::new(
+            InMemoryCompletionStore::new(),
+        )))
+    });
+    let first = pool.get_or_open(&"workspace").unwrap();
+    assert_eq!(first.admit_child_generation("parent").unwrap(), Some(1));
+    first.delete_parent("parent").unwrap();
+
+    pool.clear().unwrap();
+    let reopened = pool.get_or_open(&"workspace").unwrap();
+    reopened.resume_parent("parent");
+
+    assert!(
+        !reopened.admit_child("parent").unwrap(),
+        "a deleted parent cannot be reopened after its router is evicted"
+    );
+}
+
+#[test]
+fn parent_lifecycle_isolated_between_pool_scope_keys() {
+    let pool = CompletionRouterPool::new(|_| {
+        Arc::new(CompletionRouter::new(Arc::new(
+            InMemoryCompletionStore::new(),
+        )))
+    });
+    let first_scope = pool.get_or_open(&"workspace-a").unwrap();
+    let second_scope = pool.get_or_open(&"workspace-b").unwrap();
+    assert_eq!(
+        first_scope.admit_child_generation("same-parent").unwrap(),
+        Some(1)
+    );
+    assert_eq!(
+        second_scope.admit_child_generation("same-parent").unwrap(),
+        Some(1)
+    );
+
+    first_scope.cancel_parent("same-parent").unwrap();
+
+    assert!(!first_scope.admit_child("same-parent").unwrap());
+    assert!(second_scope.admit_child("same-parent").unwrap());
 }
 
 #[tokio::test]
