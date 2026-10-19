@@ -365,6 +365,7 @@ fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
     let claimed = store
         .claim_pending(
             "p",
+            0,
             &gate,
             CompletionClaimMode::Followup,
             1,
