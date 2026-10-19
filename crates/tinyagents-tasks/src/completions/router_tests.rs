@@ -759,6 +759,31 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
 }
 
 #[tokio::test]
+async fn queued_admission_after_store_replacement_observes_new_cancellation_marker() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source;
+    let router = CompletionRouter::new(source_port.clone());
+    let q = queue();
+    router.attach_parent("p", q.clone());
+    router.record(record("queued", "p")).await.unwrap();
+
+    let replacement = Arc::new(InMemoryCompletionStore::new());
+    let replacement_port: Arc<dyn CompletionStore> = replacement;
+    router
+        .replace_store_if_current(&source_port, replacement_port)
+        .unwrap();
+    router.cancel_parent("p").unwrap();
+
+    let admitted = q
+        .take_admitted(
+            QueueLane::Followup,
+            tinyagents_harness::run_queue::QueueMode::All,
+        )
+        .await;
+    assert!(admitted.is_empty(), "queued pre-migration capability must not bypass cancellation on replacement store");
+}
+
+#[tokio::test]
 async fn collect_mode_pushes_onto_the_collect_lane() {
     let router = router();
     let q = queue();
