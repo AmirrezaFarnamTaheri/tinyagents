@@ -141,15 +141,11 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = crate::exec::timeout::ProcessCleanup::default();
     let outcome = cleanup
-        .scope(
-            backend
-                .execute(
-                    request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
-                    None,
-                    None,
-                )
-                ,
-        )
+        .scope(backend.execute(
+            request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
+            None,
+            None,
+        ))
         .await;
     cleanup.wait().await;
     let ExecBackendOutcome::Completed(output) = outcome else {
