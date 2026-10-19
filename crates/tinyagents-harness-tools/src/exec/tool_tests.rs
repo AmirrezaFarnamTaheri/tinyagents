@@ -4,6 +4,7 @@ use crate::exec::{
     ExecDenied, ExecGate, ExecOutput, ExecPermit, ExecProgress, ExecRefusalKind, ExecRequest,
     ShellFlavor,
 };
+use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,

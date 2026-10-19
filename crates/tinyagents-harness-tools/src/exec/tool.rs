@@ -8,7 +8,7 @@ use super::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
     ExecDenied, ExecGate, ExecOperation, ExecRequest, ShellFlavor,
     progress::{HEARTBEAT_INTERVAL, with_exec_progress},
-    shell_description::{command_param_description, shell_description},
+    shell_description::shell_description,
     shell_support::{exec_result, python_environment},
     timeout::{MAX_TIMEOUT_SECS, explicit_call_timeout_duration},
 };
