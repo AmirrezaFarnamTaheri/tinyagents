@@ -725,3 +725,9 @@ pub fn plan_mode_middleware(
 ) -> PlanModeMiddleware {
     PlanModeMiddleware::new(mode, policies)
 }
+
+/// Product-level tool names commonly required for plan-mode control.
+/// Hosts may extend this list for their own safe planning tools.
+pub const fn plan_mode_allowlist() -> &'static [&'static str] {
+    &["plan_exit", "request_plan_review", "todo", "goal_create", "goal_update", "goal_complete", "goal_list"]
+}
