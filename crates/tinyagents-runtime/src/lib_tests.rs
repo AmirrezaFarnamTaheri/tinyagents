@@ -4533,3 +4533,69 @@ async fn dropping_the_turn_while_the_outcome_hook_is_pending_still_delivers_on_t
         .expect("on_terminal must still be delivered");
     assert_eq!(hook.terminals.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn direct_resume_resolves_and_uses_the_admitted_lease() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(
+        tinyagents_session::port::DriverSessionStores::new(
+            Arc::new(MemoryStorage::new()), Scope::local(),
+        ).unwrap(),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: calls.clone(),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    assert!(!session.resume(&options).await.unwrap().loaded);
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn child_identity_resolution_preserves_parent_lineage() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(
+        tinyagents_session::port::DriverSessionStores::new(
+            Arc::new(MemoryStorage::new()), Scope::local(),
+        ).unwrap(),
+    );
+    let parent = SessionRef::scoped("root-thread", "parent-agent");
+    let child = SessionRef::child_of(&parent, "delegate:worker");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("worker-agent".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("child task"), Message::assistant("child result"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .child_identity_resolver(parent.clone(), "delegate:worker", meta(), resolver)
+        .build().unwrap();
+    session.turn(
+        SessionTurnRequest::new(Message::user("child task")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            thread_id: Some("root-thread".into()),
+            ..TurnOptions::default()
+        },
+    ).await.unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "worker-agent",
+    ).unwrap();
+    let transcripts = &lease.stores().transcripts;
+    assert!(transcripts.read_session_transcript(&child).is_some());
+    assert!(transcripts.read_session_transcript(&parent).is_none());
+    assert_eq!(child.parent_session_id(), Some(parent.session_id()));
+}
