@@ -11,7 +11,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn zero_deadline_before_spawn_is_reported_without_panicking() {
     let mut command = tokio::process::Command::new("sh");
-    command.args(["-c", "printf should-not-run"]);
+    command.args(["-c", "sleep 10"]);
     let result = output_or_kill_captured_isolated(&mut command, Duration::ZERO, None).await;
     assert!(matches!(result, CapturedCommandResult::TimedOut(_)));
 }
