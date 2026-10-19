@@ -934,10 +934,11 @@ fn resolve_and_bind(
 ```
 
 `SessionIdentity` is a runtime-created private binding; the host result is
-only `ResolvedSessionStores { agent_id, stores }`. Runtime constructs the
-canonical root `SessionRef` from the configured logical key and resolved agent
-id; it accepts no host-provided stem. `same_admission` compares the identity's first generation, agent id, and
-locator key/pointer as specified above.
+only `ResolvedSessionStores { agent_id, stores }`. Runtime constructs a root
+or child `SessionRef` from configured logical naming inputs and the resolved
+agent id; it accepts no host-provided stem. `same_admission` compares the
+identity's first generation, agent id, and locator key/pointer as specified
+below.
 
 Implement the binding predicate in `runtime/identity.rs` with the following
 comparison semantics (the current target locator is read from the target that
@@ -1343,9 +1344,13 @@ impl crate::SessionIdentityResolver<()> for FixedIdentityResolver {
         request: &crate::SessionIdentityRequest,
         _: &(),
     ) -> Result<crate::ResolvedSessionStores, RuntimeError> {
-        assert_eq!(request.session_key, "thread-identity");
-        assert!(request.parent.is_none());
-        assert!(request.child_key.is_none());
+        if request.parent.is_none() {
+            assert!(request.session_key.starts_with("thread-"));
+            assert!(request.child_key.is_none());
+        } else {
+            assert_eq!(request.session_key, "delegate:worker");
+            assert_eq!(request.child_key.as_deref(), Some("delegate:worker"));
+        }
         *self.calls.lock().unwrap() += 1;
         let agent_id = self.agent_id.lock().unwrap().clone();
         let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
@@ -1401,9 +1406,15 @@ async fn child_identity_resolution_keeps_parent_lineage_and_does_not_adopt_as_ro
             parent.clone(), "delegate:worker", meta(), resolver,
         )
         .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("root-thread".into()),
+        ..TurnOptions::default()
+    };
+    assert!(!session.resume(&options).await.unwrap().loaded);
     session.turn(
         Message::user("child task"),
-        TurnOptions { resume: ResumeMode::Session, thread_id: Some("root-thread".into()), ..TurnOptions::default() },
+        options,
     ).await.unwrap();
 
     let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
