@@ -230,6 +230,10 @@ fn close_copy_builders_match_english_checkpoint_and_empty_summary() {
         final_summary_with_copy(&ENGLISH_CLOSE_COPY, "", false),
         ENGLISH_CLOSE_COPY.empty_final_summary
     );
+    assert_eq!(
+        checkpoint_with_copy(&ENGLISH_CLOSE_COPY, 25, "", false),
+        "I reached the tool-call limit for this turn (25 steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n\n- (no tools completed yet)\n\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off."
+    );
     let needles = instruction_needles(&ENGLISH_CLOSE_COPY, None);
     let needle_refs = needles.iter().map(String::as_str).collect::<Vec<_>>();
     assert!(quotes_harness_instruction_with_minimum(
@@ -287,6 +291,79 @@ fn result_renderer_accepts_the_host_block_format_and_charges_rendered_bytes() {
         checkpoint_with_copy(&ENGLISH_CLOSE_COPY, 3, &rendered, true,),
         "I reached the tool-call limit for this turn (3 steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n- `read_file` — ok\n  > first line\n  > second line\n- `write_file` — failed\n  > permission denied\n\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off."
     );
+}
+
+#[test]
+fn host_block_golden_keeps_its_leading_newline_and_multiline_output() {
+    let rendered = render_tool_results_with_options(
+        &[CloseToolResult {
+            name: "read_file".into(),
+            success: true,
+            content: "first line\nsecond line".into(),
+        }],
+        CloseResultRenderOptions {
+            per_result_cap: 800,
+            truncation_marker: "… [truncated]",
+            total_budget: 4_000,
+            render_block: |result: &CloseToolResult| {
+                let status = if result.success { "ok" } else { "failed" };
+                let mut block = format!("\n- `{}` — {status}\n", result.name);
+                for line in result.content.lines() {
+                    block.push_str("  > ");
+                    block.push_str(line);
+                    block.push('\n');
+                }
+                block
+            },
+            omitted_notice: |_| String::new(),
+        },
+    );
+    assert_eq!(
+        rendered,
+        "\n- `read_file` — ok\n  > first line\n  > second line\n"
+    );
+}
+
+#[test]
+fn newline_heavy_results_are_budgeted_after_host_block_rendering() {
+    let body = (0..200).map(|_| "y").collect::<Vec<_>>().join("\n");
+    let results = (0..20)
+        .map(|index| CloseToolResult {
+            name: format!("list_issues_{index}"),
+            success: true,
+            content: body.clone(),
+        })
+        .collect::<Vec<_>>();
+    let rendered = render_tool_results_with_options(
+        &results,
+        CloseResultRenderOptions {
+            per_result_cap: 800,
+            truncation_marker: "… [truncated]",
+            total_budget: 4_000,
+            render_block: |result: &CloseToolResult| {
+                let mut block = format!("\n- `{}` — ok\n", result.name);
+                for line in result.content.lines() {
+                    block.push_str("  > ");
+                    block.push_str(line);
+                    block.push('\n');
+                }
+                block
+            },
+            omitted_notice: |count| {
+                if count == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        "\n_({count} earlier tool result(s) omitted for length — the most recent are shown.)_\n"
+                    )
+                }
+            },
+        },
+    );
+    assert!(rendered.chars().count() <= 4_000 + 200);
+    assert!(rendered.contains("earlier tool result(s) omitted for length"));
+    assert!(rendered.contains("`list_issues_19` — ok"));
+    assert!(rendered.contains("  > y\n"));
 }
 
 #[test]
@@ -372,6 +449,41 @@ fn classified_halt_close_builds_only_for_classified_reason() {
         classified_halt_close::<()>(None, |_| panic!("no reason"), || panic!("no close")),
         None
     );
+}
+
+#[test]
+fn classified_halt_renders_partial_work_without_provider_usage() {
+    let results = [
+        CloseToolResult {
+            name: "list_issues".into(),
+            success: true,
+            content: "private success payload".into(),
+        },
+        CloseToolResult {
+            name: "fetch_pr".into(),
+            success: false,
+            content: "permission denied".into(),
+        },
+    ];
+    let close = classified_halt_close(
+        Some("Stopping after 2 attempts: classified failure"),
+        |reason| reason.starts_with("Stopping after "),
+        || {
+            let groups = crate::turn_stop::group_stop_results(&results, str::to_owned);
+            let output = crate::turn_stop::render_stop_summary_with_copy(
+                "a step was blocked",
+                &groups,
+                &crate::turn_stop::ENGLISH_STOP_COPY,
+            );
+            (output, CloseUsage::default())
+        },
+    )
+    .unwrap();
+    assert!(close.0.contains("`list_issues` succeeded"));
+    assert!(!close.0.contains("private success payload"));
+    assert!(close.0.contains("`fetch_pr` failed: permission denied"));
+    assert_eq!(close.1.model_calls, 0);
+    assert_eq!(close.1.cost.usd(), Some(0.0));
 }
 
 use std::collections::VecDeque;
