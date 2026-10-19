@@ -1,0 +1,3 @@
+#!/bin/sh
+cat > "$0.stdin"
+printf '%s\n' '{"type":"result","result":"captured","is_error":false}'
