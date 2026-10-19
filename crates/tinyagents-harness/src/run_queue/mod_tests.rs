@@ -13,8 +13,46 @@ impl QueueAdmission for MutableAdmission {
         self.0
             .load(Ordering::SeqCst)
             .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
-            .ok_or(QueueAdmissionError)
+            .ok_or(QueueAdmissionError::Rejected)
     }
+}
+
+#[derive(Debug)]
+struct RetryOnce(AtomicBool);
+
+impl QueueAdmission for RetryOnce {
+    fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        if self.0.swap(false, Ordering::SeqCst) {
+            Err(QueueAdmissionError::Retry)
+        } else {
+            Ok(Arc::new(()))
+        }
+    }
+}
+
+#[tokio::test]
+async fn transient_admission_result_retains_item_for_the_next_boundary() {
+    let queue = RunQueue::new();
+    queue
+        .push_guarded(
+            QueueLane::Followup,
+            "recover after migration",
+            Arc::new(RetryOnce(AtomicBool::new(true))),
+        )
+        .await;
+
+    assert!(
+        queue
+            .take_admitted(QueueLane::Followup, QueueMode::All)
+            .await
+            .is_empty()
+    );
+    assert_eq!(queue.status().await.followups, 1);
+    let retried = queue
+        .take_admitted(QueueLane::Followup, QueueMode::All)
+        .await;
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].value, "recover after migration");
 }
 
 #[tokio::test]

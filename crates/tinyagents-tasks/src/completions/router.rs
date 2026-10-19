@@ -225,21 +225,29 @@ impl CompletionRouter {
 
     pub(super) fn admission_store_snapshot(
         slot: &Mutex<AdmissionStoreSlot>,
-    ) -> Option<Arc<dyn CompletionStore>> {
+    ) -> Result<Arc<dyn CompletionStore>, tinyagents_harness::run_queue::QueueAdmissionError> {
         let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (!slot.migrating).then(|| Arc::clone(&slot.store))
+        if slot.migrating {
+            Err(tinyagents_harness::run_queue::QueueAdmissionError::Retry)
+        } else {
+            Ok(Arc::clone(&slot.store))
+        }
     }
 
     pub(super) fn admission_store_is_current(
         slot: &Mutex<AdmissionStoreSlot>,
         store: &Arc<dyn CompletionStore>,
-    ) -> bool {
+    ) -> Result<(), tinyagents_harness::run_queue::QueueAdmissionError> {
         let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        !slot.migrating && Arc::ptr_eq(&slot.store, store)
+        if slot.migrating || !Arc::ptr_eq(&slot.store, store) {
+            Err(tinyagents_harness::run_queue::QueueAdmissionError::Retry)
+        } else {
+            Ok(())
+        }
     }
 
     /// Returns the persistence store backing this router.

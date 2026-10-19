@@ -411,7 +411,7 @@ async fn collect_lane_rejects_revoked_guarded_messages_before_returning_the_run(
             self.0
                 .load(Ordering::SeqCst)
                 .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
-                .ok_or(QueueAdmissionError)
+                .ok_or(QueueAdmissionError::Rejected)
         }
     }
 

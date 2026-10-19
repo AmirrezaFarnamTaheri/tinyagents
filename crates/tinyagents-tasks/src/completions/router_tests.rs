@@ -926,8 +926,10 @@ fn admission_rejects_a_stale_batch_key_when_store_changes_during_acquire() {
     migration.join().unwrap();
     resume_tx.send(()).unwrap();
 
-    assert!(acquire.join().unwrap().is_err());
-    assert!(admission.retry_after_rejection(Some(&old_key)));
+    assert!(matches!(
+        acquire.join().unwrap(),
+        Err(tinyagents_harness::run_queue::QueueAdmissionError::Retry)
+    ));
     assert_ne!(admission.batch_key().as_deref(), Some(old_key.as_str()));
 }
 

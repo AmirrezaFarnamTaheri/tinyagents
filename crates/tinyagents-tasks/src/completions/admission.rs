@@ -75,34 +75,27 @@ impl QueueAdmission for CompletionAdmission {
         &self,
         expected_key: Option<&str>,
     ) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
-        let store =
-            CompletionRouter::admission_store_snapshot(&self.store).ok_or(QueueAdmissionError)?;
+        let store = CompletionRouter::admission_store_snapshot(&self.store)?;
         if expected_key.is_some_and(|expected| self.key_for(&store) != expected) {
-            return Err(QueueAdmissionError);
+            // The queue's key came from the immediately preceding snapshot.
+            // A mismatch therefore means migration won between those steps;
+            // carry the transient classification in this same result rather
+            // than querying the mutable slot again later.
+            return Err(QueueAdmissionError::Retry);
         }
         let permit = super::router::ParentAdmissionPermit::acquire(
             Arc::clone(&store),
             &self.parent_key,
             self.parent_epoch,
         )
-        .map_err(|_| QueueAdmissionError)?
-        .ok_or(QueueAdmissionError)?;
-        if !CompletionRouter::admission_store_is_current(&self.store, &store) {
-            return Err(QueueAdmissionError);
-        }
+        .map_err(|_| QueueAdmissionError::Rejected)?
+        .ok_or(QueueAdmissionError::Rejected)?;
+        CompletionRouter::admission_store_is_current(&self.store, &store)?;
         Ok(Arc::new(permit))
     }
 
-    fn retry_after_rejection(&self, expected_key: Option<&str>) -> bool {
-        let slot = self
-            .store
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slot.migrating || expected_key.is_some_and(|expected| self.key_for(&slot.store) != expected)
-    }
-
     fn batch_key(&self) -> Option<String> {
-        let store = CompletionRouter::admission_store_snapshot(&self.store)?;
+        let store = CompletionRouter::admission_store_snapshot(&self.store).ok()?;
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
         Some(self.key_for(&store))

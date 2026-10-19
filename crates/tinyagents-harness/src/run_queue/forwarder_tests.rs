@@ -427,7 +427,7 @@ async fn native_forwarder_requeues_residual_without_stripping_guarded_queue_item
             self.0
                 .load(Ordering::SeqCst)
                 .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
-                .ok_or(QueueAdmissionError)
+                .ok_or(QueueAdmissionError::Rejected)
         }
     }
 
