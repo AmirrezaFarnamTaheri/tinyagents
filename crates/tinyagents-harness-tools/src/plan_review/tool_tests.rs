@@ -49,7 +49,7 @@ async fn failing_port_returns_error_without_approval() {
         .await
         .unwrap();
     assert!(result.is_error);
-    assert_eq!(result.text(), "plan review failed: review surface unavailable");
+    assert_eq!(result.text(), "Plan review failed: review surface unavailable");
 }
 
 #[tokio::test]
