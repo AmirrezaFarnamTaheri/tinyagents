@@ -83,7 +83,7 @@ impl ArtifactFiling for OneFails {
         generated: GeneratedArtifact,
         _: Option<&dyn ToolRunContext>,
     ) -> Result<FiledArtifact, String> {
-        if generated.path == PathBuf::from("blob:bad") {
+        if generated.path == std::path::Path::new("blob:bad") {
             return Err("filing failed".into());
         }
         Ok(FiledArtifact {
