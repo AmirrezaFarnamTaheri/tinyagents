@@ -1529,7 +1529,7 @@ fn a_record_racing_store_migration_is_not_lost() {
         entered: Arc::new(std::sync::Barrier::new(2)),
         resume: Arc::new(std::sync::Barrier::new(2)),
         pause_list: std::sync::atomic::AtomicBool::new(true),
-        gate_wait: Arc::new(Mutex::new(None)),
+        gate_wait: Arc::new(std::sync::Mutex::new(None)),
     });
     let source_port: Arc<dyn CompletionStore> = source.clone();
     let router = Arc::new(CompletionRouter::new(source_port.clone()));
