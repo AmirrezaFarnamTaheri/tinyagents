@@ -31,11 +31,8 @@
 //! **only if the caller connects to [`ValidatedUrl::addrs`]** — for example
 //! via `reqwest::ClientBuilder::resolve_to_addrs` — rather than letting its
 //! HTTP client resolve the hostname a second time. This crate carries no
-//! HTTP client, so the pinning is the caller's responsibility. The network
-//! tools in [`crate::network`] do pin: they connect only to the vetted
-//! addresses, which are either the ones this module resolved or the ones the
-//! host's [`NetGate::authorize_destination`](crate::network::NetGate::authorize_destination)
-//! authorized.
+//! HTTP client, so the pinning is the caller's responsibility. This utility
+//! deliberately does not own an HTTP client or host network policy.
 
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
