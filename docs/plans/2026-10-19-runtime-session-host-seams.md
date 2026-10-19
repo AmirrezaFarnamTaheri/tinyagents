@@ -266,66 +266,53 @@ input order, and `drop_synthesized_name_collisions(&[Arc<ToolSpec>],
 Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>>`, which removes synthesized specs
 whose names occur in the durable set before the first-wins pass.
 
-Extend the harness-owned `ToolSnapshot` in
-`harness/src/tool/snapshot.rs` with a typed opaque extension carrier rather
-than a string-keyed JSON map:
+Extend harness `ToolSnapshot` in `harness/src/tool/snapshot.rs` with a
+Rust-type keyed extension carrier. TinyAgents defines no Composio/REPL names
+or payload schemas; the host owns each payload type and its lifecycle:
 
 ```rust
-pub struct ToolSnapshotExtension {
-    pub namespace: ToolExtensionNamespace,
-    pub payload: serde_json::Value,
-}
+pub trait ToolSnapshotExtension: std::any::Any + std::fmt::Debug + Send + Sync {}
+impl<T: std::any::Any + std::fmt::Debug + Send + Sync> ToolSnapshotExtension for T {}
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolExtensionNamespace {
-    Composio,
-    Repl,
+#[derive(Clone, Default)]
+pub struct ToolSnapshotExtensions {
+    values: HashMap<TypeId, Arc<dyn ToolSnapshotExtension>>,
 }
 
 pub struct ToolSnapshot {
     specs: Vec<ToolSpec>,
     exact: bool,
-    extensions: Vec<ToolSnapshotExtension>,
+    extensions: ToolSnapshotExtensions,
 }
 
 impl ToolSnapshot {
-    pub fn with_extension(
-        mut self,
-        extension: ToolSnapshotExtension,
-    ) -> Result<Self, ToolSnapshotError> {
-        if self.extensions.iter().any(|item| item.namespace == extension.namespace) {
-            return Err(ToolSnapshotError::DuplicateExtension(extension.namespace));
-        }
-        self.extensions.push(extension);
-        Ok(self)
+    pub fn with_extension<T: ToolSnapshotExtension>(mut self, extension: T) -> Self {
+        self.extensions.insert(extension);
+        self
     }
-    pub fn extension(&self, namespace: ToolExtensionNamespace)
-        -> Option<&ToolSnapshotExtension> {
-        self.extensions.iter().find(|item| item.namespace == namespace)
+    pub fn extension<T: ToolSnapshotExtension>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
-    pub fn extensions(&self) -> &[ToolSnapshotExtension] { &self.extensions }
 }
 ```
 
-`ToolExtensionNamespace` derives `Serialize`/`Deserialize` with stable snake
-case names. `payload` remains owned by the host adapter; TinyAgents stores and
-returns it without interpreting it. No transcript envelope redesign is
-needed: `jsonl.rs::ToolsLine.tools` is already arbitrary `serde_json::Value`.
-Keep the array-of-specs JSON exactly when there are no extensions. When
-extensions exist, encode `{ "specs": [...], "extensions": [...] }`; decode
-both the historical array and this object. Reject objects missing `specs`,
-unknown format versions only if a `version` field is added (prefer no version
-field for this additive in-process record), duplicate extension namespaces,
-and malformed payloads with `ToolSnapshotError::Decode`. `exact` remains a
-per-call in-memory flag and is not restored from durable transcript data.
-`retaining` and `with_retained` preserve extensions; explicit one-off tools
-remain exact and are never merged with recorded declarations.
+Implement `ToolSnapshotExtensions::insert<T>(&mut self, value: T)` and
+`get<T>(&self) -> Option<&T>` using `TypeId::of::<T>()`, an `Arc<dyn
+ToolSnapshotExtension>`, and an object-safe `as_any(&self) -> &dyn Any`
+method on the extension trait. The blanket implementation returns `self` from
+`as_any`. Replacing an existing value of the same Rust type replaces that
+value; different host types coexist. Implement `Debug` for the collection by
+printing its length, so `ToolSnapshot` keeps its current `Debug` derive. Clones
+share immutable `Arc` payloads. `retaining` and `with_retained` copy the
+extension collection; `exact` semantics remain unchanged.
 
-Add `ToolSnapshotError::DuplicateExtension(ToolExtensionNamespace)` with the
-traits needed by the error enum. Initialize `extensions` empty in `new` and
-`Default`. `ToolSnapshotExtension` derives `Clone`, `Debug`, `PartialEq`,
-`Serialize`, and `Deserialize`.
+Keep `ToolSnapshot::to_json` and `from_json` as the existing array-of-specs
+format with no extension serialization. The harness transcript record already
+stores arbitrary JSON, but TinyAgents cannot serialize a host-defined Rust
+type without a host-owned codec. The host rebuilds typed extension values when
+it reconstructs the current snapshot after resume. If a concrete host later
+proves it needs durable extension payloads, that host adds a separate codec
+and transcript record while the generic runtime carrier remains typed.
 
 ### Context configuration (`tinyagents-harness`)
 
