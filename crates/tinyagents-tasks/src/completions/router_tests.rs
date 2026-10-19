@@ -1474,6 +1474,71 @@ impl CompletionStore for FailingList {
     ) -> tinyagents_harness::error::Result<()> {
         self.inner.put_fenced(record, parent_key, gate)
     }
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.insert_if_absent(record, gate)
+    }
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.claim_task(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        )
+    }
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        self.inner.claim_pending(
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        )
+    }
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.resolve_claim(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            token,
+            resolution,
+        )
+    }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
@@ -1581,21 +1646,15 @@ async fn store_migration_copies_parent_state_after_acquiring_source_gates() {
         inner: Arc::new(InMemoryCompletionStore::new()),
         entered: Arc::new(std::sync::Barrier::new(2)),
         resume: Arc::new(std::sync::Barrier::new(2)),
-        pause_list: std::sync::atomic::AtomicBool::new(true),
+        pause_list: std::sync::atomic::AtomicBool::new(false),
         gate_wait: Arc::new(std::sync::Mutex::new(None)),
     });
     let source_port: Arc<dyn CompletionStore> = source.clone();
     let router = Arc::new(CompletionRouter::new(source_port.clone()));
-    let q = queue();
-    router.attach_parent("p", q.clone());
-    router.record(record("pending", "p")).await.unwrap();
-    let queued = q
-        .take_admitted(
-            QueueLane::Followup,
-            tinyagents_harness::run_queue::QueueMode::OneAtATime,
-        )
-        .await;
-    assert_eq!(queued.len(), 1);
+    source.put(&record("pending", "p")).unwrap();
+    source
+        .pause_list
+        .store(true, std::sync::atomic::Ordering::SeqCst);
 
     let (gate_entered_tx, gate_entered_rx) = std::sync::mpsc::channel();
     let (gate_resume_tx, gate_resume_rx) = std::sync::mpsc::channel();
@@ -1614,12 +1673,10 @@ async fn store_migration_copies_parent_state_after_acquiring_source_gates() {
     });
 
     source.entered.wait();
-    source.resume.wait();
-    gate_entered_rx.recv().unwrap();
-    drop(queued);
-
     let cancellation_router = CompletionRouter::new(source.inner.clone());
     cancellation_router.cancel_parent("p").unwrap();
+    source.resume.wait();
+    gate_entered_rx.recv().unwrap();
     gate_resume_tx.send(()).unwrap();
     migration.join().unwrap();
 
