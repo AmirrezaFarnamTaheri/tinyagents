@@ -44,6 +44,30 @@ fn manager_argv(manager: &str) -> Option<(&'static str, &'static [&'static str])
     })
 }
 
+fn resolve_manager(
+    requested: Option<&str>,
+    mut on_path: impl FnMut(&str) -> bool,
+) -> Result<(String, &'static str, &'static [&'static str]), String> {
+    let manager = match requested {
+        Some(manager) => manager.to_owned(),
+        None => ["apt-get", "dnf", "yum", "pacman", "apk", "brew", "winget"]
+            .into_iter()
+            .find(|name| on_path(name))
+            .unwrap_or("")
+            .to_owned(),
+    };
+    if manager.is_empty() {
+        return Err("No supported package manager detected on PATH. Pass 'manager' explicitly (e.g. brew, pipx, npm, cargo).".to_owned());
+    }
+    let Some((program, prefix)) = manager_argv(&manager) else {
+        return Err(format!("Unsupported package manager '{manager}'"));
+    };
+    if !on_path(program) {
+        return Err(format!("Package manager '{program}' is not installed on PATH"));
+    }
+    Ok((manager, program, prefix))
+}
+
 fn valid_package(package: &str) -> bool {
     !package.is_empty()
         && package.len() <= 200
@@ -105,29 +129,13 @@ impl Tool for InstallTool {
                 "Invalid package name '{package}': only letters, digits and ._+-@/: are allowed"
             )));
         }
-        let manager = match args.get("manager").and_then(Value::as_str) {
-            Some(manager) => manager.to_owned(),
-            None => ["apt-get", "dnf", "yum", "pacman", "apk", "brew", "winget"]
-                .into_iter()
-                .find(|name| find_on_path(name).is_some())
-                .unwrap_or("")
-                .to_owned(),
+        let (manager, program, prefix) = match resolve_manager(
+            args.get("manager").and_then(Value::as_str),
+            |name| find_on_path(name).is_some(),
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => return Ok(ToolResult::error(error)),
         };
-        if manager.is_empty() {
-            return Ok(ToolResult::error(
-                "No supported package manager detected on PATH. Pass 'manager' explicitly (e.g. brew, pipx, npm, cargo).",
-            ));
-        }
-        let Some((program, prefix)) = manager_argv(&manager) else {
-            return Ok(ToolResult::error(format!(
-                "Unsupported package manager '{manager}'"
-            )));
-        };
-        if find_on_path(program).is_none() {
-            return Ok(ToolResult::error(format!(
-                "Package manager '{program}' is not installed on PATH"
-            )));
-        }
         let operation = ExecOperation::Install {
             package: package.to_owned(),
             manager: manager.clone(),
