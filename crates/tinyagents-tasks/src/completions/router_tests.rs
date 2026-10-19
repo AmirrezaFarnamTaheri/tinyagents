@@ -902,7 +902,7 @@ async fn parents_with_pending_and_cancel_all_use_durable_parent_markers() {
         .await
         .unwrap();
     router
-        .record(record("settled", "parent-c").with_notify_mode(NotifyMode::Off))
+        .record(record("settled", "parent-c").with_notify_mode(NotifyMode::Followup))
         .await
         .unwrap();
     let settled = router.claim_pending("parent-c", 1).unwrap();
