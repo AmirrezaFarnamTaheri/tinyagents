@@ -658,27 +658,16 @@ resolver and identity seed in a private builder config so existing
 `.transcript(...)` and `.session(...)` remain source-compatible:
 
 ```rust
-struct IdentityConfig<C: Send + Sync + 'static> {
-    resolver: Arc<dyn SessionIdentityResolver<C>>,
-    session_key: String,
-    meta: TranscriptMeta,
-}
-pub fn identity_resolver(
-    mut self,
-    session_key: impl Into<String>,
-    meta: TranscriptMeta,
-    resolver: Arc<dyn SessionIdentityResolver<C>>,
-) -> Self {
-    self.identity = Some(IdentityConfig {
-        resolver,
-        session_key: session_key.into(),
-        meta,
-    });
-    self
+pub(crate) struct IdentityConfig<C: Send + Sync + 'static> {
+    pub(crate) resolver: Arc<dyn SessionIdentityResolver<C>>,
+    pub(crate) session_key: String,
+    pub(crate) meta: TranscriptMeta,
 }
 ```
 
-In `builder.rs`, add `identity: Option<IdentityConfig<C>>` to
+Define `IdentityConfig<C>` in `runtime/identity.rs` and import it from both
+`builder.rs` and `session.rs`; its crate visibility is required because both
+modules store it. In `builder.rs`, add `identity: Option<IdentityConfig<C>>` to
 `SessionBuilder<C>`, initialize it to `None` in `new`, and add the method
 implementation below. Keep `IdentityConfig<C>` in a private field so the
 existing `.transcript(...)` and `.session(...)` methods remain source
