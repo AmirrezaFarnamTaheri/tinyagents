@@ -91,6 +91,9 @@ async fn scoped_session_store_rejects_other_parent_identity() {
             .is_err()
     );
     assert!(scoped.get("not-owned").await.unwrap().is_none());
+    let mut foreign = upsert("task", key("task"));
+    foreign.selector.parent_session = "other-session".into();
+    assert!(scoped.upsert_running(foreign).await.is_err());
 }
 
 #[test]
