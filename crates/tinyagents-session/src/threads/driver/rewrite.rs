@@ -183,9 +183,14 @@ impl DriverConversationStore {
         Fut: Future<Output = ()> + Send,
     {
         let mut stats = ConversationPurgeStats::default();
-        let mut query = Query::filter(Filter::All).limit(PAGE_SIZE);
         loop {
-            let page = self.docs.query(COLLECTION, &query).await?;
+            let page = self
+                .docs
+                .query(COLLECTION, &Query::filter(Filter::All).limit(PAGE_SIZE))
+                .await?;
+            if page.items.is_empty() {
+                return Ok(stats);
+            }
             for item in page.items {
                 let row = Self::decode(item)?;
                 self.retire(&row.doc).await;
@@ -201,12 +206,10 @@ impl DriverConversationStore {
                     after_delete(row.doc.thread.id).await;
                 }
             }
-            // Deleting shifts later rows into the first page, so restart from
-            // the head until the collection is empty.
-            match page.next {
-                Some(_) => query = Query::filter(Filter::All).limit(PAGE_SIZE),
-                None => return Ok(stats),
-            }
+            // Deleting shifts rows into the first page, and callbacks or
+            // concurrent writers may add rows even when the old page had no
+            // continuation cursor. Restart at the head until a fresh query is
+            // actually empty; this is quiescence draining, not a snapshot.
         }
     }
 }
