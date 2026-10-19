@@ -81,6 +81,18 @@ fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
 }
 
 #[test]
+fn cloned_memory_stores_share_a_batch_admission_identity() {
+    let store = InMemoryCompletionStore::new();
+    let first: Arc<dyn CompletionStore> = Arc::new(store.clone());
+    let second: Arc<dyn CompletionStore> = Arc::new(store.clone());
+    let item = record("same-parent-a", "parent");
+    let first = crate::completions::CompletionAdmission::for_store(first, &item);
+    let second = crate::completions::CompletionAdmission::for_store(second, &item);
+
+    assert_eq!(first.batch_key(), second.batch_key());
+}
+
+#[test]
 fn in_memory_store_rejects_mutations_from_a_released_parent_gate() {
     let store = InMemoryCompletionStore::new();
     let stale = store
