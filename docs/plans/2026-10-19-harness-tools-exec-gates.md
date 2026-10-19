@@ -382,8 +382,15 @@ use std::sync::Arc;
 use tinytools::{Tool, ToolRunContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaArtifactKind { Image, Video }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedArtifact {
     pub path: PathBuf,
+    /// Wrapper configuration retained from the source host adapter and used
+    /// by its filing port to select the image/video artifact category.
+    pub artifact_kind: MediaArtifactKind,
+    /// The generated output's own reported kind (for example image/video).
     pub kind: String,
     pub media_type: Option<String>,
     pub bytes: Option<u64>,
@@ -404,28 +411,51 @@ pub trait ArtifactFiling: Send + Sync {
 }
 
 pub struct MediaArtifactTool<T: Tool> {
-    inner: Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>,
+    /// Retained instance is the stable metadata source (`name`, `description`,
+    /// schema and other Tool declarations) and fallback executor.
+    inner: T,
+    kind: MediaArtifactKind,
+    /// Per-invocation tool, built only for execution/progress; its borrowed
+    /// name/description are never returned from this temporary value.
+    per_call: Option<Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>>,
     filing: Arc<dyn ArtifactFiling>,
 }
 impl<T: Tool> MediaArtifactTool<T> {
-    pub fn new(
-        inner: Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>,
-        filing: Arc<dyn ArtifactFiling>,
-    ) -> Self { Self { inner, filing } }
+    pub fn new(inner: T, kind: MediaArtifactKind, filing: Arc<dyn ArtifactFiling>) -> Self {
+        Self { inner, kind, per_call: None, filing }
+    }
+    pub fn with_per_call_inner(
+        mut self,
+        factory: Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>,
+    ) -> Self {
+        self.per_call = Some(factory);
+        self
+    }
 }
 ```
 
 The wrapper passes each invocation's original `ToolRunContext` through every
 `ArtifactFiling::file` call. This per-call argument is required because the
 host adapter derives approval/chat routing from that call's extension; do not
-capture one ambient chat context in the shared wrapper or factory. The wrapper
+capture one ambient chat context in the shared wrapper or factory. Retain the
+stable `inner: T` instance alongside the per-call factory: delegate `Tool::name`
+and `Tool::description` (and the other static Tool metadata) to it. Do not
+return references borrowed from the temporary tool built by the factory. Store
+`MediaArtifactKind::{Image, Video}` on the wrapper and pass it with every
+`GeneratedArtifact`; use it to preserve the existing heartbeat labels
+`Generating image` / `Generating video`. The wrapper
 replaces only the entry's `path`, adds `artifact_id` on success,
 or adds `artifact_error` on a per-entry failure; it keeps processing later
 entries and leaves unrecognized shapes untouched. It rewrites matching source
 paths in `markdown_formatted`. Keep the `n > 1` title suffix and 60-character
 prompt title cap. OpenHuman's later adapter implements `ArtifactFiling` and
 retains the existing versioning, trusted-file-root checks, blob cleanup, and
-reference allowlist policy.
+reference allowlist policy. Metadata tests use a fake inner tool with distinct
+name, description, schema, category, policy and permissions and assert the
+wrapper returns each declaration from the retained instance with and without a
+per-call factory. Image/video configuration tests assert the exact kind passed
+to each filer and exact heartbeat label, including when the factory returns a
+new temporary inner tool.
 
 ## Bite-sized implementation tasks
 
@@ -613,18 +643,24 @@ description for POSIX/cmd flavors supplied as a generic `ShellFlavor`,
 `PermissionLevel::Execute`, unbounded default timeout, and 30,000-character
 result cap.
 
-Execution order is a contract and has a focused test: parse/validate the
-command; form `ExecAuthorizationRequest`; await `ExecGate::authorize`; on
-denial map the gate reason to the source refusal result and return without
-calling backend or recording an allowed completion; on permit, build
-backend-neutral `ExecRequest` from the permit, call the injected backend with
-the call context and output meter, map output to `ToolResult`, then call
-`ExecGate::record` exactly once with allowed=true and the final success flag.
-On backend launch error, return the stable sandbox-execution failure result
-and record an unsuccessful result. Do not call policy a second time after
-approval; the host's gate must perform its final revalidation immediately
-before spawn. Host-specific authorization must deny before the backend's
-process creation.
+Execution order is a contract and has focused tests: parse/validate the
+command; form `ExecAuthorizationRequest`; await `ExecGate::authorize`. A gate
+deny maps to the source refusal result and records exactly one
+`GateDenied` event (`authorized=false`, `allowed=false`,
+`process_attempted=false`), without calling the backend. On permit, build
+`ExecRequest` with the permit's authorized backend selection/capability and
+call the backend with context and output meter. Map each typed result and
+record exactly one matching event: `Refused` maps to the source refusal result
+and records `BackendRefused` (`authorized=true`, `allowed=false`,
+`process_attempted=false`); `LaunchFailed` maps to the stable execution-failure
+result and records `LaunchFailed` (`authorized=true`, `allowed=true`,
+`process_attempted=true`, `success=false`); `Completed` maps its output to the
+source `ToolResult` and records `Completed` (`authorized=true`, `allowed=true`,
+`process_attempted=true`, with success derived from that final result). Do not
+return early from a permitted path before its one audit record. Do not call
+policy a second time after approval; the host's gate must perform its final
+revalidation immediately before dispatch, and the selected backend must refuse
+before process creation when configuration/preflight fails.
 
 Port/retain behavior assertions for schema/name/permission/timeout; output
 Unicode and per-stream truncation boundaries; success with/without stderr;
@@ -717,13 +753,19 @@ fields, preserved resolution-to-result mapping, missing-port fail-closed
 behavior, and that feedback is not silently discarded.
 
 Port `MediaArtifactTool<T>` to `media::MediaArtifactTool<T>` with an injected
-`Arc<dyn ArtifactFiling>`. Add the transport-free `MediaJobProgress` and
+`Arc<dyn ArtifactFiling>`. Retain the stable inner tool instance for all
+borrowed metadata and static Tool declarations alongside the per-call factory.
+Add the configured `MediaArtifactKind::{Image, Video}` and preserve its filer
+kind and heartbeat label. Add the transport-free `MediaJobProgress` and
 `MediaProgressFn` contract above; do not add tinyinference-video/image or
 reqwest solely to name a callback type. Update the per-call inner factory to
 accept `Option<&dyn ToolRunContext>` instead of `ApprovalChatContext`, letting
 the host-specific factory downcast its own context in the adapter. Pass that
-same context to each `ArtifactFiling::file` call. Add a concurrent routing
-test using one shared wrapper and two simultaneous invocations with distinct
+same context to each `ArtifactFiling::file` call. Test wrapper metadata
+(name/description/schema/category/policy/permissions) against the retained
+inner both with and without a factory, and test image/video config mapping to
+filer kind and heartbeat labels. Add a concurrent routing test using one
+shared wrapper and two simultaneous invocations with distinct
 fake `ToolRunContext` host extensions; the fake filer must observe each
 invocation's own extension for every generated artifact, with the corresponding
 IDs and paths rewritten only in that invocation's result. Remove OpenHuman `Production`, artifact store,
