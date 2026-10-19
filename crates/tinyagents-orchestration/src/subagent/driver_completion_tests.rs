@@ -621,7 +621,14 @@ async fn a_replayed_terminal_result_is_not_recorded_again() {
         .unwrap();
     let claimed = router.pull("p", 10).unwrap();
     assert_eq!(claimed.len(), 1);
-    router.mark_delivered(&claimed.iter().filter_map(|record| record.receipt()).collect::<Vec<_>>()).unwrap();
+    router
+        .mark_delivered(
+            &claimed
+                .iter()
+                .filter_map(|record| record.receipt())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
     let replay = driver
         .run(request("t1"), CancellationToken::new())
         .await

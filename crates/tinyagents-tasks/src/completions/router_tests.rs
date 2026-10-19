@@ -29,7 +29,10 @@ fn ids(records: &[CompletionRecord]) -> Vec<&str> {
 }
 
 fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
-    records.iter().filter_map(CompletionRecord::receipt).collect()
+    records
+        .iter()
+        .filter_map(CompletionRecord::receipt)
+        .collect()
 }
 
 #[tokio::test]
@@ -125,8 +128,16 @@ async fn another_router_cannot_ack_or_fail_an_active_claim_by_task_id() {
     let stranger = CompletionRouter::new(store);
     owner.record(record("owned", "p")).await.unwrap();
     let claimed = owner.claim_pending("p", 1).unwrap();
-    let forged = CompletionReceipt { task_id: "owned".into(), token: "not-the-owner".into() };
-    assert_eq!(stranger.mark_delivered(std::slice::from_ref(&forged)).unwrap(), 0);
+    let forged = CompletionReceipt {
+        task_id: "owned".into(),
+        token: "not-the-owner".into(),
+    };
+    assert_eq!(
+        stranger
+            .mark_delivered(std::slice::from_ref(&forged))
+            .unwrap(),
+        0
+    );
     assert_eq!(stranger.mark_failed(&[forged]).unwrap().len(), 0);
     assert_eq!(owner.pending_for("p").len(), 1);
     assert_eq!(owner.mark_delivered(&receipts(&claimed)).unwrap(), 1);
@@ -142,13 +153,25 @@ async fn an_old_claim_receipt_cannot_settle_a_reclaimed_attempt() {
 
     // Simulate another process reclaiming the durable row after visibility.
     let mut expired = store.get("reclaimed").unwrap();
-    expired.claim.as_mut().unwrap().visible_after = SystemTime::now() - std::time::Duration::from_secs(1);
+    expired.claim.as_mut().unwrap().visible_after =
+        SystemTime::now() - std::time::Duration::from_secs(1);
     store.put(&expired).unwrap();
     let new = router.claim_pending("p", 1).unwrap();
     assert_eq!(new.len(), 1);
     let old_receipt = old.receipt().unwrap();
-    assert_eq!(router.mark_delivered(std::slice::from_ref(&old_receipt)).unwrap(), 0);
-    assert_eq!(router.mark_failed(std::slice::from_ref(&old_receipt)).unwrap().len(), 0);
+    assert_eq!(
+        router
+            .mark_delivered(std::slice::from_ref(&old_receipt))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        router
+            .mark_failed(std::slice::from_ref(&old_receipt))
+            .unwrap()
+            .len(),
+        0
+    );
     router.release(std::slice::from_ref(&old_receipt));
     assert_eq!(router.pending_for("p").len(), 1);
     assert_eq!(router.mark_delivered(&receipts(&new)).unwrap(), 1);
@@ -258,8 +281,20 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Followup))
         .await
         .unwrap();
-    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(QueueLane::Followup), receipt: Some(_) }));
-    let receipt = match outcome { RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt, _ => unreachable!() };
+    assert!(matches!(
+        outcome,
+        RecordOutcome::Recorded {
+            lane: Some(QueueLane::Followup),
+            receipt: Some(_)
+        }
+    ));
+    let receipt = match outcome {
+        RecordOutcome::Recorded {
+            receipt: Some(receipt),
+            ..
+        } => receipt,
+        _ => unreachable!(),
+    };
     let status = q.status().await;
     assert_eq!(
         (status.followups, status.collects, status.steers),
@@ -284,7 +319,13 @@ async fn collect_mode_pushes_onto_the_collect_lane() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Collect))
         .await
         .unwrap();
-    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(QueueLane::Collect), receipt: Some(_) }));
+    assert!(matches!(
+        outcome,
+        RecordOutcome::Recorded {
+            lane: Some(QueueLane::Collect),
+            receipt: Some(_)
+        }
+    ));
     let status = q.status().await;
     assert_eq!((status.followups, status.collects), (0, 1));
 }
@@ -293,7 +334,13 @@ async fn collect_mode_pushes_onto_the_collect_lane() {
 async fn followup_without_a_live_parent_stays_pending() {
     let router = router();
     let outcome = router.record(record("t1", "p")).await.unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
+    assert_eq!(
+        outcome,
+        RecordOutcome::Recorded {
+            lane: None,
+            receipt: None
+        }
+    );
     assert_eq!(ids(&router.claim_pending("p", 10).unwrap()), ["t1"]);
 }
 
@@ -316,7 +363,13 @@ async fn hold_mode_waits_for_the_next_turn() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::HoldForNextTurn))
         .await
         .unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
+    assert_eq!(
+        outcome,
+        RecordOutcome::Recorded {
+            lane: None,
+            receipt: None
+        }
+    );
     assert_eq!(q.status().await.total, 0);
     assert!(
         router.claim_pending("p", 10).unwrap().is_empty(),
@@ -339,7 +392,13 @@ async fn off_mode_is_recorded_for_the_parent_to_pull() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Off))
         .await
         .unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
+    assert_eq!(
+        outcome,
+        RecordOutcome::Recorded {
+            lane: None,
+            receipt: None
+        }
+    );
     assert_eq!(q.status().await.total, 0);
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
     assert!(router.begin_turn("p").unwrap().is_empty());
@@ -585,16 +644,23 @@ impl CompletionStore for FailingSecondPut {
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let claimed = self.inner.claim_pending(parent_key, mode, max, token, visible_after)?;
-        if (0..claimed.len()).any(|_| {
-            self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst)
-        }) {
+        let claimed = self
+            .inner
+            .claim_pending(parent_key, mode, max, token, visible_after)?;
+        if (0..claimed.len()).any(|_| self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst))
+        {
             for record in &claimed {
                 if let Some(receipt) = record.receipt() {
-                    self.inner.resolve_claim(&receipt.task_id, &receipt.token, ClaimResolution::Release)?;
+                    self.inner.resolve_claim(
+                        &receipt.task_id,
+                        &receipt.token,
+                        ClaimResolution::Release,
+                    )?;
                 }
             }
-            return Err(tinyagents_harness::error::TinyAgentsError::Graph("disk".into()));
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph(
+                "disk".into(),
+            ));
         }
         Ok(claimed)
     }
@@ -608,9 +674,12 @@ impl CompletionStore for FailingSecondPut {
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
-            return Err(tinyagents_harness::error::TinyAgentsError::Graph("disk".into()));
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph(
+                "disk".into(),
+            ));
         }
-        self.inner.claim_task(task_id, parent_key, mode, token, visible_after)
+        self.inner
+            .claim_task(task_id, parent_key, mode, token, visible_after)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)

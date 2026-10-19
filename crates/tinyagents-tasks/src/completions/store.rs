@@ -37,7 +37,10 @@ pub trait CompletionStore: Send + Sync {
         visible_after: SystemTime,
     ) -> Result<Vec<CompletionRecord>> {
         let _ = (parent_key, mode, max, token, visible_after);
-        Err(store_err("claim", "store does not support atomic delivery claims"))
+        Err(store_err(
+            "claim",
+            "store does not support atomic delivery claims",
+        ))
     }
 
     /// Atomically claims one pending record for a live push. The default fails
@@ -51,7 +54,10 @@ pub trait CompletionStore: Send + Sync {
         visible_after: SystemTime,
     ) -> Result<Option<CompletionRecord>> {
         let _ = (task_id, parent_key, mode, token, visible_after);
-        Err(store_err("claim task", "store does not support atomic delivery claims"))
+        Err(store_err(
+            "claim task",
+            "store does not support atomic delivery claims",
+        ))
     }
 
     /// Resolves a claim only while its token still owns the record. `None`
@@ -63,7 +69,10 @@ pub trait CompletionStore: Send + Sync {
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
         let _ = (task_id, token, resolution);
-        Err(store_err("resolve claim", "store does not support atomic delivery claims"))
+        Err(store_err(
+            "resolve claim",
+            "store does not support atomic delivery claims",
+        ))
     }
 
     /// Latest records, for one parent or (`None`) for all. Unordered.
@@ -183,7 +192,9 @@ impl CompletionStore for InMemoryCompletionStore {
         candidates.truncate(max);
         let mut claimed = Vec::with_capacity(candidates.len());
         for candidate in candidates {
-            let Some(record) = records.get_mut(&candidate.task_id) else { continue };
+            let Some(record) = records.get_mut(&candidate.task_id) else {
+                continue;
+            };
             record.attempts = record.attempts.saturating_add(1);
             record.updated_at = now;
             record.claim = Some(CompletionClaim {
@@ -205,11 +216,16 @@ impl CompletionStore for InMemoryCompletionStore {
     ) -> Result<Option<CompletionRecord>> {
         let now = SystemTime::now();
         let mut records = self.lock()?;
-        let Some(record) = records.get_mut(task_id) else { return Ok(None) };
+        let Some(record) = records.get_mut(task_id) else {
+            return Ok(None);
+        };
         if record.parent_key != parent_key
             || record.state != CompletionState::Pending
             || !mode.accepts(record.notify_mode)
-            || record.claim.as_ref().is_some_and(|claim| claim.visible_after > now)
+            || record
+                .claim
+                .as_ref()
+                .is_some_and(|claim| claim.visible_after > now)
         {
             return Ok(None);
         }

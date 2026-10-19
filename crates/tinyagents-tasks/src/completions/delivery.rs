@@ -263,7 +263,8 @@ impl CompletionDelivery {
             }
             match delivery_result {
                 Ok(()) => {
-                    let receipts: Vec<_> = batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    let receipts: Vec<_> =
+                        batch.iter().filter_map(CompletionRecord::receipt).collect();
                     match target.router.mark_delivered(&receipts) {
                         Ok(_) => {
                             claim.clear();
@@ -308,7 +309,8 @@ impl CompletionDelivery {
                 }
                 Err(error) => {
                     tracing::warn!(parent_key = target.parent_key, error = %error, "completion delivery turn failed");
-                    let receipts: Vec<_> = batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    let receipts: Vec<_> =
+                        batch.iter().filter_map(CompletionRecord::receipt).collect();
                     let gave_up = match target.router.mark_failed(&receipts) {
                         Ok(records) => records,
                         Err(error) => {
@@ -383,11 +385,17 @@ impl<'a> BatchClaim<'a> {
     fn new(router: &'a CompletionRouter, records: &[CompletionRecord]) -> Self {
         Self {
             router,
-            receipts: records.iter().filter_map(CompletionRecord::receipt).collect(),
+            receipts: records
+                .iter()
+                .filter_map(CompletionRecord::receipt)
+                .collect(),
         }
     }
     fn replace(&mut self, records: &[CompletionRecord]) {
-        self.receipts = records.iter().filter_map(CompletionRecord::receipt).collect();
+        self.receipts = records
+            .iter()
+            .filter_map(CompletionRecord::receipt)
+            .collect();
     }
     fn clear(&mut self) {
         self.receipts.clear();

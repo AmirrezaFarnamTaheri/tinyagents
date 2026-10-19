@@ -21,10 +21,10 @@ mod types;
 
 pub use completions::{
     ClaimResolution, CompletionArtifact, CompletionClaim, CompletionClaimMode, CompletionFormatter,
-    CompletionReceipt, CompletionRecord, CompletionResult, CompletionRouter, CompletionState, CompletionStatus,
-    CompletionStore, CompletionStoreReplaceOutcome,
-    DEFAULT_MAX_ATTEMPTS, DriverCompletionStore, InMemoryCompletionStore,
-    NeutralCompletionFormatter, NotifyMode, RecordOutcome, TombstoneOutcome,
+    CompletionReceipt, CompletionRecord, CompletionResult, CompletionRouter, CompletionState,
+    CompletionStatus, CompletionStore, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS,
+    DriverCompletionStore, InMemoryCompletionStore, NeutralCompletionFormatter, NotifyMode,
+    RecordOutcome, TombstoneOutcome,
 };
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,

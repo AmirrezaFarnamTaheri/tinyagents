@@ -44,8 +44,8 @@ pub use router::{
 };
 pub use store::{ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore};
 pub use types::{
-    CompletionArtifact, CompletionClaim, CompletionReceipt, CompletionRecord, CompletionResult, CompletionState,
-    CompletionStatus, NotifyMode,
+    CompletionArtifact, CompletionClaim, CompletionReceipt, CompletionRecord, CompletionResult,
+    CompletionState, CompletionStatus, NotifyMode,
 };
 
 #[cfg(test)]

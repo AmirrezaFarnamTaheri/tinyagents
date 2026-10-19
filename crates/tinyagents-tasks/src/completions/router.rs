@@ -194,9 +194,11 @@ impl CompletionRouter {
         for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
             if let Some(receipt) = state.active_receipts.remove(&record.task_id) {
-                let _ = state
-                    .store
-                    .resolve_claim(&record.task_id, &receipt.token, ClaimResolution::Release);
+                let _ = state.store.resolve_claim(
+                    &record.task_id,
+                    &receipt.token,
+                    ClaimResolution::Release,
+                );
             }
         }
     }
@@ -319,20 +321,29 @@ impl CompletionRouter {
                         CompletionClaimMode::Followup,
                         &token,
                         visible_after,
-                    )? else {
-                        return Ok(RecordOutcome::Recorded { lane: None, receipt: None });
+                    )?
+                    else {
+                        return Ok(RecordOutcome::Recorded {
+                            lane: None,
+                            receipt: None,
+                        });
                     };
                     record = claimed;
                     let receipt = record.receipt().expect("claimed record has a receipt");
                     state.leased.insert(record.task_id.clone());
-                    state.active_receipts.insert(record.task_id.clone(), receipt.clone());
+                    state
+                        .active_receipts
+                        .insert(record.task_id.clone(), receipt.clone());
                     Some((lane, queue, receipt))
                 }
                 None => None,
             }
         };
         let Some((lane, queue, push_receipt)) = push else {
-            return Ok(RecordOutcome::Recorded { lane: None, receipt: None });
+            return Ok(RecordOutcome::Recorded {
+                lane: None,
+                receipt: None,
+            });
         };
         let message = self.formatter.to_message(std::slice::from_ref(&record));
         queue.push(lane, message).await;
@@ -342,7 +353,10 @@ impl CompletionRouter {
             lane = lane.as_str(),
             "{LOG_PREFIX} pushed to live parent"
         );
-        Ok(RecordOutcome::Recorded { lane: Some(lane), receipt: Some(push_receipt) })
+        Ok(RecordOutcome::Recorded {
+            lane: Some(lane),
+            receipt: Some(push_receipt),
+        })
     }
 
     /// [`Self::record`], retried up to `attempts` times with a short backoff
@@ -500,18 +514,17 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
-        let mut candidates = state.store.claim_pending(
-            parent_key,
-            mode,
-            max,
-            &token,
-            visible_after,
-        )?;
+        let mut candidates =
+            state
+                .store
+                .claim_pending(parent_key, mode, max, &token, visible_after)?;
         sort_oldest_first(&mut candidates);
         for record in &candidates {
             state.leased.insert(record.task_id.clone());
             if let Some(receipt) = record.receipt() {
-                state.active_receipts.insert(record.task_id.clone(), receipt);
+                state
+                    .active_receipts
+                    .insert(record.task_id.clone(), receipt);
             }
         }
         if !candidates.is_empty() {

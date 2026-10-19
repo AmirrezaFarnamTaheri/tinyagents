@@ -260,7 +260,10 @@ impl CompletionStore for DriverCompletionStore {
             if record.parent_key != parent_key
                 || record.state != CompletionState::Pending
                 || !mode.accepts(record.notify_mode)
-                || record.claim.as_ref().is_some_and(|claim| claim.visible_after > now)
+                || record
+                    .claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.visible_after > now)
             {
                 return Ok(None);
             }
@@ -283,7 +286,9 @@ impl CompletionStore for DriverCompletionStore {
                 .await
             {
                 Ok(_) => Ok(Some(record)),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => Ok(None),
+                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
+                    Ok(None)
+                }
                 Err(error) => Err(map_error(error)),
             }
         })
@@ -307,9 +312,10 @@ impl CompletionStore for DriverCompletionStore {
             let mut record = decode_strict(row.clone())?;
             let now = SystemTime::now();
             if record.state != CompletionState::Pending
-                || record.claim.as_ref().is_none_or(|claim| {
-                    claim.token != token || claim.visible_after <= now
-                })
+                || record
+                    .claim
+                    .as_ref()
+                    .is_none_or(|claim| claim.token != token || claim.visible_after <= now)
             {
                 return Ok(None);
             }

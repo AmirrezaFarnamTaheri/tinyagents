@@ -1,9 +1,9 @@
 use super::*;
 use crate::completions::CompletionReceipt;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
@@ -17,7 +17,10 @@ fn record(task: &str, parent: &str) -> CompletionRecord {
 }
 
 fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
-    records.iter().filter_map(CompletionRecord::receipt).collect()
+    records
+        .iter()
+        .filter_map(CompletionRecord::receipt)
+        .collect()
 }
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
@@ -68,7 +71,9 @@ async fn pending_completions_survive_a_reopen() {
 async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
     let storage = MemoryStorage::new();
     let docs = docs_of(&storage, "shared");
-    let first = CompletionRouter::new(Arc::new(DriverCompletionStore::new(Arc::clone(&docs)).unwrap()));
+    let first = CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new(Arc::clone(&docs)).unwrap(),
+    ));
     let second = CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()));
     first.record(record("shared-task", "parent")).await.unwrap();
 
@@ -76,7 +81,10 @@ async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
     let second_claim = second.claim_pending("parent", 1).unwrap();
 
     assert_eq!(first_claim.len(), 1);
-    assert!(second_claim.is_empty(), "another router already owns this visible claim");
+    assert!(
+        second_claim.is_empty(),
+        "another router already owns this visible claim"
+    );
 }
 
 #[tokio::test]
@@ -102,10 +110,13 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
         .pop()
         .unwrap();
     let first_token = first_claim.claim.unwrap().token;
-    assert!(first
-        .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
-        .unwrap()
-        .is_none(), "an expired owner cannot settle before another router reclaims");
+    assert!(
+        first
+            .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+            .unwrap()
+            .is_none(),
+        "an expired owner cannot settle before another router reclaims"
+    );
     let second_claim = second
         .claim_pending(
             "parent",
@@ -115,13 +126,19 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
             now + Duration::from_secs(10),
         )
         .unwrap();
-    assert_eq!(second_claim.len(), 1, "the expired visibility lease is reclaimable");
+    assert_eq!(
+        second_claim.len(),
+        1,
+        "the expired visibility lease is reclaimable"
+    );
     let second_token = second_claim[0].claim.as_ref().unwrap().token.clone();
 
-    assert!(first
-        .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
-        .unwrap()
-        .is_none());
+    assert!(
+        first
+            .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+            .unwrap()
+            .is_none()
+    );
     let settled = second
         .resolve_claim("lease-task", &second_token, ClaimResolution::Delivered)
         .unwrap()

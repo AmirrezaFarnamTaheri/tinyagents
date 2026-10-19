@@ -2280,6 +2280,7 @@ dependencies = [
  "tinystoragedrivers-sqlite",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
