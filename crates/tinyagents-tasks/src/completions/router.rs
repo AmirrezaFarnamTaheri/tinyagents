@@ -184,7 +184,13 @@ impl CompletionRouter {
         }
         let records = state.store.try_list(None)?;
         for record in records {
-            replacement.put(&record)?;
+            let parent_key = if record.parent_key.is_empty() {
+                parent_from_marker_id(&record.task_id).unwrap_or_else(|| record.task_id.clone())
+            } else {
+                record.parent_key.clone()
+            };
+            let gate = ParentGateGuard::acquire(Arc::clone(&replacement), &parent_key)?;
+            replacement.put_fenced(&record, &parent_key, gate.claim())?;
         }
         state.store = Arc::clone(&replacement);
         Ok(CompletionStoreReplaceOutcome::Replaced(replacement))
@@ -455,17 +461,23 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let outcome = match state.store.get(task_id) {
             Some(mut existing) if existing.state == CompletionState::Pending => {
+                let gate_key = existing.parent_key.clone();
+                let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &gate_key)?;
                 existing.state = CompletionState::Tombstoned;
                 existing.updated_at = SystemTime::now();
-                state.store.put(&existing)?;
+                state.store.put_fenced(&existing, &gate_key, gate.claim())?;
                 state.leased.remove(task_id);
                 TombstoneOutcome::Suppressed
             }
             Some(_) => TombstoneOutcome::AlreadyFinal,
             None => {
-                state
-                    .store
-                    .put(&CompletionRecord::tombstone_stub(task_id))?;
+                let gate_key = format!("completion-task:{task_id}");
+                let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &gate_key)?;
+                state.store.put_fenced(
+                    &CompletionRecord::tombstone_stub(task_id),
+                    &gate_key,
+                    gate.claim(),
+                )?;
                 TombstoneOutcome::Reserved
             }
         };
@@ -480,15 +492,15 @@ impl CompletionRouter {
     /// (until [`Self::compact`] drops it after its retention window). Returns how many pending records were withdrawn.
     pub fn cancel_parent(&self, parent_key: &str) -> Result<usize> {
         let mut state = self.lock()?;
-        let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        Self::set_parent_marker(&state, parent_key, CompletionState::Tombstoned)?;
+        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+        Self::set_parent_marker(&state, parent_key, CompletionState::Tombstoned, gate.claim())?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
         for mut record in state.store.list(Some(parent_key)) {
             if record.state == CompletionState::Pending {
                 record.state = CompletionState::Tombstoned;
                 record.updated_at = SystemTime::now();
-                state.store.put(&record)?;
+                state.store.put_fenced(&record, parent_key, gate.claim())?;
                 state.leased.remove(&record.task_id);
                 withdrawn += 1;
             }
@@ -501,8 +513,8 @@ impl CompletionRouter {
     /// [`Self::cancel_parent`] (a stopped thread that the user reopened).
     pub fn resume_parent(&self, parent_key: &str) {
         let result = self.lock().and_then(|state| {
-            let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-            Self::set_parent_marker(&state, parent_key, CompletionState::Delivered)
+            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+            Self::set_parent_marker(&state, parent_key, CompletionState::Delivered, gate.claim())
         });
         if let Err(error) = result {
             tracing::warn!(parent_key = %parent_key, error = %error, "{LOG_PREFIX} could not resume parent");
@@ -516,6 +528,10 @@ impl CompletionRouter {
         format!("\u{1}parent-cancelled:{parent_key}")
     }
 
+    fn parent_from_marker_id(task_id: &str) -> Option<String> {
+        task_id.strip_prefix("\u{1}parent-cancelled:").map(str::to_owned)
+    }
+
     fn parent_cancelled(state: &RouterState, parent_key: &str) -> bool {
         state
             .store
@@ -527,10 +543,12 @@ impl CompletionRouter {
         router: &RouterState,
         parent_key: &str,
         state: CompletionState,
+        gate: &ParentGateClaim,
     ) -> Result<()> {
         let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
+        marker.parent_key = parent_key.to_owned();
         marker.state = state;
-        router.store.put(&marker)
+        router.store.put_fenced(&marker, parent_key, gate)
     }
 
     /// Every undelivered completion for `parent_key`, oldest first, in every
