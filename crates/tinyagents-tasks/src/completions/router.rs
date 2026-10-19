@@ -275,14 +275,13 @@ impl CompletionRouter {
         // Stop new queue admissions without holding a slot lock while waiting
         // on durable parent gates. Existing permits finish first; admissions
         // racing the migration fail closed and remain recoverable in the store.
-        let slot_guard = {
+        {
             let mut slot = self
                 .admission_store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             slot.migrating = true;
-            slot
-        };
+        }
         let migration = StoreMigration {
             slot: &self.admission_store,
             replacement: None,
@@ -308,7 +307,6 @@ impl CompletionRouter {
             .iter()
             .map(|parent| ParentGateGuard::acquire(Arc::clone(&state.store), parent))
             .collect::<Result<Vec<_>>>()?;
-        drop(slot_guard);
         let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
         if records.iter().any(|record| {
