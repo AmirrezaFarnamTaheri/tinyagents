@@ -929,18 +929,137 @@ through `#[cfg(test)] #[path = "context_tests.rs"] mod tests;`. Update
 TinyAgents compaction consumers and config exports; do not change OpenHuman
 sources in this TinyAgents plan.
 
-Before moving the type, add exact tests: deserialize `{}` and compare its
-serialized value with serialized `ContextConfig::default()` (the existing type
-does not need a new `PartialEq` derive); a TOML fixture with all 12 canonical
-fields and a second fixture exercising both legacy aliases; strategy parse
-table for all six accepted spellings plus rejected unknown value; zero trigger yields
-`CompactionSettings { trigger_tokens: None, strategy: configured_strategy }`;
-nonzero trigger survives; and serializing/deserializing the full default
-preserves equality. The tests fail because harness has no `ContextConfig`.
-Move the fields/default helpers exactly, replacing only the OpenHuman
-microcompact default reference with a harness constant equal to its current
-value. Then run `cargo test -p tinyagents-harness config::context` and
-`cargo test -p tinyagents-runtime`.
+Add the sibling `config/context_tests.rs` first. The test body is:
+
+```rust
+use super::*;
+
+#[test]
+fn context_config_preserves_defaults_aliases_and_strategy_spellings() {
+    let default = ContextConfig::default();
+    let parsed: ContextConfig = toml::from_str("").unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), serde_json::to_value(default).unwrap());
+
+    let canonical = r#"
+enabled = false
+microcompact_enabled = false
+autocompact_enabled = true
+microcompact_keep_recent = 9
+tool_result_budget_bytes = 1234
+summarizer_payload_threshold_tokens = 4000
+summarizer_max_payload_tokens = 64000
+summarizer_model = "test-model"
+prefer_markdown_tool_output = false
+compaction_enabled = true
+compaction_trigger_tokens = 123
+compaction_strategy = "summary"
+"#;
+    let value: ContextConfig = toml::from_str(canonical).unwrap();
+    assert!(!value.enabled);
+    assert!(!value.microcompact_enabled);
+    assert!(value.autocompact_enabled);
+    assert_eq!(value.microcompact_keep_recent, 9);
+    assert_eq!(value.tool_result_budget_bytes, 1234);
+    assert_eq!(value.summarizer_payload_threshold_tokens, 4000);
+    assert_eq!(value.summarizer_max_payload_tokens, 64000);
+    assert_eq!(value.summarizer_model.as_deref(), Some("test-model"));
+    assert!(!value.prefer_markdown_tool_output);
+    assert!(value.compaction_enabled);
+    assert_eq!(value.compaction_trigger_tokens, Some(123));
+    assert_eq!(value.compaction_settings().trigger_tokens, Some(123));
+    assert_eq!(value.compaction_settings().strategy, CompactionStrategy::Summary);
+
+    let aliases: ContextConfig = toml::from_str(
+        "summarizer_payload_threshold_bytes=41\nsummarizer_max_payload_bytes=42",
+    ).unwrap();
+    assert_eq!(aliases.summarizer_payload_threshold_tokens, 41);
+    assert_eq!(aliases.summarizer_max_payload_tokens, 42);
+
+    for spelling in ["task_state", "typed", "s4"] {
+        assert_eq!(CompactionStrategy::parse(spelling), Some(CompactionStrategy::TaskState));
+    }
+    for spelling in ["summary", "free_form", "s0"] {
+        assert_eq!(CompactionStrategy::parse(spelling), Some(CompactionStrategy::Summary));
+    }
+    assert_eq!(CompactionStrategy::parse("  TASK-STATE  "), Some(CompactionStrategy::TaskState));
+    assert_eq!(CompactionStrategy::parse("unknown"), None);
+    let mut zero = value.clone();
+    zero.compaction_trigger_tokens = Some(0);
+    assert_eq!(zero.compaction_settings().trigger_tokens, None);
+    let encoded = toml::to_string(&default).unwrap();
+    let round_trip: ContextConfig = toml::from_str(&encoded).unwrap();
+    assert_eq!(serde_json::to_value(round_trip).unwrap(), serde_json::to_value(default).unwrap());
+}
+```
+
+Then move the full type definitions below into `config/context.rs`, preserving
+the 12 fields and serde attributes exactly. No host `JsonSchema` derive or
+OpenHuman imports belong in the harness. The tests fail to compile before the
+move because the harness has no `ContextConfig`; run the focused test after
+each migration substep.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+pub const DEFAULT_KEEP_RECENT_TOOL_RESULTS: usize = 5;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextConfig {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub microcompact_enabled: bool,
+    #[serde(default = "default_true")]
+    pub autocompact_enabled: bool,
+    #[serde(default = "default_microcompact_keep_recent")]
+    pub microcompact_keep_recent: usize,
+    #[serde(default = "default_tool_result_budget_bytes")]
+    pub tool_result_budget_bytes: usize,
+    #[serde(default = "default_summarizer_payload_threshold_tokens", alias = "summarizer_payload_threshold_bytes")]
+    pub summarizer_payload_threshold_tokens: usize,
+    #[serde(default = "default_summarizer_max_payload_tokens", alias = "summarizer_max_payload_bytes")]
+    pub summarizer_max_payload_tokens: usize,
+    #[serde(default)]
+    pub summarizer_model: Option<String>,
+    #[serde(default = "default_true")]
+    pub prefer_markdown_tool_output: bool,
+    #[serde(default = "default_true")]
+    pub compaction_enabled: bool,
+    #[serde(default)]
+    pub compaction_trigger_tokens: Option<u64>,
+    #[serde(default)]
+    pub compaction_strategy: CompactionStrategy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompactionSettings {
+    pub trigger_tokens: Option<u64>,
+    pub strategy: CompactionStrategy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStrategy {
+    #[default]
+    TaskState,
+    Summary,
+}
+
+fn default_enabled() -> bool { true }
+fn default_true() -> bool { true }
+fn default_microcompact_keep_recent() -> usize { DEFAULT_KEEP_RECENT_TOOL_RESULTS }
+fn default_tool_result_budget_bytes() -> usize {
+    crate::config::TurnConfig::default().tool_result_budget_bytes
+}
+fn default_summarizer_payload_threshold_tokens() -> usize { 4_000 }
+fn default_summarizer_max_payload_tokens() -> usize { 64_000 }
+```
+
+Export all three types and the default constant from `config/mod.rs` and the
+harness crate root. Keep the `ContextConfig` field docs describing only the
+generic behavior; host-only product policy and environment loading stay in
+OpenHuman.
 
 ### 8. Reconcile full crate and workspace integration
 
