@@ -201,6 +201,15 @@ impl CompletionStore for BlockingParentMarkerRead {
         self.inner.put(record)
     }
 
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<()> {
+        self.inner.put_fenced(record, parent_key, gate)
+    }
+
     fn insert_if_absent(
         &self,
         record: &CompletionRecord,
@@ -397,6 +406,15 @@ impl CompletionStore for BlockingFirstReadStore {
 
     fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
         self.inner.put(record)
+    }
+
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<()> {
+        self.inner.put_fenced(record, parent_key, gate)
     }
 
     fn insert_if_absent(
@@ -1030,6 +1048,20 @@ impl CompletionStore for FailingSecondPut {
         }
         self.inner.put(record)
     }
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<()> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph(
+                "disk".into(),
+            ));
+        }
+        self.inner.put_fenced(record, parent_key, gate)
+    }
     fn insert_if_absent(
         &self,
         record: &CompletionRecord,
@@ -1137,6 +1169,14 @@ impl CompletionStore for BlockingTryList {
     fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
         self.inner.put(record)
     }
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<()> {
+        self.inner.put_fenced(record, parent_key, gate)
+    }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
@@ -1180,6 +1220,14 @@ impl CompletionStore for FailingList {
     }
     fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
         self.inner.put(record)
+    }
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<()> {
+        self.inner.put_fenced(record, parent_key, gate)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
