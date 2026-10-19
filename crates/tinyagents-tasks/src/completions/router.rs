@@ -207,7 +207,7 @@ impl ParentGateGuard {
                     "completion store: timed out waiting for parent gate {parent_key}"
                 )));
             }
-            std::thread::sleep(PARENT_GATE_POLL_INTERVAL);
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -240,7 +240,11 @@ impl CompletionRouter {
     /// A router over `store` with the neutral formatter and
     /// [`DEFAULT_MAX_ATTEMPTS`].
     pub fn new(store: Arc<dyn CompletionStore>) -> Self {
-        let lifecycle = ParentLifecycle::new();
+        let lifecycle = if store.is_process_local() {
+            ParentLifecycle::for_store(store.as_ref())
+        } else {
+            ParentLifecycle::new()
+        };
         let admission_store = Arc::new(Mutex::new(AdmissionStoreSlot {
             store: Arc::clone(&store),
             migrating: false,
@@ -292,11 +296,6 @@ impl CompletionRouter {
             _ => ParentLifecycleStatus::Stopped(marker.parent_epoch),
         });
 
-        if store.is_process_local() {
-            if let Some(status) = lifecycle.status(parent_key)? {
-                return Ok(Some(status));
-            }
-        }
         if let Some(status) = marker_status {
             lifecycle.set_status(gate, status)?;
             return Ok(Some(status));

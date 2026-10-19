@@ -31,8 +31,20 @@ pub(super) struct ParentLifecycle {
 
 impl ParentLifecycle {
     pub(super) fn new() -> Arc<Self> {
+        Self::with_identity(uuid::Uuid::new_v4().to_string())
+    }
+
+    pub(super) fn for_store(store: &dyn super::CompletionStore) -> Arc<Self> {
+        Self::with_identity(
+            store
+                .coordination_identity()
+                .unwrap_or_else(|| format!("store:{:p}", store as *const dyn super::CompletionStore)),
+        )
+    }
+
+    fn with_identity(identity: String) -> Arc<Self> {
         Arc::new(Self {
-            identity: uuid::Uuid::new_v4().to_string(),
+            identity,
             entries: Mutex::new(HashMap::new()),
             changed: Condvar::new(),
         })

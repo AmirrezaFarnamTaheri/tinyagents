@@ -44,7 +44,11 @@ impl CompletionAdmission {
                 store: Arc::clone(&store),
                 migrating: false,
             })),
-            lifecycle: ParentLifecycle::new(),
+            lifecycle: if store.is_process_local() {
+                ParentLifecycle::for_store(store.as_ref())
+            } else {
+                ParentLifecycle::new()
+            },
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
