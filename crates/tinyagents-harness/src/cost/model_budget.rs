@@ -296,7 +296,7 @@ impl ChatModel<()> for ControlledChatModel {
     ) -> tinyinference_llm::Result<ModelResponse> {
         self.invoke_controlled(state, request)
             .await
-            .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))
+            .map_err(tinyinference_llm::Error::from)
     }
 
     async fn stream(
@@ -306,7 +306,7 @@ impl ChatModel<()> for ControlledChatModel {
     ) -> tinyinference_llm::Result<ModelStream> {
         self.stream_controlled(state, request)
             .await
-            .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))
+            .map_err(tinyinference_llm::Error::from)
     }
 
     async fn fetch_deferred(

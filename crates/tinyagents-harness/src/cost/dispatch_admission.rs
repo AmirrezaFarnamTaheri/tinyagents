@@ -124,6 +124,17 @@ impl From<DispatchRefusal> for ControlledDispatchError {
     }
 }
 
+impl From<ControlledDispatchError> for tinyinference_llm::Error {
+    fn from(error: ControlledDispatchError) -> Self {
+        match error {
+            ControlledDispatchError::Admission(refusal) => {
+                Self::Validation(refusal.to_string())
+            }
+            ControlledDispatchError::Model(error) => error,
+        }
+    }
+}
+
 /// Shared host policy that reserves a physical call slot before model work.
 #[async_trait::async_trait]
 pub trait PhysicalDispatchAdmission: Send + Sync {
