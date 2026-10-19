@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tinyinference_llm::model::ChatModel;
-use tinyinference_llm::model::budget::{Budget, BudgetedModel, CallBudget};
-use tinyinference_llm::model::{ModelRequest, ModelResponse, ModelStream};
+use tinyinference_llm::model::budget::{BeforeDispatch, Budget, BudgetedModel, CallBudget};
+use tinyinference_llm::model::{
+    DeferredHandle, DeferredStatus, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
+};
 
 use super::dispatch_admission::{
     ControlledDispatchError, DispatchModelOptions,
@@ -56,12 +58,7 @@ impl ModelBudget {
         model: Arc<dyn ChatModel<()>>,
         observer: Option<Arc<dyn crate::observability::PhysicalDispatchObserver>>,
     ) -> Arc<dyn ChatModel<()>> {
-        let observed = wrap_observed_model(model, observer);
-        Arc::new(BudgetedModel::new(
-            observed,
-            self.ledger.clone(),
-            self.call,
-        ))
+        wrap_model_with_policies(model, Some(self), observer, None)
     }
 }
 
@@ -77,27 +74,39 @@ fn wrap_observed_model(
     crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed)
 }
 
+fn wrap_model_with_policies(
+    model: Arc<dyn ChatModel<()>>,
+    budget: Option<&ModelBudget>,
+    observer: Option<Arc<dyn crate::observability::PhysicalDispatchObserver>>,
+    before_dispatch: Option<Arc<dyn BeforeDispatch>>,
+) -> Arc<dyn ChatModel<()>> {
+    let observed = wrap_observed_model(model, observer);
+    match budget {
+        Some(budget) => {
+            let budgeted = BudgetedModel::new(
+                observed,
+                budget.ledger.clone(),
+                budget.call,
+            );
+            match before_dispatch {
+                Some(hook) => Arc::new(budgeted.before_dispatch(hook)),
+                None => Arc::new(budgeted),
+            }
+        }
+        None => observed,
+    }
+}
+
 /// Controlled invocation facade around the existing budget and observer stack.
-///
-/// This constructor stage intentionally preserves the old pass-through behavior
-/// while the admission hook is wired into the wrapper.
 pub struct ControlledChatModel {
-    inner: Arc<dyn ChatModel<()>>,
+    model: Arc<dyn ChatModel<()>>,
+    options: DispatchModelOptions,
 }
 
 impl ControlledChatModel {
     /// Builds the compatibility wrapper from an existing model and policies.
     pub fn new(model: Arc<dyn ChatModel<()>>, options: DispatchModelOptions) -> Self {
-        let observed = wrap_observed_model(model, options.observer);
-        let inner = match options.monetary_budget {
-            Some(budget) => Arc::new(BudgetedModel::new(
-                observed,
-                budget.ledger,
-                budget.call,
-            )) as Arc<dyn ChatModel<()>>,
-            None => observed,
-        };
-        Self { inner }
+        Self { model, options }
     }
 
     /// Invokes this model with a typed physical-admission result.
@@ -106,10 +115,45 @@ impl ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> Result<ModelResponse, ControlledDispatchError> {
-        self.inner
-            .invoke(state, request)
-            .await
-            .map_err(ControlledDispatchError::Model)
+        let permit = match &self.options.admission {
+            Some(admission) => Some(admission.acquire().await.map_err(Into::into)?),
+            None => None,
+        };
+        let dispatch_outcome = Arc::new(std::sync::Mutex::new(None));
+        let hook = permit.as_ref().map(|permit| {
+            Arc::new(AdmissionBeforeDispatch {
+                permit: permit.clone(),
+                outcome: dispatch_outcome.clone(),
+            }) as Arc<dyn BeforeDispatch>
+        });
+        let wrapped = wrap_model_with_policies(
+            self.model.clone(),
+            self.options.monetary_budget.as_ref(),
+            self.options.observer.clone(),
+            hook,
+        );
+
+        if permit.is_some() && self.options.monetary_budget.is_none() {
+            if let Err(refusal) = permit
+                .as_ref()
+                .expect("admission permit was acquired")
+                .mark_dispatched()
+            {
+                return Err(refusal.into());
+            }
+        }
+
+        match wrapped.invoke(state, request).await {
+            Ok(response) => Ok(response),
+            Err(error) => match dispatch_outcome
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                Some(refusal) => Err(refusal.into()),
+                None => Err(ControlledDispatchError::Model(error)),
+            },
+        }
     }
 
     /// Opens a stream with a typed physical-admission result.
@@ -118,17 +162,108 @@ impl ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> Result<ModelStream, ControlledDispatchError> {
-        self.inner
-            .stream(state, request)
-            .await
-            .map_err(ControlledDispatchError::Model)
+        let permit = match &self.options.admission {
+            Some(admission) => Some(admission.acquire().await.map_err(Into::into)?),
+            None => None,
+        };
+        let dispatch_outcome = Arc::new(std::sync::Mutex::new(None));
+        let hook = permit.as_ref().map(|permit| {
+            Arc::new(AdmissionBeforeDispatch {
+                permit: permit.clone(),
+                outcome: dispatch_outcome.clone(),
+            }) as Arc<dyn BeforeDispatch>
+        });
+        let wrapped = wrap_model_with_policies(
+            self.model.clone(),
+            self.options.monetary_budget.as_ref(),
+            self.options.observer.clone(),
+            hook,
+        );
+        if permit.is_some() && self.options.monetary_budget.is_none() {
+            if let Err(refusal) = permit
+                .as_ref()
+                .expect("admission permit was acquired")
+                .mark_dispatched()
+            {
+                return Err(refusal.into());
+            }
+        }
+        let stream = match wrapped.stream(state, request).await {
+            Ok(stream) => stream,
+            Err(error) => {
+                return match dispatch_outcome
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    Some(refusal) => Err(refusal.into()),
+                    None => Err(ControlledDispatchError::Model(error)),
+                };
+            }
+        };
+        Ok(guard_dispatch_stream(stream, permit))
     }
+}
+
+struct AdmissionBeforeDispatch {
+    permit: Arc<dyn super::dispatch_admission::PhysicalDispatchPermit>,
+    outcome: Arc<std::sync::Mutex<Option<super::dispatch_admission::DispatchRefusal>>>,
+}
+
+impl BeforeDispatch for AdmissionBeforeDispatch {
+    fn check(&self) -> tinyinference_llm::Result<()> {
+        match self.permit.mark_dispatched() {
+            Ok(()) => Ok(()),
+            Err(refusal) => {
+                *self
+                    .outcome
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+                Err(tinyinference_llm::Error::Validation(
+                    "physical dispatch admission refused".to_owned(),
+                ))
+            }
+        }
+    }
+}
+
+fn guard_dispatch_stream(
+    stream: ModelStream,
+    permit: Option<Arc<dyn super::dispatch_admission::PhysicalDispatchPermit>>,
+) -> ModelStream {
+    use futures::StreamExt;
+
+    let metadata = stream.metadata().clone();
+    let mut stream = Box::pin(stream);
+    let mut permit = permit;
+    let mut ended = false;
+    let guarded = futures::stream::poll_fn(move |cx| {
+        if ended {
+            return std::task::Poll::Ready(None);
+        }
+        let item = stream.as_mut().poll_next(cx);
+        let terminal_item = matches!(
+            &item,
+            std::task::Poll::Ready(Some(
+                ModelStreamItem::Completed(_)
+                    | ModelStreamItem::Failed(_)
+                    | ModelStreamItem::ProviderFailed(_)
+                    | ModelStreamItem::Deferred(_)
+            ))
+        );
+        if terminal_item || matches!(item, std::task::Poll::Ready(None)) {
+            ended = true;
+            drop(permit.take());
+        }
+        item
+    });
+    ModelStream::new(Box::pin(guarded)).with_metadata(metadata)
 }
 
 #[async_trait]
 impl ChatModel<()> for ControlledChatModel {
     fn profile(&self) -> Option<&tinyinference_llm::model::ModelProfile> {
-        self.inner.profile()
+        self.model.profile()
     }
 
     fn supports_input(
@@ -137,11 +272,11 @@ impl ChatModel<()> for ControlledChatModel {
         mime: &str,
         source: tinyinference_llm::model::InputSource,
     ) -> bool {
-        self.inner.supports_input(modality, mime, source)
+        self.model.supports_input(modality, mime, source)
     }
 
     fn cache_identity(&self) -> Option<String> {
-        self.inner.cache_identity()
+        self.model.cache_identity()
     }
 
     async fn invoke(
@@ -149,7 +284,9 @@ impl ChatModel<()> for ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        self.inner.invoke(state, request).await
+        self.invoke_controlled(state, request)
+            .await
+            .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))
     }
 
     async fn stream(
@@ -157,7 +294,16 @@ impl ChatModel<()> for ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
-        self.inner.stream(state, request).await
+        self.stream_controlled(state, request)
+            .await
+            .map_err(|error| tinyinference_llm::Error::Model(error.to_string()))
+    }
+
+    async fn fetch_deferred(
+        &self,
+        handle: &DeferredHandle,
+    ) -> tinyinference_llm::Result<DeferredStatus> {
+        self.model.fetch_deferred(handle).await
     }
 }
 
