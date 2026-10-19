@@ -581,6 +581,49 @@ async fn close_source_model_records_failure_when_consumer_drops_stream_early() {
 }
 
 #[tokio::test]
+async fn close_source_model_completes_stream_trace_once() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use futures::StreamExt;
+
+    let mut response = ModelResponse::assistant("answer");
+    response.usage = Some(Usage::new(2, 1));
+    let inner = Arc::new(StreamScriptedModel {
+        responses: Mutex::new(VecDeque::from([vec![ModelStreamItem::Completed(
+            response,
+        )]])),
+        requests: Mutex::new(Vec::new()),
+    });
+    let source = StaticCloseSource(inner);
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close-stream"),
+        Arc::new(EmptyCloseEnricher),
+    );
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected",
+        temperature: 0.2,
+        thread_id: None,
+        trace: Some(&trace),
+    };
+    let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Completed(_))
+    ));
+    drop(stream);
+    let events = listener.events();
+    assert_eq!(events.len(), 3);
+    assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[1].event, AgentEvent::UsageRecorded { .. }));
+    assert!(matches!(events[2].event, AgentEvent::ModelCompleted { .. }));
+}
+
+#[tokio::test]
 async fn close_source_model_records_invoke_and_stream_failures_once() {
     use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
     use crate::ids::RunId;
