@@ -909,11 +909,11 @@ async fn parents_with_pending_and_cancel_all_use_durable_parent_markers() {
     router.mark_delivered(&receipts(&settled)).unwrap();
 
     assert_eq!(
-        router.parents_with_pending(),
+        router.parents_with_pending().unwrap(),
         vec!["parent-a", "parent-b"]
     );
     assert_eq!(router.cancel_all_parents().unwrap(), 2);
-    assert!(router.parents_with_pending().is_empty());
+    assert!(router.parents_with_pending().unwrap().is_empty());
     assert!(!router.admit_child("parent-a").unwrap());
     assert!(!router.admit_child("parent-b").unwrap());
     assert!(router.admit_child("parent-c").unwrap());
@@ -930,6 +930,21 @@ fn cancelling_a_deleted_parent_does_not_reopen_its_lifecycle() {
         !router.admit_child("deleted").unwrap(),
         "a later stop marker must not downgrade permanent deletion"
     );
+}
+
+#[tokio::test]
+async fn cancel_all_closes_an_attached_parent_before_its_first_completion() {
+    let router = router();
+    let queue = queue();
+    router.attach_parent("idle-parent", queue.clone());
+
+    assert_eq!(router.cancel_all_parents().unwrap(), 0);
+    assert!(matches!(
+        router.record(record("late-child", "idle-parent")).await.unwrap(),
+        RecordOutcome::Dropped { .. }
+    ));
+    assert_eq!(queue.status().await.total, 0);
+    assert!(!router.admit_child("idle-parent").unwrap());
 }
 
 #[test]

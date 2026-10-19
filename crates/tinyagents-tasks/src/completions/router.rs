@@ -711,26 +711,47 @@ impl CompletionRouter {
 
     /// Parent keys with at least one pending completion in this store's scope.
     /// Tenant isolation is provided by the scoped completion store.
-    pub fn parents_with_pending(&self) -> Vec<String> {
-        let Ok(state) = self.lock() else {
-            return Vec::new();
-        };
-        state
+    pub fn parents_with_pending(&self) -> Result<Vec<String>> {
+        let state = self.lock()?;
+        Ok(state
             .store
-            .list(None)
+            .try_list(None)?
             .into_iter()
             .filter(|record| record.state == CompletionState::Pending)
             .map(|record| record.parent_key)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
-            .collect()
+            .collect())
     }
 
     /// Closes every parent with pending completions and returns the number of
     /// records withdrawn. Each marker uses the same durable fenced path as
     /// [`Self::cancel_parent`].
     pub fn cancel_all_parents(&self) -> Result<usize> {
-        self.parents_with_pending()
+        let (mut parents, records) = {
+            let state = self.lock()?;
+            let records = state.store.try_list(None)?;
+            let mut parents = state.parents.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+            for record in &records {
+                if let Some(parent) = Self::parent_from_marker_id(&record.task_id) {
+                    if record.state == CompletionState::Delivered {
+                        parents.insert(parent);
+                    }
+                } else if record.state == CompletionState::Pending && !record.parent_key.is_empty() {
+                    parents.insert(record.parent_key.clone());
+                }
+            }
+            (parents, records)
+        };
+        // Pending rows may predate lifecycle markers, so retain their parent
+        // keys even when they have no open marker yet.
+        parents.extend(
+            records
+                .into_iter()
+                .filter(|record| record.state == CompletionState::Pending)
+                .map(|record| record.parent_key),
+        );
+        parents
             .into_iter()
             .try_fold(0usize, |total, parent| {
                 self.cancel_parent(&parent).map(|withdrawn| total + withdrawn)
