@@ -251,8 +251,17 @@ missing/expired/error result fail closed; never turn port errors into approval.
 
 ### Media artifact filing port
 
-The generic wrapper keeps the inner tool's name, description, schema, policy,
-permissions, scope, category, result content, and progress behavior. It parses
+The generic wrapper is feature-gated as `media`; this feature may add only the
+optional `tinyinference-video` dependency needed for its existing
+`ProgressFn` callback type. It must not enable `tinyagents-harness/multimodal`
+or pull `flate2`, `tar`, `zip`, or reqwest through that feature. Keep
+`MediaArtifactTool<T>` generic over `T: tinytools::Tool` and pass the
+`ToolRunContext` to the per-call inner-tool factory so the host adapter can
+read its own approval/chat extension. The factory remains
+`Arc<dyn Fn(ProgressFn, Option<&dyn ToolRunContext>) -> T + Send + Sync>`;
+it must not mention `ApprovalChatContext`. The generic wrapper keeps the inner
+tool's name, description, schema, policy, permissions, scope, category, result
+content, and progress behavior. It parses
 each JSON result's `artifacts` array and invokes the injected `ArtifactFiling`
 port once per recognizable output. It does not store files, create product
 artifact records, or depend on TinyArtifacts/OpenHuman.
@@ -516,7 +525,10 @@ fields, preserved resolution-to-result mapping, missing-port fail-closed
 behavior, and that feedback is not silently discarded.
 
 Port `MediaArtifactTool<T>` to `media::MediaArtifactTool<T>` with an injected
-`Arc<dyn ArtifactFiling>`. Remove OpenHuman `Production`, artifact store,
+`Arc<dyn ArtifactFiling>`. Add optional `tinyinference-video` under the new
+`media` feature solely for `ProgressFn`; update the per-call inner factory to
+accept `Option<&dyn ToolRunContext>` instead of `ApprovalChatContext`, letting
+the host-specific factory downcast its own context in the adapter. Remove OpenHuman `Production`, artifact store,
 TinyArtifacts, TinyStorageDrivers, file-root, blob-store, approval-chat, and
 product reference-allowlist dependencies. Keep the generic output walk,
 per-entry continuation, ID/error insertion, path rewrite, title cap/suffix,
