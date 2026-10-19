@@ -145,17 +145,21 @@ pub enum ExecAuditOutcome {
 #[derive(Debug, Clone)]
 pub struct ExecAuditEvent {
     pub operation: ExecOperation,
+    /// The source audit's approval-required proxy from the exact tool args.
+    pub approval_required: bool,
     /// True only after host authorization produced a permit.
     pub authorized: bool,
+    /// Mirrors the source `(allowed, ToolResult)` gate result: false for a
+    /// policy/rate denial or a backend refusal before launch.
+    pub allowed: bool,
     pub backend_selection: Option<String>,
-    /// False for policy denial and backend/preflight refusal; true only when
-    /// the backend actually attempted to create a process.
+    /// True only when process creation was attempted.
     pub process_attempted: bool,
     pub outcome: ExecAuditOutcome,
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecRequest {
     pub program: OsString,
     pub args: Vec<OsString>,
@@ -226,11 +230,15 @@ more permissive route. OpenHuman retains authority over native/sandbox/Docker/
 TinyBox/SaaS selection. A SaaS-unavailable refusal and Docker configuration or
 preflight refusal are typed `Refused` outcomes before process creation; they
 are not policy denials and are not launch failures. `LaunchFailed` means a
-process-creation attempt failed. Audit exactly once for each call, recording
-gate denials as `authorized=false, process_attempted=false`, backend refusals
-as authorized but not attempted, launch failures as attempted, and completed
-processes with exit/timeout-derived success. Include the selected backend when
-a permit exists. Never represent a backend refusal as an allowed successful
+process-creation attempt failed. Audit exactly once for each call, recording the source approval-required
+proxy (`external_effect_with_args(args)`) separately from authorization and
+allowed status. Gate denial is `authorized=false, allowed=false,
+process_attempted=false`; backend refusal (including SaaS refusal or Docker
+configuration/preflight failure) is `authorized=true, allowed=false,
+process_attempted=false`; launch failure is `authorized=true, allowed=true,
+process_attempted=true`; completed execution is allowed and attempted, with
+success derived from the source result mapping. Include the selected backend
+when a permit exists. Never represent a backend refusal as an allowed successful
 execution.
 
 The shell result conversion preserves current behavior: decode output lossily
@@ -318,8 +326,11 @@ plan — proceed and execute it now.`, non-interactive approval is
 `approved: non-interactive turn (no review surface) — proceed with the plan.`,
 and outside-plan success is `not applicable: this thread is not in plan mode,
 so there is no plan to review. Do not call \`request_plan_review\` again
-this turn.` Preserve the existing reject and revise strings verbatim from
-`plan_review/tool.rs`. Tests assert all five outcomes and exact strings;
+this turn.` Preserve exact reject text `rejected: the user rejected the plan — do NOT
+execute it. Briefly ask what they would like to do instead.` and revise text
+`revise: the user requested changes before executing. Their feedback:
+{feedback}
+Revise the plan accordingly, then call \`request_plan_review\` again before executing.` Tests assert all five outcomes and exact strings;
 missing port, port error, and expired review remain errors and can never map
 to an approval variant.
 
