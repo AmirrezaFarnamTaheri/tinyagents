@@ -29,7 +29,10 @@ pub trait CompletionStore: Send + Sync {
         ttl: Duration,
     ) -> Result<Option<ParentGateClaim>> {
         let _ = (parent_key, holder, ttl);
-        Err(store_err("parent gate", "store does not support durable leases"))
+        Err(store_err(
+            "parent gate",
+            "store does not support durable leases",
+        ))
     }
 
     /// Renews the exact holder and epoch returned by `acquire_parent_gate`.
@@ -40,13 +43,19 @@ pub trait CompletionStore: Send + Sync {
         ttl: Duration,
     ) -> Result<bool> {
         let _ = (parent_key, claim, ttl);
-        Err(store_err("parent gate", "store does not support durable leases"))
+        Err(store_err(
+            "parent gate",
+            "store does not support durable leases",
+        ))
     }
 
     /// Releases only the holder and epoch returned by `acquire_parent_gate`.
     fn release_parent_gate(&self, parent_key: &str, claim: &ParentGateClaim) -> Result<bool> {
         let _ = (parent_key, claim);
-        Err(store_err("parent gate", "store does not support durable leases"))
+        Err(store_err(
+            "parent gate",
+            "store does not support durable leases",
+        ))
     }
 
     /// The latest record for `task_id`.

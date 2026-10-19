@@ -42,7 +42,9 @@ pub use router::{
     CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
     TombstoneOutcome,
 };
-pub use store::{ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore};
+pub use store::{
+    ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore, ParentGateClaim,
+};
 pub use types::{
     CompletionArtifact, CompletionClaim, CompletionReceipt, CompletionRecord, CompletionResult,
     CompletionState, CompletionStatus, NotifyMode,

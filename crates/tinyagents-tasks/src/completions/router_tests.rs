@@ -351,6 +351,30 @@ struct BlockingFirstReadStore {
 }
 
 impl CompletionStore for BlockingFirstReadStore {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        self.inner.acquire_parent_gate(parent_key, holder, ttl)
+    }
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.renew_parent_gate(parent_key, claim, ttl)
+    }
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let observed = self.inner.get(task_id);
         if task_id == self.blocked_task
@@ -952,6 +976,30 @@ struct FailingSecondPut {
 }
 
 impl CompletionStore for FailingSecondPut {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        self.inner.acquire_parent_gate(parent_key, holder, ttl)
+    }
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.renew_parent_gate(parent_key, claim, ttl)
+    }
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.get(task_id)
     }
@@ -1044,6 +1092,30 @@ struct BlockingTryList {
 }
 
 impl CompletionStore for BlockingTryList {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        self.inner.acquire_parent_gate(parent_key, holder, ttl)
+    }
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.renew_parent_gate(parent_key, claim, ttl)
+    }
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.get(task_id)
     }
@@ -1064,6 +1136,30 @@ impl CompletionStore for BlockingTryList {
 }
 
 impl CompletionStore for FailingList {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        self.inner.acquire_parent_gate(parent_key, holder, ttl)
+    }
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.renew_parent_gate(parent_key, claim, ttl)
+    }
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.get(task_id)
     }

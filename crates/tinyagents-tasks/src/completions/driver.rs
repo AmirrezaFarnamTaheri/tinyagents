@@ -26,11 +26,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Leases,
     Precondition, Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
 };
-use tinystoragedrivers_core::primitives::LEASES;
 use tokio::sync::OnceCell;
 
 use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
@@ -205,12 +205,7 @@ impl CompletionStore for DriverCompletionStore {
         self.run(async move {
             this.declare().await?;
             Leases::new(&this.docs)
-                .release(
-                    PARENT_GATE_OWNER,
-                    &parent_key,
-                    &claim.holder,
-                    claim.epoch,
-                )
+                .release(PARENT_GATE_OWNER, &parent_key, &claim.holder, claim.epoch)
                 .await
                 .map_err(map_error)
         })
