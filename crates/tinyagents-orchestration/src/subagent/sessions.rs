@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use tinyinference_llm::message::Message;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::tool::ToolCall;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Precondition, Query,
 };
@@ -14,6 +16,7 @@ use super::{SubagentError, SubagentTaskKey};
 
 const COLLECTION: &str = "subagent_sessions";
 const CAS_ATTEMPTS: usize = 32;
+type SessionCloseCallback = dyn Fn(&str, &str, &SubagentTaskKey) + Send + Sync;
 
 fn session_id_for_selector(selector: &SubagentSessionSelector) -> String {
     let encoded =
@@ -38,7 +41,7 @@ pub enum DurableSubagentStatus {
 impl DurableSubagentStatus {
     /// Whether a session may be selected for reuse.
     pub fn reusable(self) -> bool {
-        matches!(self, Self::Running | Self::Idle)
+        matches!(self, Self::Running | Self::Idle | Self::AwaitingUser)
     }
 }
 
@@ -78,12 +81,85 @@ pub struct DurableSubagentSession {
     pub current_task_id: Option<String>,
     pub status: DurableSubagentStatus,
     pub reusable: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_session_history"
+    )]
     pub latest_history: Option<Vec<Message>>,
     pub latest_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_used_at: String,
+}
+
+#[derive(Deserialize)]
+struct LegacyTranscriptMessage {
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Vec<LegacyTranscriptToolCall>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LegacyTranscriptToolCall {
+    id: String,
+    name: String,
+    #[serde(default)]
+    arguments: String,
+}
+
+fn deserialize_session_history<'de, D>(deserializer: D) -> Result<Option<Vec<Message>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(rows) = Option::<Vec<Value>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    rows.into_iter()
+        .map(|row| {
+            if let Ok(message) = serde_json::from_value::<Message>(row.clone()) {
+                return Ok(message);
+            }
+            let legacy: LegacyTranscriptMessage =
+                serde_json::from_value(row).map_err(serde::de::Error::custom)?;
+            let message = match legacy.role.as_str() {
+                "system" => Message::system(legacy.content),
+                "user" => Message::user(legacy.content),
+                "tool" => Message::tool(
+                    legacy.tool_call_id.ok_or_else(|| {
+                        serde::de::Error::custom("legacy tool row has no call id")
+                    })?,
+                    legacy.content,
+                ),
+                "assistant" => Message::Assistant(AssistantMessage {
+                    id: None,
+                    content: vec![ContentBlock::Text(legacy.content)],
+                    tool_calls: legacy
+                        .tool_calls
+                        .into_iter()
+                        .map(|call| match serde_json::from_str(&call.arguments) {
+                            Ok(arguments) => ToolCall::new(call.id, call.name, arguments),
+                            Err(error) => ToolCall::invalid(
+                                call.id,
+                                call.name,
+                                call.arguments,
+                                error.to_string(),
+                            ),
+                        })
+                        .collect(),
+                    usage: None,
+                    origin: None,
+                }),
+                _ => return Err(serde::de::Error::custom("unknown legacy transcript role")),
+            };
+            Ok(message)
+        })
+        .collect::<Result<Vec<_>, D::Error>>()
+        .map(Some)
 }
 
 impl DurableSubagentSession {
@@ -201,6 +277,21 @@ pub trait SubagentSessionStore: Send + Sync {
     ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError>;
     /// Closes a session so it cannot be reused.
     async fn close(&self, id: &str) -> Result<bool, SubagentError>;
+    /// Closes only the current task lifecycle. A stale owner cannot close a
+    /// replacement that reused the same durable session id.
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<bool, SubagentError> {
+        let _ = (id, task_id, lifecycle_key, parent_session, parent_thread_id);
+        Err(SubagentError::Persistence(
+            "session store does not support atomic lifecycle close".into(),
+        ))
+    }
     /// Records the latest result and reusable state after a completed turn.
     async fn mark_finished(
         &self,
@@ -209,6 +300,33 @@ pub trait SubagentSessionStore: Send + Sync {
         status: DurableSubagentStatus,
         history: Vec<Message>,
     ) -> Result<bool, SubagentError>;
+    /// Owner- and lifecycle-checked completion for an owner-bound session.
+    // Each argument is part of the atomic ownership predicate or the new
+    // session result; combining them would hide which values are checked.
+    #[allow(clippy::too_many_arguments)]
+    async fn mark_finished_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let _ = (
+            id,
+            task_id,
+            lifecycle_key,
+            parent_session,
+            parent_thread_id,
+            status,
+            history,
+        );
+        Err(SubagentError::Persistence(
+            "session store does not support atomic owner-checked completion".into(),
+        ))
+    }
     /// Records a failed turn while preserving the durable session for listing.
     async fn mark_failed(
         &self,
@@ -216,6 +334,234 @@ pub trait SubagentSessionStore: Send + Sync {
         task_id: &str,
         error: String,
     ) -> Result<bool, SubagentError>;
+    /// Owner- and lifecycle-checked failure for an owner-bound session.
+    async fn mark_failed_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let _ = (
+            id,
+            task_id,
+            lifecycle_key,
+            parent_session,
+            parent_thread_id,
+            error,
+        );
+        Err(SubagentError::Persistence(
+            "session store does not support atomic owner-checked failure".into(),
+        ))
+    }
+}
+
+/// Owner-bound view of a session store for one exact parent session/thread.
+/// Missing thread identity is exact (threadless), never a wildcard.
+#[derive(Clone)]
+pub struct ScopedSubagentSessionStore<S> {
+    inner: Arc<S>,
+    parent_session: String,
+    parent_thread_id: Option<String>,
+    close_callback: Option<Arc<SessionCloseCallback>>,
+}
+
+impl<S> ScopedSubagentSessionStore<S> {
+    /// Binds the underlying store to one parent owner.
+    pub fn new(
+        inner: Arc<S>,
+        parent_session: impl Into<String>,
+        parent_thread_id: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            parent_session: parent_session.into(),
+            parent_thread_id,
+            close_callback: None,
+        }
+    }
+
+    /// Binds a host cancellation callback to successful lifecycle closes.
+    /// The callback receives the closed session id, task id and lifecycle key
+    /// only after the store's conditional close wins.
+    pub fn with_close_callback(
+        inner: Arc<S>,
+        parent_session: impl Into<String>,
+        parent_thread_id: Option<String>,
+        callback: impl Fn(&str, &str, &SubagentTaskKey) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner,
+            parent_session: parent_session.into(),
+            parent_thread_id,
+            close_callback: Some(Arc::new(callback)),
+        }
+    }
+
+    fn owns(&self, session: &DurableSubagentSession) -> bool {
+        session.parent_session == self.parent_session
+            && session.parent_thread_id == self.parent_thread_id
+    }
+
+    fn owns_selector(&self, selector: &SubagentSessionSelector) -> bool {
+        selector.parent_session == self.parent_session
+            && selector.parent_thread_id == self.parent_thread_id
+    }
+
+    fn owner_error() -> SubagentError {
+        SubagentError::Persistence("subagent session is outside the bound owner scope".into())
+    }
+}
+
+#[async_trait]
+impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentSessionStore<S> {
+    async fn list_for_parent(
+        &self,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<Vec<DurableSubagentSession>, SubagentError> {
+        if parent_session != self.parent_session
+            || parent_thread_id != self.parent_thread_id.as_deref()
+        {
+            return Err(Self::owner_error());
+        }
+        Ok(self
+            .inner
+            .list_for_parent(&self.parent_session, self.parent_thread_id.as_deref())
+            .await?
+            .into_iter()
+            .filter(|session| self.owns(session))
+            .collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<DurableSubagentSession>, SubagentError> {
+        Ok(self
+            .inner
+            .get(id)
+            .await?
+            .filter(|session| self.owns(session)))
+    }
+
+    async fn upsert_running(
+        &self,
+        upsert: SubagentSessionUpsert,
+    ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        if !self.owns_selector(&upsert.selector) {
+            return Err(Self::owner_error());
+        }
+        let (session, decision) = self.inner.upsert_running(upsert).await?;
+        if !self.owns(&session) {
+            return Err(Self::owner_error());
+        }
+        Ok((session, decision))
+    }
+
+    async fn close(&self, id: &str) -> Result<bool, SubagentError> {
+        let Some(session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        let Some(task_id) = session.current_task_id.as_deref() else {
+            return Ok(false);
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        let closed = self
+            .inner
+            .close_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
+            .await?;
+        if closed && let Some(callback) = &self.close_callback {
+            callback(id, task_id, lifecycle_key);
+        }
+        Ok(closed)
+    }
+
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<bool, SubagentError> {
+        if parent_session != self.parent_session
+            || parent_thread_id != self.parent_thread_id.as_deref()
+        {
+            return Ok(false);
+        }
+        let closed = self
+            .inner
+            .close_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
+            .await?;
+        if closed && let Some(callback) = &self.close_callback {
+            callback(id, task_id, lifecycle_key);
+        }
+        Ok(closed)
+    }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let Some(session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        self.inner
+            .mark_finished_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                status,
+                history,
+            )
+            .await
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let Some(session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        self.inner
+            .mark_failed_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                error,
+            )
+            .await
+    }
 }
 
 /// A `SubagentSessionStore` backed by the host's `tinystoragedrivers` document
@@ -385,6 +731,12 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             } else {
                 find_reusable_session(all, &upsert.selector)
             };
+            let selected_owner = reuse.as_ref().map(|session| {
+                (
+                    session.current_task_id.clone(),
+                    session.lifecycle_key.clone(),
+                )
+            });
             let decision = reuse_decision(reuse.as_ref(), upsert.force_fresh);
             let now = chrono::Utc::now().to_rfc3339();
             let mut session = reuse.clone().unwrap_or_else(|| DurableSubagentSession {
@@ -427,7 +779,14 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             if reuse.is_some() {
                 let update = this
                     .mutate(&session_id, |current| {
-                        if !current.status.reusable() || !current.reusable {
+                        if !current.status.reusable()
+                            || !current.reusable
+                            || selected_owner.as_ref()
+                                != Some(&(
+                                    current.current_task_id.clone(),
+                                    current.lifecycle_key.clone(),
+                                ))
+                        {
                             return false;
                         }
                         current.lifecycle_key = session.lifecycle_key.clone();
@@ -514,6 +873,70 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         .await
     }
 
+    async fn mark_finished_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
+        self.mutate(id, move |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
+            {
+                return false;
+            }
+            session.status = status;
+            session.reusable = status.reusable();
+            session.latest_history = Some(history.clone());
+            session.latest_error = None;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<bool, SubagentError> {
+        let id = id.to_owned();
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
+        self.mutate(&id, move |session| {
+            if session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
+            {
+                return false;
+            }
+            session.status = DurableSubagentStatus::Closed;
+            session.reusable = false;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
     async fn mark_finished(
         &self,
         id: &str,
@@ -547,6 +970,38 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         self.mutate(id, |session| {
             if session.status == DurableSubagentStatus::Closed
                 || session.current_task_id.as_deref() != Some(task_id)
+            {
+                return false;
+            }
+            session.status = DurableSubagentStatus::Failed;
+            session.reusable = false;
+            session.latest_error = Some(error.clone());
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
+    async fn mark_failed_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
+        self.mutate(id, move |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
             {
                 return false;
             }
@@ -634,3 +1089,7 @@ pub fn task_title_from_prompt(prompt: &str) -> String {
         title
     }
 }
+
+#[cfg(test)]
+#[path = "sessions_tests.rs"]
+mod tests;
