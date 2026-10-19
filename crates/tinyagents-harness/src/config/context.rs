@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_KEEP_RECENT_TOOL_RESULTS: usize = 5;
 
 /// Generic token and result controls used by context middleware.
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContextConfig {
@@ -61,6 +62,7 @@ pub struct CompactionSettings {
 }
 
 /// How context compaction creates a checkpoint.
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactionStrategy {

@@ -1,5 +1,94 @@
 use super::*;
 
+#[cfg(feature = "json-schema")]
+#[test]
+fn context_config_exposes_a_json_schema_for_host_configuration() {
+    fn accepts_schema_type<T: schemars::JsonSchema>() {}
+    accepts_schema_type::<ContextConfig>();
+    accepts_schema_type::<CompactionStrategy>();
+
+    let schema = schemars::schema_for!(ContextConfig);
+    let value = serde_json::to_value(schema).unwrap();
+    let properties = value["properties"].as_object().unwrap();
+
+    for field in [
+        "enabled",
+        "microcompact_enabled",
+        "autocompact_enabled",
+        "microcompact_keep_recent",
+        "tool_result_budget_bytes",
+        "summarizer_payload_threshold_tokens",
+        "summarizer_max_payload_tokens",
+        "summarizer_model",
+        "prefer_markdown_tool_output",
+        "compaction_enabled",
+        "compaction_trigger_tokens",
+        "compaction_strategy",
+    ] {
+        assert!(properties.contains_key(field), "missing {field}");
+    }
+
+    for field in [
+        "enabled",
+        "microcompact_enabled",
+        "autocompact_enabled",
+        "prefer_markdown_tool_output",
+        "compaction_enabled",
+    ] {
+        assert_eq!(properties[field]["type"], "boolean", "{field}");
+    }
+    for field in [
+        "microcompact_keep_recent",
+        "tool_result_budget_bytes",
+        "summarizer_payload_threshold_tokens",
+        "summarizer_max_payload_tokens",
+    ] {
+        assert_eq!(properties[field]["type"], "integer", "{field}");
+    }
+    assert_eq!(
+        properties["compaction_trigger_tokens"]["type"],
+        serde_json::json!(["integer", "null"])
+    );
+    assert_eq!(
+        properties["summarizer_model"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    assert_eq!(
+        properties["compaction_strategy"]["$ref"],
+        "#/$defs/CompactionStrategy"
+    );
+    assert_eq!(
+        value["$defs"]["CompactionStrategy"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["const"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["task_state", "summary"]
+    );
+
+    let defaults = [
+        ("enabled", serde_json::json!(true)),
+        ("microcompact_enabled", serde_json::json!(true)),
+        ("autocompact_enabled", serde_json::json!(true)),
+        ("microcompact_keep_recent", serde_json::json!(5)),
+        ("tool_result_budget_bytes", serde_json::json!(16_384)),
+        (
+            "summarizer_payload_threshold_tokens",
+            serde_json::json!(4_000),
+        ),
+        ("summarizer_max_payload_tokens", serde_json::json!(64_000)),
+        ("summarizer_model", serde_json::Value::Null),
+        ("prefer_markdown_tool_output", serde_json::json!(true)),
+        ("compaction_enabled", serde_json::json!(true)),
+        ("compaction_trigger_tokens", serde_json::Value::Null),
+        ("compaction_strategy", serde_json::json!("task_state")),
+    ];
+    for (field, expected) in defaults {
+        assert_eq!(properties[field]["default"], expected, "{field}");
+    }
+}
+
 #[test]
 fn context_config_preserves_defaults_aliases_and_strategy_spellings() {
     let default = ContextConfig::default();
