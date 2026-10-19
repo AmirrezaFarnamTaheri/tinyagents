@@ -701,6 +701,12 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             } else {
                 find_reusable_session(all, &upsert.selector)
             };
+            let selected_owner = reuse.as_ref().map(|session| {
+                (
+                    session.current_task_id.clone(),
+                    session.lifecycle_key.clone(),
+                )
+            });
             let decision = reuse_decision(reuse.as_ref(), upsert.force_fresh);
             let now = chrono::Utc::now().to_rfc3339();
             let mut session = reuse.clone().unwrap_or_else(|| DurableSubagentSession {
@@ -743,7 +749,14 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
             if reuse.is_some() {
                 let update = this
                     .mutate(&session_id, |current| {
-                        if !current.status.reusable() || !current.reusable {
+                        if !current.status.reusable()
+                            || !current.reusable
+                            || selected_owner.as_ref()
+                                != Some(&(
+                                    current.current_task_id.clone(),
+                                    current.lifecycle_key.clone(),
+                                ))
+                        {
                             return false;
                         }
                         current.lifecycle_key = session.lifecycle_key.clone();
