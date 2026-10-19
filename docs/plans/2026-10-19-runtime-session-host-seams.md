@@ -604,9 +604,9 @@ pub struct ResolvedSessionStores {
 
 #[derive(Clone)]
 pub struct SessionIdentity {
-    session: SessionRef,
-    agent_id: String,
-    stores: tinyagents_session::port::SessionStoreLease,
+    pub(crate) session: SessionRef,
+    pub(crate) agent_id: String,
+    pub(crate) stores: tinyagents_session::port::SessionStoreLease,
 }
 
 impl SessionIdentity {
@@ -654,7 +654,8 @@ Add `identity: Option<IdentityConfig<C>>` to `SessionBuilder<C>` and
 `identity: Option<SessionIdentity>` to `Session<C>`. Initialize all three
 options to `None`. Add `identity: Option<&'a SessionIdentity>` to
 `SessionStateView<'a>` and populate it from `established_identity`, not the
-current in-flight resolution. Export `SessionIdentity` from `types` and
+current in-flight resolution. Export `SessionIdentity` and
+`SessionIdentityRequest` from `types` and
 `ResolvedSessionStores`/`SessionIdentityResolver` from `identity` in `lib.rs`.
 
 In `SessionBuilder::build`, require a codec when either transcript or
@@ -982,6 +983,7 @@ impl SessionHooks for ReplaceTargetHook {
 #[tokio::test]
 async fn hook_cannot_replace_the_identity_locator() {
     use tinystoragedrivers_core::{MemoryStorage, Scope};
+    use tinyagents_session::port::DriverSessionStores;
     let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
     let calls = Arc::new(Mutex::new(0));
     let resolver = Arc::new(FixedIdentityResolver {
@@ -1004,6 +1006,7 @@ async fn hook_cannot_replace_the_identity_locator() {
 
 #[tokio::test]
 async fn explicit_session_override_cannot_change_resolved_identity() {
+    use tinyagents_session::port::DriverSessionStores;
     use tinystoragedrivers_core::{MemoryStorage, Scope};
     let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
     let calls = Arc::new(Mutex::new(0));
@@ -1027,6 +1030,7 @@ async fn explicit_session_override_cannot_change_resolved_identity() {
 #[tokio::test]
 async fn later_agent_change_is_rejected_before_second_driver_call() {
     use tinystoragedrivers_core::{MemoryStorage, Scope};
+    use tinyagents_session::port::DriverSessionStores;
     let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
     let calls = Arc::new(Mutex::new(0));
     let agent_id = Arc::new(Mutex::new("agent-one".into()));
