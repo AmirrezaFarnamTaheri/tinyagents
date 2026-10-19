@@ -2,7 +2,10 @@
 mod port;
 mod store;
 mod tool;
-pub use port::{PlanReviewHost, PlanReviewPort, PlanReviewRequest, PlanReviewResolution};
+pub use port::{
+    InteractiveReviewSurface, PlanReviewHost, PlanReviewPort, PlanReviewRequest,
+    PlanReviewResolution,
+};
 pub use store::{ParkedReview, PlanReviewNotifier, PlanReviewReason, PlanReviewStore};
 pub use tool::RequestPlanReviewTool;
 #[cfg(test)]

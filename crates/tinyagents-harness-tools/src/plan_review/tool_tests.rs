@@ -15,7 +15,10 @@ struct NonInteractive;
 struct BuildMode;
 #[async_trait]
 impl PlanReviewHost for NonInteractive {
-    fn interactive_surface(&self, _: Option<&dyn ToolRunContext>) -> Option<()> {
+    fn interactive_surface(
+        &self,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Option<InteractiveReviewSurface> {
         None
     }
     async fn request_review(

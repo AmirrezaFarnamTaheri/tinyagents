@@ -18,11 +18,18 @@ pub enum PlanReviewResolution {
     Revise { feedback: String },
 }
 
+/// Opaque marker that the host has an interactive surface for this request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InteractiveReviewSurface;
+
 #[async_trait]
 pub trait PlanReviewHost: Send + Sync {
     /// `None` selects the established non-interactive auto-approval path.
-    fn interactive_surface(&self, _context: Option<&dyn ToolRunContext>) -> Option<()> {
-        Some(())
+    fn interactive_surface(
+        &self,
+        _context: Option<&dyn ToolRunContext>,
+    ) -> Option<InteractiveReviewSurface> {
+        Some(InteractiveReviewSurface)
     }
     fn thread_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> {
         None
