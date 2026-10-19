@@ -9,7 +9,9 @@ struct Events {
     requested: tokio::sync::Notify,
 }
 impl PlanReviewNotifier<u8> for Events {
-    fn requested(&self, _: &ParkedReview<u8>) { self.requested.notify_one(); }
+    fn requested(&self, _: &ParkedReview<u8>) {
+        self.requested.notify_one();
+    }
     fn decided(
         &self,
         review: &ParkedReview<u8>,
@@ -59,7 +61,10 @@ async fn timeout_rejects_and_reports_expired() {
     assert!(store.parked_review_for_thread(&1, "t").is_some());
     tokio::time::advance(Duration::from_secs(600)).await;
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Expired);
+    assert_eq!(
+        events.decisions.lock().unwrap()[0].1,
+        PlanReviewReason::Expired
+    );
     assert!(!store.has_parked_review(&1, "t"));
 }
 
@@ -134,7 +139,10 @@ async fn dropped_park_reports_cancelled_and_cleans_snapshot() {
     task.abort();
     let _ = task.await;
     assert!(!store.has_parked_review(&1, "t"));
-    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
+    assert_eq!(
+        events.decisions.lock().unwrap()[0].1,
+        PlanReviewReason::Cancelled
+    );
 }
 
 #[tokio::test]
@@ -145,7 +153,10 @@ async fn dropped_sender_is_cancelled_not_expired() {
     let id = store.parked_review_for_thread(&1, "t").unwrap().request_id;
     assert!(store.cancel(&1, &id));
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
+    assert_eq!(
+        events.decisions.lock().unwrap()[0].1,
+        PlanReviewReason::Cancelled
+    );
 }
 
 #[tokio::test]

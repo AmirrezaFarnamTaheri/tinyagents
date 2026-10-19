@@ -34,7 +34,9 @@ fn tool(
 #[derive(Default)]
 struct NoopReviews(tokio::sync::Notify);
 impl crate::plan_review::PlanReviewNotifier<u8> for NoopReviews {
-    fn requested(&self, _: &crate::plan_review::ParkedReview<u8>) { self.0.notify_one(); }
+    fn requested(&self, _: &crate::plan_review::ParkedReview<u8>) {
+        self.0.notify_one();
+    }
     fn decided(
         &self,
         _: &crate::plan_review::ParkedReview<u8>,
