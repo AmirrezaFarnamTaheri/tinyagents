@@ -171,6 +171,11 @@ impl ParentGateGuard {
     ) -> Result<Self> {
         let mut gate = Self::acquire_native(store, parent_key)?;
         gate._local = Some(lifecycle.acquire(parent_key)?);
+        if !gate.renew()? {
+            return Err(TinyAgentsError::Graph(format!(
+                "completion router: parent gate expired while waiting for local lifecycle `{parent_key}`"
+            )));
+        }
         Ok(gate)
     }
 
@@ -427,6 +432,13 @@ impl CompletionRouter {
             .iter()
             .map(|parent| state.lifecycle.acquire(parent))
             .collect::<Result<Vec<_>>>()?;
+        for gate in &_source_gates {
+            if !gate.renew()? {
+                return Err(TinyAgentsError::Graph(
+                    "completion store: source parent gate expired while waiting for local lifecycle".into(),
+                ));
+            }
+        }
         let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
         if records.iter().any(|record| {
