@@ -1,5 +1,41 @@
 use super::*;
 
+#[cfg(feature = "json-schema")]
+#[test]
+fn context_config_exposes_a_json_schema_for_host_configuration() {
+    fn accepts_schema_type<T: schemars::JsonSchema>() {}
+    accepts_schema_type::<ContextConfig>();
+    accepts_schema_type::<CompactionStrategy>();
+
+    let schema = schemars::schema_for!(ContextConfig);
+    let value = serde_json::to_value(schema).unwrap();
+    let properties = value["properties"].as_object().unwrap();
+
+    for field in [
+        "enabled",
+        "microcompact_enabled",
+        "autocompact_enabled",
+        "microcompact_keep_recent",
+        "tool_result_budget_bytes",
+        "summarizer_payload_threshold_tokens",
+        "summarizer_max_payload_tokens",
+        "summarizer_model",
+        "prefer_markdown_tool_output",
+        "compaction_enabled",
+        "compaction_trigger_tokens",
+        "compaction_strategy",
+    ] {
+        assert!(properties.contains_key(field), "missing {field}");
+    }
+    assert_eq!(properties["enabled"]["type"], "boolean");
+    assert_eq!(properties["microcompact_keep_recent"]["type"], "integer");
+    assert_eq!(properties["summarizer_model"]["type"], "string");
+    assert_eq!(
+        properties["compaction_strategy"]["enum"],
+        serde_json::json!(["task_state", "summary"])
+    );
+}
+
 #[test]
 fn context_config_preserves_defaults_aliases_and_strategy_spellings() {
     let default = ContextConfig::default();
