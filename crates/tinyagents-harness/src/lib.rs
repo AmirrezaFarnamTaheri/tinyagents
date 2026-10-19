@@ -102,6 +102,7 @@ pub mod structured;
 pub mod summarization;
 pub mod terminal;
 pub mod testkit;
+pub mod thread_reasoning;
 pub mod title;
 pub mod token_estimation;
 pub mod tool;
