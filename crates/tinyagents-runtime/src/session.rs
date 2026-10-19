@@ -608,6 +608,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .is_some_and(|session_id| {
                             scanned_session_id.as_deref() == Some(session_id)
                         })
+                        || destination_transcript.messages == transcript.messages
                         || destination
                             .as_ref()
                             .is_some_and(|destination| destination.path() == read.path());
