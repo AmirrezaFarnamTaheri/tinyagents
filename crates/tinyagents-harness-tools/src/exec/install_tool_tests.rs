@@ -19,6 +19,7 @@ struct State {
     events: Mutex<Vec<ExecAuditEvent>>,
     backend_calls: AtomicUsize,
     request: Mutex<Option<ExecRequest>>,
+    backend_outcome: Mutex<Option<ExecBackendOutcome>>,
 }
 struct Gate(Arc<State>);
 
@@ -66,6 +67,9 @@ impl ExecBackend for Backend {
     ) -> ExecBackendOutcome {
         self.0.backend_calls.fetch_add(1, Ordering::SeqCst);
         *self.0.request.lock().unwrap() = Some(request);
+        if let Some(outcome) = self.0.backend_outcome.lock().unwrap().take() {
+            return outcome;
+        }
         ExecBackendOutcome::Completed(ExecOutput {
             stdout: b"ok".to_vec(),
             stderr: Vec::new(),
@@ -134,6 +138,22 @@ fn every_supported_manager_keeps_its_exact_argument_prefix() {
 }
 
 #[test]
+fn missing_path_and_unsupported_managers_keep_exact_errors() {
+    assert_eq!(
+        resolve_manager(Some("cargo"), |_| false).unwrap_err(),
+        "Package manager 'cargo' is not installed on PATH"
+    );
+    assert_eq!(
+        resolve_manager(None, |_| false).unwrap_err(),
+        "No supported package manager detected on PATH. Pass 'manager' explicitly (e.g. brew, pipx, npm, cargo)."
+    );
+    assert_eq!(
+        resolve_manager(Some("unknown"), |_| true).unwrap_err(),
+        "Unsupported package manager 'unknown'"
+    );
+}
+
+#[test]
 fn package_output_truncation_is_per_stream_and_utf8_safe() {
     let text = format!("{}é", "a".repeat(MAX_OUTPUT_BYTES - 1));
     assert_eq!(text.len(), MAX_OUTPUT_BYTES + 1);
@@ -189,4 +209,47 @@ async fn install_uses_exact_manager_argv_and_no_shell_command() {
     assert_eq!(request.shell_command, None);
     assert_eq!(request.timeout, Some(INSTALL_TIMEOUT));
     assert_eq!(state.events.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn install_maps_launch_failure_nonzero_exit_and_timeout_exactly() {
+    let (tool, state) = tool(false);
+    *state.backend_outcome.lock().unwrap() = Some(ExecBackendOutcome::LaunchFailed {
+        error: "permission denied".into(),
+    });
+    assert_eq!(
+        tool.execute(json!({"package":"ripgrep","manager":"cargo"}))
+            .await
+            .unwrap()
+            .text(),
+        "Failed to launch cargo: permission denied"
+    );
+
+    *state.backend_outcome.lock().unwrap() = Some(ExecBackendOutcome::Completed(ExecOutput {
+        stdout: b"informational".to_vec(),
+        stderr: b"compile failed".to_vec(),
+        exit_code: Some(17),
+        timed_out: false,
+    }));
+    assert_eq!(
+        tool.execute(json!({"package":"ripgrep","manager":"cargo"}))
+            .await
+            .unwrap()
+            .text(),
+        "cargo failed to install 'ripgrep' (exit Some(17)).\ncompile failed"
+    );
+
+    *state.backend_outcome.lock().unwrap() = Some(ExecBackendOutcome::Completed(ExecOutput {
+        stdout: b"partial".to_vec(),
+        stderr: b"still working".to_vec(),
+        exit_code: None,
+        timed_out: true,
+    }));
+    assert_eq!(
+        tool.execute(json!({"package":"ripgrep","manager":"cargo"}))
+            .await
+            .unwrap()
+            .text(),
+        "Install timed out after 300s and was killed"
+    );
 }

@@ -63,7 +63,9 @@ fn resolve_manager(
         return Err(format!("Unsupported package manager '{manager}'"));
     };
     if !on_path(program) {
-        return Err(format!("Package manager '{program}' is not installed on PATH"));
+        return Err(format!(
+            "Package manager '{program}' is not installed on PATH"
+        ));
     }
     Ok((manager, program, prefix))
 }
@@ -129,13 +131,13 @@ impl Tool for InstallTool {
                 "Invalid package name '{package}': only letters, digits and ._+-@/: are allowed"
             )));
         }
-        let (manager, program, prefix) = match resolve_manager(
-            args.get("manager").and_then(Value::as_str),
-            |name| find_on_path(name).is_some(),
-        ) {
-            Ok(resolved) => resolved,
-            Err(error) => return Ok(ToolResult::error(error)),
-        };
+        let (manager, program, prefix) =
+            match resolve_manager(args.get("manager").and_then(Value::as_str), |name| {
+                find_on_path(name).is_some()
+            }) {
+                Ok(resolved) => resolved,
+                Err(error) => return Ok(ToolResult::error(error)),
+            };
         let operation = ExecOperation::Install {
             package: package.to_owned(),
             manager: manager.clone(),
