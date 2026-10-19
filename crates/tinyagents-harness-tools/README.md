@@ -46,3 +46,28 @@ default set.
 Subagent registry policy stays in `tinyagents-orchestration`; this crate owns
 the reusable tool declarations. The harness owns tool registration,
 admission, schema preparation, discovery, and dispatch infrastructure.
+
+### Host-backed tools
+
+`ExecTool` and `InstallTool` receive an `ExecGate` and an `ExecBackend` from the
+host. The gate authorizes the parsed request before the backend can spawn a
+process; the permit carries the backend selection, capability, working
+directory, and environment chosen for that call. `NativeExecBackend::new`
+selects a shell flavor, but does not choose whether native execution is safe.
+Hosts own approval, security policy, sandbox selection, and audit policy and
+may instead provide a sandbox or remote backend. Keep those decisions in the
+host adapter.
+
+For turns that can be cancelled, hosts should create a
+`exec::timeout::ProcessCleanup`, run the turn future inside `scope`, drop that
+future when cancelling, and await `wait` before acknowledging cancellation.
+The native backend registers its child waiter with the active scope; the wait
+ensures the process and captured output pipes are finished first. Work handed
+to a host-owned task must explicitly inherit cleanup with
+`ProcessCleanup::hold` and drop the hold after stopping.
+
+`MediaArtifactTool` takes an `ArtifactFiling` implementation. The host owns
+artifact persistence, file-root checks, and blob lifecycle; the generic wrapper
+only maps returned artifact records and rewrites their paths. Likewise,
+`RequestPlanReviewTool` uses `PlanReviewPort` to request a host review and
+returns its resolution without owning a UI or approval policy.
