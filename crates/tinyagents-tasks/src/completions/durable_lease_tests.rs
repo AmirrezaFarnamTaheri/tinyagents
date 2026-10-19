@@ -8,7 +8,7 @@ use tinyagents_harness::CancellationToken;
 async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epoch() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let lease_scope = Scope::new("cluster").unwrap();
-    let tenant = Scope::new("user:alice").unwrap();
+    let tenant = Scope::new("u:alice").unwrap();
     let first_factory = DurableThreadDeliveryLeases::new(
         backend.as_ref(),
         lease_scope.clone(),
