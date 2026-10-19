@@ -13,7 +13,7 @@ use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_core::{Scope, StorageBackend, StorageError};
 
-use super::{AgentStores, SessionStoreProvider};
+use super::{AgentStores, SessionStoreLease, SessionStoreLeaseError, SessionStoreProvider};
 use crate::DriverSessionStores;
 use crate::port::{TurnState, TurnStates};
 use crate::transcript::{
@@ -411,6 +411,13 @@ impl TranscriptLocator for LiveTranscriptLocator {
 /// Each resolved trait object is stable, while its backing stores are replaced
 /// atomically when the owning provider rebinds.
 impl SessionStoreProvider for RebindableSessionStores {
+    fn lease_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        self.current().lease_for_agent(agent_id)
+    }
+
     fn for_agent(&self, agent_id: &str) -> AgentStores {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live.retain(|_, weak| weak.strong_count() > 0);

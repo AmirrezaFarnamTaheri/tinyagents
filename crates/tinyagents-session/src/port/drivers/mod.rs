@@ -48,7 +48,7 @@ use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, Scope, ScopedStorage, StorageBackend, StorageError,
 };
 
-use super::{AgentStores, SessionStoreProvider};
+use super::{AgentStores, SessionStoreLease, SessionStoreLeaseError, SessionStoreProvider};
 
 pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
 pub use schema::storage_schema;
@@ -381,6 +381,15 @@ fn check_tenant(tenant: &Scope) -> Result<(), StorageError> {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
+    fn lease_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        let stores = DriverSessionStores::try_for_agent(self, agent_id)
+            .map_err(SessionStoreLeaseError::Open)?;
+        Ok(SessionStoreLease::pinned(stores))
+    }
+
     fn run_ledger_for_agent(
         &self,
         agent_id: &str,
