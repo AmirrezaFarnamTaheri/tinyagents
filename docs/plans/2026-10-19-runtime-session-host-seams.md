@@ -1024,16 +1024,20 @@ Use these exact adversarial test bodies. They reuse `locator(None)`, `meta()`,
 and `Driver` from `lib_tests.rs`:
 
 ```rust
-struct ReplaceTargetHook(Arc<dyn TranscriptLocator>);
+struct ReplaceTargetHook {
+    target: Arc<dyn TranscriptLocator>,
+    session_override: Option<SessionRef>,
+}
 
 #[async_trait]
 impl SessionHooks for ReplaceTargetHook {
     async fn before_resume(
-        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        &self, _: &mut SessionTurnRequest, options: &mut TurnOptions,
         _: SessionStateView<'_>,
     ) -> Result<ResumePreparation, RuntimeError> {
+        options.session = self.session_override.clone();
         Ok(ResumePreparation { transcript: Some(TranscriptTarget::for_session(
-            self.0.clone(), SessionRef::scoped("thread-identity", "agent-resolved"), meta(),
+            self.target.clone(), SessionRef::scoped("thread-identity", "agent-resolved"), meta(),
         )) })
     }
     async fn before_turn(
@@ -1059,7 +1063,9 @@ async fn hook_cannot_replace_the_identity_locator() {
     let driver = Arc::new(Driver::new(vec![]));
     let mut session = SessionBuilder::new(driver.clone())
         .codec(Arc::new(Codec::default()))
-        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .hooks(Arc::new(ReplaceTargetHook {
+            target: wrong.clone(), session_override: None,
+        }))
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
     let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
@@ -1084,7 +1090,9 @@ async fn public_resume_validates_hook_replacement_before_locator_access() {
     let (wrong, wrong_history) = locator(None);
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(Arc::new(Codec::default()))
-        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .hooks(Arc::new(ReplaceTargetHook {
+            target: wrong.clone(), session_override: None,
+        }))
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
     let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
