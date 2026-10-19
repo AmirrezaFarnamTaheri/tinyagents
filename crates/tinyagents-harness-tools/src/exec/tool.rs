@@ -6,7 +6,7 @@ use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout,
 
 use super::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend,
-    ExecBackendOutcome, ExecDenied, ExecGate, ExecOperation, ExecRefusalKind, ExecRequest,
+    ExecBackendOutcome, ExecDenied, ExecGate, ExecOperation, ExecRequest,
     ShellFlavor,
     progress::{HEARTBEAT_INTERVAL, with_exec_progress},
     shell_description::{command_param_description, shell_description},

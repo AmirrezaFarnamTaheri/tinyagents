@@ -3,6 +3,8 @@
 pub mod detect_tools;
 pub mod ports;
 pub mod progress;
+mod shell_description;
+mod shell_support;
 pub mod timeout;
 
 pub use ports::{
