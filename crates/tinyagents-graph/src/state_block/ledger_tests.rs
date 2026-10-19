@@ -152,6 +152,14 @@ fn search_misses_are_not_failures() {
         "Command failed (exit code 2)",
     );
     assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
+    // A compound command that explains itself on stderr is a real failure.
+    record_result(
+        &mut ledger,
+        shell("python3 -c 'import m'; echo done"),
+        true,
+        "Command failed (exit code 1)\n[stderr]\nTraceback (most recent call last):",
+    );
+    assert_eq!(ledger.failures.len(), 1);
     // A crash, a missing executable or a non-search failure still counts.
     record_result(
         &mut ledger,
@@ -160,5 +168,5 @@ fn search_misses_are_not_failures() {
         "Command failed (exit code 2)",
     );
     record_result(&mut ledger, shell("python3 x.py"), true, SHELL_127);
-    assert_eq!(ledger.failures.len(), 2);
+    assert_eq!(ledger.failures.len(), 3);
 }
