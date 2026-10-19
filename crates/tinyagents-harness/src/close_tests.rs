@@ -387,6 +387,27 @@ impl CloseModelSource for StaticCloseSource {
     }
 }
 
+struct RecordingCloseSource {
+    model: Arc<dyn ChatModel<()>>,
+    builds: Mutex<Vec<(String, f64, Option<String>)>>,
+}
+
+impl CloseModelSource for RecordingCloseSource {
+    fn build_summarizer(
+        &self,
+        model: &str,
+        temperature: f64,
+        thread_id: Option<&str>,
+    ) -> Result<Arc<dyn ChatModel<()>>, String> {
+        self.builds.lock().unwrap().push((
+            model.to_owned(),
+            temperature,
+            thread_id.map(str::to_owned),
+        ));
+        Ok(Arc::clone(&self.model))
+    }
+}
+
 struct EmptyCloseEnricher;
 
 impl crate::observability::SupplementalEnricher for EmptyCloseEnricher {
@@ -416,7 +437,10 @@ async fn close_source_model_stamps_request_and_traces_completion() {
     use crate::ids::RunId;
 
     let inner = Arc::new(scripted_model(&["answer"]));
-    let source = StaticCloseSource(inner.clone());
+    let source = RecordingCloseSource {
+        model: inner.clone(),
+        builds: Mutex::new(Vec::new()),
+    };
     let events = EventSink::new();
     let listener = Arc::new(RecordingListener::new());
     events.subscribe(listener.clone() as Arc<dyn EventListener>);
@@ -436,6 +460,11 @@ async fn close_source_model_stamps_request_and_traces_completion() {
         .invoke(&(), ModelRequest::new(Vec::new()))
         .await
         .unwrap();
+
+    assert_eq!(
+        source.builds.lock().unwrap().as_slice(),
+        [("selected".to_owned(), 0.2, Some("thread".to_owned()))]
+    );
 
     let requests = inner.requests.lock().unwrap();
     let correlation = requests[0].correlation.as_ref().unwrap();
