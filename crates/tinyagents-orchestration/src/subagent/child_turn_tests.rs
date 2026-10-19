@@ -163,10 +163,7 @@ async fn early_exit_appends_typed_question_without_cap_summary() {
             accepted_history: vec!["accepted-native-tool-result".into()],
             output: "Which account should I use?".into(),
             model_calls: 3,
-            accounting: ChildTurnAccounting {
-                model_calls: 3,
-                ..ChildTurnAccounting::default()
-            },
+            accounting: ChildTurnAccounting::default(),
             hit_cap: false,
             early_exit: true,
         })),
