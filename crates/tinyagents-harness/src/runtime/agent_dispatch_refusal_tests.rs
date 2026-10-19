@@ -16,7 +16,10 @@ fn hosted_error_retains_content_free_dispatch_refusal() {
 
     assert_eq!(hosted.kind, HostedErrorKind::LimitExceeded);
     assert_eq!(hosted.dispatch_refusal, Some(refusal));
-    assert_eq!(hosted.message, "hosted agent invocation exceeded a configured limit");
+    assert_eq!(
+        hosted.message,
+        "hosted agent invocation exceeded a configured limit"
+    );
 }
 
 #[test]
