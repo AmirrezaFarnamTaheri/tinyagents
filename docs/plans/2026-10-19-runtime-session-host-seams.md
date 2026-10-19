@@ -1885,13 +1885,15 @@ Keep the existing `after_commit` call at the same place in the task. Build
 `PostCommitObservation` from the committed receipt, the original request
 input, usage captured from the completed turn, `DriverOutcome.tool_outcomes`,
 and the resolved thread/agent identity before transferring ownership to the
-spawned task. At the existing successful commit site, construct and pass the
+spawned task. At the start of `turn_inner`, before `before_resume` can mutate
+the request, capture `let original_input = request.input.clone();`. At the
+existing successful commit site, construct and pass the
 values in this order:
 
 ```rust
 let observation = PostCommitObservation {
     receipt: receipt.clone(),
-    input: request.input.clone(),
+    input: original_input,
     usage: turn_usage.clone(),
     tool_outcomes: outcome.tool_outcomes.clone(),
     thread_id: thread_id.clone(),
