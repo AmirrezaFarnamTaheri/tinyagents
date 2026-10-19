@@ -486,6 +486,26 @@ fn same_thread_id_is_isolated_between_tenants_for_delivery_and_busy_gates() {
     drop((lease_a, lease_b));
 }
 
+#[test]
+fn release_all_clears_delivery_leases_without_touching_busy_state() {
+    let delivery = ThreadDeliveryLeases::default();
+    let thread_a = TenantThreadKey::new("tenant-a", "thread-a");
+    let thread_b = TenantThreadKey::new("tenant-b", "thread-b");
+    let busy = ParentBusyGate::default();
+    let lease_a = delivery.try_acquire(thread_a.clone()).unwrap();
+    let lease_b = delivery.try_acquire(thread_b.clone()).unwrap();
+    let _busy = busy.enter(thread_a.clone()).unwrap();
+
+    assert_eq!(delivery.release_all(), 2);
+    let renewed_a = delivery.try_acquire(thread_a.clone()).unwrap();
+    let renewed_b = delivery.try_acquire(thread_b).unwrap();
+    drop((lease_a, lease_b));
+    assert!(delivery.try_acquire(thread_a.clone()).is_none());
+    assert!(delivery.try_acquire(renewed_b.key.clone()).is_none());
+    assert!(busy.is_busy_scoped(&thread_a));
+    drop((renewed_a, renewed_b));
+}
+
 #[tokio::test]
 async fn aborted_delivery_releases_its_claimed_batch() {
     let router = Arc::new(CompletionRouter::new(Arc::new(

@@ -551,12 +551,13 @@ impl Drop for ParentBusyLease {
 
 /// At-most-one live delivery turn per thread, released automatically on drop.
 #[derive(Clone, Default)]
-pub struct ThreadDeliveryLeases(Arc<Mutex<HashSet<TenantThreadKey>>>);
+pub struct ThreadDeliveryLeases(Arc<Mutex<HashMap<TenantThreadKey, u64>>>);
 
 /// RAII exclusive delivery lease for one thread.
 pub struct ThreadDeliveryLease {
     leases: ThreadDeliveryLeases,
     key: TenantThreadKey,
+    id: u64,
 }
 
 impl ThreadDeliveryLeases {
@@ -567,12 +568,27 @@ impl ThreadDeliveryLeases {
     ) -> Option<ThreadDeliveryLease> {
         let key = thread_key.into();
         let mut leases = self.0.lock().ok()?;
-        if !leases.insert(key.clone()) {
+        if leases.contains_key(&key) {
             return None;
         }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        leases.insert(key.clone(), id);
         Some(ThreadDeliveryLease {
             leases: self.clone(),
             key,
+            id,
+        })
+    }
+
+    /// Releases every process-local delivery lease and returns the count.
+    /// Existing guards become inert and cannot remove a subsequently acquired
+    /// lease for the same thread when they are dropped.
+    pub fn release_all(&self) -> usize {
+        self.0.lock().map_or(0, |mut leases| {
+            let count = leases.len();
+            leases.clear();
+            count
         })
     }
 }
@@ -580,7 +596,9 @@ impl ThreadDeliveryLeases {
 impl Drop for ThreadDeliveryLease {
     fn drop(&mut self) {
         if let Ok(mut leases) = self.leases.0.lock() {
-            leases.remove(&self.key);
+            if leases.get(&self.key) == Some(&self.id) {
+                leases.remove(&self.key);
+            }
         }
     }
 }
