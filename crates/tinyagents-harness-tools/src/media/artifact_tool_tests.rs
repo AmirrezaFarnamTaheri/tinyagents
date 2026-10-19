@@ -155,6 +155,43 @@ impl Tool for ProgressInner {
     }
 }
 
+struct ErrorInner;
+#[async_trait]
+impl Tool for ErrorInner {
+    fn name(&self) -> &str {
+        "error"
+    }
+    fn description(&self) -> &str {
+        "error"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::error("provider failed"))
+    }
+}
+
+struct UnknownShapeInner;
+#[async_trait]
+impl Tool for UnknownShapeInner {
+    fn name(&self) -> &str {
+        "unknown_shape"
+    }
+    fn description(&self) -> &str {
+        "unknown"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success_with_markdown(
+            json!({"result":"provider-specific","items":[{"url":"https://example.test/media"}]}),
+            "provider-specific markdown",
+        ))
+    }
+}
+
 #[derive(Default)]
 struct ProgressRecorder(Mutex<Vec<String>>);
 impl ToolRunContext for ProgressRecorder {
@@ -337,4 +374,28 @@ async fn media_heartbeat_reports_per_call_job_state() {
         *recorder.0.lock().unwrap(),
         vec!["Generating video — 15s elapsed (job in_progress)"],
     );
+}
+
+#[tokio::test]
+async fn errors_and_unknown_output_shapes_are_preserved_without_filing() {
+    let filer = Arc::new(Filer::default());
+    let error_tool = MediaArtifactTool::new(ErrorInner, MediaArtifactKind::Image, filer.clone());
+    let error = error_tool.execute(json!({})).await.unwrap();
+    assert!(error.is_error);
+    assert_eq!(error.text(), "provider failed");
+    let unknown_tool =
+        MediaArtifactTool::new(UnknownShapeInner, MediaArtifactKind::Image, filer.clone());
+    let unknown = unknown_tool.execute(json!({})).await.unwrap();
+    let ToolContent::Json { data } = &unknown.content[0] else {
+        panic!("expected JSON")
+    };
+    assert_eq!(
+        data,
+        &json!({"result":"provider-specific","items":[{"url":"https://example.test/media"}]})
+    );
+    assert_eq!(
+        unknown.markdown_formatted.as_deref(),
+        Some("provider-specific markdown")
+    );
+    assert!(filer.0.lock().unwrap().is_empty());
 }
