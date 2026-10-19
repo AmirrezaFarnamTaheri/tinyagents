@@ -570,7 +570,10 @@ async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice(
         let start = Arc::clone(&start);
         tokio::spawn(async move {
             start.wait().await;
-            router.record(record("same-parent", "parent")).await.unwrap()
+            router
+                .record(record("same-parent", "parent"))
+                .await
+                .unwrap()
         })
     };
     let second_writer = {
@@ -578,7 +581,10 @@ async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice(
         let start = Arc::clone(&start);
         tokio::spawn(async move {
             start.wait().await;
-            router.record(record("same-parent", "parent")).await.unwrap()
+            router
+                .record(record("same-parent", "parent"))
+                .await
+                .unwrap()
         })
     };
     start.wait().await;
@@ -604,7 +610,10 @@ async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice(
     let winner = store.get("same-parent").unwrap();
     assert_eq!(winner.receipt().as_ref(), Some(recorded));
     assert_eq!(winner.attempts, 1);
-    assert_eq!(first_queue.status().await.total + second_queue.status().await.total, 1);
+    assert_eq!(
+        first_queue.status().await.total + second_queue.status().await.total,
+        1
+    );
 }
 
 #[tokio::test]
