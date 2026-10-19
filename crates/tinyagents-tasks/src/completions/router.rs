@@ -544,6 +544,32 @@ impl CompletionRouter {
         }
     }
 
+    /// Records with retries and, only when the caller explicitly permits a
+    /// process-local scope, migrates this router to memory after durable
+    /// writes fail. Existing records must be readable and copyable before the
+    /// replacement is published; otherwise the durable store remains active
+    /// and the migration error is returned.
+    pub async fn record_resilient(
+        &self,
+        record: CompletionRecord,
+        attempts: u32,
+        fallback: super::registry::CompletionStoreFallback,
+    ) -> Result<RecordOutcome> {
+        match self.record_with_retries(record.clone(), attempts).await {
+            Ok(outcome) => Ok(outcome),
+            Err(error) if fallback == super::registry::CompletionStoreFallback::FailClosed => {
+                Err(error)
+            }
+            Err(_) => {
+                let current = self.store();
+                let replacement: Arc<dyn CompletionStore> =
+                    Arc::new(super::InMemoryCompletionStore::new());
+                self.replace_store_if_current(&current, replacement)?;
+                self.record_with_retries(record, attempts).await
+            }
+        }
+    }
+
     /// Withdraws a child's completion because the parent collected it itself
     /// (waited on it, or read its result). Suppresses routing from now on; a
     /// message already pushed onto a live queue is not retracted. A completion that has not arrived
