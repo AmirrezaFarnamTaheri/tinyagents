@@ -298,6 +298,40 @@ async fn purge_callback_keeps_successful_ids_when_a_later_document_delete_fails(
 }
 
 #[tokio::test]
+async fn async_purge_callback_keeps_completed_ids_when_a_later_delete_fails() {
+    let (store, docs) = probed_store(Some(2), None, None).await;
+    for id in ["logical/one", "logical/two", "logical/three"] {
+        store.ensure_thread(request(id)).await.unwrap();
+    }
+    let page = store
+        .docs
+        .query(COLLECTION, &Query::filter(Filter::All).limit(PAGE_SIZE))
+        .await
+        .unwrap();
+    let expected_first = DriverConversationStore::decode(page.items.into_iter().next().unwrap())
+        .unwrap()
+        .doc
+        .thread
+        .id;
+
+    let mut callbacks = Vec::new();
+    let result = store
+        .purge_threads_with_async(|thread_id| {
+            callbacks.push(thread_id);
+            std::future::ready(())
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ConversationError::Driver(error)) if error.kind() == tinystoragedrivers_core::ErrorKind::Unavailable
+    ));
+    assert_eq!(callbacks, vec![expected_first]);
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 2);
+}
+
+#[tokio::test]
 async fn purge_callback_enumerates_paged_and_new_threads() {
     let inserted_id = "channel/inserted-during-purge";
     let (store, docs) = probed_store(None, Some(inserted_id), None).await;
@@ -362,4 +396,90 @@ async fn purge_callback_skips_a_delete_reported_as_not_removed() {
     assert!(docs.inner.get(COLLECTION, &key).await.unwrap().is_none());
     assert_eq!(docs.thread_deletes.load(Ordering::SeqCst), 1);
     assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn async_purge_callback_is_awaited_before_the_next_document_delete() {
+    let (store, docs) = probed_store(None, None, None).await;
+    store.ensure_thread(request("logical/live")).await.unwrap();
+    store
+        .ensure_thread(request("logical/tombstoned"))
+        .await
+        .unwrap();
+    store
+        .append_message("logical/tombstoned", message("tombstoned-message"))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .delete_thread("logical/tombstoned", "now")
+            .await
+            .unwrap()
+    );
+
+    let (callback_tx, mut callback_rx) = tokio::sync::mpsc::unbounded_channel();
+    let purge = tokio::spawn(async move {
+        store
+            .purge_threads_with_async(move |thread_id| {
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+                callback_tx
+                    .send((thread_id, release_tx))
+                    .expect("test is waiting for every callback");
+                async move {
+                    release_rx
+                        .await
+                        .expect("test releases each callback before finishing");
+                }
+            })
+            .await
+    });
+
+    let (first_id, release_first) = callback_rx.recv().await.unwrap();
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    assert!(callback_rx.try_recv().is_err());
+    release_first.send(()).unwrap();
+
+    let (second_id, release_second) = callback_rx.recv().await.unwrap();
+    assert_ne!(first_id, second_id);
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 2);
+    assert!(callback_rx.try_recv().is_err());
+    release_second.send(()).unwrap();
+
+    let stats = purge.await.unwrap().unwrap();
+    assert_eq!(
+        BTreeSet::from([first_id, second_id]),
+        BTreeSet::from(["logical/live".to_owned(), "logical/tombstoned".to_owned()])
+    );
+    assert_eq!((stats.thread_count, stats.message_count), (1, 0));
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn cancelling_an_async_purge_callback_does_not_process_the_next_row() {
+    let (store, docs) = probed_store(None, None, None).await;
+    for id in ["logical/one", "logical/two"] {
+        store.ensure_thread(request(id)).await.unwrap();
+    }
+
+    let (callback_tx, mut callback_rx) = tokio::sync::mpsc::unbounded_channel();
+    let purge = tokio::spawn(async move {
+        store
+            .purge_threads_with_async(move |thread_id| {
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+                callback_tx
+                    .send((thread_id, release_tx))
+                    .expect("test is waiting for the callback");
+                async move {
+                    let _ = release_rx.await;
+                }
+            })
+            .await
+    });
+
+    let (_deleted_id, _release) = callback_rx.recv().await.unwrap();
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    purge.abort();
+    assert!(purge.await.unwrap_err().is_cancelled());
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 1);
 }

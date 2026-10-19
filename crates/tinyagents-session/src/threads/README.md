@@ -104,17 +104,18 @@ or thread. `purge_threads` deletes every thread document (live and tombstoned),
 stream and intent, and counts live threads and messages.
 
 Hosts that need to retain work for each removed thread can use
-`DriverConversationStore::purge_threads_with`. Its synchronous callback gets
-the logical thread ID after a successful document deletion, including for
-tombstones, and runs before the next row is processed on the caller's executor.
-Keep the callback limited to recording the obligation; perform follow-up work
-separately. If durable recording uses synchronous I/O, run the purge from an
-appropriate blocking executor. The callback is infallible and must not panic or
-re-enter this store. If a later read or delete fails, earlier callbacks have
-already run. The purge is not crash-atomic: a process failure between deleting a
-document and invoking its callback can leave that obligation unreported. The
-existing `ConversationPersistence` purge uses the same loop with a no-op
-callback.
+`DriverConversationStore::purge_threads_with` or
+`DriverConversationStore::purge_threads_with_async`. Both callbacks receive the
+logical thread ID only after a successful document deletion, including for
+tombstones, and run before the next row is processed. The synchronous callback
+runs on the caller's executor and should only record the obligation; callbacks
+that need asynchronous follow-up work should use the async variant, which awaits
+each callback before continuing. Neither callback can report failure. If a later
+read or delete fails, earlier callback effects remain. Neither purge is
+crash-atomic: a process failure after deletion but before the callback completes
+can leave that obligation unreported, and cancellation may stop an async callback
+before completion. The existing `ConversationPersistence` purge uses the same
+loop with a no-op callback.
 
 Plain message append does not authorize distributed agent execution. No
 importer, provider selection or legacy source-ownership grant is added.
