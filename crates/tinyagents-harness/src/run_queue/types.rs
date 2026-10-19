@@ -19,9 +19,17 @@ pub type RunQueueHandle = Arc<super::RunQueue<Message>>;
 /// turn. Hosts can attach durable lifecycle admission to messages without
 /// changing the transcript payload.
 pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
-    /// Validates that the queued item still belongs to an admitted lifecycle.
-    fn validate(&self) -> Result<(), QueueAdmissionError>;
+    /// Acquires a short-lived permit that linearizes this item with lifecycle
+    /// closure. Implementations must return an error when the lifecycle no
+    /// longer admits the item. The permit is held only while the harness
+    /// transfers the item into a turn, never across a provider await.
+    fn acquire(&self) -> Result<Box<dyn QueueAdmissionPermit>, QueueAdmissionError>;
 }
+
+/// Owned authority held across the queue-to-turn transfer.
+pub trait QueueAdmissionPermit: Send {}
+
+impl QueueAdmissionPermit for () {}
 
 /// The queued item's admission capability is no longer valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
