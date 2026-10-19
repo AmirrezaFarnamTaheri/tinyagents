@@ -124,6 +124,42 @@ fn close_usage_counts_attempts_and_excludes_verifier_from_context_tokens() {
 }
 
 #[test]
+fn close_usage_accepts_host_billing_without_host_types() {
+    let mut usage = CloseUsage::for_model("selected-model");
+    let mut response = ModelResponse::assistant("closed");
+    response.usage = Some(Usage {
+        input_tokens: 17,
+        output_tokens: 5,
+        ..Default::default()
+    });
+
+    usage.record_close_call_with_cost(
+        CloseRequestKind::Generation,
+        Some(&response),
+        |response| {
+            assert!(response.is_some());
+            Some((
+                "actual-route-model".into(),
+                crate::cost::CallCost::Charged(0.007),
+            ))
+        },
+    );
+    usage.record_close_call_with_cost(
+        CloseRequestKind::RequiredOutputRepair,
+        None,
+        |response| {
+            assert!(response.is_none());
+            None
+        },
+    );
+
+    assert_eq!(usage.model_calls, 2);
+    assert_eq!((usage.input_tokens, usage.output_tokens), (17, 5));
+    assert_eq!(usage.pricing_model, "actual-route-model");
+    assert_eq!(usage.cost.usd(), Some(0.007));
+}
+
+#[test]
 fn classified_halt_close_builds_only_for_classified_reason() {
     let mut built = false;
     let result = classified_halt_close(
