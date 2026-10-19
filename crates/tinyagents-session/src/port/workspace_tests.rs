@@ -1,6 +1,10 @@
 use super::*;
 use crate::legacy::OnceOutcome;
 use crate::port::SessionStoreProvider;
+use crate::testkit::conformance::{
+    session_store_conformance, session_store_isolation_conformance,
+    session_store_lease_conformance,
+};
 use crate::transcript::{
     SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn, session_stem, write_transcript,
 };
@@ -103,6 +107,16 @@ fn a_workspace_with_no_legacy_files_opens_empty() {
     let dir = tempfile::tempdir().unwrap();
     let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert!(opened.transcripts().latest_for_agent("agent").is_none());
+}
+
+#[tokio::test]
+async fn workspace_provider_passes_full_session_store_conformance() {
+    let dir = tempfile::tempdir().unwrap();
+    let opened = WorkspaceStores::open(dir.path(), "conformance-agent").unwrap();
+    let provider = opened.provider();
+    session_store_conformance(provider.as_ref()).await;
+    session_store_isolation_conformance(provider.as_ref()).await;
+    session_store_lease_conformance(provider.as_ref()).await;
 }
 
 #[tokio::test]
