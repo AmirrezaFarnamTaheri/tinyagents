@@ -12,7 +12,7 @@
 //! sibling `mod.rs` and its `*_tests.rs` files.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -408,6 +408,9 @@ pub(crate) struct JobControl {
     /// Watchers keep a terminal job from cap pruning until they consume its
     /// final status or drop their wait future.
     pub(crate) waiters: Arc<AtomicUsize>,
+    /// Set after any waiter consumes a terminal snapshot so the final waiter
+    /// dropping can reclaim it even when it is below the soft cap.
+    pub(crate) terminal_observed: Arc<AtomicBool>,
 }
 
 pub struct DriverJobRegistration {
