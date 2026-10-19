@@ -104,9 +104,6 @@ impl QueueAdmission for CompletionAdmission {
         expected_key: Option<&str>,
     ) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         let store = CompletionRouter::admission_store_snapshot(&self.store)?;
-        if store.is_process_local() && store.parent_lifecycle_is_ambiguous() {
-            return Err(QueueAdmissionError::Retry);
-        }
         let lifecycle = self.lifecycle_for(&store);
         if expected_key.is_some_and(|expected| self.key_for(&store, &lifecycle) != expected) {
             // The queue's key came from the immediately preceding snapshot.
@@ -125,10 +122,9 @@ impl QueueAdmission for CompletionAdmission {
         .ok_or(QueueAdmissionError::Rejected)?;
         CompletionRouter::admission_store_is_current(&self.store, &store)?;
         if store.is_process_local()
-            && (store.parent_lifecycle_is_ambiguous()
-                || store
-                    .parent_lifecycle()
-                    .is_some_and(|current| !Arc::ptr_eq(&current, &lifecycle)))
+            && store
+                .parent_lifecycle()
+                .is_some_and(|current| !Arc::ptr_eq(&current, &lifecycle))
         {
             return Err(QueueAdmissionError::Retry);
         }
@@ -137,9 +133,6 @@ impl QueueAdmission for CompletionAdmission {
 
     fn batch_key(&self) -> Option<String> {
         let store = CompletionRouter::admission_store_snapshot(&self.store).ok()?;
-        if store.is_process_local() && store.parent_lifecycle_is_ambiguous() {
-            return None;
-        }
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
         let lifecycle = self.lifecycle_for(&store);

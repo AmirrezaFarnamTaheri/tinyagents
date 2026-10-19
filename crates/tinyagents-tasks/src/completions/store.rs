@@ -40,11 +40,6 @@ pub trait CompletionStore: Send + Sync {
         None
     }
 
-    /// Whether this store is bound to more than one host-defined pool scope.
-    fn parent_lifecycle_is_ambiguous(&self) -> bool {
-        false
-    }
-
     /// Binds this store to its pool-owned lifecycle authority. Implementations
     /// that opt into process-local routing must preserve the binding for all
     /// handles sharing the same backing store and reject conflicting scopes.
@@ -272,7 +267,7 @@ pub struct InMemoryCompletionStore {
     parent_gates: Arc<Mutex<HashMap<String, MemoryParentGate>>>,
     parent_gate_epochs: Arc<Mutex<HashMap<String, u64>>>,
     identity: Arc<str>,
-    lifecycles: Arc<Mutex<HashMap<String, Arc<ParentLifecycle>>>>,
+    lifecycle: Arc<Mutex<Option<Arc<ParentLifecycle>>>>,
 }
 
 impl Default for InMemoryCompletionStore {
@@ -295,7 +290,7 @@ impl InMemoryCompletionStore {
             parent_gates: Arc::default(),
             parent_gate_epochs: Arc::default(),
             identity: Arc::from(format!("memory:{}", uuid::Uuid::new_v4().simple())),
-            lifecycles: Arc::default(),
+            lifecycle: Arc::default(),
         }
     }
 
@@ -341,24 +336,24 @@ impl CompletionStore for InMemoryCompletionStore {
     }
 
     fn parent_lifecycle(&self) -> Option<Arc<ParentLifecycle>> {
-        let lifecycles = self.lifecycles.lock().ok()?;
-        (lifecycles.len() == 1)
-            .then(|| lifecycles.values().next().cloned())
-            .flatten()
-    }
-
-    fn parent_lifecycle_is_ambiguous(&self) -> bool {
-        self.lifecycles
-            .lock()
-            .is_ok_and(|lifecycles| lifecycles.len() > 1)
+        self.lifecycle.lock().ok().and_then(|lifecycle| lifecycle.clone())
     }
 
     fn bind_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
-        let mut lifecycles = self
-            .lifecycles
+        let mut current = self
+            .lifecycle
             .lock()
             .map_err(|_| store_err("parent lifecycle", "lock poisoned"))?;
-        lifecycles.insert(lifecycle.identity().to_owned(), lifecycle);
+        if current
+            .as_ref()
+            .is_some_and(|existing| !Arc::ptr_eq(existing, &lifecycle))
+        {
+            return Err(store_err(
+                "parent lifecycle",
+                "store is already bound to a different pool scope",
+            ));
+        }
+        *current = Some(lifecycle);
         Ok(())
     }
 
