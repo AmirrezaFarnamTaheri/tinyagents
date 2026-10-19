@@ -1,5 +1,4 @@
 use super::*;
-use std::sync::Arc;
 use tinyagents_harness::cost::{CallCost, CostSource};
 use tinyinference_llm::usage::{ChargedAmount, Usage};
 
@@ -91,7 +90,7 @@ fn totals(input: u64, output: u64, cache_read: u64, cache_create: u64, reasoning
 
 #[tokio::test]
 async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
-    let mut accounting = ChildTurnAccounting {
+    let accounting = ChildTurnAccounting {
         usage: totals(10, 4, 3, 2, 1),
         cost: {
             let mut cost = CostTally::default();
@@ -100,7 +99,6 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
         },
         model_calls: 5,
     };
-    let _ = &mut accounting;
     let mut host = FakeHost {
         run: Some(Ok(ChildTurnRun {
             accepted_history: vec!["accepted-native-assistant-tool-call".into()],
