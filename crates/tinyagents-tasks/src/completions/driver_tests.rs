@@ -95,25 +95,27 @@ fn cloned_memory_stores_share_a_batch_admission_identity() {
 
 #[test]
 fn driver_stores_can_share_an_explicit_backend_domain_without_coalescing_other_domains() {
-    let memory = MemoryStorage::new();
-    let first_backend: Arc<dyn StorageBackend> = Arc::new(memory.clone());
-    let second_backend: Arc<dyn StorageBackend> = Arc::new(memory);
+    let first_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let other_backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let scope = Scope::new("tenant").unwrap();
     let first = DriverCompletionStore::new_with_coordination_domain(
-        first_backend,
+        Arc::clone(&first_backend),
         scope.clone(),
         "shared-backend",
     )
     .unwrap();
     let second = DriverCompletionStore::new_with_coordination_domain(
-        second_backend.clone(),
+        Arc::clone(&first_backend),
         scope.clone(),
         "shared-backend",
     )
     .unwrap();
-    let unrelated =
-        DriverCompletionStore::new_with_coordination_domain(second_backend, scope, "other-backend")
-            .unwrap();
+    let unrelated = DriverCompletionStore::new_with_coordination_domain(
+        other_backend,
+        scope,
+        "other-backend",
+    )
+    .unwrap();
 
     assert_eq!(
         first.coordination_identity(),
@@ -122,6 +124,59 @@ fn driver_stores_can_share_an_explicit_backend_domain_without_coalescing_other_d
     assert_ne!(
         first.coordination_identity(),
         unrelated.coordination_identity()
+    );
+}
+
+#[tokio::test]
+async fn separate_database_domains_do_not_share_a_same_parent_queue_permit() {
+    use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
+    use tinyinference_llm::message::Message;
+
+    let backend_a: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let backend_b: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scope = Scope::new("shared-tenant").unwrap();
+    let router_a = Arc::new(CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new_with_coordination_domain(
+            backend_a,
+            scope.clone(),
+            "database-a",
+        )
+        .unwrap(),
+    )));
+    let router_b = Arc::new(CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new_with_coordination_domain(backend_b, scope, "database-b")
+            .unwrap(),
+    )));
+    router_a.record(record("database-a-child", "same-parent")).await.unwrap();
+    router_b.record(record("database-b-child", "same-parent")).await.unwrap();
+    router_b.cancel_parent("same-parent").unwrap();
+
+    let queue = RunQueue::new();
+    for (router, task_id) in [
+        (&router_a, "database-a-child"),
+        (&router_b, "database-b-child"),
+    ] {
+        let completion = router.pending_for("same-parent").remove(0);
+        assert_eq!(completion.task_id, task_id);
+        queue
+            .push_guarded(
+                QueueLane::Followup,
+                Message::user(task_id),
+                Arc::new(crate::completions::CompletionAdmission::for_record(
+                    Arc::clone(router),
+                    &completion,
+                )),
+            )
+            .await;
+    }
+
+    let admitted = queue
+        .take_admitted(QueueLane::Followup, QueueMode::All)
+        .await;
+    assert_eq!(
+        admitted.iter().map(|item| item.value.clone()).collect::<Vec<_>>(),
+        [Message::user("database-a-child")],
+        "a permit from one database must not authorize an unrelated store with the same scope and parent text"
     );
 }
 
@@ -491,15 +546,28 @@ async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit(
     use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
     use tinyinference_llm::message::Message;
 
-    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let open = || {
-        Arc::new(
-            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
-                .unwrap(),
-        ) as Arc<dyn CompletionStore>
-    };
-    let producer = Arc::new(CompletionRouter::new(open()));
-    let observer = Arc::new(CompletionRouter::new(open()));
+    let shared_memory = MemoryStorage::new();
+    let backend_a: Arc<dyn StorageBackend> = Arc::new(shared_memory.clone());
+    let backend_b: Arc<dyn StorageBackend> = Arc::new(shared_memory);
+    let scope = Scope::new("shared").unwrap();
+    let producer_store: Arc<dyn CompletionStore> = Arc::new(
+        DriverCompletionStore::new_with_coordination_domain(
+            Arc::clone(&backend_a),
+            scope.clone(),
+            "shared-backend-aliases",
+        )
+        .unwrap(),
+    );
+    let observer_store: Arc<dyn CompletionStore> = Arc::new(
+        DriverCompletionStore::new_with_coordination_domain(
+            backend_b,
+            scope,
+            "shared-backend-aliases",
+        )
+        .unwrap(),
+    );
+    let producer = Arc::new(CompletionRouter::new(producer_store));
+    let observer = Arc::new(CompletionRouter::new(observer_store));
     producer.record(record("first", "parent")).await.unwrap();
     producer.record(record("second", "parent")).await.unwrap();
     let records = producer.pending_for("parent");
