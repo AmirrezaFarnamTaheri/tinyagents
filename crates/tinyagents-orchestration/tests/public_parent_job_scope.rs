@@ -1,8 +1,7 @@
-use tinyagents_orchestration::subagent::{
-    DriverJobRegistration, ParentJobScope, SubAgentJobRegistry,
-    format_parent_roster_for_owner,
-};
 use tinyagents_harness::cancel::CancellationToken;
+use tinyagents_orchestration::subagent::{
+    DriverJobRegistration, ParentJobScope, SubAgentJobRegistry, format_parent_roster_for_owner,
+};
 use tinytools::WorkspaceDescriptor;
 
 #[test]
@@ -11,10 +10,9 @@ fn parent_job_scope_is_available_from_the_public_subagent_facade() {
     let _ = constructor;
     let registry = SubAgentJobRegistry::new();
     let scope = ParentJobScope::new(WorkspaceDescriptor::new("/workspace"), "thread");
-    let rendered = format_parent_roster_for_owner(&registry, "owner", &scope, &[], |_| {
-        "empty".to_owned()
-    })
-    .unwrap();
+    let rendered =
+        format_parent_roster_for_owner(&registry, "owner", &scope, &[], |_| "empty".to_owned())
+            .unwrap();
     assert_eq!(rendered, "empty");
 }
 
@@ -26,7 +24,12 @@ fn parent_scope_can_cancel_only_its_jobs_through_the_public_facade() {
     let token_a = CancellationToken::new();
     let token_b = CancellationToken::new();
     for (task, thread, workspace, cancellation) in [
-        ("task-a", "same-thread", workspace_a.clone(), token_a.clone()),
+        (
+            "task-a",
+            "same-thread",
+            workspace_a.clone(),
+            token_a.clone(),
+        ),
         ("task-b", "same-thread", workspace_b, token_b.clone()),
     ] {
         registry

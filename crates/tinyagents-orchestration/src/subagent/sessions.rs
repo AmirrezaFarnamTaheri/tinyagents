@@ -500,13 +500,13 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let closed = self
             .inner
             .close_if_current(
-            id,
-            task_id,
-            lifecycle_key,
-            &self.parent_session,
-            self.parent_thread_id.as_deref(),
-        )
-        .await?;
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
+            .await?;
         if closed && let Some(callback) = &self.close_callback {
             callback(id, task_id, lifecycle_key);
         }

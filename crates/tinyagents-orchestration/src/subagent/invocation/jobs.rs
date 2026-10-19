@@ -528,7 +528,7 @@ impl SubAgentJobRegistry {
             owner,
             Some((completions, key.task_id.as_str())),
         )
-            .map(|(job, _)| job)
+        .map(|(job, _)| job)
     }
 
     /// Points the job link at the attempt that is now running.
