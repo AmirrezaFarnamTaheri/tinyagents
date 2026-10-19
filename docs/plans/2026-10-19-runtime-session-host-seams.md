@@ -143,15 +143,21 @@ Its constructor remains private to `port`; only
 wrapping a live forwarding handle and accidentally calling that a pinned
 lease.
 
-Add `SessionStoreProvider::lease_for_agent(&self, agent_id: &str)` with a
-default implementation that opens `try_for_agent(agent_id)` once and wraps the
-returned handles. `RebindableSessionStores` overrides it by snapshotting the
-current `DriverSessionStores` and returning ordinary driver-backed handles,
-not the live forwarding wrappers. Keep `for_agent` and existing handles
-live-following `rebind` exactly as they are today. The host establishes the
-lease by resolving its actor first and supplying the corresponding backend
-and `Scope`; TinyAgents stores those supplied values but performs no tenant
-lookup.
+Add `SessionStoreProvider::lease_for_agent(&self, agent_id: &str)` returning
+`Result<SessionStoreLease, SessionStoreLeaseError>`. Its default returns
+`Err(SessionStoreLeaseError::Unsupported)`; it must never wrap
+`try_for_agent`, because that may return forwarding handles and does not prove
+pinned lifetime. `RebindableSessionStores` is the first supported provider: its
+override holds the same `current` read lock used by `current()`, clones the
+current `Arc<DriverSessionStores>`, opens the agent through that snapshot, and
+stores the resulting non-forwarding `AgentStores` in the lease. If agent open
+fails, return `SessionStoreLeaseError::Open(StorageError)` without creating a
+lease. Keep `for_agent`, `try_for_agent`, and existing retained handles
+live-following `rebind` exactly as they are today. `bind_actor` remains the
+host-admission seam: the host resolves the actor and supplies the already
+admitted backend; TinyAgents neither resolves tenant scope nor infers it from
+agent/session keys. A provider that cannot attest that its handles pin their
+backend returns `Unsupported`.
 
 Rebind may update the provider's current backend for future opens, but must
 not mutate an already returned lease. `WorkspaceStores::open`
@@ -223,7 +229,7 @@ host's own gate and is installed in the actual call-policy chain. Add the
 generic equivalent in `runtime/tool_registration.rs`:
 
 ```rust
-pub struct HostOnlyToolPolicy<C> {
+pub struct HostOnlyToolPolicy<C: Send + Sync + 'static> {
     allowed: HashSet<String>,
     host: Option<Arc<dyn tinyagents_harness::middleware::ToolCallPolicy<C>>>,
 }
@@ -249,6 +255,13 @@ impl<C: Send + Sync + 'static> ToolCallPolicy<C> for HostOnlyToolPolicy<C> {
     }
 }
 ```
+
+The generic declaration and impl both carry `C: Send + Sync + 'static` (the
+same bound as `ToolCallPolicy<C>`); put the bound on the struct, impl, and
+constructor so the public type is well-formed. Install it on the actual
+`TurnPlan::tool_policy`, which `TurnDriver::prepare` wraps with
+`ToolPolicyGateMiddleware`; registration filtering is only the model-visible
+half of this policy.
 
 Use the harness's actual `ToolCallPolicy<C>` trait and `RunContext<C>` call
 signature rather than a new policy protocol. The `check` implementation
@@ -356,7 +369,17 @@ are part of this task, even though host deletion/adoption of the rest of
 ### Session identity resolution (`tinyagents-runtime`)
 
 Issue #63 implements and wires this seam; OpenHuman's concrete resolver and
-adapter migration remain in #212. Place the request and result in
+adapter migration remain in #212. One authority check covers every path that
+can touch a transcript locator. `Session::turn` resolves after
+`before_resume` and `apply_resume_preparation`, so hook-provided replacements
+are visible; it checks `TurnOptions::session`, the effective target session,
+and locator before lock acquisition. Public `Session::resume` performs that
+same resolution and validation before any locator method and never reuses a
+prior operation's identity. Move the existing implementation into private
+`resume_bound`; only checked paths may call it. Resolver-enabled sessions fail
+closed when a target is absent. These checks precede `head_generation`,
+`read_session_transcript`, legacy adoption, and lock lookup. Place the request
+and result in
 `runtime/types.rs`, the trait in `runtime/identity.rs`, register it on
 `SessionBuilder`, and invoke it in `Session::turn_inner` after its initial
 cancellation check and before `before_resume`, target binding, locking, or
@@ -388,7 +411,7 @@ pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
 ```
 
 The request has logical naming inputs only; there is no caller-provided
-agent/tenant scope field. The resolver uses `context` to authorize the actor,
+agent/tenant scope field. The resolver uses `options.run_context.data` to authorize the actor,
 choose the resolved agent id, and open a tenant-scoped lease. It returns a
 root `SessionRef::scoped(request.session_key, resolved_agent_id)` or child
 `SessionRef::child_of(parent, child_key)`. Runtime binds the target locator
