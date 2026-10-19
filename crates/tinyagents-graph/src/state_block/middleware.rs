@@ -1,0 +1,209 @@
+//! [`StateBlockMiddleware`]'s hooks.
+
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use tinyagents_harness::context::RunContext;
+use tinyagents_harness::error::{Result, TinyAgentsError};
+use tinyagents_harness::middleware::{
+    AgentRun, Middleware, ToolInvocationIdentity, push_ephemeral_instruction,
+};
+use tinyagents_harness::store::Store;
+use tinyinference_llm::model::{ModelRequest, ModelResponse};
+use tinyinference_llm::tool::ToolCall;
+use tinytools::ToolResult;
+
+use crate::todos::{TodoItem, TodoStatus, store as todo_store};
+
+use super::ledger;
+use super::render::render;
+use super::types::{CallRecord, RunLedger, StateBlockMiddleware};
+
+/// The `todo` tool's name: its own result already shows the plan.
+const TODO_TOOL_NAME: &str = "todo";
+/// ponytail: a run that ends without `after_agent`/`on_error` (cancelled)
+/// leaves its entry behind; past this many the map is cleared.
+const MAX_RETAINED_RUNS: usize = 1_024;
+
+impl StateBlockMiddleware {
+    /// A middleware reading each thread's plan from `store` (the store the
+    /// `todo` tool writes).
+    pub fn new(store: Arc<dyn Store>) -> Self {
+        Self {
+            store,
+            runs: Mutex::default(),
+        }
+    }
+
+    fn with_run<T>(&self, instance: u64, f: impl FnOnce(&mut RunLedger) -> T) -> T {
+        let mut runs = self
+            .runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if runs.len() >= MAX_RETAINED_RUNS && !runs.contains_key(&instance) {
+            runs.clear();
+        }
+        f(runs.entry(instance).or_default())
+    }
+
+    fn forget(&self, instance: u64) {
+        self.runs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&instance);
+    }
+
+    /// The thread's plan; empty without a thread or a plan, or when the store
+    /// cannot be read (the block then shows the facts alone).
+    async fn items(&self, thread_id: Option<&str>) -> Vec<TodoItem> {
+        let Some(thread_id) = thread_id else {
+            return Vec::new();
+        };
+        match todo_store::get(&self.store, thread_id).await {
+            Ok(list) => list.map(|list| list.items).unwrap_or_default(),
+            Err(error) => {
+                tracing::debug!(%error, "[tinyagents::mw] state_block: plan unreadable");
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// Notes the step in progress, so the block can say how long it has run.
+fn track_step(ledger: &mut RunLedger, items: &[TodoItem]) {
+    let current = items
+        .iter()
+        .position(|item| item.status == TodoStatus::InProgress)
+        .map(|index| (index + 1, items[index].content.clone()));
+    if ledger.step != current {
+        ledger.step = current;
+        ledger.step_since = ledger.round;
+    }
+}
+
+#[async_trait]
+impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
+    fn name(&self) -> &str {
+        "state_block"
+    }
+
+    /// Its ledger must see every call, whatever another middleware decides.
+    fn is_observer(&self) -> bool {
+        true
+    }
+
+    async fn before_model_dispatch(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        let thread_id = ctx.thread_id().map(|id| id.as_str().to_owned());
+        let items = self.items(thread_id.as_deref()).await;
+        let block = self.with_run(ctx.instance_id(), |ledger| {
+            ledger::age_out(ledger);
+            track_step(ledger, &items);
+            ledger.staged = render(&items, ledger);
+            ledger.staged.clone()
+        });
+        if let Some(block) = block {
+            tracing::trace!(chars = block.len(), "[tinyagents::mw] state_block: added");
+            push_ephemeral_instruction(request, block, ctx.model_profile.as_ref());
+        }
+        Ok(())
+    }
+
+    async fn after_model_rewrite(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        request: &mut ModelRequest,
+    ) -> Result<()> {
+        let Some(block) = self.with_run(ctx.instance_id(), |ledger| ledger.staged.clone()) else {
+            return Ok(());
+        };
+        if !request
+            .messages
+            .iter()
+            .any(|message| message.text().contains(&block))
+        {
+            push_ephemeral_instruction(request, block, ctx.model_profile.as_ref());
+        }
+        Ok(())
+    }
+
+    async fn after_model(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        response: &mut ModelResponse,
+    ) -> Result<()> {
+        if !response.tool_calls().is_empty() {
+            self.with_run(ctx.instance_id(), |ledger| ledger.round += 1);
+        }
+        Ok(())
+    }
+
+    async fn before_tool(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        call: &mut ToolCall,
+    ) -> Result<()> {
+        if call.name != TODO_TOOL_NAME {
+            let record = ledger::call_record(call);
+            self.with_run(ctx.instance_id(), |ledger| {
+                ledger.calls.insert(call.id.clone(), record);
+            });
+        }
+        Ok(())
+    }
+
+    async fn after_tool(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        invocation: &ToolInvocationIdentity,
+        result: &mut ToolResult,
+    ) -> Result<()> {
+        if invocation.tool_name() == TODO_TOOL_NAME {
+            return Ok(());
+        }
+        let output = result.output();
+        let is_error = result.is_error;
+        self.with_run(ctx.instance_id(), |ledger| {
+            // A call refused before `before_tool` reached this middleware has
+            // no record; its name is all the ledger knows.
+            let record = ledger
+                .calls
+                .remove(invocation.call_id().as_str())
+                .unwrap_or_else(|| CallRecord {
+                    tool: invocation.tool_name().to_string(),
+                    summary: String::new(),
+                    command: None,
+                    written_path: None,
+                });
+            ledger::record_result(ledger, record, is_error, &output);
+        });
+        Ok(())
+    }
+
+    async fn on_error(&self, ctx: &mut RunContext<C>, _error: &TinyAgentsError) -> Result<()> {
+        self.forget(ctx.instance_id());
+        Ok(())
+    }
+
+    async fn after_agent(
+        &self,
+        ctx: &mut RunContext<C>,
+        _state: &S,
+        _run: &mut AgentRun,
+    ) -> Result<()> {
+        self.forget(ctx.instance_id());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "middleware_tests.rs"]
+mod tests;
