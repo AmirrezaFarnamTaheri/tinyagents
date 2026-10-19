@@ -23,6 +23,17 @@ fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
         .collect()
 }
 
+fn parent_gate(store: &dyn CompletionStore, parent_key: &str) -> crate::completions::ParentGateClaim {
+    store
+        .acquire_parent_gate(
+            parent_key,
+            &uuid::Uuid::new_v4().to_string(),
+            Duration::from_secs(30),
+        )
+        .unwrap()
+        .unwrap()
+}
+
 #[test]
 fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
@@ -152,9 +163,11 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
         .put(&record("a-newer", "p").with_finished_at(now + Duration::from_secs(1)))
         .unwrap();
 
+    let gate = parent_gate(&store, "p");
     let claimed = store
         .claim_pending(
             "p",
+            &gate,
             CompletionClaimMode::Followup,
             1,
             "owner",
@@ -177,11 +190,13 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     let storage = MemoryStorage::new();
     let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let original = record("claim-owner", "parent");
-    assert!(store.insert_if_absent(&original).unwrap());
+    let gate = parent_gate(&store, "parent");
+    assert!(store.insert_if_absent(&original, &gate).unwrap());
     let claimed = store
         .claim_task(
             "claim-owner",
             "parent",
+            &gate,
             CompletionClaimMode::Followup,
             "owner-token",
             SystemTime::now() + Duration::from_secs(30),
@@ -191,7 +206,7 @@ fn conditional_driver_create_preserves_an_existing_claim() {
 
     assert!(
         !store
-            .insert_if_absent(&record("claim-owner", "other-parent"))
+            .insert_if_absent(&record("claim-owner", "other-parent"), &gate)
             .unwrap()
     );
     let persisted = store.get("claim-owner").unwrap();
@@ -216,10 +231,11 @@ fn conditional_driver_create_does_not_replace_a_tombstone() {
     let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let tombstone = CompletionRecord::tombstone_stub("deleted");
     store.put(&tombstone).unwrap();
+    let gate = parent_gate(&store, "parent");
 
     assert!(
         !store
-            .insert_if_absent(&record("deleted", "parent"))
+            .insert_if_absent(&record("deleted", "parent"), &gate)
             .unwrap()
     );
     let persisted = store.get("deleted").unwrap();
@@ -239,9 +255,11 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     let record = record("lease-task", "parent");
     first.put(&record).unwrap();
     let now = SystemTime::now();
+    let first_gate = parent_gate(&first, "parent");
     let first_claim = first
         .claim_pending(
             "parent",
+            &first_gate,
             CompletionClaimMode::Followup,
             1,
             "first",
@@ -250,6 +268,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
         .unwrap()
         .pop()
         .unwrap();
+    first.release_parent_gate("parent", &first_gate).unwrap();
     let first_token = first_claim.claim.unwrap().token;
     assert!(
         first
@@ -258,9 +277,11 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
             .is_none(),
         "an expired owner cannot settle before another router reclaims"
     );
+    let second_gate = parent_gate(&second, "parent");
     let second_claim = second
         .claim_pending(
             "parent",
+            &second_gate,
             CompletionClaimMode::Followup,
             1,
             "second",
