@@ -609,6 +609,11 @@ pub struct SessionIdentity {
     stores: tinyagents_session::port::SessionStoreLease,
 }
 
+impl SessionIdentity {
+    pub fn session(&self) -> &SessionRef { &self.session }
+    pub fn agent_id(&self) -> &str { &self.agent_id }
+}
+
 pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
     fn resolve(
         &self,
@@ -628,10 +633,6 @@ struct IdentityConfig<C: Send + Sync + 'static> {
     session_key: String,
     meta: TranscriptMeta,
 }
-// Add `identity: Option<IdentityConfig<C>>` to SessionBuilder and
-// `identity_config: Option<IdentityConfig<C>>` plus
-// `identity: Option<SessionIdentity>` to Session<C>.
-
 pub fn identity_resolver(
     mut self,
     session_key: impl Into<String>,
@@ -646,6 +647,15 @@ pub fn identity_resolver(
     self
 }
 ```
+
+Add `identity: Option<IdentityConfig<C>>` to `SessionBuilder<C>` and
+`identity_config: Option<IdentityConfig<C>>`,
+`established_identity: Option<SessionIdentity>`, and
+`identity: Option<SessionIdentity>` to `Session<C>`. Initialize all three
+options to `None`. Add `identity: Option<&'a SessionIdentity>` to
+`SessionStateView<'a>` and populate it from `established_identity`, not the
+current in-flight resolution. Export `SessionIdentity` from `types` and
+`ResolvedSessionStores`/`SessionIdentityResolver` from `identity` in `lib.rs`.
 
 In `SessionBuilder::build`, require a codec when either transcript or
 identity config is present, then pass the identity config into `Session::new`.
@@ -682,10 +692,12 @@ fn resolve_and_bind(
     {
         return Err(RuntimeError::InvalidSessionState("TurnOptions.session conflicts with resolved identity".into()));
     }
+    let mut meta = config.meta.clone();
+    meta.agent_id = Some(identity.agent_id.clone());
     let target = TranscriptTarget::for_session(
         identity.stores.stores().transcripts.clone(),
         identity.session.clone(),
-        config.meta.clone(),
+        meta,
     );
     if hook_target.is_some_and(|selected| !selected.same_binding(&target)) {
         return Err(RuntimeError::InvalidSessionState("before_resume target conflicts with resolved identity".into()));
@@ -757,14 +769,13 @@ agent/tenant scope field. The resolver uses `options.run_context.data` to
 authorize the actor, choose the resolved agent id, and open a tenant-scoped
 lease. Map `SessionStoreLeaseError::Unsupported` or `Open(_)` into
 `RuntimeError::InvalidSessionState(error.to_string())`; host resolver errors
-remain the host's `RuntimeError`. It returns a
-root `SessionRef::scoped(request.session_key, resolved_agent_id)` or child
-`SessionRef::child_of(parent, child_key)`. Runtime binds the target locator
-from `identity.stores.stores().transcripts`, sets target `session`, `stem`,
-`meta.agent_id`, `meta.session_id`, `meta.parent_session_id`, then continues
-to hooks/resume. Resolver failure returns immediately without touching the
-current or fallback locator. A session-bound target may keep its own fixed
-locator only when no resolver is installed.
+remain the host's `RuntimeError`. Runtime constructs a root
+`SessionRef::scoped(request.session_key, resolved.agent_id)`. Runtime binds
+the target locator from `resolved.stores.stores().transcripts`, sets
+`meta.agent_id`, `meta.session_id`, `meta.parent_session_id`, and canonical
+stem, then continues to resume. Resolver failure returns immediately without
+touching the current or fallback locator. A session-bound target may keep its
+own fixed locator only when no resolver is installed.
 
 Put the last established binding in `SessionStateView` as
 `Option<&SessionIdentity>` for diagnostics and hook decisions; it is not
@@ -875,7 +886,7 @@ to `SessionRef`.
 
 **Files:** new `crates/tinyagents-runtime/src/identity.rs`,
 `runtime/types.rs`, `runtime/builder.rs`, `runtime/session.rs`, `runtime/lib.rs`,
-and new `runtime/identity_tests.rs` declared from `lib.rs`.
+and `runtime/lib_tests.rs` (the existing sibling test module).
 
 Add these red tests first: (a) direct `Session::resume` uses the resolved
 locator; (b) a `before_resume` hook replacing `ResumePreparation.transcript`
@@ -893,8 +904,72 @@ Bind the target locator from the lease, canonical `SessionRef`, and metadata
 seed; expose the identity through `SessionStateView`. Require metadata seed at
 builder build time if a resolver is installed. Check any explicit option or
 hook-selected target against this identity; they cannot replace authority.
-Run `cargo test -p tinyagents-runtime identity_resolver` and then
-`cargo test -p tinyagents-runtime`.
+Add these test helpers to the top of `lib_tests.rs` and use the exact direct
+resume regression below:
+
+```rust
+struct FixedIdentityResolver {
+    provider: Arc<tinyagents_session::port::DriverSessionStores>,
+    calls: Arc<Mutex<usize>>,
+    agent_id: Arc<Mutex<String>>,
+}
+
+impl crate::SessionIdentityResolver<()> for FixedIdentityResolver {
+    fn resolve(
+        &self,
+        request: &crate::SessionIdentityRequest,
+        _: &(),
+    ) -> Result<crate::ResolvedSessionStores, RuntimeError> {
+        assert_eq!(request.session_key, "thread-identity");
+        *self.calls.lock().unwrap() += 1;
+        let agent_id = self.agent_id.lock().unwrap().clone();
+        let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+            self.provider.as_ref(), &agent_id,
+        ).map_err(|error| RuntimeError::InvalidSessionState(error.to_string()))?;
+        Ok(crate::ResolvedSessionStores { agent_id, stores })
+    }
+}
+
+#[tokio::test]
+async fn direct_resume_resolves_and_uses_the_admitted_lease() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(
+        tinyagents_session::port::DriverSessionStores::new(
+            Arc::new(MemoryStorage::new()), Scope::local(),
+        ).unwrap(),
+    );
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: calls.clone(), agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let mut options = TurnOptions::default();
+    options.resume = ResumeMode::Session;
+    assert!(!session.resume(&options).await.unwrap().loaded);
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+```
+
+For the three rejection cases, use the same `FixedIdentityResolver` with
+distinct `agent_id`s and a `TranscriptLocator` wrapped in the existing
+`Destination` fixture. Assert the call returns
+`Err(RuntimeError::InvalidSessionState(_))`, the `Driver.requests` vector
+remains empty, and the wrong locator's `latest_agents`/`opened_stems` vectors
+remain empty. The hook case's hook implementation must return a
+`ResumePreparation { transcript: Some(TranscriptTarget::for_session(
+wrong_locator, SessionRef::scoped("thread-identity", "agent-resolved"),
+meta())) }`; its `before_turn` returns `Ok(TurnPreparation::default())`,
+`before_commit` returns `Ok(())`, and `on_terminal` returns `Ok(())`. The
+explicit option case sets `options.session = Some(SessionRef::scoped(
+"other-thread", "agent-resolved"))`. The changed-identity case performs one
+successful turn, changes resolver agent id, then asserts the next turn fails
+before the second driver request. Keep the same destination/rebuilt locator
+case accepted by asserting the second turn's driver request is recorded.
+Run `cargo test -p tinyagents-runtime direct_resume_resolves_and_uses_the_admitted_lease`
+and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
 
 ### 4. Add explicit pinned store leases without changing live rebind
 
