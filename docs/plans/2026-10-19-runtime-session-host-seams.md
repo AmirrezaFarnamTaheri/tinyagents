@@ -1494,6 +1494,87 @@ async fn prepared_run_exposes_the_same_rewritten_tool_outcome() {
 }
 ```
 
+Use this sink and test in `session_tests.rs` to prove the post-commit task owns
+completion after the caller task is aborted. The callback reads the just-
+appended transcript before it signals the test:
+
+```rust
+struct BlockingReadSink {
+    locator: Arc<dyn TranscriptLocator>,
+    session: SessionRef,
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Arc<tokio::sync::Notify>,
+    finished: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl PostCommitSink for BlockingReadSink {
+    async fn after_commit(
+        &self,
+        observation: &PostCommitObservation,
+    ) -> Result<(), RuntimeError> {
+        assert!(observation.receipt.transcript.is_some());
+        let head = self.locator.head_generation(&self.session);
+        let read = self.locator.read_session_transcript(&head).unwrap();
+        let transcript = read.read_session().unwrap().unwrap();
+        assert!(transcript.messages.iter().any(|row| row.content == "committed reply"));
+        if let Some(started) = self.started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
+        self.release.notified().await;
+        self.finished.notify_one();
+        Ok(())
+    }
+}
+
+struct ReplyDriver;
+
+#[async_trait]
+impl SessionDriver for ReplyDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        let mut history = request.history;
+        history.push(Message::assistant("committed reply"));
+        Ok(DriverOutcome {
+            history,
+            output: Some("committed reply".into()),
+            partial: None,
+            interrupted: false,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn owned_post_commit_sink_finishes_after_caller_abort() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-post-commit", "agent");
+    let release = Arc::new(tokio::sync::Notify::new());
+    let finished = Arc::new(tokio::sync::Notify::new());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let sink = Arc::new(BlockingReadSink {
+        locator: locator.clone(),
+        session: session_ref.clone(),
+        started: Mutex::new(Some(started_tx)),
+        release: release.clone(),
+        finished: finished.clone(),
+    });
+    let session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .codec(Arc::new(RoleCodec))
+        .session(locator, session_ref, meta())
+        .post_commit_sink(sink)
+        .build().unwrap();
+    let turn = tokio::spawn(async move {
+        let mut session = session;
+        session.turn(Message::user("commit this"), TurnOptions::default()).await
+    });
+    started_rx.await.unwrap();
+    turn.abort();
+    release.notify_one();
+    timeout(Duration::from_secs(1), finished.notified()).await.unwrap();
+}
+```
+
 Capture must live in `TurnDriver::prepare`, not only `execute`: callers may
 drive `PreparedTurn::split` themselves and never call `execute`. Create the
 sink while preparing, push capture middleware before planner middleware so it
