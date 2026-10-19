@@ -3,6 +3,72 @@ use serde_json::Value;
 use tinystoragedrivers_core::MemoryStorage;
 
 #[tokio::test]
+async fn a_lease_keeps_its_backend_while_new_opens_follow_rebind() {
+    let registry = SessionStoreRegistry::default();
+    let old_backend = Arc::new(MemoryStorage::new());
+    let provider = RebindableSessionStores::new_in(&registry, old_backend.clone(), false).unwrap();
+    let lease = provider.lease_for_agent("agent-one").unwrap();
+    lease.stores().kv.put("prefs", "key", serde_json::json!("leased"))
+        .await.unwrap();
+    let new_backend = Arc::new(MemoryStorage::new());
+    assert_eq!(registry.rebind(new_backend.clone()).unwrap(), 1);
+    assert_eq!(lease.stores().kv.get("prefs", "key").await.unwrap(),
+        Some(serde_json::json!("leased")));
+    let new_lease = provider.lease_for_agent("agent-one").unwrap();
+    assert_eq!(new_lease.stores().kv.get("prefs", "key").await.unwrap(), None);
+    new_lease.stores().kv.put("prefs", "key", serde_json::json!("new"))
+        .await.unwrap();
+    let old = DriverSessionStores::new(old_backend, Scope::local()).unwrap()
+        .try_for_agent("agent-one").unwrap();
+    assert_eq!(old.kv.get("prefs", "key").await.unwrap(), Some(serde_json::json!("leased")));
+}
+
+#[tokio::test]
+async fn actor_bound_driver_provider_can_open_a_pinned_lease() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let root = DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::tenant("alice").unwrap()).unwrap();
+    let actor = root.bind_actor(Arc::clone(&backend)).unwrap().unwrap();
+    let lease = actor.lease_for_agent("agent").unwrap();
+    lease.stores().kv.put("prefs", "key", serde_json::json!("actor"))
+        .await.unwrap();
+    let direct = DriverSessionStores::new(backend, Scope::tenant("alice").unwrap())
+        .unwrap().try_for_agent("agent").unwrap();
+    assert_eq!(direct.kv.get("prefs", "key").await.unwrap(), Some(serde_json::json!("actor")));
+}
+
+#[tokio::test]
+async fn actor_bound_leases_keep_the_admitted_tenant_separate() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let alice_root = DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::tenant("alice").unwrap(),
+    ).unwrap();
+    let bob_root = DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::tenant("bob").unwrap(),
+    ).unwrap();
+    let alice_provider = alice_root.bind_actor(Arc::clone(&backend)).unwrap().unwrap();
+    let bob_provider = bob_root.bind_actor(Arc::clone(&backend)).unwrap().unwrap();
+    let alice = alice_provider.lease_for_agent("same-agent").unwrap();
+    let bob = bob_provider.lease_for_agent("same-agent").unwrap();
+    alice.stores().kv.put("prefs", "key", serde_json::json!("alice"))
+        .await.unwrap();
+    assert_eq!(bob.stores().kv.get("prefs", "key").await.unwrap(), None);
+    assert_eq!(alice.stores().kv.get("prefs", "key").await.unwrap(),
+        Some(serde_json::json!("alice")));
+}
+
+#[tokio::test]
+async fn leases_keep_tenant_scope_and_agent_isolation() {
+    let backend = Arc::new(MemoryStorage::new());
+    let alice = DriverSessionStores::new(backend.clone(), Scope::tenant("alice").unwrap()).unwrap();
+    let bob = DriverSessionStores::new(backend, Scope::tenant("bob").unwrap()).unwrap();
+    let alice_lease = alice.lease_for_agent("agent").unwrap();
+    let bob_lease = bob.lease_for_agent("agent").unwrap();
+    alice_lease.stores().kv.put("prefs", "key", serde_json::json!("alice"))
+        .await.unwrap();
+    assert_eq!(bob_lease.stores().kv.get("prefs", "key").await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes() {
     let registry = SessionStoreRegistry::default();
     let old_backend = Arc::new(MemoryStorage::new());
