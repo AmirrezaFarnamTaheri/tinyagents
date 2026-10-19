@@ -47,7 +47,11 @@ impl TranscriptCodec for ReplayProbeCodec {
             })
             .collect::<Vec<_>>();
         if self.synthesize_leading_tool {
-            decoded.insert(0, Message::tool("codec-orphan", "decoded orphan"));
+            let prefix = decoded
+                .iter()
+                .take_while(|message| matches!(message, Message::System(_)))
+                .count();
+            decoded.insert(prefix, Message::tool("codec-orphan", "decoded orphan"));
         }
         Ok(decoded)
     }
