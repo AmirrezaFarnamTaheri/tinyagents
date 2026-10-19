@@ -214,7 +214,7 @@ async fn resume_repairs_a_leading_tool_synthesized_by_the_decoder() {
             .iter()
             .map(Message::text)
             .collect::<Vec<_>>(),
-        ["frozen prompt", "durable user row"],
+        ["frozen prompt", "durable user row", "next"],
         "decoded history must be repaired before dispatch"
     );
     let after = fingerprint(
