@@ -185,7 +185,7 @@ async fn the_watcher_pushes_to_a_live_parent_by_notify_mode() {
 }
 
 #[tokio::test]
-async fn a_paused_child_records_nothing() {
+async fn a_paused_child_records_a_separate_notice_not_its_terminal_task_id() {
     let router = router();
     let store = spawned_store("t1");
     let (tx, rx) = watch::channel(DetachedSubagentStatus::Running);
@@ -195,7 +195,10 @@ async fn a_paused_child_records_nothing() {
     })
     .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(router.pending_for("p").is_empty());
+    let pauses = router.pending_for("p");
+    assert_eq!(pauses.len(), 1);
+    assert!(pauses[0].task_id.starts_with(&pause_record_prefix("t1")));
+    assert_eq!(pauses[0].result.text, "which?");
 }
 
 #[tokio::test]
@@ -207,7 +210,7 @@ async fn a_cancelled_child_is_not_pushed_back_to_its_parent() {
     spawn_status_watcher_with_completions(store, "t1".into(), rx, target(&router));
     drop(tx);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(router.pending_for("p").is_empty());
+    assert_eq!(router.pending_for("p").len(), 1);
 }
 
 #[tokio::test]
@@ -221,12 +224,71 @@ async fn a_resumed_child_is_recorded_when_it_finally_finishes() {
     })
     .unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(router.pending_for("p").is_empty());
+    assert_eq!(router.pending_for("p").len(), 1);
     tx.send(DetachedSubagentStatus::Completed {
         output: "answered".into(),
         iterations: 2,
     })
     .unwrap();
     settle(&router, "p").await;
-    assert_eq!(router.pending_for("p")[0].result.text, "answered");
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().any(|record| record.result.text == "answered"));
+}
+
+#[tokio::test]
+async fn watcher_targets_keep_the_admitted_parent_generation() {
+    let router = router();
+    let old_target = DetachedCompletionTarget::try_new(router.clone(), "p", "worker").unwrap();
+    let old_epoch = old_target.parent_epoch;
+    router.cancel_parent("p").unwrap();
+    router.resume_parent("p");
+
+    assert!(old_target.record_pause("late-pause", "old question").await);
+    let old_store = spawned_store("old-child");
+    let (old_tx, old_rx) = watch::channel(DetachedSubagentStatus::Running);
+    spawn_status_watcher_with_completions(
+        old_store,
+        "old-child".into(),
+        old_rx,
+        old_target,
+    );
+    old_tx
+        .send(DetachedSubagentStatus::Completed {
+            output: "old answer".into(),
+            iterations: 1,
+        })
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(router.pending_for("p").is_empty());
+
+    let new_target = DetachedCompletionTarget::try_new(router.clone(), "p", "worker").unwrap();
+    assert!(new_target.parent_epoch > old_epoch);
+    let new_epoch = new_target.parent_epoch;
+    let new_store = spawned_store("new-child");
+    let (new_tx, new_rx) = watch::channel(DetachedSubagentStatus::Running);
+    spawn_status_watcher_with_completions(
+        new_store,
+        "new-child".into(),
+        new_rx,
+        new_target,
+    );
+    new_tx
+        .send(DetachedSubagentStatus::AwaitingUser {
+            question: "new question".into(),
+        })
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    new_tx
+        .send(DetachedSubagentStatus::Completed {
+            output: "new answer".into(),
+            iterations: 1,
+        })
+        .unwrap();
+    settle(&router, "p").await;
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().all(|record| record.parent_epoch == new_epoch));
+    assert!(pending.iter().any(|record| record.result.text == "new question"));
+    assert!(pending.iter().any(|record| record.task_id == "new-child"));
 }
