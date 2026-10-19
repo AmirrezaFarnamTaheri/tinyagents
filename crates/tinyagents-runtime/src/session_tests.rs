@@ -36,12 +36,16 @@ struct ReplayProbeCodec {
 impl TranscriptCodec for ReplayProbeCodec {
     fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
         *self.seen_rows.lock().unwrap() = transcript.messages.clone();
-        let mut decoded = transcript.messages.iter().map(|row| match row.role.as_str() {
-            "system" => Message::system(&row.content),
-            "user" => Message::user(&row.content),
-            "tool" => Message::tool(row.id.as_deref().unwrap_or("missing-id"), &row.content),
-            _ => Message::assistant(&row.content),
-        }).collect::<Vec<_>>();
+        let mut decoded = transcript
+            .messages
+            .iter()
+            .map(|row| match row.role.as_str() {
+                "system" => Message::system(&row.content),
+                "user" => Message::user(&row.content),
+                "tool" => Message::tool(row.id.as_deref().unwrap_or("missing-id"), &row.content),
+                _ => Message::assistant(&row.content),
+            })
+            .collect::<Vec<_>>();
         if self.synthesize_leading_tool {
             decoded.insert(0, Message::tool("codec-orphan", "decoded orphan"));
         }
@@ -68,15 +72,19 @@ fn seed_replay_transcript(
     transcript_meta.session_id = Some(session.session_id());
     transcript_meta.agent_id = session.agent_id.clone();
     transcript_meta.thread_id = Some(session.session_key.clone());
-    let handle = locator.open_session(session, transcript_meta.clone()).unwrap();
-    handle.append_turn(TranscriptTurn {
-        prev: &[],
-        next: messages,
-        meta: &transcript_meta,
-        turn_usage: None,
-        request_id: None,
-        tools: None,
-    }).unwrap();
+    let handle = locator
+        .open_session(session, transcript_meta.clone())
+        .unwrap();
+    handle
+        .append_turn(TranscriptTurn {
+            prev: &[],
+            next: messages,
+            meta: &transcript_meta,
+            turn_usage: None,
+            request_id: None,
+            tools: None,
+        })
+        .unwrap();
 }
 
 #[tokio::test]
@@ -91,7 +99,12 @@ async fn resume_repairs_only_the_leading_orphan_tool_head_for_dispatch() {
         TranscriptMessage::assistant("trailing assistant remains"),
     ];
     seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
-    let before = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
+    let before = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
     let seen_rows = Arc::new(Mutex::new(Vec::new()));
     let dispatched = Arc::new(Mutex::new(Vec::new()));
     let mut session = SessionBuilder::new(Arc::new(ReplayCaptureDriver(dispatched.clone())))
@@ -100,31 +113,59 @@ async fn resume_repairs_only_the_leading_orphan_tool_head_for_dispatch() {
             synthesize_leading_tool: false,
         }))
         .session(locator.clone(), session_ref.clone(), meta())
-        .build().unwrap();
+        .build()
+        .unwrap();
 
-    assert!(session.turn(
-        SessionTurnRequest::new(Message::user("next")),
-        TurnOptions {
-            resume: ResumeMode::Session,
-            thread_id: Some(session_ref.session_key.clone()),
-            ..TurnOptions::default()
-        },
-    ).await.is_err());
+    assert!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("next")),
+                TurnOptions {
+                    resume: ResumeMode::Session,
+                    thread_id: Some(session_ref.session_key.clone()),
+                    ..TurnOptions::default()
+                },
+            )
+            .await
+            .is_err()
+    );
 
     let replay_rows = seen_rows.lock().unwrap().clone();
     assert_eq!(
-        replay_rows.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
-        ["frozen prompt", "keep this user turn", "later malformed tool", "trailing assistant remains"],
+        replay_rows
+            .iter()
+            .map(|row| row.content.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "frozen prompt",
+            "keep this user turn",
+            "later malformed tool",
+            "trailing assistant remains"
+        ],
         "the codec should receive the replay-only raw-row view"
     );
     let replay = dispatched.lock().unwrap().clone();
     assert_eq!(
         replay.iter().map(Message::text).collect::<Vec<_>>(),
-        ["frozen prompt", "keep this user turn", "later malformed tool", "trailing assistant remains", "next"],
+        [
+            "frozen prompt",
+            "keep this user turn",
+            "later malformed tool",
+            "trailing assistant remains",
+            "next"
+        ],
         "later malformed tool rows and trailing assistant rows remain visible to dispatch"
     );
-    let after = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
-    assert_eq!(after, before, "replay repair must never rewrite durable transcript rows");
+    let after = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
+    assert_eq!(
+        after, before,
+        "replay repair must never rewrite durable transcript rows"
+    );
 }
 
 #[tokio::test]
@@ -136,7 +177,12 @@ async fn resume_repairs_a_leading_tool_synthesized_by_the_decoder() {
         TranscriptMessage::user("durable user row"),
     ];
     seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
-    let before = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
+    let before = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
     let seen_rows = Arc::new(Mutex::new(Vec::new()));
     let dispatched = Arc::new(Mutex::new(Vec::new()));
     let mut session = SessionBuilder::new(Arc::new(ReplayCaptureDriver(dispatched.clone())))
@@ -145,23 +191,42 @@ async fn resume_repairs_a_leading_tool_synthesized_by_the_decoder() {
             synthesize_leading_tool: true,
         }))
         .session(locator.clone(), session_ref.clone(), meta())
-        .build().unwrap();
+        .build()
+        .unwrap();
 
-    assert!(session.turn(
-        SessionTurnRequest::new(Message::user("next")),
-        TurnOptions {
-            resume: ResumeMode::Session,
-            thread_id: Some(session_ref.session_key.clone()),
-            ..TurnOptions::default()
-        },
-    ).await.is_err());
+    assert!(
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("next")),
+                TurnOptions {
+                    resume: ResumeMode::Session,
+                    thread_id: Some(session_ref.session_key.clone()),
+                    ..TurnOptions::default()
+                },
+            )
+            .await
+            .is_err()
+    );
     assert_eq!(
-        dispatched.lock().unwrap().iter().map(Message::text).collect::<Vec<_>>(),
+        dispatched
+            .lock()
+            .unwrap()
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>(),
         ["frozen prompt", "durable user row"],
         "decoded history must be repaired before dispatch"
     );
-    let after = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
-    assert_eq!(after, before, "decoded repair must leave durable rows unchanged");
+    let after = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
+    assert_eq!(
+        after, before,
+        "decoded repair must leave durable rows unchanged"
+    );
 }
 
 struct BlockingReadSink {

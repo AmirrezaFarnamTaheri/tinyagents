@@ -24,10 +24,10 @@ pub enum ToolSnapshotError {
     Decode(String),
 }
 
-/// An immutable, model-visible tool declaration set for one session turn.
+/// Type-erased host-owned state carried alongside a tool snapshot.
 ///
-/// It records declarations only; choosing which tools are permitted and wiring
-/// their executors remains a host/driver responsibility.
+/// Extensions are retained by in-memory snapshot copies and are excluded from
+/// the serialized tool declarations.
 pub trait ToolSnapshotExtension: std::any::Any + fmt::Debug + Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 }
@@ -65,6 +65,11 @@ impl ToolSnapshotExtensions {
     }
 }
 
+/// An immutable, model-visible tool declaration set for one session turn.
+///
+/// It records declarations only; choosing which tools are permitted and wiring
+/// their executors remains a host/driver responsibility. Typed extensions stay
+/// in memory and do not appear in the serialized transcript value.
 #[derive(Clone, Debug, Default)]
 pub struct ToolSnapshot {
     specs: Vec<ToolSpec>,

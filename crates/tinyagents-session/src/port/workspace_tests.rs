@@ -2,8 +2,7 @@ use super::*;
 use crate::legacy::OnceOutcome;
 use crate::port::SessionStoreProvider;
 use crate::testkit::conformance::{
-    session_store_conformance, session_store_isolation_conformance,
-    session_store_lease_conformance,
+    session_store_conformance, session_store_isolation_conformance, session_store_lease_conformance,
 };
 use crate::transcript::{
     SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn, session_stem, write_transcript,

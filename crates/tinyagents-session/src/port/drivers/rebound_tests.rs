@@ -1,21 +1,16 @@
 use super::*;
-use crate::transcript::{SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn};
 use crate::testkit::conformance::{
-    session_store_conformance, session_store_isolation_conformance,
-    session_store_lease_conformance,
+    session_store_conformance, session_store_isolation_conformance, session_store_lease_conformance,
 };
+use crate::transcript::{SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn};
 use serde_json::Value;
 use tinystoragedrivers_core::MemoryStorage;
 
 #[tokio::test]
 async fn rebound_provider_passes_full_session_store_conformance() {
     let registry = SessionStoreRegistry::default();
-    let provider = RebindableSessionStores::new_in(
-        &registry,
-        Arc::new(MemoryStorage::new()),
-        false,
-    )
-    .unwrap();
+    let provider =
+        RebindableSessionStores::new_in(&registry, Arc::new(MemoryStorage::new()), false).unwrap();
     session_store_conformance(&provider).await;
     session_store_isolation_conformance(&provider).await;
     session_store_lease_conformance(&provider).await;
