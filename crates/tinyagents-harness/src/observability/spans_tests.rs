@@ -65,7 +65,7 @@ fn builds_nested_three_step_trace_with_payloads_and_usage() {
 }
 
 #[test]
-fn preserves_graph_exporter_shape_for_deterministic_three_step_span_batch() {
+fn builds_a_nested_run_and_three_step_span_batch() {
     let spans = vec![
         Span::new("root-1:run:root-1", "run-1", "demo-graph", BASE + 1_000)
             .with_event_id("evt-0")

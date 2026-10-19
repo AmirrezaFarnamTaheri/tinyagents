@@ -53,12 +53,18 @@ surface and operational constraints.
   - `ProcessProfile` — the serializable wall-time, CPU utilization, and
     baseline/peak RSS report returned by `ProcessProfiler::finish`.
 - `LangfuseAuth`, `LangfuseClient`, `LangfuseTraceConfig` (re-exported from the
-  private `langfuse` submodule) — the Langfuse exporter used to ship harness
-  (and, via shared helpers, graph) traces to Langfuse. The exporter emits a
+  private `langfuse` submodule) — shared Langfuse credentials, HTTP transport,
+  trace config, and the exporter for durable harness observations. The agent
+  exporter emits a
   per-run span (`{trace}:run:{run_id}`, `agent`/`sub-agent`) and nests every
   generation, tool span, and event under it, so a run — and sub-agent recursion
   across separately-exported batches — surfaces as a tree, matching LangChain's
   callback run hierarchy.
+- `spans::Span`, `spans::SpanState`, and `spans::SpanExporter` (behind the
+  `langfuse` feature) — a host-neutral model for already-mapped run, step,
+  generation, tool, and event observations. It builds the Langfuse ingestion
+  shape and delegates v4 OTLP conversion and transport to the shared helpers
+  and client. Hosts retain event mapping, identity, and content-capture policy.
 - `LangfuseScore` / `LangfuseScoreValue` — an evaluation score (numeric,
   categorical, or boolean; trace- or observation-scoped) attached to an exported
   trace via `LangfuseClient::create_score`, mirroring Langfuse's `createScore`.
@@ -105,7 +111,8 @@ silently excluded from the rollup rather than reported with a bogus duration.
 | `types.rs` | Every public type: `AgentObservation`, journal/status-store traits and in-memory impls, sink structs, latency types. |
 | `profile.rs` | Scoped process CPU/RSS sampling for stress tests and host-specific workloads. |
 | `mod.rs` | Behavioral code: latency rollups, journal/store/sink impls. |
-| `langfuse/` | `LangfuseClient` and payload helpers (`clean_nulls`, `iso_ms`) shared with `graph::observability::langfuse`, split into `mod.rs` (impl + helpers), `types.rs` (`LangfuseAuth`/`LangfuseClient`/`LangfuseTraceConfig`), and `mod_tests.rs`. |
+| `langfuse/` | `LangfuseClient` and payload helpers (`clean_nulls`, `iso_ms`), split into `mod.rs` (impl + helpers), `types.rs` (`LangfuseAuth`/`LangfuseClient`/`LangfuseTraceConfig`), and `mod_tests.rs`. |
+| `spans.rs`, `spans/` | Host-neutral span records and Langfuse batch/OTLP exporter; module README documents lifecycle and shape. |
 | `mod_tests.rs` | Unit tests (journal round-trips, redaction, latency rollups, sink fan-out). |
 
 ## Operational constraints
