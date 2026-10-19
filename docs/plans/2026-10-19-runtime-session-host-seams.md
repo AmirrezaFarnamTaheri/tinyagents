@@ -1050,10 +1050,14 @@ Resolver failure returns immediately without touching the current or fallback
 locator. A session-bound target may keep its own fixed locator only when no
 resolver is installed.
 
-On re-admission, compare the new logical first generation, resolved agent and
-lease destination to the established identity, then retain the current
-`self.target.session` generation if its `first_generation()` matches. Use
-that current generation to construct the new target and identity. In
+Only when a prior `established_identity` exists and passes the first-generation,
+agent, and pinned-lease comparison may re-admission retain the current
+`self.target.session` generation. Verify its `first_generation()` against the
+new logical identity before carrying it forward. With no established identity,
+ignore `self.target` completely: a builder-provided target is an unselected
+fallback and cannot choose the first admitted generation, even if it uses the
+same canonical session at generation 9. Use the validated current generation
+to construct the new target and identity. In
 `ResumeMode::Never`, do not call `head_generation` just to discover a known
 head: preserve the already-bound generation, then let normal commit/compaction
 advance it. This keeps the sealed generation immutable and ensures the next
