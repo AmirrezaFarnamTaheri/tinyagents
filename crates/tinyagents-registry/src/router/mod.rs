@@ -234,20 +234,8 @@ impl WorkloadRouter {
             return configured.to_owned();
         }
 
-        if default_model_eligible_for_role(role) {
-            if let Some(model) = source
-                .default_model()
-                .map(str::trim)
-                .filter(|m| !m.is_empty())
-            {
-                if !model.starts_with("hint:")
-                    && source.legacy_tier_role(model).is_none()
-                    && source.classify_default_model_route(model)
-                        == DefaultModelRoute::ExplicitProvider
-                {
-                    return model.to_owned();
-                }
-            }
+        if let Some(model) = explicit_default_model_route(role, source) {
+            return model.to_owned();
         }
         source.primary_cloud_route().trim().to_owned()
     }
@@ -362,6 +350,19 @@ fn default_model_eligible_for_role(role: &str) -> bool {
         role.trim(),
         "chat" | "reasoning" | "agentic" | "coding" | "burst"
     )
+}
+
+fn explicit_default_model_route<'a>(
+    role: &str,
+    source: &'a (impl RouteSource + ?Sized),
+) -> Option<&'a str> {
+    let model = source.default_model()?.trim();
+    (default_model_eligible_for_role(role)
+        && !model.is_empty()
+        && !model.starts_with("hint:")
+        && source.legacy_tier_role(model).is_none()
+        && source.classify_default_model_route(model) == DefaultModelRoute::ExplicitProvider)
+        .then_some(model)
 }
 
 fn cloud_fallback_role(role: &str) -> Option<CloudFallbackRole> {
