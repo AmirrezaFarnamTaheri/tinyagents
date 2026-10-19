@@ -21,6 +21,28 @@ async fn jobs_are_registered_in_the_shared_detached_registry() {
 }
 
 #[tokio::test]
+async fn live_job_metadata_retains_parent_thread_and_workspace() {
+    let jobs = SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
+    let (job_id, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        tinyagents_harness::cancel::CancellationToken::new(),
+        JobLink {
+            parent_thread_id: Some("thread-7".into()),
+            workspace: Some(workspace.clone()),
+            ..JobLink::default()
+        },
+    );
+    let snapshot = jobs
+        .tasks()
+        .snapshot(&TaskId::new(job_id.as_str()), "7")
+        .unwrap();
+    assert_eq!(snapshot.metadata.parent_thread_id.as_deref(), Some("thread-7"));
+    assert_eq!(snapshot.metadata.workspace, Some(workspace));
+}
+
+#[tokio::test]
 async fn steering_is_reachable_while_live_and_released_when_settled() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);
