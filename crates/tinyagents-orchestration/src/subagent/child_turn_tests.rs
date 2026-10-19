@@ -64,16 +64,19 @@ impl ChildTurnHost for FakeHost {
         Ok(())
     }
 
-    async fn after_commit(
-        &mut self,
-        _: &ChildTurnResult<String>,
-    ) -> Result<(), &'static str> {
+    async fn after_commit(&mut self, _: &ChildTurnResult<String>) -> Result<(), &'static str> {
         self.events.push("after-commit");
         Ok(())
     }
 }
 
-fn totals(input: u64, output: u64, cache_read: u64, cache_create: u64, reasoning: u64) -> UsageTotals {
+fn totals(
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_create: u64,
+    reasoning: u64,
+) -> UsageTotals {
     let mut totals = UsageTotals::default();
     totals.record(Usage {
         input_tokens: input,
@@ -120,7 +123,13 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
 
     assert_eq!(
         host.events,
-        ["run", "summary", "append-final", "persist-success", "after-commit"]
+        [
+            "run",
+            "summary",
+            "append-final",
+            "persist-success",
+            "after-commit"
+        ]
     );
     assert_eq!(
         result.accepted_history,

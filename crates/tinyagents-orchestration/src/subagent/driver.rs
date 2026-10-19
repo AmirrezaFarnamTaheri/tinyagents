@@ -402,8 +402,10 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                             );
                             Ok(SubagentOutcome::incomplete(
                                 task_id.clone(),
-                                SubagentIncomplete::new(format!("subagent timed out after {limit:?}"))
-                                    .with_kind(IncompleteKind::Timeout),
+                                SubagentIncomplete::new(format!(
+                                    "subagent timed out after {limit:?}"
+                                ))
+                                .with_kind(IncompleteKind::Timeout),
                             ))
                         }
                     },
@@ -458,9 +460,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             }
         };
 
-        if turn_lease_lost
-            || turn_fence.as_ref().is_some_and(|fence| !fence.admitted())
-        {
+        if turn_lease_lost || turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
             return Err(SubagentError::Cancelled);
         }
         let outcome = match executed {

@@ -1,8 +1,8 @@
 use super::*;
 use std::sync::Arc;
 use std::time::Duration;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 use tinyagents_harness::CancellationToken;
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 #[tokio::test]
 async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epoch() {
@@ -84,8 +84,8 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
     // Simulate another process taking over through the released document CAS
     // contract. The lease renewer observes the new holder/epoch and permanently
     // closes this tenure; no private clock or test-only lease hook is involved.
-    let encoded_key = serde_json::to_string(&("test-cluster", tenant.as_str(), "thread-1"))
-        .unwrap();
+    let encoded_key =
+        serde_json::to_string(&("test-cluster", tenant.as_str(), "thread-1")).unwrap();
     let lease_id = Key::of(["tinyagents.thread-turn", encoded_key.as_str()])
         .unwrap()
         .as_str()
@@ -110,7 +110,10 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
         )
         .await
         .unwrap();
-    assert!(first.admitted(), "the takeover is written before renewal runs");
+    assert!(
+        first.admitted(),
+        "the takeover is written before renewal runs"
+    );
     tokio::time::advance(Duration::from_millis(100)).await;
 
     tokio::time::timeout(Duration::from_secs(2), turn_cancellation.cancelled())

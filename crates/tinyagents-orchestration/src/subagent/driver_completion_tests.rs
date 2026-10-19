@@ -811,8 +811,7 @@ async fn generic_child_driver_cancels_dispatch_and_skips_persistence_when_turn_f
         persistence: Some(persistence.clone()),
     })
     .unwrap();
-    let request = request_in_scope("parent-a", "root-a", "thread-a")
-        .with_turn_fence(fence.clone());
+    let request = request_in_scope("parent-a", "root-a", "thread-a").with_turn_fence(fence.clone());
     let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
     started.notified().await;
 

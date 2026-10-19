@@ -11,8 +11,8 @@
 
 mod admission;
 mod awaiting_user;
-mod completion;
 mod child_turn;
+mod completion;
 mod detached;
 mod document_persistence;
 mod driver;
@@ -32,11 +32,11 @@ mod turn_storage;
 mod types;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
+pub use awaiting_user::SubagentAwaitingUser;
 pub use child_turn::{
     ChildTurnAccounting, ChildTurnCapSummary, ChildTurnFailure, ChildTurnHost, ChildTurnResult,
     ChildTurnRun, drive_child_turn,
 };
-pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,
     DetachedCompletionTarget, DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome,

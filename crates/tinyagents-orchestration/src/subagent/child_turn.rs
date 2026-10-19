@@ -142,7 +142,11 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
     if run.hit_cap {
         let summary = host.summarize_cap(&run).await?;
         run.output = summary.text;
-        run.accounting.usage.calls = run.accounting.usage.calls.saturating_add(summary.usage.calls);
+        run.accounting.usage.calls = run
+            .accounting
+            .usage
+            .calls
+            .saturating_add(summary.usage.calls);
         run.accounting.usage.usage += summary.usage.usage;
         run.accounting.cost.add(summary.cost);
     }
