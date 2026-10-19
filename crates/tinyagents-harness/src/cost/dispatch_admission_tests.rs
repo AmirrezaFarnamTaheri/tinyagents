@@ -19,7 +19,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
-use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ModelStream};
+use tinyinference_llm::model::{
+    ChatModel, DeferredHandle, DeferredStatus, InputModality, InputSource, ModelProfile,
+    ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
+};
 use tinyinference_llm::usage::Usage;
 
 type Action = Result<(), DispatchRefusalReason>;
@@ -174,11 +177,13 @@ enum ModelBehavior {
     Fail,
     EmptyStream,
     PendingStream,
+    FailedStream,
 }
 
 struct TestModel {
     counts: Arc<Counts>,
     behavior: ModelBehavior,
+    profile: ModelProfile,
 }
 
 struct FirstCallGateModel {
@@ -213,6 +218,18 @@ impl ChatModel<()> for FirstCallGateModel {
 
 #[async_trait]
 impl ChatModel<()> for TestModel {
+    fn profile(&self) -> Option<&ModelProfile> {
+        Some(&self.profile)
+    }
+
+    fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
+        modality == InputModality::Image && mime == "image/png" && source == InputSource::Url
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        Some("dispatch-test-model".to_owned())
+    }
+
     async fn invoke(
         &self,
         _: &(),
@@ -236,9 +253,22 @@ impl ChatModel<()> for TestModel {
         > = match self.behavior {
             ModelBehavior::EmptyStream => Box::pin(futures::stream::empty()),
             ModelBehavior::PendingStream => Box::pin(futures::stream::pending()),
+            ModelBehavior::FailedStream => Box::pin(futures::stream::iter([
+                ModelStreamItem::Failed("fixture stream error".to_owned()),
+            ])),
+            ModelBehavior::Fail => {
+                return Err(tinyinference_llm::Error::Model("fixture stream error".into()));
+            }
             _ => Box::pin(futures::stream::empty()),
         };
         Ok(ModelStream::new(stream))
+    }
+
+    async fn fetch_deferred(
+        &self,
+        _: &DeferredHandle,
+    ) -> tinyinference_llm::Result<DeferredStatus> {
+        Ok(DeferredStatus::Pending)
     }
 }
 
@@ -254,9 +284,12 @@ fn options(
 }
 
 fn model(counts: &Arc<Counts>, behavior: ModelBehavior) -> Arc<dyn ChatModel<()>> {
+    let mut profile = ModelProfile::default();
+    profile.model = Some("dispatch-test-model".to_owned());
     Arc::new(TestModel {
         counts: counts.clone(),
         behavior,
+        profile,
     })
 }
 
@@ -481,6 +514,52 @@ async fn cancel_stream_releases_admission() {
     assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(admission.acquired.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn stream_failure_releases_admission() {
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::FailedStream),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut stream = controlled
+        .stream_controlled(&(), ModelRequest::default())
+        .await
+        .expect("stream dispatch");
+
+    assert!(matches!(stream.next().await, Some(ModelStreamItem::Failed(_))));
+    assert!(stream.next().await.is_none());
+    assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn controlled_chat_model_delegates_capabilities_and_deferred_polling() {
+    let counts = Arc::new(Counts::default());
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(None, None, &counts),
+    );
+
+    assert_eq!(
+        controlled.profile().and_then(|profile| profile.model.as_deref()),
+        Some("dispatch-test-model")
+    );
+    assert!(controlled.supports_input(
+        InputModality::Image,
+        "image/png",
+        InputSource::Url
+    ));
+    assert_eq!(controlled.cache_identity().as_deref(), Some("dispatch-test-model"));
+    assert!(matches!(
+        controlled
+            .fetch_deferred(&DeferredHandle::new("fixture", "deferred-1"))
+            .await
+            .expect("deferred status"),
+        DeferredStatus::Pending
+    ));
 }
 
 #[tokio::test]
