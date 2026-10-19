@@ -128,7 +128,9 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     }
 
     /// Drops cached routers so their stores can be reopened after a lifecycle
-    /// boundary. Durable records remain in the backing store.
+    /// boundary. Durable records remain in the backing store, and the
+    /// pool-scoped parent lifecycle authority remains available to the new
+    /// router and to queue admissions retained from the old one.
     pub fn clear(&self) -> Result<(), CompletionRouterPoolError> {
         self.lock()?.clear();
         Ok(())
