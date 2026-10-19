@@ -138,6 +138,62 @@ fn final_summary_copy_keeps_each_result_status_and_body_byte_for_byte() {
 }
 
 #[test]
+fn english_close_copy_frames_records_and_keeps_write_and_truncation_rules() {
+    let records = "\n- `read_file` — ok\n  > configuration found\n";
+    let instruction = final_answer_instruction(&ENGLISH_CLOSE_COPY, None, false, records);
+    let frame_end = instruction
+        .find("</harness_instruction>")
+        .expect("directive is framed");
+    let records_at = instruction.find("<tool_records>").expect("records included");
+    assert!(frame_end < records_at);
+    assert!(instruction.contains("Do not quote or restate them"));
+    assert!(instruction.contains("Do not list or describe the tools available to you"));
+    assert!(instruction.contains("Do not narrate your deliberation"));
+    assert!(instruction.contains("  > configuration found"));
+
+    let halted = final_answer_instruction(&ENGLISH_CLOSE_COPY, Some("stop note"), true, records);
+    assert!(halted.contains("<stop_note>\nstop note\n</stop_note>"));
+    assert!(halted.contains(ENGLISH_CLOSE_COPY.final_answer_instruction));
+    let truncated = final_answer_instruction(&ENGLISH_CLOSE_COPY, None, true, records);
+    assert!(truncated.contains("ran out of output tokens"));
+    assert!(!truncated.contains("You have finished using tools"));
+
+    let write = ENGLISH_CLOSE_COPY.final_write_instruction.to_lowercase();
+    assert!(write.contains("apply_patch") && write.contains("file_write"));
+    assert!(write.contains("source files") && write.contains("partial set of real edits"));
+    assert!(write.contains("asked you to produce a file"));
+    for forbidden in ["notes", "plan", "summary"] {
+        assert!(write.contains(forbidden));
+    }
+}
+
+#[test]
+fn english_close_guard_rejects_the_instruction_and_stop_note_it_received() {
+    let needles = instruction_needles(&ENGLISH_CLOSE_COPY, Some("The stop note says to stop now."));
+    let needle_refs = needles.iter().map(String::as_str).collect::<Vec<_>>();
+    let directive = ENGLISH_CLOSE_COPY
+        .final_answer_instruction
+        .split('.')
+        .next()
+        .unwrap();
+    assert!(quotes_harness_instruction_with_minimum(
+        &format!("{directive}. Here is the result."),
+        &needle_refs,
+        1
+    ));
+    assert!(quotes_harness_instruction_with_minimum(
+        "The stop note says to stop now.",
+        &needle_refs,
+        1
+    ));
+    assert!(!quotes_harness_instruction_with_minimum(
+        "I used `read_file` and `write_file` to update the config.",
+        &needle_refs,
+        1
+    ));
+}
+
+#[test]
 fn english_verification_prompt_uses_no_tool_fallback_for_empty_records() {
     let expected = "You are checking a reply before it is shown to a user. Below are the user's request, the records of the tool calls made while handling it, and the reply.\n\nAnswer REJECT if any of these is true:\n1. The reply only says what the assistant will do or is about to do, instead of reporting what happened.\n2. The reply states something the tool records contradict, for example that something does not exist or did not work when a record shows it succeeded, or that something succeeded when its record shows it failed.\n3. The request was not completed, a failed record gives the reason, and the reply does not pass that reason on.\n4. The reply narrates the assistant's own deliberation — thinking aloud, correcting itself part way through, or weighing what to do — rather than stating the outcome. Reporting what a tool call returned is not deliberation.\n5. The reply recites or enumerates the tools the assistant has, instead of reporting what this turn's tool calls produced. Naming a tool the reply actually used, or answering a request that asked what the assistant can do, is not a violation.\n\nOtherwise answer ACCEPT. Reply with the single word ACCEPT or REJECT.\n\n<user_request>\nstatus?\n</user_request>\n\n<tool_records>\n(no tool calls completed)\n</tool_records>\n\n<reply>\nNothing ran.\n</reply>";
     assert_eq!(
