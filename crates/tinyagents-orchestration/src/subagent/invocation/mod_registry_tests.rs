@@ -43,6 +43,43 @@ async fn live_job_metadata_retains_parent_thread_and_workspace() {
 }
 
 #[tokio::test]
+async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let thread_token = CancellationToken::new();
+    let other_token = CancellationToken::new();
+    let (thread_job, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        thread_token.clone(),
+        JobLink {
+            parent_thread_id: Some("thread-a".into()),
+            ..JobLink::default()
+        },
+    );
+    let (other_job, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        other_token.clone(),
+        JobLink {
+            parent_thread_id: Some("thread-b".into()),
+            ..JobLink::default()
+        },
+    );
+
+    assert_eq!(jobs.cancel_for_thread("thread-a").unwrap(), 1);
+    assert!(thread_token.is_cancelled());
+    assert!(!other_token.is_cancelled());
+    assert!(jobs.get(thread_job.as_str()).is_some());
+    assert!(!jobs.get(thread_job.as_str()).unwrap().status.is_terminal());
+
+    assert_eq!(jobs.cancel_all().unwrap(), 1);
+    assert!(other_token.is_cancelled());
+    assert!(jobs.get(other_job.as_str()).is_some());
+}
+
+#[tokio::test]
 async fn steering_is_reachable_while_live_and_released_when_settled() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);
