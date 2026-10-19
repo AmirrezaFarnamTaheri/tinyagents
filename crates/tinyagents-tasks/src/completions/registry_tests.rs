@@ -307,28 +307,43 @@ async fn evicting_one_key_preserves_other_cached_routers_and_held_claims() {
     );
 }
 
-#[tokio::test]
-async fn pool_release_all_releases_claims_from_every_cached_router() {
-    let store = Arc::new(InMemoryCompletionStore::new());
+#[test]
+fn one_memory_store_rejects_a_second_pool_scope_without_breaking_the_first() {
+    let store: Arc<dyn crate::completions::CompletionStore> =
+        Arc::new(InMemoryCompletionStore::new());
     let shared = Arc::clone(&store);
     let pool = CompletionRouterPool::new(move |_| Arc::new(CompletionRouter::new(shared.clone())));
     let first = pool.get_or_open(&"workspace-a").unwrap();
-    let second = pool.get_or_open(&"workspace-b").unwrap();
-    let ambiguous_alias = CompletionAdmission::for_store(
-        store.clone(),
-        &CompletionRecord::new(
-            "ambiguous",
-            "parent-a",
-            "worker",
-            crate::completions::CompletionStatus::Success,
-            crate::completions::CompletionResult::default(),
-        ),
+    assert!(pool.get_or_open(&"workspace-b").is_err());
+
+    let epoch = first.admit_child_generation("parent").unwrap().unwrap();
+    let mut record = CompletionRecord::new(
+        "child",
+        "parent",
+        "worker",
+        crate::completions::CompletionStatus::Success,
+        crate::completions::CompletionResult::default(),
     );
-    assert!(tinyagents_harness::run_queue::QueueAdmission::batch_key(&ambiguous_alias).is_none());
-    assert!(matches!(
-        tinyagents_harness::run_queue::QueueAdmission::acquire(&ambiguous_alias),
-        Err(tinyagents_harness::run_queue::QueueAdmissionError::Retry)
-    ));
+    record.parent_epoch = epoch;
+    let router_alias = CompletionAdmission::for_router(&first, &record);
+    let store_alias = CompletionAdmission::for_store(first.store(), &record);
+    assert_eq!(
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&router_alias),
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&store_alias)
+    );
+    drop(tinyagents_harness::run_queue::QueueAdmission::acquire(&router_alias).unwrap());
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&store_alias).is_ok());
+}
+
+#[tokio::test]
+async fn pool_release_all_releases_claims_from_every_cached_router() {
+    let pool = CompletionRouterPool::new(|_| {
+        Arc::new(CompletionRouter::new(Arc::new(
+            InMemoryCompletionStore::new(),
+        )))
+    });
+    let first = pool.get_or_open(&"workspace-a").unwrap();
+    let second = pool.get_or_open(&"workspace-b").unwrap();
     first
         .record(CompletionRecord::new(
             "first",

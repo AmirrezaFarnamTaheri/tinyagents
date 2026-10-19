@@ -336,7 +336,10 @@ impl CompletionStore for InMemoryCompletionStore {
     }
 
     fn parent_lifecycle(&self) -> Option<Arc<ParentLifecycle>> {
-        self.lifecycle.lock().ok().and_then(|lifecycle| lifecycle.clone())
+        self.lifecycle
+            .lock()
+            .ok()
+            .and_then(|lifecycle| lifecycle.clone())
     }
 
     fn bind_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
