@@ -79,9 +79,13 @@ impl ExecBackend for NativeExecBackend {
                         }),
                         CapturedCommandResult::Completed(Err(error)) => Err(error),
                         CapturedCommandResult::TimedOut(output) => Ok(ExecOutput {
-                            stdout: output.stdout,
-                            stderr: output.stderr,
-                            exit_code: output.status.code(),
+                            stdout: output
+                                .as_ref()
+                                .map_or_else(Vec::new, |output| output.stdout.clone()),
+                            stderr: output
+                                .as_ref()
+                                .map_or_else(Vec::new, |output| output.stderr.clone()),
+                            exit_code: output.and_then(|output| output.status.code()),
                             timed_out: true,
                         }),
                     }

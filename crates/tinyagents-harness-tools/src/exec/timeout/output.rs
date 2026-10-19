@@ -76,7 +76,8 @@ pub async fn output_or_kill_with_progress_isolated(
 /// Process result that retains bytes collected before a deadline killed it.
 pub enum CapturedCommandResult {
     Completed(std::io::Result<std::process::Output>),
-    TimedOut(std::process::Output),
+    /// `None` means the deadline fired before the waiter captured output.
+    TimedOut(Option<std::process::Output>),
 }
 
 /// Run with a deadline and return the captured streams after cleanup on timeout.
@@ -106,8 +107,7 @@ pub async fn output_or_kill_captured_isolated(
             let output = captured
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("the process waiter stores its output before acknowledging cleanup");
+                .take();
             CapturedCommandResult::TimedOut(output)
         }
     }
