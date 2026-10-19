@@ -73,6 +73,7 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
     assert!(!other_token.is_cancelled());
     assert!(jobs.get(thread_job.as_str()).is_some());
     assert!(!jobs.get(thread_job.as_str()).unwrap().status.is_terminal());
+    assert_eq!(jobs.cancel_for_thread("thread-a").unwrap(), 0);
 
     assert_eq!(jobs.cancel_all().unwrap(), 1);
     assert!(other_token.is_cancelled());

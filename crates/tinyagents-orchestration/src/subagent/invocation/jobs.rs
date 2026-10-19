@@ -571,11 +571,23 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
+        self.cancel_owned_with_change(job_id, owner)
+            .map(|(job, _)| job)
+    }
+
+    fn cancel_owned_with_change(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+    ) -> Result<(SubAgentJob, bool), SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let mut controls = self.controls();
         let control = controls
             .get_mut(&id)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+        if control.cancellation_requested {
+            return Ok((control.status.borrow().clone(), false));
+        }
         let task_id = TaskId::new(job_id);
         let mut snapshot = match self.tasks.cancel_cooperative(&task_id, &owner.to_string()) {
             Ok(snapshot) => snapshot.status,
@@ -599,11 +611,11 @@ impl SubAgentJobRegistry {
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
             self.steering.deregister(&task_id);
-            return Ok(control.status.borrow().clone());
+            return Ok((control.status.borrow().clone(), true));
         }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
-        Ok(snapshot)
+        Ok((snapshot, true))
     }
 
     /// Requests cancellation for every live job whose durable metadata names
@@ -636,8 +648,8 @@ impl SubAgentJobRegistry {
             if !matches(&snapshot.metadata) {
                 continue;
             }
-            match self.cancel_owned(id.as_str(), snapshot.owner_id) {
-                Ok(_) => requested += 1,
+            match self.cancel_owned_with_change(id.as_str(), snapshot.owner_id) {
+                Ok((_, changed)) => requested += usize::from(changed),
                 Err(SubAgentJobError::Terminal { .. } | SubAgentJobError::NotFound(_)) => {}
                 Err(error) => return Err(error),
             }
