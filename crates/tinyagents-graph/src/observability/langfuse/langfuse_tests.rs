@@ -144,7 +144,7 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
             },
         ));
         observations.push(obs(
-            observations.len(),
+            observations.len() as u64,
             step,
             base + 10,
             GraphEvent::StepCompleted { step },
@@ -184,8 +184,7 @@ fn graph_span_metadata(
     if let Some(step) = step {
         metadata["langgraph_step"] = json!(step);
     }
-    let cleaned = clean_nulls(metadata);
-    cleaned
+    metadata
         .as_object()
         .unwrap()
         .iter()
