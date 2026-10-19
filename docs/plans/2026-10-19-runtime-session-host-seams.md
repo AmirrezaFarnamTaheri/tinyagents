@@ -1249,7 +1249,7 @@ with `Vec<ToolCallOutcome>` defaulted empty; have `TurnDriver` build a shared
 `TurnTail`, which drains it for both `run` and `split`. Keep custom drivers'
 empty default. Add the sink list to `SessionBuilder`, pass it to `Session`, and
 invoke each sink in registration order from the existing owned
-`terminal_guard.finalize_commit(receipt)` task. Keep `SessionHooks::after_commit`
+`terminal_guard.finalize_commit(receipt, observation, sinks)` task. Keep `SessionHooks::after_commit`
 in that task and in its current position. The `TurnSummary` adapter consumes
 outcomes and must not persist the raw argument/result. Verify with
 `cargo test -p tinyagents-runtime post_commit` and then
