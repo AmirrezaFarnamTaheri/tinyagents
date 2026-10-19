@@ -12,19 +12,28 @@ fn builds_nested_three_step_trace_with_payloads_and_usage() {
     let spans = vec![
         Span::new("trace:run:run-1", "run-1", "demo", BASE)
             .finish(BASE + 50, SpanState::Ok)
-            .with_io(Some(json!({"input":"question"})), Some(json!({"output":"answer"}))),
+            .with_io(
+                Some(json!({"input":"question"})),
+                Some(json!({"output":"answer"})),
+            ),
         span("trace:step:1", "step 1", 1, 10).with_parent("trace:run:run-1"),
         Span::new("trace:model:1", "run-1", "model call", BASE + 2)
             .with_parent("trace:step:1")
             .with_step_id("1")
-            .with_io(Some(json!([{"role":"user","content":"question"}])), Some(json!({"content":"thinking"})))
+            .with_io(
+                Some(json!([{"role":"user","content":"question"}])),
+                Some(json!({"content":"thinking"})),
+            )
             .with_usage(json!({"input":12,"output":4,"total":16}))
             .finish(BASE + 8, SpanState::Ok),
         span("trace:step:2", "step 2", 11, 25).with_parent("trace:run:run-1"),
         Span::new("trace:tool:2", "run-1", "search", BASE + 12)
             .with_parent("trace:step:2")
             .with_step_id("2")
-            .with_io(Some(json!({"query":"question"})), Some(json!({"result":"found"})))
+            .with_io(
+                Some(json!({"query":"question"})),
+                Some(json!({"result":"found"})),
+            )
             .finish(BASE + 20, SpanState::Ok),
         span("trace:step:3", "step 3", 26, 50).with_parent("trace:run:run-1"),
         Span::new("trace:model:3", "run-1", "final answer", BASE + 27)
@@ -94,7 +103,10 @@ fn preserves_graph_exporter_shape_for_deterministic_three_step_span_batch() {
     assert_eq!(events[0]["body"]["sessionId"], "thread-1");
     assert_eq!(events[1]["id"], "evt-0");
     assert_eq!(events[1]["body"]["id"], "root-1:run:root-1");
-    assert_eq!(events[2]["body"]["parentObservationId"], "root-1:run:root-1");
+    assert_eq!(
+        events[2]["body"]["parentObservationId"],
+        "root-1:run:root-1"
+    );
     assert_eq!(events[3]["body"]["parentObservationId"], "root-1:step:1");
     assert_eq!(events[6]["body"]["id"], "root-1:step:3");
 }
@@ -117,16 +129,19 @@ fn failed_and_open_spans_keep_status_and_timing_shape() {
 #[test]
 fn otlp_conversion_keeps_parentage_payload_and_usage() {
     let spans = vec![
-        Span::new("root", "run-1", "root", BASE)
-            .finish(BASE + 10, SpanState::Ok),
+        Span::new("root", "run-1", "root", BASE).finish(BASE + 10, SpanState::Ok),
         Span::new("model", "run-1", "model", BASE + 1)
             .with_parent("root")
-            .with_io(Some(json!({"prompt":"hi"})), Some(json!({"answer":"hello"})))
+            .with_io(
+                Some(json!({"prompt":"hi"})),
+                Some(json!({"answer":"hello"})),
+            )
             .with_usage(json!({"input":2,"output":1}))
             .finish(BASE + 9, SpanState::Ok),
     ];
     let batch = build_ingestion_batch(LangfuseTraceConfig::default(), &spans).unwrap();
-    let requests = ingestion_batch_otlp_requests(&batch, "test-service", "test-service.spans").unwrap();
+    let requests =
+        ingestion_batch_otlp_requests(&batch, "test-service", "test-service.spans").unwrap();
     let encoded = requests[0].to_string();
     assert!(encoded.contains("langfuse.observation.usage_details"));
     assert!(encoded.contains("langfuse.observation.input"));
@@ -138,4 +153,3 @@ fn otlp_conversion_keeps_parentage_payload_and_usage() {
 fn rejects_empty_span_batch() {
     assert!(build_ingestion_batch(LangfuseTraceConfig::default(), &[]).is_err());
 }
-

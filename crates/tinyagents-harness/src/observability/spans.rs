@@ -277,12 +277,10 @@ impl SpanExporter {
     }
 
     /// Sends spans through the legacy Langfuse ingestion API.
-    pub async fn send(
-        &self,
-        trace: LangfuseTraceConfig,
-        spans: &[Span],
-    ) -> Result<Value> {
-        self.client.send_batch(build_ingestion_batch(trace, spans)?).await
+    pub async fn send(&self, trace: LangfuseTraceConfig, spans: &[Span]) -> Result<Value> {
+        self.client
+            .send_batch(build_ingestion_batch(trace, spans)?)
+            .await
     }
 }
 
