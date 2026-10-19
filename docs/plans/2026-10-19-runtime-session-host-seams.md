@@ -795,6 +795,26 @@ pub fn identity_resolver(
     self.identity = Some(IdentityConfig {
         resolver,
         session_key: session_key.into(),
+        parent: None,
+        child_key: None,
+        meta,
+    });
+    self
+}
+
+pub fn child_identity_resolver(
+    mut self,
+    parent: SessionRef,
+    child_key: impl Into<String>,
+    meta: TranscriptMeta,
+    resolver: Arc<dyn SessionIdentityResolver<C>>,
+) -> Self {
+    let child_key = child_key.into();
+    self.identity = Some(IdentityConfig {
+        resolver,
+        session_key: child_key.clone(),
+        parent: Some(parent),
+        child_key: Some(child_key),
         meta,
     });
     self
@@ -830,8 +850,12 @@ after `target` and initialize `identity_config`,
 `established_identity: None`, and `identity: None`. Add
 `identity: Option<&'a SessionIdentity>` to `SessionStateView<'a>` and populate
 it from `established_identity` (never the in-flight result). Export
-`SessionIdentity` and `SessionIdentityRequest` from `types` and
-`ResolvedSessionStores`/`SessionIdentityResolver` from `identity` in `lib.rs`.
+`SessionIdentity`, `SessionIdentityRequest`, and `ResolvedSessionStores` from
+`types`; export `SessionIdentityResolver` from `identity` in `lib.rs`. Define
+`IdentityConfig`, `SessionIdentityResolver`, and `same_admission` in
+`identity.rs`; import request/result types from `crate::types`. Because
+`session.rs` calls it, declare `same_admission` `pub(crate)` and import it as
+`crate::identity::same_admission`.
 
 In `SessionBuilder::build`, require a codec when either transcript or
 identity config is present, then pass the identity config into `Session::new`.
@@ -852,38 +876,57 @@ fn resolve_and_bind(
     let request = SessionIdentityRequest {
         thread_id: options.thread_id.clone(),
         session_key: config.session_key.clone(),
+        parent: config.parent.clone(),
+        child_key: config.child_key.clone(),
     };
     let resolved = config.resolver.resolve(&request, &options.run_context.data)?;
     if resolved.agent_id.is_empty() {
         return Err(RuntimeError::InvalidSessionState("resolver returned empty agent id".into()));
     }
-    let session = SessionRef::scoped(&request.session_key, &resolved.agent_id);
+    let first_session = match (&request.parent, &request.child_key) {
+        (Some(parent), Some(child_key)) => SessionRef::child_of(parent, child_key),
+        (None, None) => SessionRef::scoped(&request.session_key, &resolved.agent_id),
+        _ => return Err(RuntimeError::InvalidSessionState(
+            "identity request has an incomplete child lineage".into(),
+        )),
+    };
     let identity = SessionIdentity {
-        session,
+        session: first_session.clone(),
         agent_id: resolved.agent_id,
         stores: resolved.stores,
     };
     if options.session.as_ref().is_some_and(|selected|
-        selected.first_generation() != identity.session.first_generation())
+        selected.first_generation() != first_session.first_generation())
     {
         return Err(RuntimeError::InvalidSessionState("TurnOptions.session conflicts with resolved identity".into()));
     }
+    if let Some(previous) = self.established_identity.as_ref()
+        && !same_admission(previous, &identity)
+    {
+        return Err(RuntimeError::InvalidSessionState(
+            "session identity or pinned store changed".into(),
+        ));
+    }
+    // Reuse the currently bound generation after validating its stable first
+    // generation and admitted lease. Rebuilding `first_session` on every
+    // operation would reset a compacted root or child to generation zero.
+    let session = self.target.as_ref()
+        .and_then(|target| target.session.clone())
+        .filter(|current| current.first_generation() == first_session.first_generation())
+        .unwrap_or(first_session);
     let mut meta = config.meta.clone();
     meta.agent_id = Some(identity.agent_id.clone());
     let target = TranscriptTarget::for_session(
         identity.stores.stores().transcripts.clone(),
-        identity.session.clone(),
+        session.clone(),
         meta,
     );
     if hook_target.is_some_and(|selected| !selected.same_binding(&target)) {
         return Err(RuntimeError::InvalidSessionState("before_resume target conflicts with resolved identity".into()));
     }
-    if let Some(previous) = self.established_identity.as_ref()
-        && !same_admission(previous, &identity)
-    {
-        return Err(RuntimeError::InvalidSessionState("session identity or pinned store changed".into()));
-    }
     self.target = Some(target);
+    let mut identity = identity;
+    identity.session = session;
     self.established_identity = Some(identity.clone());
     self.identity = Some(identity);
     Ok(())
@@ -901,7 +944,7 @@ comparison semantics (the current target locator is read from the target that
 will actually be resumed, after hook preparation):
 
 ```rust
-fn same_admission(a: &SessionIdentity, b: &SessionIdentity) -> bool {
+pub(crate) fn same_admission(a: &SessionIdentity, b: &SessionIdentity) -> bool {
     if a.session.first_generation() != b.session.first_generation()
         || a.agent_id != b.agent_id
     {
