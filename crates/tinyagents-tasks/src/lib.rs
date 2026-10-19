@@ -24,7 +24,8 @@ pub use completions::{
     CompletionFormatter, CompletionReceipt, CompletionRecord, CompletionResult, CompletionRouter,
     CompletionState, CompletionStatus, CompletionStore, CompletionStoreReplaceOutcome,
     DEFAULT_MAX_ATTEMPTS, DriverCompletionStore, InMemoryCompletionStore,
-    NeutralCompletionFormatter, NotifyMode, ParentGateClaim, RecordOutcome, TombstoneOutcome,
+    NeutralCompletionFormatter, NotifyMode, ParentGateClaim, PendingClaimRequest,
+    ResolveClaimRequest, TaskClaimRequest, RecordOutcome, TombstoneOutcome,
 };
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
