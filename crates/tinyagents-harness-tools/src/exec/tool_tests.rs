@@ -1,5 +1,5 @@
 use super::*;
-use crate::exec::{ExecAuditEvent, ExecBackendOutcome, ExecDenied, ExecOutput, ExecPermit, ExecProgress, ExecRequest, ExecAuthorizationRequest, ExecGate, ExecBackend, ExecOperation, ShellFlavor};
+use crate::exec::{ExecAuditEvent, ExecBackendOutcome, ExecDenied, ExecOutput, ExecPermit, ExecProgress, ExecRequest, ExecAuthorizationRequest, ExecGate, ExecBackend, ShellFlavor};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct DenyingGate;

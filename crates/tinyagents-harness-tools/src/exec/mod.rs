@@ -7,7 +7,7 @@ pub mod timeout;
 
 pub use ports::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
-    ExecBackendCapability, ExecDenied, ExecOperation, ExecOutput, ExecPermit, ExecRefusalKind,
+    ExecBackendCapability, ExecDenied, ExecGate, ExecOperation, ExecOutput, ExecPermit, ExecRefusalKind,
     ExecRequest, ShellFlavor,
 };
 pub use progress::ExecProgress;
