@@ -419,6 +419,61 @@ The existing host `CompactionSettings` call site and full TOML compatibility
 are part of this task, even though host deletion/adoption of the rest of
 `session_host` is later in #212.
 
+Keep these implementation bodies and values when moving the definitions:
+
+```rust
+impl ContextConfig {
+    pub fn compaction_settings(&self) -> CompactionSettings {
+        CompactionSettings {
+            trigger_tokens: self.compaction_trigger_tokens.filter(|value| *value > 0),
+            strategy: self.compaction_strategy,
+        }
+    }
+}
+
+impl CompactionStrategy {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "task_state" | "typed" | "s4" => Some(Self::TaskState),
+            "summary" | "free_form" | "s0" => Some(Self::Summary),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            microcompact_enabled: true,
+            autocompact_enabled: true,
+            microcompact_keep_recent: DEFAULT_KEEP_RECENT_TOOL_RESULTS,
+            tool_result_budget_bytes: TurnConfig::default().tool_result_budget_bytes,
+            summarizer_payload_threshold_tokens: 4_000,
+            summarizer_max_payload_tokens: 64_000,
+            summarizer_model: None,
+            prefer_markdown_tool_output: true,
+            compaction_enabled: true,
+            compaction_trigger_tokens: None,
+            compaction_strategy: CompactionStrategy::TaskState,
+        }
+    }
+}
+```
+
+In `config/context_tests.rs`, use a TOML string with exactly these keys and
+values: `enabled=false`, `microcompact_enabled=false`,
+`autocompact_enabled=true`, `microcompact_keep_recent=9`,
+`tool_result_budget_bytes=1234`,
+`summarizer_payload_threshold_tokens=4000`,
+`summarizer_max_payload_tokens=64000`, `summarizer_model="test-model"`,
+`prefer_markdown_tool_output=false`, `compaction_enabled=true`,
+`compaction_trigger_tokens=123`, `compaction_strategy="summary"`; assert
+every field. A second fixture substitutes both aliases for their canonical
+threshold keys and asserts the same parsed values. Check default round-trip by
+serializing both values to `serde_json::Value` and comparing; do not add
+`PartialEq` solely for this test.
+
 ### Session identity resolution (`tinyagents-runtime`)
 
 Issue #63 implements and wires this seam; OpenHuman's concrete resolver and
