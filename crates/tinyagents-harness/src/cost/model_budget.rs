@@ -9,9 +9,7 @@ use tinyinference_llm::model::{
     DeferredHandle, DeferredStatus, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
 };
 
-use super::dispatch_admission::{
-    ControlledDispatchError, DispatchModelOptions,
-};
+use super::dispatch_admission::{ControlledDispatchError, DispatchModelOptions};
 
 /// Budget state shared by the concrete models used for one turn and its child
 /// agents.
@@ -68,7 +66,9 @@ fn wrap_observed_model(
 ) -> Arc<dyn ChatModel<()>> {
     let charged = Arc::new(super::GatewayChargeModel::new(model));
     let explicitly_observed: Arc<dyn ChatModel<()>> = match observer {
-        Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(charged, observer)),
+        Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(
+            charged, observer,
+        )),
         None => charged,
     };
     crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed)
@@ -83,11 +83,7 @@ fn wrap_model_with_policies(
     let observed = wrap_observed_model(model, observer);
     match budget {
         Some(budget) => {
-            let budgeted = BudgetedModel::new(
-                observed,
-                budget.ledger.clone(),
-                budget.call,
-            );
+            let budgeted = BudgetedModel::new(observed, budget.ledger.clone(), budget.call);
             match before_dispatch {
                 Some(hook) => Arc::new(budgeted.before_dispatch(hook)),
                 None => Arc::new(budgeted),

@@ -127,9 +127,7 @@ impl From<DispatchRefusal> for ControlledDispatchError {
 impl From<ControlledDispatchError> for tinyinference_llm::Error {
     fn from(error: ControlledDispatchError) -> Self {
         match error {
-            ControlledDispatchError::Admission(refusal) => {
-                Self::Validation(refusal.to_string())
-            }
+            ControlledDispatchError::Admission(refusal) => Self::Validation(refusal.to_string()),
             ControlledDispatchError::Model(error) => error,
         }
     }

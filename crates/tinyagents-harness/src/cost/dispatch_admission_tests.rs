@@ -14,10 +14,10 @@ use crate::observability::{
 };
 use async_trait::async_trait;
 use futures::{StreamExt, poll};
-use std::task::Poll;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
 use tinyinference_llm::model::{
     ChatModel, DeferredHandle, DeferredStatus, InputModality, InputSource, ModelProfile,
@@ -194,11 +194,7 @@ struct FirstCallGateModel {
 
 #[async_trait]
 impl ChatModel<()> for FirstCallGateModel {
-    async fn invoke(
-        &self,
-        _: &(),
-        _: ModelRequest,
-    ) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
         let invocation = self.counts.provider.fetch_add(1, Ordering::SeqCst);
         if invocation == 0 {
             self.entered.add_permits(1);
@@ -230,11 +226,7 @@ impl ChatModel<()> for TestModel {
         Some("dispatch-test-model".to_owned())
     }
 
-    async fn invoke(
-        &self,
-        _: &(),
-        _: ModelRequest,
-    ) -> tinyinference_llm::Result<ModelResponse> {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
         self.counts.provider.fetch_add(1, Ordering::SeqCst);
         match self.behavior {
             ModelBehavior::Fail => Err(tinyinference_llm::Error::Model("fixture failure".into())),
@@ -242,22 +234,22 @@ impl ChatModel<()> for TestModel {
         }
     }
 
-    async fn stream(
-        &self,
-        _: &(),
-        _: ModelRequest,
-    ) -> tinyinference_llm::Result<ModelStream> {
+    async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
         self.counts.provider.fetch_add(1, Ordering::SeqCst);
         let stream: std::pin::Pin<
             Box<dyn futures::Stream<Item = tinyinference_llm::model::ModelStreamItem> + Send>,
         > = match self.behavior {
             ModelBehavior::EmptyStream => Box::pin(futures::stream::empty()),
             ModelBehavior::PendingStream => Box::pin(futures::stream::pending()),
-            ModelBehavior::FailedStream => Box::pin(futures::stream::iter([
-                ModelStreamItem::Failed("fixture stream error".to_owned()),
-            ])),
+            ModelBehavior::FailedStream => {
+                Box::pin(futures::stream::iter([ModelStreamItem::Failed(
+                    "fixture stream error".to_owned(),
+                )]))
+            }
             ModelBehavior::Fail => {
-                return Err(tinyinference_llm::Error::Model("fixture stream error".into()));
+                return Err(tinyinference_llm::Error::Model(
+                    "fixture stream error".into(),
+                ));
             }
             _ => Box::pin(futures::stream::empty()),
         };
@@ -321,9 +313,8 @@ async fn admission_refuses_before_provider_or_physical_observer_start() {
 #[tokio::test]
 async fn chat_model_trait_consumer_observes_admission_refusal() {
     let counts = Arc::new(Counts::default());
-    let admission = ScriptedAdmission::new([Step::Immediate(Err(
-        DispatchRefusalReason::CallLimit,
-    ))]);
+    let admission =
+        ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::CallLimit))]);
     let controlled = ControlledChatModel::new(
         model(&counts, ModelBehavior::Succeed),
         options(Some(admission.clone()), None, &counts),
@@ -331,7 +322,10 @@ async fn chat_model_trait_consumer_observes_admission_refusal() {
 
     let result = ChatModel::invoke(&controlled, &(), ModelRequest::default()).await;
 
-    assert!(matches!(result, Err(tinyinference_llm::Error::Validation(_))));
+    assert!(matches!(
+        result,
+        Err(tinyinference_llm::Error::Validation(_))
+    ));
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
@@ -376,10 +370,7 @@ async fn late_refusal_after_money_wait_refunds_the_uncommitted_call() {
     let counts = Arc::new(Counts::default());
     let entered = Arc::new(tokio::sync::Semaphore::new(0));
     let release = Arc::new(tokio::sync::Semaphore::new(0));
-    let admission = ScriptedAdmission::new([
-        Step::Immediate(Ok(())),
-        Step::Immediate(Ok(())),
-    ]);
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(())), Step::Immediate(Ok(()))]);
     let budget = ModelBudget::new(
         Budget::new(SpendLimits {
             tokens: Some(2_000),
@@ -401,19 +392,18 @@ async fn late_refusal_after_money_wait_refunds_the_uncommitted_call() {
         options(Some(admission.clone()), Some(budget.clone()), &counts),
     );
 
-    let mut first = Box::pin(
-        controlled.invoke_controlled(&(), ModelRequest::default()),
-    );
+    let mut first = Box::pin(controlled.invoke_controlled(&(), ModelRequest::default()));
     assert!(poll!(first.as_mut()).is_pending());
     entered
         .acquire()
         .await
         .expect("first provider call entered")
         .forget();
-    let mut second = Box::pin(
-        controlled.invoke_controlled(&(), ModelRequest::default()),
+    let mut second = Box::pin(controlled.invoke_controlled(&(), ModelRequest::default()));
+    assert!(
+        poll!(second.as_mut()).is_pending(),
+        "second waits for money"
     );
-    assert!(poll!(second.as_mut()).is_pending(), "second waits for money");
     assert_eq!(admission.acquired.load(Ordering::SeqCst), 2);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(budget.ledger.snapshot().reserved.cost_micros, 10);
@@ -435,7 +425,10 @@ async fn late_refusal_after_money_wait_refunds_the_uncommitted_call() {
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
     assert_eq!(budget.ledger.snapshot().spent.cost_micros, 3);
-    assert_eq!(budget.ledger.snapshot().reserved, tinyinference_llm::model::budget::Spend::default());
+    assert_eq!(
+        budget.ledger.snapshot().reserved,
+        tinyinference_llm::model::budget::Spend::default()
+    );
 }
 
 #[tokio::test]
@@ -548,7 +541,10 @@ async fn stream_failure_releases_admission() {
         .await
         .expect("stream dispatch");
 
-    assert!(matches!(stream.next().await, Some(ModelStreamItem::Failed(_))));
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Failed(_))
+    ));
     assert!(stream.next().await.is_none());
     assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
@@ -563,15 +559,16 @@ async fn controlled_chat_model_delegates_capabilities_and_deferred_polling() {
     );
 
     assert_eq!(
-        controlled.profile().and_then(|profile| profile.model.as_deref()),
+        controlled
+            .profile()
+            .and_then(|profile| profile.model.as_deref()),
         Some("dispatch-test-model")
     );
-    assert!(controlled.supports_input(
-        InputModality::Image,
-        "image/png",
-        InputSource::Url
-    ));
-    assert_eq!(controlled.cache_identity().as_deref(), Some("dispatch-test-model"));
+    assert!(controlled.supports_input(InputModality::Image, "image/png", InputSource::Url));
+    assert_eq!(
+        controlled.cache_identity().as_deref(),
+        Some("dispatch-test-model")
+    );
     assert!(matches!(
         controlled
             .fetch_deferred(&DeferredHandle::new("fixture", "deferred-1"))
@@ -631,10 +628,7 @@ async fn concurrent_refusals_remain_call_local() {
         Err(ControlledDispatchError::Admission(refusal))
             if refusal.reason() == DispatchRefusalReason::CallLimit
     ));
-    assert!(second
-        .await
-        .expect("second controlled task")
-        .is_ok());
+    assert!(second.await.expect("second controlled task").is_ok());
     assert_eq!(counts.provider.load(Ordering::SeqCst), 1);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
