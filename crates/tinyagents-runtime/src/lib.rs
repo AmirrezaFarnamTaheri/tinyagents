@@ -16,6 +16,7 @@ mod managed_tools;
 mod permanent_tool;
 mod prefix;
 mod session;
+mod summary;
 mod tool_registration;
 pub mod transcript;
 pub mod turn_driver;
