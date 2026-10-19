@@ -184,6 +184,13 @@ struct TerminalResolver {
     outcomes: Mutex<Vec<(String, &'static str)>>,
 }
 
+#[derive(Default)]
+struct AllowedAuditResolver {
+    allowed: Mutex<usize>,
+    outcomes: Mutex<Vec<(String, &'static str)>>,
+    deny_allowed: bool,
+}
+
 #[async_trait]
 impl ApprovalResolver<Host> for TerminalResolver {
     async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
@@ -193,6 +200,50 @@ impl ApprovalResolver<Host> for TerminalResolver {
     async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
         ApprovalResolution::Allow {
             ticket: Some("ticket".into()),
+        }
+    }
+
+    fn record(&self, _ticket: &str, _result: &ToolResult) {}
+
+    fn record_terminal(&self, ticket: &str, outcome: ApprovalExecutionOutcome<'_>) {
+        let kind = match outcome {
+            ApprovalExecutionOutcome::Result(_) => "result",
+            ApprovalExecutionOutcome::Failed(_) => "failed",
+            ApprovalExecutionOutcome::Cancelled(_) => "cancelled",
+            ApprovalExecutionOutcome::Control(_) => "control",
+            ApprovalExecutionOutcome::Abandoned => "abandoned",
+        };
+        self.outcomes
+            .lock()
+            .unwrap()
+            .push((ticket.to_owned(), kind));
+    }
+}
+
+#[async_trait]
+impl ApprovalResolver<Host> for AllowedAuditResolver {
+    async fn requires_approval(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> bool {
+        false
+    }
+
+    async fn resolve(&self, _ctx: &RunContext<Host>, _call: &ToolCall) -> ApprovalResolution {
+        panic!("an already-allowed call must not enter the approval prompt path")
+    }
+
+    async fn resolve_allowed(
+        &self,
+        _ctx: &RunContext<Host>,
+        _call: &ToolCall,
+    ) -> ApprovalResolution {
+        *self.allowed.lock().unwrap() += 1;
+        if self.deny_allowed {
+            ApprovalResolution::Deny {
+                reason: "audit admission failed".into(),
+            }
+        } else {
+            ApprovalResolution::Allow {
+                ticket: Some("allowed-audit".into()),
+            }
         }
     }
 
@@ -408,6 +459,120 @@ async fn approved_post_gate_response_records_one_terminal_callback() {
         *resolver.outcomes.lock().unwrap(),
         vec![("ticket".into(), "result")]
     );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_admits_and_records_allowed_execution() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "ran");
+    assert_eq!(runs, 1);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("allowed-audit".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn allowed_call_resolver_never_receives_policy_denials() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "rm", false).await;
+
+    assert!(result.is_error);
+    assert!(result.output().contains("destructive"));
+    assert_eq!(runs, 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 0);
+    assert!(resolver.outcomes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn allowed_admission_denial_precedes_post_gate_and_execution() {
+    let resolver = Arc::new(AllowedAuditResolver {
+        deny_allowed: true,
+        ..Default::default()
+    });
+    let post_gate_calls = Arc::new(Mutex::new(0));
+    let observed = post_gate_calls.clone();
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_approval_resolver(resolver.clone())
+            .with_post_gate(Arc::new(move |_ctx, _call| {
+                *observed.lock().unwrap() += 1;
+                Some(ToolResult::success("must not disclose"))
+            })),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "audit admission failed");
+    assert!(result.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*post_gate_calls.lock().unwrap(), 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn allowed_admission_runs_once_after_both_policies_allow() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run(middleware, "read", false).await;
+
+    assert_eq!(result.output(), "ran");
+    assert_eq!(runs, 1);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
+    assert_eq!(
+        *resolver.outcomes.lock().unwrap(),
+        vec![("allowed-audit".into(), "result")]
+    );
+}
+
+#[tokio::test]
+async fn session_denial_skips_allowed_admission() {
+    let resolver = Arc::new(AllowedAuditResolver::default());
+    let middleware = Arc::new(
+        ToolPolicyGateMiddleware::new(Arc::new(NamePolicy))
+            .with_session_ceiling(Arc::new(SessionCeiling))
+            .with_approval_resolver(resolver.clone()),
+    );
+
+    let (result, runs) = run_on_channel(middleware, "ceiling_only", false, "cli").await;
+
+    assert!(result.is_error);
+    assert_eq!(runs, 0);
+    assert_eq!(*resolver.allowed.lock().unwrap(), 0);
+    assert!(resolver.outcomes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn evaluate_routes_allow_through_allowed_admission_hook() {
+    let resolver = AllowedAuditResolver::default();
+    let gate = ToolPolicyGate::new(Arc::new(NamePolicy));
+
+    assert_eq!(
+        gate.evaluate(&ctx(), &call("read"), false, Some(&resolver))
+            .await,
+        GateVerdict::Proceed {
+            ticket: Some("allowed-audit".into())
+        }
+    );
+    assert_eq!(*resolver.allowed.lock().unwrap(), 1);
 }
 
 #[tokio::test]
@@ -700,7 +865,7 @@ async fn evaluate_settles_each_decision_for_a_host_that_interleaves_the_gate() {
         ticket: Some("t-9".to_string()),
     });
 
-    // Allow never consults the resolver.
+    // A legacy resolver's default admission hook preserves ticket-free Allow.
     assert_eq!(
         gate.evaluate(&ctx(), &call("read"), false, Some(&resolver))
             .await,

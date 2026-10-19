@@ -87,6 +87,7 @@ pub mod model_registry;
 pub mod multimodal;
 pub mod no_progress;
 pub mod observability;
+pub mod oneshot;
 pub mod prompt;
 pub mod providers;
 pub mod retriever;
