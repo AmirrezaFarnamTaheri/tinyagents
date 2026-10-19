@@ -4,7 +4,10 @@ use tinytools::ToolRunContext;
 
 use super::{
     ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress, ExecRequest, ShellFlavor,
-    timeout::{CapturedCommandResult, output_or_kill_captured_isolated, output_unbounded_with_progress_isolated},
+    timeout::{
+        CapturedCommandResult, output_or_kill_captured_isolated,
+        output_unbounded_with_progress_isolated,
+    },
 };
 
 /// Capability token required by [`NativeExecBackend`] before it may spawn.
@@ -81,6 +84,7 @@ impl ExecBackend for NativeExecBackend {
                             exit_code: output.status.code(),
                             timed_out: true,
                         }),
+                    }
                 }
                 None => output_unbounded_with_progress_isolated(&mut command, progress)
                     .await
