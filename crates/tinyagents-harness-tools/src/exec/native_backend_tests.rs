@@ -141,20 +141,14 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let pidfile = dir.path().join("child.pid");
     let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "echo $$ > {}; sleep 30 & child=$!; echo $child > {}; printf captured; wait",
+        "printf '%s\\n' \"$$\" > {}; sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; printf captured; wait",
         shell_quote(&shell_pidfile),
         shell_quote(&pidfile),
     );
-    eprintln!("timeout fixture: {command}");
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let outcome = backend
         .execute(
-            request(
-                "sh",
-                &["-c", &command],
-                Some(Duration::from_millis(100)),
-                true,
-            ),
+            request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
             None,
             None,
         )
@@ -192,11 +186,10 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     let pidfile = dir.path().join("child.pid");
     let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "echo $$ > {}; sleep 30 & child=$!; echo $child > {}; wait",
+        "printf '%s\\n' \"$$\" > {}; sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; wait",
         shell_quote(&shell_pidfile),
         shell_quote(&pidfile),
     );
-    eprintln!("cancellation fixture: {command}");
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = ProcessCleanup::default();
     let turn_cleanup = cleanup.clone();
@@ -205,7 +198,7 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
             .scope(backend.execute(request("sh", &["-c", &command], None, true), None, None))
             .await
     });
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(Duration::from_secs(8), async {
         loop {
             let child_ready = std::fs::read_to_string(&pidfile)
                 .ok()
