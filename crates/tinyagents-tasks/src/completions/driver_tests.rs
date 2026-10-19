@@ -87,6 +87,38 @@ async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
     );
 }
 
+#[test]
+fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
+    use crate::completions::CompletionClaimMode;
+
+    let storage = MemoryStorage::new();
+    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let now = SystemTime::now();
+    store
+        .put(&record("z-older", "p").with_finished_at(now))
+        .unwrap();
+    store
+        .put(&record("a-newer", "p").with_finished_at(now + Duration::from_secs(1)))
+        .unwrap();
+
+    let claimed = store
+        .claim_pending(
+            "p",
+            CompletionClaimMode::Followup,
+            1,
+            "owner",
+            now + Duration::from_secs(30),
+        )
+        .unwrap();
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|record| record.task_id.as_str())
+            .collect::<Vec<_>>(),
+        ["z-older"]
+    );
+}
+
 #[tokio::test]
 async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     use crate::completions::{ClaimResolution, CompletionClaimMode};

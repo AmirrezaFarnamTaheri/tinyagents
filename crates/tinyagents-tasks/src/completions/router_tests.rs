@@ -282,7 +282,7 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         .await
         .unwrap();
     assert!(matches!(
-        outcome,
+        &outcome,
         RecordOutcome::Recorded {
             lane: Some(QueueLane::Followup),
             receipt: Some(_)
@@ -547,12 +547,12 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
     source
         .put(&record("pending", "p").with_notify_mode(NotifyMode::Off))
         .unwrap();
-    let delivered = router.pull("p", 1).unwrap();
+    let _pending_claim = router.pull("p", 1).unwrap();
 
     source
         .put(&record("delivered", "p").with_notify_mode(NotifyMode::Off))
         .unwrap();
-    router.pull("p", 1).unwrap();
+    let delivered = router.pull("p", 1).unwrap();
     router.mark_delivered(&receipts(&delivered)).unwrap();
 
     source
