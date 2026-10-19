@@ -66,3 +66,13 @@ fn typed_extensions_survive_snapshot_copies_without_changing_json() {
     assert_eq!(replaced.extension::<HostAlpha>(), Some(&HostAlpha(8)));
     assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
 }
+
+#[test]
+fn exact_snapshot_never_retains_recorded_declarations() {
+    let exact = ToolSnapshot::new(vec![spec("live", "live")]).unwrap().exact();
+    let recorded = ToolSnapshot::new(vec![spec("recorded", "recorded")]).unwrap();
+    let (merged, count) = exact.with_retained(&recorded).unwrap();
+    assert_eq!(count, 0);
+    assert!(merged.is_exact());
+    assert_eq!(merged.specs().iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(), ["live"]);
+}
