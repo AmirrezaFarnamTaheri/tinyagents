@@ -885,6 +885,71 @@ fn admission_rejects_a_stale_batch_key_when_store_changes_during_acquire() {
     assert_ne!(admission.batch_key().as_deref(), Some(old_key.as_str()));
 }
 
+struct LostRenewalGateStore {
+    inner: InMemoryCompletionStore,
+    acquired: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl CompletionStore for LostRenewalGateStore {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        let claim = self.inner.acquire_parent_gate(parent_key, holder, ttl)?;
+        if claim.is_some() {
+            if let Some(sender) = self
+                .acquired
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                let _ = sender.send(());
+            }
+        }
+        Ok(claim)
+    }
+
+    fn renew_parent_gate(
+        &self,
+        _parent_key: &str,
+        _claim: &ParentGateClaim,
+        _ttl: Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        Ok(false)
+    }
+
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+}
+
+#[test]
+fn admission_fails_closed_if_native_gate_expires_while_waiting_for_local_lifecycle() {
+    let lifecycle = super::lifecycle::ParentLifecycle::new();
+    let local = lifecycle.acquire("p").unwrap();
+    let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+    let store: Arc<dyn CompletionStore> = Arc::new(LostRenewalGateStore {
+        inner: InMemoryCompletionStore::new(),
+        acquired: std::sync::Mutex::new(Some(acquired_tx)),
+    });
+    let waiting_store = Arc::clone(&store);
+    let waiting_lifecycle = Arc::clone(&lifecycle);
+    let admission = std::thread::spawn(move || {
+        super::router::ParentAdmissionPermit::acquire(waiting_store, waiting_lifecycle, "p", 1)
+    });
+
+    acquired_rx.recv().unwrap();
+    drop(local);
+
+    assert!(admission.join().unwrap().is_err());
+}
+
 #[tokio::test]
 async fn collect_mode_pushes_onto_the_collect_lane() {
     let router = router();
