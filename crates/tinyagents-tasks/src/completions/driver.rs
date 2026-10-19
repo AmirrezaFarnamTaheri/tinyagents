@@ -337,6 +337,7 @@ impl CompletionStore for DriverCompletionStore {
     fn claim_pending(
         &self,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
@@ -345,6 +346,7 @@ impl CompletionStore for DriverCompletionStore {
     ) -> Result<Vec<CompletionRecord>> {
         let this = self.clone();
         let parent_key = parent_key.to_owned();
+        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
@@ -362,7 +364,8 @@ impl CompletionStore for DriverCompletionStore {
                 .into_iter()
                 .filter_map(|row| decode_strict(row.clone()).ok().map(|record| (row, record)))
                 .filter(|(_, record)| {
-                    record.state == CompletionState::Pending
+                    record.parent_epoch == parent_epoch
+                        && record.state == CompletionState::Pending
                         && mode.accepts(record.notify_mode)
                         && record
                             .claim
@@ -407,6 +410,7 @@ impl CompletionStore for DriverCompletionStore {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
@@ -415,6 +419,7 @@ impl CompletionStore for DriverCompletionStore {
         let this = self.clone();
         let task_id = task_id.to_owned();
         let parent_key = parent_key.to_owned();
+        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
@@ -427,6 +432,7 @@ impl CompletionStore for DriverCompletionStore {
             let mut record = decode_strict(row.clone())?;
             let now = SystemTime::now();
             if record.parent_key != parent_key
+                || record.parent_epoch != parent_epoch
                 || record.state != CompletionState::Pending
                 || !mode.accepts(record.notify_mode)
                 || record
@@ -466,6 +472,7 @@ impl CompletionStore for DriverCompletionStore {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
@@ -473,6 +480,7 @@ impl CompletionStore for DriverCompletionStore {
         let this = self.clone();
         let task_id = task_id.to_owned();
         let parent_key = parent_key.to_owned();
+        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
@@ -484,7 +492,9 @@ impl CompletionStore for DriverCompletionStore {
             };
             let mut record = decode_strict(row.clone())?;
             let now = SystemTime::now();
-            if record.state != CompletionState::Pending
+            if record.parent_key != parent_key
+                || record.parent_epoch != parent_epoch
+                || record.state != CompletionState::Pending
                 || record
                     .claim
                     .as_ref()

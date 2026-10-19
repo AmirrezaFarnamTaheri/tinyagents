@@ -101,13 +101,14 @@ pub trait CompletionStore: Send + Sync {
     fn claim_pending(
         &self,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Vec<CompletionRecord>> {
-        let _ = (parent_key, gate, mode, max, token, visible_after);
+        let _ = (parent_key, parent_epoch, gate, mode, max, token, visible_after);
         Err(store_err(
             "claim",
             "store does not support atomic delivery claims",
@@ -120,12 +121,13 @@ pub trait CompletionStore: Send + Sync {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, parent_key, gate, mode, token, visible_after);
+        let _ = (task_id, parent_key, parent_epoch, gate, mode, token, visible_after);
         Err(store_err(
             "claim task",
             "store does not support atomic delivery claims",
@@ -138,11 +140,12 @@ pub trait CompletionStore: Send + Sync {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, parent_key, gate, token, resolution);
+        let _ = (task_id, parent_key, parent_epoch, gate, token, resolution);
         Err(store_err(
             "resolve claim",
             "store does not support atomic delivery claims",
@@ -361,6 +364,7 @@ impl CompletionStore for InMemoryCompletionStore {
     fn claim_pending(
         &self,
         parent_key: &str,
+        parent_epoch: u64,
         _gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
@@ -373,6 +377,7 @@ impl CompletionStore for InMemoryCompletionStore {
             .values()
             .filter(|record| {
                 record.parent_key == parent_key
+                    && record.parent_epoch == parent_epoch
                     && record.state == CompletionState::Pending
                     && mode.accepts(record.notify_mode)
                     && record
@@ -408,6 +413,7 @@ impl CompletionStore for InMemoryCompletionStore {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         _gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
@@ -419,6 +425,7 @@ impl CompletionStore for InMemoryCompletionStore {
             return Ok(None);
         };
         if record.parent_key != parent_key
+            || record.parent_epoch != parent_epoch
             || record.state != CompletionState::Pending
             || !mode.accepts(record.notify_mode)
             || record
@@ -440,7 +447,8 @@ impl CompletionStore for InMemoryCompletionStore {
     fn resolve_claim(
         &self,
         task_id: &str,
-        _parent_key: &str,
+        parent_key: &str,
+        parent_epoch: u64,
         _gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
@@ -449,7 +457,9 @@ impl CompletionStore for InMemoryCompletionStore {
         let Some(record) = records.get_mut(task_id) else {
             return Ok(None);
         };
-        if record.state != CompletionState::Pending
+        if record.parent_key != parent_key
+            || record.parent_epoch != parent_epoch
+            || record.state != CompletionState::Pending
             || record.claim.as_ref().is_none_or(|claim| {
                 claim.token != token || claim.visible_after <= SystemTime::now()
             })
