@@ -1,6 +1,7 @@
 //! Unit tests for [`WorkloadRouter`](super::WorkloadRouter) / [`WorkloadRoute`].
 
-use super::{WorkloadRoute, WorkloadRouter};
+use super::*;
+use std::collections::HashMap;
 use tinyinference_llm::model::CapabilitySet;
 
 /// Mirrors OpenHuman's workload tiers so the tests exercise the exact projection
@@ -144,9 +145,6 @@ fn workload_route_serde_skips_defaults() {
     let back: WorkloadRoute = serde_json::from_str(&json).unwrap();
     assert_eq!(back, route);
 }
-use super::*;
-use std::collections::HashMap;
-
 #[derive(Default)]
 struct TestRoutes {
     routes: HashMap<String, String>,
@@ -263,7 +261,10 @@ fn configured_role_is_independent_and_cloud_fallback_metadata_is_typed() {
         "agentic"
     );
     assert_eq!(
-        router.cloud_fallback_role("summarization").unwrap().override_role,
+        router
+            .cloud_fallback_role("summarization")
+            .unwrap()
+            .override_role,
         "memory"
     );
     assert!(router.cloud_fallback_role("chat").is_none());
@@ -277,14 +278,23 @@ fn model_helpers_preserve_hints_legacy_aliases_and_raw_models() {
         ..TestRoutes::default()
     };
     let router = router();
-    assert_eq!(router.role_for_model_tier("hint:reasoning", &routes), "reasoning");
-    assert_eq!(router.role_for_model_tier("old-memory", &routes), "summarization");
+    assert_eq!(
+        router.role_for_model_tier("hint:reasoning", &routes),
+        "reasoning"
+    );
+    assert_eq!(
+        router.role_for_model_tier("old-memory", &routes),
+        "summarization"
+    );
     assert_eq!(router.role_for_model_tier("mystery", &routes), "chat");
     assert_eq!(
-        router.resolve_model_for_hint("hint:chat", &TestRoutes {
-            primary: "managed".into(),
-            ..TestRoutes::default()
-        }),
+        router.resolve_model_for_hint(
+            "hint:chat",
+            &TestRoutes {
+                primary: "managed".into(),
+                ..TestRoutes::default()
+            }
+        ),
         None,
         "missing managed model is represented as unavailable"
     );
@@ -292,10 +302,16 @@ fn model_helpers_preserve_hints_legacy_aliases_and_raw_models() {
         router.resolve_model_for_hint("hint:reasoning", &routes),
         Some("catalog/default".into())
     );
-    assert_eq!(router.resolve_model_for_hint("hint:chat", &TestRoutes {
-        routes: HashMap::from([("chat".into(), "vendor:model@0.4".into())]),
-        ..TestRoutes::default()
-    }), Some("model".into()));
+    assert_eq!(
+        router.resolve_model_for_hint(
+            "hint:chat",
+            &TestRoutes {
+                routes: HashMap::from([("chat".into(), "vendor:model@0.4".into())]),
+                ..TestRoutes::default()
+            }
+        ),
+        Some("model".into())
+    );
     assert!(router.is_raw_passthrough_model("openrouter/vendor/model", &routes));
     assert!(!router.is_raw_passthrough_model("old-chat", &routes));
     assert!(!router.is_raw_passthrough_model("hint:unknown", &routes));

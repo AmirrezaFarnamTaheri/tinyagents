@@ -63,10 +63,6 @@ mod types;
 #[path = "mod_tests.rs"]
 mod test;
 
-#[cfg(test)]
-#[path = "behavior_tests.rs"]
-mod behavior_tests;
-
 pub use types::WorkloadRoute;
 pub use types::{
     CloudFallbackRole, DefaultModelRoute, FallbackDiagnostics, FallbackReason, RouteSource,
@@ -239,7 +235,11 @@ impl WorkloadRouter {
         }
 
         if default_model_eligible_for_role(role) {
-            if let Some(model) = source.default_model().map(str::trim).filter(|m| !m.is_empty()) {
+            if let Some(model) = source
+                .default_model()
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+            {
                 if !model.starts_with("hint:")
                     && source.legacy_tier_role(model).is_none()
                     && source.classify_default_model_route(model)
@@ -320,7 +320,9 @@ impl WorkloadRouter {
         }
         Some(FallbackDiagnostics {
             role: metadata.role.to_owned(),
-            requested_route: requested.filter(|route| !route.is_empty()).map(str::to_owned),
+            requested_route: requested
+                .filter(|route| !route.is_empty())
+                .map(str::to_owned),
             fallback_route: source.primary_cloud_route().trim().to_owned(),
             reason: FallbackReason::ImplicitCloudFallback,
             override_role: metadata.override_role.to_owned(),
@@ -348,11 +350,18 @@ fn canonical_hint_role(hint: &str) -> Option<&'static str> {
     let name = hint.strip_prefix("hint:")?;
     tinyinference_llm::model::workload::WORKLOAD_ROUTE_TIERS
         .iter()
-        .find_map(|route| route.strip_prefix("hint:").filter(|route_name| *route_name == name))
+        .find_map(|route| {
+            route
+                .strip_prefix("hint:")
+                .filter(|route_name| *route_name == name)
+        })
 }
 
 fn default_model_eligible_for_role(role: &str) -> bool {
-    matches!(role.trim(), "chat" | "reasoning" | "agentic" | "coding" | "burst")
+    matches!(
+        role.trim(),
+        "chat" | "reasoning" | "agentic" | "coding" | "burst"
+    )
 }
 
 fn cloud_fallback_role(role: &str) -> Option<CloudFallbackRole> {
@@ -365,7 +374,10 @@ fn cloud_fallback_role(role: &str) -> Option<CloudFallbackRole> {
         "summarization" => ("summarization", "memory"),
         _ => return None,
     };
-    Some(CloudFallbackRole { role, override_role })
+    Some(CloudFallbackRole {
+        role,
+        override_role,
+    })
 }
 
 /// Deprecated alias for [`WorkloadRouter`]. `ModelRouter` routes workload
