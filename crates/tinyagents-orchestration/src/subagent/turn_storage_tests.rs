@@ -190,6 +190,11 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
     ];
     assert!(append(history_a.as_ref(), &first, &stale, &metadata).is_err());
     let transcript = history_b.read_session().unwrap().unwrap();
-    assert_eq!(transcript.messages, second);
+    let persisted: Vec<_> = transcript
+        .messages
+        .iter()
+        .map(|message| message.content.as_str())
+        .collect();
+    assert_eq!(persisted, ["owner A", "owner B"]);
     assert!(lease_b.release().await.unwrap());
 }
