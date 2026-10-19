@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
+use tinytools::{Tool, ToolCallOptions, ToolContent, ToolResult, ToolRunContext};
 
 struct Inner;
 #[async_trait]
@@ -99,4 +99,10 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
         assert_eq!(data["artifacts"][0]["artifact_id"],identity);
         assert_eq!(data["artifacts"][0]["path"],format!("/files/{identity}.png"));
     }
+}
+
+#[test]
+fn configured_media_kinds_keep_their_exact_heartbeat_labels() {
+    assert_eq!(progress_label(&MediaArtifactKind::Image),"Generating image");
+    assert_eq!(progress_label(&MediaArtifactKind::Video),"Generating video");
 }

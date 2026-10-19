@@ -21,6 +21,10 @@ pub type MediaProgressFn = Arc<dyn Fn(&MediaJobProgress) + Send + Sync>;
 type PerCall<T> =
     Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>;
 
+fn progress_label(kind: &MediaArtifactKind) -> &'static str {
+    match kind { MediaArtifactKind::Image => "Generating image", MediaArtifactKind::Video => "Generating video" }
+}
+
 pub struct MediaArtifactTool<T: Tool> {
     inner: T,
     kind: MediaArtifactKind,
@@ -66,10 +70,7 @@ impl<T: Tool> MediaArtifactTool<T> {
         let Some(context) = context else {
             return run.await;
         };
-        let label = match self.kind {
-            MediaArtifactKind::Image => "Generating image",
-            MediaArtifactKind::Video => "Generating video",
-        };
+        let label = progress_label(&self.kind);
         let start = tokio::time::Instant::now();
         let mut run = Box::pin(run);
         let mut ticker = tokio::time::interval_at(
