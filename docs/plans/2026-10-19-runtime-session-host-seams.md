@@ -976,7 +976,7 @@ fn message_repair_removes_the_same_leading_tool_head() {
 
 `Message::tool` takes the call id and result content in that order.
 
-After the runtime red test fails, add the helper implementation to `adoption.rs`, call it on raw rows before codec decoding and on decoded `Message` history before dispatch, and keep `persisted` raw rows unchanged. Add a second test with a later orphan and assert it remains in the returned replay view, plus a no-orphan test asserting `matches!(..., Cow::Borrowed(_))`. Run `cargo test -p tinyagents-runtime orphaned_tool_head` for the red/green behavioral regression, then `cargo test -p tinyagents-session adoption_tests`, and `cargo test -p tinyagents-runtime`.
+After the runtime red test fails, add the helper implementation to `adoption.rs`, call it on raw rows before codec decoding and on decoded `Message` history before dispatch, and keep `persisted` raw rows unchanged. Add a second test with a later orphan and assert it remains in the returned replay view, plus a no-orphan test asserting `matches!(..., Cow::Borrowed(_))`. Run `run_tinyagents_test -p tinyagents-runtime orphaned_tool_head` for the red/green behavioral regression, then `run_tinyagents_test -p tinyagents-session adoption_tests`, and `run_tinyagents_test -p tinyagents-runtime`.
 
 ### 2. Adopt legacy transcripts into canonical identity without changing old files
 
@@ -994,7 +994,7 @@ reads the head with `head_generation`, and asserts the imported messages and
 canonical metadata match while the legacy fixture remains readable and
 unchanged. This is a compatibility characterization for adoption; the
 behavioral red test for the missing host identity binding is in step 3. Run
-`cargo test -p tinyagents-session legacy_session_adoption`; then ensure the
+`run_tinyagents_test -p tinyagents-session legacy_session_adoption`; then ensure the
 runtime calls adoption only through the already existing `ResumeMode::Session`
 path. Do not add a constructor that claims to map arbitrary old raw filenames
 to `SessionRef`.
@@ -1326,8 +1326,8 @@ async fn same_admission_can_resume_the_current_generation_twice() {
 ```
 
 Run the direct test filter and the runtime suite.
-Run `cargo test -p tinyagents-runtime direct_resume_resolves_and_uses_the_admitted_lease`
-and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
+Run `run_tinyagents_test -p tinyagents-runtime direct_resume_resolves_and_uses-the-admitted-lease`
+and `run_tinyagents_test -p tinyagents-runtime identity`, then the runtime crate suite.
 
 ### 4. Add explicit pinned store leases without changing live rebind
 
@@ -1335,7 +1335,7 @@ and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
 `port/drivers/rebound_tests.rs`, `port/workspace_tests.rs`, and
 `testkit/conformance.rs`.
 
-In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `actor_bound_driver_provider_can_open_a_pinned_lease`: call `bind_actor(admitted_backend)`, then open a lease from the returned provider and assert its tenant-scoped stores access the admitted backend. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `DriverSessionStores::lease_for_agent` opens immutable, direct handles, and `RebindableSessionStores::lease_for_agent` delegates to `self.current()` so a live forwarding handle never escapes. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
+In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `actor_bound_driver_provider_can_open_a_pinned_lease`: call `bind_actor(admitted_backend)`, then open a lease from the returned provider and assert its tenant-scoped stores access the admitted backend. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `DriverSessionStores::lease_for_agent` opens immutable, direct handles, and `RebindableSessionStores::lease_for_agent` delegates to `self.current()` so a live forwarding handle never escapes. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `run_tinyagents_test -p tinyagents-session port::drivers::rebound`, then the crate suite.
 
 Use the existing `rebound_tests.rs` fixture imports and these exact bodies:
 
@@ -1475,8 +1475,8 @@ invoke each sink in registration order from the existing owned
 `terminal_guard.finalize_commit(receipt, observation, sinks)` task. Keep `SessionHooks::after_commit`
 in that task and in its current position. The `TurnSummary` adapter consumes
 outcomes and must not persist the raw argument/result. Verify with
-`cargo test -p tinyagents-runtime post_commit` and then
-`cargo test -p tinyagents-runtime`.
+`run_tinyagents_test -p tinyagents-runtime post_commit` and then
+`run_tinyagents_test -p tinyagents-runtime`.
 
 In `a_split_turn_is_driven_by_the_host_and_settled_by_its_tail`, add this
 planner context middleware after its tool builder setup:
@@ -1934,7 +1934,7 @@ preservation, extension preservation through `retaining` and `with_retained`,
 and exact snapshots never retaining recorded tools. Do not add object-envelope
 decoding or extension serialization. Run each new filter and verify red before
 code, then run
-`cargo test -p tinyagents-runtime -p tinyagents-harness`.
+`run_tinyagents_test -p tinyagents-runtime -p tinyagents-harness`.
 
 The typed-carrier regression test is concrete and host-neutral:
 
