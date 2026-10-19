@@ -361,7 +361,10 @@ pub enum TinyAgentsError {
 impl TinyAgentsError {
     /// Whether this is a terminal configured or provider budget limit.
     pub fn is_terminal_limit(&self) -> bool {
-        matches!(self, Self::LimitExceeded(_) | Self::PhysicalDispatchAdmission(_))
+        matches!(
+            self,
+            Self::LimitExceeded(_) | Self::PhysicalDispatchAdmission(_)
+        )
     }
 }
 

@@ -159,9 +159,9 @@ fn classify_hosted_error(error: &TinyAgentsError) -> HostedErrorKind {
         TinyAgentsError::StreamIdleTimeout(_) => HostedErrorKind::StreamIdleTimeout,
         TinyAgentsError::RateLimited(_) => HostedErrorKind::RateLimited,
         TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_) => HostedErrorKind::Timeout,
-        TinyAgentsError::LimitExceeded(_) | TinyAgentsError::SubAgentDepth(_) => {
-            HostedErrorKind::LimitExceeded
-        }
+        TinyAgentsError::LimitExceeded(_)
+        | TinyAgentsError::SubAgentDepth(_)
+        | TinyAgentsError::PhysicalDispatchAdmission(_) => HostedErrorKind::LimitExceeded,
         TinyAgentsError::Validation(_) | TinyAgentsError::Steering(_) => HostedErrorKind::Policy,
         TinyAgentsError::Provider(_) | TinyAgentsError::Model(_) => HostedErrorKind::Provider,
         _ => HostedErrorKind::Internal,

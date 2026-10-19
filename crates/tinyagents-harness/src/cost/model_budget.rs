@@ -290,12 +290,14 @@ impl ChatModel<()> for ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelResponse> {
-        self.invoke_controlled(state, request).await.map_err(|error| {
-            if let ControlledDispatchError::Admission(refusal) = error {
-                super::dispatch_admission::record_invocation_refusal(*refusal);
-            }
-            tinyinference_llm::Error::from(error)
-        })
+        self.invoke_controlled(state, request)
+            .await
+            .map_err(|error| {
+                if let ControlledDispatchError::Admission(refusal) = error {
+                    super::dispatch_admission::record_invocation_refusal(*refusal);
+                }
+                tinyinference_llm::Error::from(error)
+            })
     }
 
     async fn stream(
@@ -303,12 +305,14 @@ impl ChatModel<()> for ControlledChatModel {
         state: &(),
         request: ModelRequest,
     ) -> tinyinference_llm::Result<ModelStream> {
-        self.stream_controlled(state, request).await.map_err(|error| {
-            if let ControlledDispatchError::Admission(refusal) = error {
-                super::dispatch_admission::record_invocation_refusal(*refusal);
-            }
-            tinyinference_llm::Error::from(error)
-        })
+        self.stream_controlled(state, request)
+            .await
+            .map_err(|error| {
+                if let ControlledDispatchError::Admission(refusal) = error {
+                    super::dispatch_admission::record_invocation_refusal(*refusal);
+                }
+                tinyinference_llm::Error::from(error)
+            })
     }
 
     async fn fetch_deferred(

@@ -8,12 +8,12 @@ use super::{
     ControlledChatModel, ControlledDispatchError, DispatchModelOptions, DispatchRefusal,
     DispatchRefusalReason, ModelBudget, PhysicalDispatchAdmission, PhysicalDispatchPermit,
 };
+use crate::context::RunConfig;
+use crate::error::TinyAgentsError;
 use crate::observability::{
     PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome,
     PhysicalDispatchTerminal,
 };
-use crate::context::RunConfig;
-use crate::error::TinyAgentsError;
 use crate::runtime::AgentHarness;
 use async_trait::async_trait;
 use futures::{StreamExt, poll};

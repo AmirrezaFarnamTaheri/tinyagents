@@ -3,8 +3,8 @@
 //! This API stays independent of repository, request, and provider details so
 //! a host can share one policy across model wrappers and child agents.
 
-use std::sync::Arc;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use super::ModelBudget;
