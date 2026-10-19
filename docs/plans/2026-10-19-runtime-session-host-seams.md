@@ -1301,10 +1301,10 @@ fn legacy_root_adoption_does_not_replace_a_child_session() {
     let child = SessionRef::child_of(&root, "delegate:worker");
 
     assert!(locator.adopt_legacy(&child, THREAD, &meta(THREAD)).unwrap().is_none());
-    assert!(locator.read_session_transcript(&child).unwrap().read_session().unwrap().is_none());
+    assert!(locator.read_session_transcript(&child).is_none());
     assert!(locator.adopt_legacy(&root, THREAD, &meta(THREAD)).unwrap().is_some());
     assert_eq!(contents(&locator, &root), vec!["root history"]);
-    assert!(locator.read_session_transcript(&child).unwrap().read_session().unwrap().is_none());
+    assert!(locator.read_session_transcript(&child).is_none());
 }
 ```
 
@@ -1433,8 +1433,8 @@ async fn child_identity_resolution_keeps_parent_lineage_and_does_not_adopt_as_ro
     let transcripts = &stores.stores().transcripts;
     assert_eq!(session_stem(&child), session_stem(&child.first_generation()));
     assert!(session_stem(&child).starts_with(&format!("{}__", session_stem(&parent))));
-    assert!(transcripts.read_session_transcript(&child).unwrap().read_session().unwrap().is_some());
-    assert!(transcripts.read_session_transcript(&parent).unwrap().read_session().unwrap().is_none());
+    assert!(transcripts.read_session_transcript(&child).is_some());
+    assert!(transcripts.read_session_transcript(&parent).is_none());
 }
 
 #[tokio::test]
@@ -1533,7 +1533,7 @@ async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
     ).unwrap();
     let transcripts = &stores.stores().transcripts;
     let admitted_root = SessionRef::scoped("thread-first-admission", "agent-resolved");
-    assert!(transcripts.read_session_transcript(&admitted_root).unwrap().is_some());
+    assert!(transcripts.read_session_transcript(&admitted_root).is_some());
     assert!(transcripts.read_session_transcript(&fallback_session).is_none());
     assert_eq!(*fallback_history.opens.lock().unwrap(), 0);
     assert!(fallback.latest_agents.lock().unwrap().is_empty());
