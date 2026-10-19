@@ -7,6 +7,8 @@ use crate::{
     NoopSessionHooks, PrefixSnapshot, RuntimeError, Session, SessionDriver, SessionHooks,
     TranscriptCodec,
 };
+use crate::identity::IdentityConfig;
+use crate::SessionIdentityResolver;
 
 /// Configures a directly-owned, reusable [`Session`].
 pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
@@ -14,6 +16,7 @@ pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
     post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
+    identity: Option<IdentityConfig<C>>,
     prefix: PrefixSnapshot,
     tools: ToolSnapshot,
     retain_recorded_tools: bool,
@@ -36,6 +39,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             codec: None,
             hooks: Arc::new(NoopSessionHooks),
             post_commit_sinks: Vec::new(),
+            identity: None,
             prefix: PrefixSnapshot::default(),
             tools: ToolSnapshot::default(),
             retain_recorded_tools: false,
@@ -58,6 +62,42 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     /// Adds a host observer for successful durable commits.
     pub fn post_commit_sink(mut self, sink: Arc<dyn crate::hooks::PostCommitSink<C>>) -> Self {
         self.post_commit_sinks.push(sink);
+        self
+    }
+
+    /// Resolves a root session's logical key against host-authorized storage.
+    pub fn identity_resolver(
+        mut self,
+        session_key: impl Into<String>,
+        meta: TranscriptMeta,
+        resolver: Arc<dyn SessionIdentityResolver<C>>,
+    ) -> Self {
+        self.identity = Some(IdentityConfig {
+            resolver,
+            session_key: session_key.into(),
+            parent: None,
+            child_key: None,
+            meta,
+        });
+        self
+    }
+
+    /// Resolves a child session while preserving its logical parent lineage.
+    pub fn child_identity_resolver(
+        mut self,
+        parent: SessionRef,
+        child_key: impl Into<String>,
+        meta: TranscriptMeta,
+        resolver: Arc<dyn SessionIdentityResolver<C>>,
+    ) -> Self {
+        let child_key = child_key.into();
+        self.identity = Some(IdentityConfig {
+            resolver,
+            session_key: child_key.clone(),
+            parent: Some(parent),
+            child_key: Some(child_key),
+            meta,
+        });
         self
     }
 
@@ -158,7 +198,8 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             session: config.session,
             meta: config.meta,
         });
-        if target.is_some() && self.codec.is_none() {
+        let identity = self.identity;
+        if (target.is_some() || identity.is_some()) && self.codec.is_none() {
             return Err(RuntimeError::MissingDependency("TranscriptCodec"));
         }
         let mut session = Session::<C>::new(
@@ -169,6 +210,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             self.prefix,
             self.tools,
             target,
+            identity,
         );
         session.set_retain_recorded_tools(self.retain_recorded_tools);
         Ok(session)

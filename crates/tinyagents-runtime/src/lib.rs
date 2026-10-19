@@ -11,6 +11,7 @@ pub use tinyagents_hooks::command as command_hooks;
 mod driver;
 mod error;
 mod hooks;
+mod identity;
 mod managed_tools;
 mod permanent_tool;
 mod prefix;
@@ -25,6 +26,8 @@ pub use capability_projection::{project_descriptors, register_admitted_projected
 pub use driver::{DriverFailure, DriverOutcome, DriverRequest, HarnessDriver, SessionDriver};
 pub use error::RuntimeError;
 pub use hooks::{FnSessionHooks, NoopSessionHooks, SessionHookFuture, SessionHooks};
+pub use hooks::PostCommitSink;
+pub use identity::SessionIdentityResolver;
 pub use managed_tools::{ManagedToolNames, refresh_prefix, reject_synthesized_collisions};
 pub use permanent_tool::PermanentTool;
 pub use prefix::PrefixSnapshot;
@@ -36,6 +39,7 @@ pub use tool_registration::{
 };
 pub use types::{
     CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
+    ResolvedSessionStores, SessionIdentity, SessionIdentityRequest,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
