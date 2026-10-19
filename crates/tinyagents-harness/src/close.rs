@@ -328,6 +328,21 @@ impl CloseUsage {
             kind != CloseRequestKind::Verification,
         );
     }
+
+    /// Record a close request and let the host attach pricing from its billing
+    /// and catalog adapters without importing host types into the harness.
+    pub fn record_close_call_with_cost(
+        &mut self,
+        kind: CloseRequestKind,
+        response: Option<&ModelResponse>,
+        cost: impl FnOnce(Option<&ModelResponse>) -> Option<(String, crate::cost::CallCost)>,
+    ) {
+        self.record_close_call(kind, response);
+        if let Some((pricing_model, call_cost)) = cost(response) {
+            self.pricing_model = pricing_model;
+            self.cost.add(call_cost);
+        }
+    }
 }
 
 /// Invoke a close builder only when the supplied stop reason is classified.
