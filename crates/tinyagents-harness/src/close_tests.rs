@@ -589,9 +589,7 @@ async fn close_source_model_completes_stream_trace_once() {
     let mut response = ModelResponse::assistant("answer");
     response.usage = Some(Usage::new(2, 1));
     let inner = Arc::new(StreamScriptedModel {
-        responses: Mutex::new(VecDeque::from([vec![ModelStreamItem::Completed(
-            response,
-        )]])),
+        responses: Mutex::new(VecDeque::from([vec![ModelStreamItem::Completed(response)]])),
         requests: Mutex::new(Vec::new()),
     });
     let source = StaticCloseSource(inner);
