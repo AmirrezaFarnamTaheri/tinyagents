@@ -14,6 +14,7 @@ use super::persistence::*;
 use super::schema::{SCHEMA_VERSION, THREADS as COLLECTION, append_spec, stream_name, thread_spec};
 use super::*;
 use async_trait::async_trait;
+use std::future::Future;
 use std::sync::Arc;
 use tinystoragedrivers_core::primitives::Repo;
 use tinystoragedrivers_core::{
@@ -188,10 +189,45 @@ impl DriverConversationStore {
     /// [`ConversationPersistence::purge_threads`].
     pub async fn purge_threads_with<F>(
         &self,
-        after_delete: F,
+        mut after_delete: F,
     ) -> ConversationResult<ConversationPurgeStats>
     where
         F: FnMut(&str) + Send,
+    {
+        self.admit().await?;
+        self.purge_native_with(move |thread_id| {
+            after_delete(&thread_id);
+            std::future::ready(())
+        })
+        .await
+    }
+
+    /// Purge threads and await a callback after each successfully deleted thread document.
+    ///
+    /// The owned logical thread ID is delivered for live and tombstoned threads.
+    /// The callback is awaited immediately after the document store confirms the
+    /// deletion and before another row is processed. A `false` delete result
+    /// does not invoke the callback. This variant is suitable when recording the
+    /// deletion obligation requires asynchronous work, including work that must
+    /// yield to the storage bridge's executor.
+    ///
+    /// The callback is infallible by API shape. If a later query, decode, or
+    /// delete fails, completed callbacks remain observable and the purge returns
+    /// the same error as [`ConversationPersistence::purge_threads`]. The purge
+    /// is not crash-atomic: a process failure between document deletion and
+    /// callback completion can leave an obligation unreported. Cancellation can
+    /// likewise stop the purge after a deletion and before callback completion.
+    ///
+    /// The returned counts retain [`ConversationPersistence::purge_threads`]
+    /// semantics: tombstones are removed but are not included in the live thread
+    /// or message totals.
+    pub async fn purge_threads_with_async<F, Fut>(
+        &self,
+        after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
     {
         self.admit().await?;
         self.purge_native_with(after_delete).await
