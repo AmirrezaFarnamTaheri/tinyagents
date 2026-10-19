@@ -864,7 +864,7 @@ impl SubagentPlanner<String> for ArtifactPlanner {
             ToolSnapshot::new(vec![]).unwrap(),
             parts.run_context,
         )
-        .with_notify_mode(NotifyMode::Always)
+        .with_notify_mode(NotifyMode::Followup)
         .with_completion_parent("parent-a")
         .with_result_policy(
             ResultPolicy::new()
