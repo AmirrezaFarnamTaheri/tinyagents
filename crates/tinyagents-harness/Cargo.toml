@@ -58,6 +58,7 @@ workspace = true
 
 [features]
 default = ["claude-code", "langfuse"]
+# Optional schema support for hosts that expose the harness context config.
 json-schema = ["dep:schemars"]
 sqlite = []
 # `store::DriverStore` / `store::DriverAppendStore` over tinystoragedrivers
