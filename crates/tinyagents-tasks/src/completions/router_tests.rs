@@ -456,10 +456,13 @@ impl CompletionStore for BlockingFirstReadStore {
     fn resolve_claim(
         &self,
         task_id: &str,
+        parent_key: &str,
+        gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.resolve_claim(task_id, token, resolution)
+        self.inner
+            .resolve_claim(task_id, parent_key, gate, token, resolution)
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -1098,6 +1101,8 @@ impl CompletionStore for FailingSecondPut {
                 if let Some(receipt) = record.receipt() {
                     self.inner.resolve_claim(
                         &receipt.task_id,
+                        &receipt.parent_key,
+                        gate,
                         &receipt.token,
                         ClaimResolution::Release,
                     )?;
