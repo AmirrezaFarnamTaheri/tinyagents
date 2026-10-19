@@ -1782,13 +1782,11 @@ fn typed_extensions_survive_snapshot_copies_without_changing_json() {
         assert_eq!(copy.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
         assert_eq!(copy.to_json(), original_json);
     }
+    let replaced = clone.with_extension(HostAlpha(8));
+    assert_eq!(replaced.extension::<HostAlpha>(), Some(&HostAlpha(8)));
+    assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
 }
 ```
-
-Add `let replaced = clone.with_extension(HostAlpha(8));` and assert lookup
-returns `HostAlpha(8)` in `replaced` while `snapshot` remains `HostAlpha(7)`.
-This pins replacement semantics while retaining immutable sharing for clones
-not changed by the builder.
 
 ### 7. Move context configuration into harness
 
