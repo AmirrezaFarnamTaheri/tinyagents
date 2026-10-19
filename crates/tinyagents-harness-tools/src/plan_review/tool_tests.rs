@@ -9,6 +9,17 @@ struct Port {
     resolution: PlanReviewResolution,
     request: Mutex<Option<PlanReviewRequest>>,
 }
+struct FailingPort;
+#[async_trait]
+impl PlanReviewPort for FailingPort {
+    async fn request_review(
+        &self,
+        _: PlanReviewRequest,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Result<PlanReviewResolution, String> {
+        Err("review surface unavailable".into())
+    }
+}
 #[async_trait]
 impl PlanReviewPort for Port {
     async fn request_review(
@@ -29,6 +40,16 @@ async fn missing_port_fails_closed() {
         .unwrap();
     assert!(result.is_error);
     assert!(result.text().contains("no review port"));
+}
+
+#[tokio::test]
+async fn failing_port_returns_error_without_approval() {
+    let result = RequestPlanReviewTool::new(Some(Arc::new(FailingPort)))
+        .execute(json!({"summary":"plan"}))
+        .await
+        .unwrap();
+    assert!(result.is_error);
+    assert_eq!(result.text(), "plan review failed: review surface unavailable");
 }
 
 #[tokio::test]
