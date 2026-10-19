@@ -70,7 +70,7 @@ async fn timeout_rejects_and_reports_expired() {
 
 #[tokio::test]
 async fn approve_resolves_the_parked_turn() {
-    let (store, events) = store(Duration::from_secs(60));
+    let (store, _events) = store(Duration::from_secs(60));
     let task = request(store.clone(), 1, "approve");
     events.requested.notified().await;
     assert!(store.decide_by_thread(&1, "approve", PlanReviewResolution::Approve));
@@ -98,7 +98,7 @@ fn unknown_request_cannot_be_decided() {
 
 #[tokio::test]
 async fn parked_snapshot_replays_routing_call_id_and_expiry() {
-    let (store, _) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     let parked_store = store.clone();
     let task = tokio::spawn(async move {
         parked_store

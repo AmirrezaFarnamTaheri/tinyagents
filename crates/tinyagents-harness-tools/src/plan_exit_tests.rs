@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "plan-review")]
+use crate::plan_review::PlanReviewStore;
 use std::sync::{Arc, Mutex};
 use tinyagents_harness::{
     context::{RunConfig, RunContext},
