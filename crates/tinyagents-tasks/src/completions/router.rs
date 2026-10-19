@@ -596,6 +596,15 @@ impl CompletionRouter {
             }
             Some(_) => Ok(None),
             None => {
+                // Records written before lifecycle markers existed carry
+                // generation zero. First sight admits those durable records
+                // into the new open generation under the same parent gate.
+                for mut legacy in router.store.try_list(Some(parent_key))? {
+                    if legacy.parent_epoch == 0 {
+                        legacy.parent_epoch = 1;
+                        router.store.put_fenced(&legacy, parent_key, gate)?;
+                    }
+                }
                 Self::set_parent_marker(router, parent_key, CompletionState::Delivered, gate)?;
                 let marker = router.store.try_get(&marker_id)?.ok_or_else(|| {
                     TinyAgentsError::Graph(

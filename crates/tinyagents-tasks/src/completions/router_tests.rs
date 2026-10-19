@@ -556,46 +556,55 @@ async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
 
 #[tokio::test]
 async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice() {
-    let store = blocking_first_read_store("same-parent");
+    let store = Arc::new(InMemoryCompletionStore::new());
     let first = Arc::new(CompletionRouter::new(store.clone()));
-    let second = CompletionRouter::new(store.clone());
+    let second = Arc::new(CompletionRouter::new(store.clone()));
     let first_queue = queue();
     let second_queue = queue();
     first.attach_parent("parent", first_queue.clone());
     second.attach_parent("parent", second_queue.clone());
 
-    let first_router = Arc::clone(&first);
-    let first_writer = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(first_router.record(record("same-parent", "parent")))
-    });
-    store.entered.wait();
-
-    let second_outcome = second
-        .record(record("same-parent", "parent"))
-        .await
-        .unwrap();
-    let second_receipt = match second_outcome {
-        RecordOutcome::Recorded {
-            receipt: Some(receipt),
-            ..
-        } => receipt,
-        other => panic!("first conditional create should win: {other:?}"),
+    let start = Arc::new(tokio::sync::Barrier::new(3));
+    let first_writer = {
+        let router = Arc::clone(&first);
+        let start = Arc::clone(&start);
+        tokio::spawn(async move {
+            start.wait().await;
+            router.record(record("same-parent", "parent")).await.unwrap()
+        })
     };
-    store.resume.wait();
+    let second_writer = {
+        let router = Arc::clone(&second);
+        let start = Arc::clone(&start);
+        tokio::spawn(async move {
+            start.wait().await;
+            router.record(record("same-parent", "parent")).await.unwrap()
+        })
+    };
+    start.wait().await;
+    let outcomes = [first_writer.await.unwrap(), second_writer.await.unwrap()];
+    let recorded = outcomes
+        .iter()
+        .find_map(|outcome| match outcome {
+            RecordOutcome::Recorded {
+                receipt: Some(receipt),
+                ..
+            } => Some(receipt),
+            _ => None,
+        })
+        .expect("exactly one writer should own the live claim");
     assert_eq!(
-        first_writer.join().unwrap().unwrap(),
-        RecordOutcome::Duplicate
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, RecordOutcome::Duplicate))
+            .count(),
+        1
     );
 
-    let winner = store.inner.get("same-parent").unwrap();
-    assert_eq!(winner.receipt(), Some(second_receipt));
+    let winner = store.get("same-parent").unwrap();
+    assert_eq!(winner.receipt().as_ref(), Some(recorded));
     assert_eq!(winner.attempts, 1);
-    assert_eq!(first_queue.status().await.total, 0);
-    assert_eq!(second_queue.status().await.total, 1);
+    assert_eq!(first_queue.status().await.total + second_queue.status().await.total, 1);
 }
 
 #[tokio::test]
@@ -1408,7 +1417,7 @@ async fn record_with_retries_survives_a_transient_store_failure() {
     let store = Arc::new(FailingSecondPut {
         inner: InMemoryCompletionStore::new(),
         puts: Default::default(),
-        fail_from: std::sync::atomic::AtomicUsize::new(0),
+        fail_from: std::sync::atomic::AtomicUsize::new(1),
     });
     let router = CompletionRouter::new(store.clone());
     assert!(

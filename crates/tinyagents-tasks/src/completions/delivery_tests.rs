@@ -13,7 +13,7 @@ fn target(router: &CompletionRouter) -> DeliveryTarget<'_> {
     DeliveryTarget {
         router,
         parent_key: "parent",
-        tenant_key: "test-tenant",
+        tenant_key: "",
         thread_key: "thread",
     }
 }
