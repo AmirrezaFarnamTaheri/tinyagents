@@ -904,20 +904,22 @@ fn resolve_and_bind(
     {
         return Err(RuntimeError::InvalidSessionState("TurnOptions.session conflicts with resolved identity".into()));
     }
-    if let Some(previous) = self.established_identity.as_ref()
-        && !same_admission(previous, &identity)
-    {
-        return Err(RuntimeError::InvalidSessionState(
-            "session identity or pinned store changed".into(),
-        ));
-    }
-    // Reuse the currently bound generation after validating its stable first
-    // generation and admitted lease. Rebuilding `first_session` on every
-    // operation would reset a compacted root or child to generation zero.
-    let session = self.target.as_ref()
-        .and_then(|target| target.session.clone())
-        .filter(|current| current.first_generation() == first_session.first_generation())
-        .unwrap_or(first_session);
+    // Only a previously admitted identity authorizes carrying a nonzero
+    // generation forward. A builder target is an unselected fallback, even
+    // when it names the same logical session at generation 9.
+    let session = if let Some(previous) = self.established_identity.as_ref() {
+        if !same_admission(previous, &identity) {
+            return Err(RuntimeError::InvalidSessionState(
+                "session identity or pinned store changed".into(),
+            ));
+        }
+        self.target.as_ref()
+            .and_then(|target| target.session.clone())
+            .filter(|current| current.first_generation() == first_session.first_generation())
+            .unwrap_or(first_session)
+    } else {
+        first_session
+    };
     let mut meta = config.meta.clone();
     meta.agent_id = Some(identity.agent_id.clone());
     let target = TranscriptTarget::for_session(
@@ -1449,6 +1451,10 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
             Message::user("two"), Message::assistant("second"),
         ])),
         Ok(outcome(vec![Message::user("three"), Message::assistant("third")])),
+        Ok(outcome(vec![
+            Message::user("three"), Message::assistant("third"),
+            Message::user("four"), Message::assistant("fourth"),
+        ])),
     ]));
     let mut session = SessionBuilder::new(driver)
         .codec(Arc::new(Codec::default()))
@@ -1462,18 +1468,31 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
         provider.as_ref(), "agent-resolved",
     ).unwrap();
     let locator = &stores.stores().transcripts;
-    let sealed = locator.read_session_transcript(&session_ref).unwrap();
-    let sealed_bytes = fingerprint(sealed.as_ref());
-
     session.turn(
         Message::user("three"),
         session_turn_options(ResumeMode::Never, "thread-identity-compact"),
     ).await.unwrap();
 
+    // Capture the generation zero bytes after the compaction has committed.
+    let sealed = locator.read_session_transcript(&session_ref).unwrap();
+    let sealed_bytes = fingerprint(sealed.as_ref());
     assert_eq!(locator.head_generation(&session_ref).generation, 1);
+
+    // This third turn re-admits the identity after compaction. The old bug
+    // rebuilt generation zero here and attempted to write through the sealed
+    // handle instead of appending to the known generation-one head.
+    session.turn(
+        Message::user("four"),
+        session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+    ).await.unwrap();
+
     assert_eq!(fingerprint(sealed.as_ref()), sealed_bytes,
-        "a later ResumeMode::Never admission must not reset or rewrite generation zero");
-    assert!(locator.read_session_transcript(&session_ref.next_generation()).unwrap().is_some());
+        "re-admission must not reset or rewrite the sealed generation");
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    let active = locator.read_session_transcript(&session_ref.next_generation())
+        .unwrap().unwrap().read_session().unwrap().unwrap();
+    assert_eq!(active.messages.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
+        ["three", "third", "four", "fourth"]);
 }
 ```
 
