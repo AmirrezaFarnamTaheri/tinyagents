@@ -183,8 +183,7 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
         let inner = self
             .per_call
             .as_ref()
-            .map(|factory| factory(progress, context))
-            .as_ref();
+            .map(|factory| factory(progress, context));
         let result = match inner {
             Some(tool) => {
                 tool.execute_with_context(args.clone(), options, context)
