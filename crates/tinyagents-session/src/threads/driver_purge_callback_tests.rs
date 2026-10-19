@@ -375,6 +375,57 @@ async fn purge_callback_enumerates_paged_and_new_threads() {
 }
 
 #[tokio::test]
+async fn async_purge_rechecks_after_last_page_delete_and_callback_insertions() {
+    let probe_inserted_id = "channel/probe-inserted-on-final-delete";
+    let callback_inserted_id = "channel/async-callback-inserted-on-final-delete";
+    let (store, docs) = probed_store(None, Some(probe_inserted_id), None).await;
+    store
+        .ensure_thread(request("channel/only-original"))
+        .await
+        .unwrap();
+
+    let callback_store = store.clone();
+    let callbacks = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&callbacks);
+    let stats = store
+        .purge_threads_with_async(move |thread_id| {
+            let callback_store = callback_store.clone();
+            let observed = Arc::clone(&observed);
+            async move {
+                let was_original = thread_id == "channel/only-original";
+                observed.lock().unwrap().push(thread_id);
+                if was_original {
+                    callback_store
+                        .ensure_thread(request(callback_inserted_id))
+                        .await
+                        .unwrap();
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+    let callbacks = callbacks
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        callbacks,
+        BTreeSet::from([
+            "channel/only-original".to_owned(),
+            probe_inserted_id.to_owned(),
+            callback_inserted_id.to_owned(),
+        ]),
+        "the final-page probe row and async callback row are both purged and reported"
+    );
+    assert_eq!((stats.thread_count, stats.message_count), (3, 0));
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 3);
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn purge_callback_skips_a_delete_reported_as_not_removed() {
     let thread_id = "logical/concurrent-delete";
     let (store, docs) = probed_store(None, None, Some(1)).await;

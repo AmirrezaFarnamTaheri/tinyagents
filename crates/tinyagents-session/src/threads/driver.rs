@@ -182,6 +182,11 @@ impl DriverConversationStore {
     /// while a document delete is in flight can likewise leave a deletion that
     /// the backend completed without a callback.
     ///
+    /// Purging repeatedly reads from the head until a fresh query returns no
+    /// rows, so rows inserted during deletion or callbacks are included when
+    /// observed before that empty query. This is not a transactional snapshot:
+    /// rows inserted after the final empty query are outside the purge.
+    ///
     /// The returned counts retain [`ConversationPersistence::purge_threads`]
     /// semantics: tombstones are removed but are not included in the live thread
     /// or message totals.
@@ -221,6 +226,11 @@ impl DriverConversationStore {
     /// while a document delete is in flight can leave a deletion that the
     /// backend completed without a callback; cancellation after deletion can
     /// also stop the purge before an async callback completes.
+    ///
+    /// Purging repeatedly reads from the head until a fresh query returns no
+    /// rows, so rows inserted during deletion or callbacks are included when
+    /// observed before that empty query. This is not a transactional snapshot:
+    /// rows inserted after the final empty query are outside the purge.
     ///
     /// The returned counts retain [`ConversationPersistence::purge_threads`]
     /// semantics: tombstones are removed but are not included in the live thread
