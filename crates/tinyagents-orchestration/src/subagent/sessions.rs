@@ -38,7 +38,7 @@ pub enum DurableSubagentStatus {
 impl DurableSubagentStatus {
     /// Whether a session may be selected for reuse.
     pub fn reusable(self) -> bool {
-        matches!(self, Self::Running | Self::Idle)
+        matches!(self, Self::Running | Self::Idle | Self::AwaitingUser)
     }
 }
 
