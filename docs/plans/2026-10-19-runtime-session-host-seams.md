@@ -1683,22 +1683,54 @@ Change the owned finalizer to accept the separate observation and sinks, not
 to reconstruct observations from `CommitReceipt`:
 
 ```rust
-tokio::spawn(async move {
-    let _ = hooks.after_commit(receipt.clone()).await;
-    for sink in sinks {
-        let _ = sink.after_commit(&observation).await;
-    }
-    let _ = hooks.on_terminal_outcome(outcome).await;
-    let _ = hooks.on_terminal(terminal).await;
-})
+fn finalize_commit(
+    &mut self,
+    receipt: CommitReceipt<C>,
+    observation: PostCommitObservation<C>,
+    sinks: Vec<Arc<dyn PostCommitSink<C>>>,
+) -> tokio::task::JoinHandle<()> {
+    let terminal = SessionTerminal::Completed(receipt.outcome.clone());
+    let outcome = self.driver_success_outcome.take()
+        .unwrap_or_else(|| terminal.outcome());
+    self.terminal = None;
+    self.committed = true;
+    let hooks = self.hooks.clone();
+    tokio::spawn(async move {
+        let _ = hooks.after_commit(receipt.clone()).await;
+        for sink in sinks {
+            let _ = sink.after_commit(&observation).await;
+        }
+        let _ = hooks.on_terminal_outcome(outcome).await;
+        let _ = hooks.on_terminal(terminal).await;
+    })
+}
 ```
 
 Keep the existing `after_commit` call at the same place in the task. Build
 `PostCommitObservation` from the committed receipt, the original request
 input, usage captured from the completed turn, `DriverOutcome.tool_outcomes`,
 and the resolved thread/agent identity before transferring ownership to the
-spawned task. On `DriverFailure`, use observations only if a durable partial
-commit is actually produced; pre-commit errors do not invoke sinks.
+spawned task. At the existing successful commit site, construct and pass the
+values in this order:
+
+```rust
+let observation = PostCommitObservation {
+    receipt: receipt.clone(),
+    input: request.input.clone(),
+    usage: turn_usage.clone(),
+    tool_outcomes: outcome.tool_outcomes.clone(),
+    thread_id: thread_id.clone(),
+    agent_id: self.identity.as_ref().map(|identity| identity.agent_id().to_owned()),
+};
+let finalization = terminal_guard.finalize_commit(
+    receipt, observation, self.post_commit_sinks.clone(),
+);
+let _ = finalization.await;
+```
+
+Perform no await between successful append and this call. On `DriverFailure`,
+use observations only if a durable partial commit is actually produced;
+pre-commit errors do not invoke sinks.
 
 ### 6. Move tool policy and declaration preservation
 
