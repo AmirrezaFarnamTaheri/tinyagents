@@ -81,6 +81,12 @@ impl Tool for InstallTool {
     fn external_effect(&self) -> bool {
         true
     }
+    fn external_effect_with_args(&self, args: &Value) -> bool {
+        self.gate.external_effect_with_args(args)
+    }
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        self.gate.prepare_authorization(args).await
+    }
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
         self.execute_with_context(args, ToolCallOptions::default(), None)
             .await
