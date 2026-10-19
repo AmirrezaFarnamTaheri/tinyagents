@@ -730,6 +730,10 @@ resolver-enabled session rejects absent identity, conflicting
 pub struct SessionIdentityRequest {
     pub thread_id: Option<String>,
     pub session_key: String,
+    /// Logical parent lineage for a delegated session; never authorization.
+    pub parent: Option<SessionRef>,
+    /// Child key paired with `parent`; never an actor or tenant selector.
+    pub child_key: Option<String>,
 }
 
 #[derive(Clone)]
@@ -767,6 +771,8 @@ resolver and identity seed in a private builder config so existing
 pub(crate) struct IdentityConfig<C: Send + Sync + 'static> {
     pub(crate) resolver: Arc<dyn SessionIdentityResolver<C>>,
     pub(crate) session_key: String,
+    pub(crate) parent: Option<SessionRef>,
+    pub(crate) child_key: Option<String>,
     pub(crate) meta: TranscriptMeta,
 }
 ```
