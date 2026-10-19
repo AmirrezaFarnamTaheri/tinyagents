@@ -299,11 +299,50 @@ async fn cross_router_cancellation_rejects_a_queued_completion_at_turn_consumpti
 
     assert!(
         queue
-            .take(QueueLane::Followup, QueueMode::All)
+            .take_admitted(QueueLane::Followup, QueueMode::All)
             .await
             .is_empty(),
         "a completion queued under the old generation must not reach the model turn"
     );
+}
+
+#[tokio::test]
+async fn same_parent_batch_shares_one_lifecycle_admission_permit() {
+    use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
+    use tinyinference_llm::message::Message;
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let store = DriverCompletionStore::new(
+        Arc::clone(&backend),
+        Scope::new("shared").unwrap(),
+    )
+    .unwrap();
+    let router = Arc::new(CompletionRouter::new(Arc::new(store)));
+    router.record(record("first", "parent")).await.unwrap();
+    router.record(record("second", "parent")).await.unwrap();
+    let records = router.pending_for("parent");
+    assert_eq!(records.len(), 2);
+
+    let queue = RunQueue::new();
+    for completion in records {
+        queue
+            .push_guarded(
+                QueueLane::Followup,
+                Message::user(completion.task_id.clone()),
+                Arc::new(crate::completions::CompletionAdmission::for_record(
+                    Arc::clone(&router),
+                    &completion,
+                )),
+            )
+            .await;
+    }
+
+    let admitted = queue
+        .take_admitted(QueueLane::Followup, QueueMode::All)
+        .await;
+    assert_eq!(admitted.len(), 2);
+    assert_eq!(admitted[0].value, Message::user("first"));
+    assert_eq!(admitted[1].value, Message::user("second"));
 }
 
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
