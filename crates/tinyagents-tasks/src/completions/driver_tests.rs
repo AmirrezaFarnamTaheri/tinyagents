@@ -138,6 +138,64 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
     );
 }
 
+#[test]
+fn conditional_driver_create_preserves_an_existing_claim() {
+    use crate::completions::{ClaimResolution, CompletionClaimMode};
+
+    let storage = MemoryStorage::new();
+    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let original = record("claim-owner", "parent");
+    assert!(store.insert_if_absent(&original).unwrap());
+    let claimed = store
+        .claim_task(
+            "claim-owner",
+            "parent",
+            CompletionClaimMode::Followup,
+            "owner-token",
+            SystemTime::now() + Duration::from_secs(30),
+        )
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        !store
+            .insert_if_absent(&record("claim-owner", "other-parent"))
+            .unwrap()
+    );
+    let persisted = store.get("claim-owner").unwrap();
+    assert_eq!(persisted.parent_key, claimed.parent_key);
+    assert_eq!(persisted.attempts, claimed.attempts);
+    assert_eq!(persisted.receipt(), claimed.receipt());
+    assert_eq!(persisted.result, claimed.result);
+    let receipt = claimed.receipt().unwrap();
+    assert_eq!(
+        store
+            .resolve_claim(&receipt.task_id, &receipt.token, ClaimResolution::Delivered)
+            .unwrap()
+            .unwrap()
+            .state,
+        CompletionState::Delivered
+    );
+}
+
+#[test]
+fn conditional_driver_create_does_not_replace_a_tombstone() {
+    let storage = MemoryStorage::new();
+    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let tombstone = CompletionRecord::tombstone_stub("deleted");
+    store.put(&tombstone).unwrap();
+
+    assert!(
+        !store
+            .insert_if_absent(&record("deleted", "parent"))
+            .unwrap()
+    );
+    let persisted = store.get("deleted").unwrap();
+    assert_eq!(persisted.task_id, tombstone.task_id);
+    assert_eq!(persisted.state, CompletionState::Tombstoned);
+    assert!(persisted.parent_key.is_empty());
+}
+
 #[tokio::test]
 async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     use crate::completions::{ClaimResolution, CompletionClaimMode};

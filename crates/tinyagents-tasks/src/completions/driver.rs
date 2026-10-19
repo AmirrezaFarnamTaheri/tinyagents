@@ -199,7 +199,9 @@ impl CompletionStore for DriverCompletionStore {
                 .await
             {
                 Ok(_) => Ok(true),
-                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => Ok(false),
+                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => {
+                    Ok(false)
+                }
                 Err(error) => Err(map_error(error)),
             }
         })

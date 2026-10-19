@@ -239,6 +239,22 @@ impl CompletionRouter {
         records
     }
 
+    fn classify_existing(
+        existing: &CompletionRecord,
+        incoming: &CompletionRecord,
+    ) -> RecordOutcome {
+        if existing.state == CompletionState::Tombstoned {
+            tracing::debug!(task_id = %incoming.task_id, "{LOG_PREFIX} dropped: tombstoned");
+            RecordOutcome::Suppressed
+        } else if !existing.parent_key.is_empty() && existing.parent_key != incoming.parent_key {
+            tracing::warn!(task_id = %incoming.task_id, "{LOG_PREFIX} task id already recorded for another parent");
+            RecordOutcome::IdCollision
+        } else {
+            tracing::debug!(task_id = %incoming.task_id, state = existing.state.as_str(), "{LOG_PREFIX} duplicate completion ignored");
+            RecordOutcome::Duplicate
+        }
+    }
+
     /// Records a finished child, idempotent per task id.
     ///
     /// A new record is stored `Pending`. If its [`NotifyMode`] is `Followup` or
@@ -259,38 +275,21 @@ impl CompletionRouter {
                 );
                 return Ok(RecordOutcome::Suppressed);
             }
-            match state.store.get(&record.task_id) {
-                Some(existing) if existing.state == CompletionState::Tombstoned => {
-                    tracing::debug!(
-                        task_id = %record.task_id,
-                        "{LOG_PREFIX} dropped: tombstoned"
-                    );
-                    return Ok(RecordOutcome::Suppressed);
-                }
-                Some(existing)
-                    if !existing.parent_key.is_empty()
-                        && existing.parent_key != record.parent_key =>
-                {
-                    tracing::warn!(
-                        task_id = %record.task_id,
-                        "{LOG_PREFIX} task id already recorded for another parent"
-                    );
-                    return Ok(RecordOutcome::IdCollision);
-                }
-                Some(existing) => {
-                    tracing::debug!(
-                        task_id = %record.task_id,
-                        state = existing.state.as_str(),
-                        "{LOG_PREFIX} duplicate completion ignored"
-                    );
-                    return Ok(RecordOutcome::Duplicate);
-                }
-                None => {}
+            if let Some(existing) = state.store.get(&record.task_id) {
+                return Ok(Self::classify_existing(&existing, &record));
             }
             record.state = CompletionState::Pending;
             record.attempts = 0;
             record.updated_at = SystemTime::now();
-            state.store.put(&record)?;
+            if !state.store.insert_if_absent(&record)? {
+                let existing = state.store.try_get(&record.task_id)?.ok_or_else(|| {
+                    TinyAgentsError::Graph(format!(
+                        "completion store: conditional create conflicted but `{}` was not readable",
+                        record.task_id
+                    ))
+                })?;
+                return Ok(Self::classify_existing(&existing, &record));
+            }
             tracing::debug!(
                 task_id = %record.task_id,
                 parent_key = %record.parent_key,

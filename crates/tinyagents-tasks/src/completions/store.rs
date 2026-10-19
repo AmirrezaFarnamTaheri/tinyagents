@@ -35,7 +35,10 @@ pub trait CompletionStore: Send + Sync {
     /// absence check and write atomic; unsupported stores fail closed.
     fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
         let _ = record;
-        Err(store_err("conditional create", "store does not support atomic create"))
+        Err(store_err(
+            "conditional create",
+            "store does not support atomic create",
+        ))
     }
 
     /// Atomically leases matching pending completions until `visible_after`.

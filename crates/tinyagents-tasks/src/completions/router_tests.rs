@@ -235,7 +235,10 @@ impl CompletionStore for BlockingFirstReadStore {
         self.inner.put(record)
     }
 
-    fn insert_if_absent(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<bool> {
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+    ) -> tinyagents_harness::error::Result<bool> {
         self.inner.insert_if_absent(record)
     }
 
@@ -247,7 +250,8 @@ impl CompletionStore for BlockingFirstReadStore {
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner.claim_pending(parent_key, mode, max, token, visible_after)
+        self.inner
+            .claim_pending(parent_key, mode, max, token, visible_after)
     }
 
     fn claim_task(
@@ -258,7 +262,8 @@ impl CompletionStore for BlockingFirstReadStore {
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(task_id, parent_key, mode, token, visible_after)
+        self.inner
+            .claim_task(task_id, parent_key, mode, token, visible_after)
     }
 
     fn resolve_claim(
@@ -307,7 +312,10 @@ async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
 
     let second_outcome = second.record(record("racing", "parent-b")).await.unwrap();
     let second_receipt = match second_outcome {
-        RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt,
+        RecordOutcome::Recorded {
+            receipt: Some(receipt),
+            ..
+        } => receipt,
         other => panic!("second writer should win the create: {other:?}"),
     };
     store.resume.wait();
@@ -317,7 +325,10 @@ async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
     assert_eq!(store.inner.get("racing").unwrap().parent_key, "parent-b");
     let winner = store.inner.get("racing").unwrap();
     assert_eq!(winner.receipt(), Some(second_receipt.clone()));
-    assert_eq!(winner.attempts, 1, "the losing create must not reset attempt state");
+    assert_eq!(
+        winner.attempts, 1,
+        "the losing create must not reset attempt state"
+    );
     assert_eq!(first_queue.status().await.total, 0);
     assert_eq!(second_queue.status().await.total, 1);
 }
@@ -342,13 +353,22 @@ async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice(
     });
     store.entered.wait();
 
-    let second_outcome = second.record(record("same-parent", "parent")).await.unwrap();
+    let second_outcome = second
+        .record(record("same-parent", "parent"))
+        .await
+        .unwrap();
     let second_receipt = match second_outcome {
-        RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt,
+        RecordOutcome::Recorded {
+            receipt: Some(receipt),
+            ..
+        } => receipt,
         other => panic!("first conditional create should win: {other:?}"),
     };
     store.resume.wait();
-    assert_eq!(first_writer.join().unwrap().unwrap(), RecordOutcome::Duplicate);
+    assert_eq!(
+        first_writer.join().unwrap().unwrap(),
+        RecordOutcome::Duplicate
+    );
 
     let winner = store.inner.get("same-parent").unwrap();
     assert_eq!(winner.receipt(), Some(second_receipt));
@@ -372,10 +392,16 @@ async fn concurrent_tombstone_wins_over_a_first_completion_write() {
     });
     store.entered.wait();
 
-    assert_eq!(tombstoner.tombstone("deleted").unwrap(), TombstoneOutcome::Reserved);
+    assert_eq!(
+        tombstoner.tombstone("deleted").unwrap(),
+        TombstoneOutcome::Reserved
+    );
     store.resume.wait();
     assert_eq!(writer.join().unwrap().unwrap(), RecordOutcome::Suppressed);
-    assert_eq!(store.inner.get("deleted").unwrap().state, CompletionState::Tombstoned);
+    assert_eq!(
+        store.inner.get("deleted").unwrap().state,
+        CompletionState::Tombstoned
+    );
 }
 
 #[tokio::test]
@@ -798,6 +824,12 @@ impl CompletionStore for FailingSecondPut {
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.get(task_id)
     }
+    fn try_get(
+        &self,
+        task_id: &str,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.try_get(task_id)
+    }
     fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
@@ -806,6 +838,18 @@ impl CompletionStore for FailingSecondPut {
             ));
         }
         self.inner.put(record)
+    }
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+    ) -> tinyagents_harness::error::Result<bool> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph(
+                "disk".into(),
+            ));
+        }
+        self.inner.insert_if_absent(record)
     }
     fn claim_pending(
         &self,
