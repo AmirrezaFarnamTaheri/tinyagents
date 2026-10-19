@@ -178,14 +178,38 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
 
 /// Opens a durable completion store over the tenant-scoped backend.
 ///
-/// Shared-store setup fails closed; callers that intentionally want local
-/// storage can construct [`InMemoryCompletionStore`] explicitly.
+/// This convenience constructor uses the identity of the supplied backend
+/// `Arc`. If independent handles may point to the same database, use
+/// [`open_driver_completion_store_with_coordination_domain`] with one
+/// trusted domain shared by all processes opening that database and scope.
+/// Shared-store setup fails closed.
 pub fn open_driver_completion_store(
     backend: Arc<dyn StorageBackend>,
     scope: Scope,
 ) -> HarnessResult<Arc<dyn CompletionStore>> {
     let store = DriverCompletionStore::new(backend, scope)
         .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    store.declare_collections()?;
+    Ok(Arc::new(store))
+}
+
+/// Opens a durable completion store with a host-configured shared-backend
+/// coordination domain.
+///
+/// The opaque domain is trusted host configuration, never caller or model
+/// input. Processes sharing a database and scope must use the same domain;
+/// different databases must use different domains.
+pub fn open_driver_completion_store_with_coordination_domain(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    coordination_domain: impl Into<String>,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    let store = DriverCompletionStore::new_with_coordination_domain(
+        backend,
+        scope,
+        coordination_domain,
+    )
+    .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
     store.declare_collections()?;
     Ok(Arc::new(store))
 }
@@ -202,6 +226,31 @@ pub fn open_driver_completion_store_or_memory(
     fallback: CompletionStoreFallback,
 ) -> HarnessResult<Arc<dyn CompletionStore>> {
     match open_driver_completion_store(backend, scope) {
+        Ok(store) => Ok(store),
+        Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
+            tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");
+            Ok(Arc::new(super::InMemoryCompletionStore::new()))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Opens a durable store in an explicit coordination domain, with optional
+/// local-only memory fallback.
+///
+/// Use `FailClosed` for shared/durable scopes. `LocalMemory` is an explicit
+/// host policy for a scope that does not require cross-process delivery.
+pub fn open_driver_completion_store_or_memory_with_coordination_domain(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    coordination_domain: impl Into<String>,
+    fallback: CompletionStoreFallback,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    match open_driver_completion_store_with_coordination_domain(
+        backend,
+        scope,
+        coordination_domain,
+    ) {
         Ok(store) => Ok(store),
         Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
             tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");

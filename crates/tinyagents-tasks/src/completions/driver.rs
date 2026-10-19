@@ -84,6 +84,11 @@ pub struct DriverCompletionStore {
 impl DriverCompletionStore {
     /// Store completions in `tasks.completions`, with its own bridge.
     ///
+    /// The default coordination identity is tied to this exact `Arc`
+    /// handle. Use `new_with_coordination_domain` when distinct handles may
+    /// point at the same shared database; all processes using that database
+    /// and scope must be configured with the same trusted domain.
+    ///
     /// # Errors
     ///
     /// When the bridge's runtime thread cannot start.
@@ -115,6 +120,10 @@ impl DriverCompletionStore {
 
     /// Store completions in `tasks.completions`, running the synchronous trait
     /// on `bridge` so several stores share one thread.
+    ///
+    /// The default coordination identity is tied to this exact `Arc`
+    /// handle. Use `with_bridge_and_coordination_domain` when distinct
+    /// handles may point at the same shared database.
     ///
     /// # Panics
     ///
