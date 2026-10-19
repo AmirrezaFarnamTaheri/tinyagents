@@ -237,9 +237,9 @@ Complete `CloseCopy` with these additional literal fields; each initializer valu
 | `stop_note_preamble` | `turn_checkpoint.rs::STOP_NOTE_PREAMBLE` | stop-note carry/quote tests |
 | `no_tool_calls` | exact literal `(no tool calls completed)` | close-verification and final-answer record tests |
 | `repair_no_reply`, `repair_quoted_instruction`, `repair_unverified` | three arms of `turn_checkpoint.rs::close_repair_instruction` | `the_repair_re_ask_names_the_violation_and_repeats_the_instruction` |
-| `verification_prompt` | full format string in `turn_checkpoint.rs::close_verification_prompt` | verification-prompt and deliberation/toolset rejection tests |
+| `verification_prompt_template` | full format string in `turn_checkpoint.rs::close_verification_prompt` | verification-prompt and deliberation/toolset rejection tests |
 
-`CloseCopy` also carries the host instruction-needle sources and `MIN_QUOTED_WORDS = 10`; the harness already implements normalization, span selection, and matching. The OpenHuman copy initializer uses the exact English strings in those source ranges. Its test uses whole-output equality for checkpoint and close prompt paths. These are source inputs required by #64; they are not left for the implementer to rediscover.
+Move the named source constants and `final_answer_body!()` into `close.rs` unchanged before initializing `ENGLISH_CLOSE_COPY`; this makes every referenced initializer expression defined and preserves exact bytes. `CloseCopy` also carries the host instruction-needle sources and `MIN_QUOTED_WORDS = 10`; the harness already implements normalization, span selection, and matching. Its tests use whole-output equality for checkpoint and close prompt paths. These are source inputs required by #64; they are not left for the implementer to rediscover.
 
 Keep existing APIs source-compatible. Existing `deterministic_checkpoint` and `deterministic_final_summary` remain; add the exact functions above. Existing `CloseViolation` has `NoReply`, `QuotedInstruction`, and `Unverified`; map OpenHuman's `QuotedHarnessText` variant to `QuotedInstruction` at its host boundary. The host passes the copy-aware close renderers explicitly.
 
