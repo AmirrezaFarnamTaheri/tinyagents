@@ -149,14 +149,15 @@ async fn separate_database_domains_do_not_share_a_same_parent_queue_permit() {
         .record(record("database-b-child", "same-parent"))
         .await
         .unwrap();
+    let completion_a = router_a.pending_for("same-parent").remove(0);
+    let completion_b = router_b.pending_for("same-parent").remove(0);
     router_b.cancel_parent("same-parent").unwrap();
 
     let queue = RunQueue::new();
-    for (router, task_id) in [
-        (&router_a, "database-a-child"),
-        (&router_b, "database-b-child"),
+    for (router, task_id, completion) in [
+        (&router_a, "database-a-child", completion_a),
+        (&router_b, "database-b-child", completion_b),
     ] {
-        let completion = router.pending_for("same-parent").remove(0);
         assert_eq!(completion.task_id, task_id);
         queue
             .push_guarded(
