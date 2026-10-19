@@ -330,7 +330,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
         let replay_rows =
             tinyagents_session::transcript::repair_orphaned_tool_head(&transcript.messages);
-        let reconcile_prior = replay_rows.as_ref().to_vec();
+        let mut reconcile_prior = replay_rows.as_ref().to_vec();
         let mut decoded = match replay_rows {
             std::borrow::Cow::Borrowed(_) => codec.decode_history(&transcript)?,
             std::borrow::Cow::Owned(messages) => {
@@ -339,6 +339,24 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 codec.decode_history(&replay_transcript)?
             }
         };
+        // Keep the lossless prior rows aligned with the decoded replay view.
+        // Some legacy codecs recognize tool rows whose raw role is not
+        // `tool`; when decoded repair removes such a leading tool message, its
+        // corresponding raw row must not remain at that positional index for
+        // the default reconciler to reuse for the following user message.
+        let decoded_system_prefix = decoded
+            .iter()
+            .take_while(|message| matches!(message, Message::System(_)))
+            .count();
+        let decoded_orphan_count = decoded[decoded_system_prefix..]
+            .iter()
+            .take_while(|message| matches!(message, Message::Tool(_)))
+            .count();
+        if decoded_orphan_count != 0 && reconcile_prior.len() == decoded.len() {
+            reconcile_prior.drain(
+                decoded_system_prefix..decoded_system_prefix + decoded_orphan_count,
+            );
+        }
         decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
             .into_owned();
         // A compacted head can start with a System summary immediately after
@@ -577,7 +595,17 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         Self::decode_recorded_tools(destination_transcript.tools.as_ref());
                     self.persisted_prefix_len = destination_transcript.meta.prefix_message_count;
                     self.persisted = destination_transcript.messages.clone();
-                    self.reconcile_prior = destination_transcript.messages.clone();
+                    let destination = target
+                        .session
+                        .as_ref()
+                        .map(|session| target.locator.head_generation(session))
+                        .and_then(|head| target.locator.read_session_transcript(&head));
+                    let same_source = destination
+                        .as_ref()
+                        .is_some_and(|destination| destination.path() == read.path());
+                    if !same_source {
+                        self.reconcile_prior = destination_transcript.messages.clone();
+                    }
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
                     }
