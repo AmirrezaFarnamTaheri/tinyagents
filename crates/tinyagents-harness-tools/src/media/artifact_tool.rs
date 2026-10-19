@@ -48,8 +48,8 @@ fn heartbeat_message(label: &str, elapsed: Duration, job_state: Option<&str>) ->
         format!("{seconds}s")
     };
     match job_state {
-        Some(state) => format!("{label} · {state} · output(s)"),
-        None => format!("{label} · running {}s", elapsed),
+        Some(state) => format!("{label} — {elapsed} elapsed (job {state})"),
+        None => format!("{label} — {elapsed} elapsed"),
     }
 }
 
