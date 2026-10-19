@@ -294,7 +294,7 @@ impl ChatModel<()> for ControlledChatModel {
             .await
             .map_err(|error| {
                 if let ControlledDispatchError::Admission(refusal) = error {
-                    super::dispatch_admission::record_invocation_refusal(*refusal);
+                super::dispatch_admission::record_invocation_refusal(refusal);
                 }
                 tinyinference_llm::Error::from(error)
             })
@@ -309,7 +309,7 @@ impl ChatModel<()> for ControlledChatModel {
             .await
             .map_err(|error| {
                 if let ControlledDispatchError::Admission(refusal) = error {
-                    super::dispatch_admission::record_invocation_refusal(*refusal);
+                super::dispatch_admission::record_invocation_refusal(refusal);
                 }
                 tinyinference_llm::Error::from(error)
             })
