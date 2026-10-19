@@ -635,3 +635,48 @@ fn record_cancelled_is_a_noop_when_terminal_or_missing() {
     record_cancelled(&store, "c1").unwrap();
     record_cancelled(&store, "missing").unwrap();
 }
+
+#[tokio::test]
+async fn host_roster_formatter_receives_sorted_owner_scoped_snapshot() {
+    let reg = registry();
+    let _b = add(
+        &reg,
+        "task-b",
+        "owner-a",
+        Meta {
+            agent: "worker-b",
+            session: None,
+        },
+    );
+    let _a = add(
+        &reg,
+        "task-a",
+        "owner-a",
+        Meta {
+            agent: "worker-a",
+            session: None,
+        },
+    );
+    let _foreign = add(
+        &reg,
+        "task-foreign",
+        "owner-b",
+        Meta {
+            agent: "worker-foreign",
+            session: None,
+        },
+    );
+
+    let rendered = format_roster_for_owner(&reg, "owner-a", |snapshot| {
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|row| row.task_id.as_str())
+                .collect::<Vec<_>>(),
+            ["task-a", "task-b"]
+        );
+        format!("host roster: {} workers", snapshot.len())
+    })
+    .unwrap();
+    assert_eq!(rendered, "host roster: 2 workers");
+}

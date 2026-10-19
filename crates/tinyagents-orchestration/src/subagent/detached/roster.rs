@@ -34,6 +34,22 @@ where
     Ok(out)
 }
 
+/// Formats an owner's stable roster through host-supplied wording.
+///
+/// The callback receives only the owner-filtered, deterministically ordered
+/// snapshot. TinyAgents supplies data and ordering; hosts own prompt wording.
+pub fn format_roster_for_owner<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    owner: &str,
+    format: impl FnOnce(&[SubagentSnapshot]) -> String,
+) -> Result<String, WaitError>
+where
+    M: SubagentIdentity + Clone + Send + Sync + 'static,
+{
+    let snapshot = snapshot_for_owner(registry, owner)?;
+    Ok(format(&snapshot))
+}
+
 /// Resolve a durable session id to the live task id, enforcing ownership. A
 /// non-terminal entry wins over a terminal one.
 pub fn task_id_for_session<M>(
