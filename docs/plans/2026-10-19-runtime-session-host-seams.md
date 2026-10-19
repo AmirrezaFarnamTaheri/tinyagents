@@ -271,12 +271,26 @@ Rust-type keyed extension carrier. TinyAgents defines no Composio/REPL names
 or payload schemas; the host owns each payload type and its lifecycle:
 
 ```rust
-pub trait ToolSnapshotExtension: std::any::Any + std::fmt::Debug + Send + Sync {}
-impl<T: std::any::Any + std::fmt::Debug + Send + Sync> ToolSnapshotExtension for T {}
+pub trait ToolSnapshotExtension: std::any::Any + std::fmt::Debug + Send + Sync {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+impl<T: std::any::Any + std::fmt::Debug + Send + Sync> ToolSnapshotExtension for T {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
 
 #[derive(Clone, Default)]
 pub struct ToolSnapshotExtensions {
     values: HashMap<TypeId, Arc<dyn ToolSnapshotExtension>>,
+}
+
+impl ToolSnapshotExtensions {
+    pub fn insert<T: ToolSnapshotExtension>(&mut self, value: T) {
+        self.values.insert(TypeId::of::<T>(), Arc::new(value));
+    }
+
+    pub fn get<T: ToolSnapshotExtension>(&self) -> Option<&T> {
+        self.values.get(&TypeId::of::<T>())?.as_any().downcast_ref::<T>()
+    }
 }
 
 pub struct ToolSnapshot {
@@ -296,15 +310,11 @@ impl ToolSnapshot {
 }
 ```
 
-Implement `ToolSnapshotExtensions::insert<T>(&mut self, value: T)` and
-`get<T>(&self) -> Option<&T>` using `TypeId::of::<T>()`, an `Arc<dyn
-ToolSnapshotExtension>`, and an object-safe `as_any(&self) -> &dyn Any`
-method on the extension trait. The blanket implementation returns `self` from
-`as_any`. Replacing an existing value of the same Rust type replaces that
-value; different host types coexist. Implement `Debug` for the collection by
-printing its length, so `ToolSnapshot` keeps its current `Debug` derive. Clones
-share immutable `Arc` payloads. `retaining` and `with_retained` copy the
-extension collection; `exact` semantics remain unchanged.
+Implement `Debug` for the collection by printing its length, so `ToolSnapshot`
+keeps its current `Debug` derive. Replacing an existing value of the same Rust
+type replaces that value; different host types coexist. Clones share immutable
+`Arc` payloads. `retaining` and `with_retained` copy the extension collection;
+`exact` semantics remain unchanged.
 
 Keep `ToolSnapshot::to_json` and `from_json` as the existing array-of-specs
 format with no extension serialization. The harness transcript record already
