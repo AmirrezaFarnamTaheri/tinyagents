@@ -30,56 +30,94 @@ Harness already exposes `close`, `cost`, `no_progress`, `observability`, `turn_o
 
 ## Copy seams: complete API contract
 
-Expose host-injectable copy using owned, immutable values so the harness is product-neutral and the host can preserve every byte of existing wording. Add these public structs in `crates/tinyagents-harness/src/close.rs` and `turn_stop.rs`; derive `Debug, Clone, PartialEq, Eq` and keep fields public for construction by downstream hosts.
+The harness already accepts copy as template arguments in `deterministic_checkpoint`, `deterministic_final_summary`, `close_repair_instruction`, and `GroundedCloseConfig`. Bundle these existing seams rather than creating string fields unrelated to the current renderers. Add the following values in `close.rs` and `turn_stop.rs`:
 
 ```rust
 // close.rs
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CloseCopy {
-    pub max_iteration_instruction: String,
-    pub final_write_instruction: String,
-    pub final_answer_instruction: String,
-    pub truncated_answer_instruction: String,
-    pub stop_note_preamble: String,
-    pub no_tool_calls: String,
-    pub omitted_results: String,
-    pub deterministic_checkpoint_heading: String,
-    pub deterministic_summary_heading: String,
-    pub empty_checkpoint: String,
-    pub empty_final_summary: String,
-    pub repair_no_reply: String,
-    pub repair_quoted_instruction: String,
-    pub repair_unverified: String,
+    pub checkpoint_template: &'static str,
+    pub final_summary_template: &'static str,
+    pub repair_template: &'static str,
 }
 
-impl CloseCopy {
-    pub fn english() -> Self { /* move the current harness English defaults verbatim */ }
-    pub fn checkpoint_instruction(&self, rendered_results: &str) -> String;
-    pub fn final_instruction(&self, stop_reason: Option<&str>, truncated: bool,
-                             rendered_results: &str) -> String;
-    pub fn repair_instruction(&self, instruction: &str, violation: CloseViolation) -> String;
+pub const ENGLISH_CLOSE_COPY: CloseCopy = CloseCopy {
+    checkpoint_template: "I reached the tool-call limit for this turn ({steps} steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n{results}\n**Next steps:** I'll continue from here — just reply (e.g. \\\"continue\\\") and I'll pick up where I left off.",
+    final_summary_template: "{stop_reason}I finished this turn without writing up a result. Here is what each tool call returned:\n{results}\nTell me how you'd like to proceed.",
+    repair_template: "{repair_reason} Write the message again.\n\n{instruction}",
+};
+
+pub fn checkpoint_with_copy(copy: &CloseCopy, steps: usize, rendered_results: &str) -> String {
+    copy.checkpoint_template
+        .replace("{steps}", &steps.to_string())
+        .replace("{results}", rendered_results)
+}
+
+pub fn final_summary_with_copy(copy: &CloseCopy, rendered_results: &str) -> String {
+    copy.final_summary_template.replace("{results}", rendered_results)
+}
+
+pub fn repair_with_copy(copy: &CloseCopy, instruction: &str, violation: CloseViolation) -> String {
+    let reason = match violation {
+        CloseViolation::NoReply => "Your previous reply was empty or tried to call a tool. No tools will run: write the message itself.",
+        CloseViolation::QuotedInstruction => "Your previous reply repeated these directions, or the stop note, back to the user. That text is addressed to you alone and must never appear in the message. Do not reproduce any part of it, do not refer to it, and do not explain that you were given it.",
+        CloseViolation::Unverified => "Your previous reply did not pass the check that it reports what actually happened, grounded in the records below.",
+    };
+    copy.repair_template.replace("{repair_reason}", reason).replace("{instruction}", instruction)
 }
 
 // turn_stop.rs
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopCopy {
-    pub stopped_because: String,
-    pub what_happened_heading: String,
-    pub success: String,
-    pub failed: String,
-    pub more_calls: String,
-    pub proceed_prompt: String,
+    pub opening_template: &'static str,
+    pub what_happened_heading: &'static str,
+    pub success_template: &'static str,
+    pub failure_template: &'static str,
+    pub hidden_calls_template: &'static str,
+    pub proceed_prompt: &'static str,
 }
 
-impl StopCopy {
-    pub fn english() -> Self { /* neutral English defaults */ }
-    pub fn render(&self, reason: &str, groups: &[StopSummaryGroup]) -> String;
+pub const ENGLISH_STOP_COPY: StopCopy = StopCopy {
+    opening_template: "I stopped this turn early because {reason}.\n",
+    what_happened_heading: "\n**What happened**\n",
+    success_template: "- `{name}` succeeded{count}",
+    failure_template: "- `{name}` failed{count}{error}",
+    hidden_calls_template: "- …and {count} more tool call(s)",
+    proceed_prompt: "\nTell me how you'd like to proceed, or ask me to try again.",
+};
+
+pub struct StopSummaryGroup { pub name: String, pub success: bool, pub error: Option<String>, pub count: usize }
+
+pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], copy: &StopCopy) -> String {
+    use std::fmt::Write as _;
+    let mut out = copy.opening_template.replace("{reason}", reason);
+    if !groups.is_empty() {
+        out.push_str(copy.what_happened_heading);
+        let shown_from = groups.len().saturating_sub(8);
+        for group in groups.iter().skip(shown_from) {
+            let name: String = group.name.chars().take(60).collect();
+            let count = if group.count == 1 { String::new() } else { format!(" {} times", group.count) };
+            let line = if group.success {
+                copy.success_template.replace("{name}", &name).replace("{count}", &count)
+            } else {
+                copy.failure_template.replace("{name}", &name).replace("{count}", &count)
+                    .replace("{error}", &group.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default())
+            };
+            let _ = writeln!(out, "{line}");
+        }
+        let hidden: usize = groups.iter().take(shown_from).map(|group| group.count).sum();
+        if hidden > 0 {
+            let _ = writeln!(out, "{}", copy.hidden_calls_template.replace("{count}", &hidden.to_string()));
+        }
+    }
+    out.push_str(copy.proceed_prompt);
+    out
 }
 ```
 
-The comment bodies above are signatures, not permission to leave `todo!()` or unimplemented methods. Implement each method in the same change. `StopSummaryGroup` is a new generic data record `{ name: String, success: bool, error: Option<String>, count: usize }`; it contains already-scrubbed display data, not raw tool arguments. The harness performs chronological grouping, last-eight selection, character truncation, and count formatting as it does today. `StopCopy` supplies only localized labels/sentences, with placeholder insertion performed by harness formatting. `CloseCopy` supplies the actual host instruction and headings, including the exact existing OpenHuman text. It must also include every literal that contributes to deterministic checkpoint/final summary output; do not merely translate the main headings and leave hard-coded English in the algorithm.
+`StopSummaryGroup.error` contains only the already-scrubbed `short_error_line` output. Move the host grouping and scrub logic into harness and pass the resulting groups to the renderer above. Host `StopCopy` provides the reason sentence through `StopReasonKind.copy()`; it does not move the product's failure-note parser or security scrubber. Keep the existing total-budget result rendering APIs and let OpenHuman supply its existing `CloseResultRenderOptions` block/omission closures.
 
-Keep existing public `*_with_options` APIs source-compatible. Add `*_with_copy` variants that accept `&CloseCopy` or `&StopCopy`; old entry points delegate to `CloseCopy::english()` / `StopCopy::english()`. The exact function names should match the module's established naming (`build_deterministic_checkpoint_with_copy`, `build_deterministic_final_summary_with_copy`, `grounded_close_with_copy`, `render_stop_summary_with_copy`). The host call path must select the `with_copy` functions explicitly. `CloseViolation` remains one canonical harness enum with variants `NoReply`, `QuotedInstruction`, and `Unverified`; remove OpenHuman's duplicate and map no strings or public core types into the harness.
+Keep existing APIs source-compatible. Existing `deterministic_checkpoint` and `deterministic_final_summary` remain; add the exact functions above. Existing `CloseViolation` has `NoReply`, `QuotedInstruction`, and `Unverified`; map OpenHuman's `QuotedHarnessText` variant to `QuotedInstruction` at its host boundary. The host passes the copy-aware close renderers explicitly.
 
 ## TDD implementation sequence
 
@@ -89,8 +127,9 @@ Do each step as a small red/green/refactor slice. Rust tests must be sibling `*_
 
 Files: `crates/tinyagents-harness/src/close.rs`, `close_tests.rs`, `turn_stop.rs`, `turn_stop_tests.rs`, and corresponding `mod.rs` exports if needed.
 
-1. Port assertions from OpenHuman `agent/session_host/turn_checkpoint_tests.rs` for deterministic checkpoint, final summary, truncation and omission disclosure, repair instructions for all three violations, harness instruction quote detection, and exact final/checkpoint instruction content. Port `stop_summary_tests.rs` expected full strings, stop categories, grouping, scrubbing/truncation, last-eight groups, and hidden-call count. Assertions in the OpenHuman source are the golden source; retain exact expected strings.
-2. Add `CloseCopy` and `StopCopy`, their English defaults, and copy-aware APIs. Existing APIs delegate to defaults. Use a deliberately distinct custom-copy test as well as the OpenHuman golden; a default-only test would not prove injection works.
+1. Port the exact behavior assertions from OpenHuman `turn_checkpoint_tests.rs`: `the_deterministic_checkpoint_reproduces_each_result_body`, `checkpoint_records_keep_the_captured_tool_failure_status_and_body`, `tool_result_renderer_preserves_the_openhuman_block_format`, `results_over_the_budget_are_omitted_with_a_disclosure`, `one_oversized_result_is_still_shown`, `no_completed_tools_says_so`, `newline_heavy_results_are_charged_what_they_render`, `the_final_summary_quotes_each_failure_message`, `the_final_summary_of_a_halted_turn_gives_a_reason_and_names_the_tools`, `the_final_answer_instruction_carries_the_records_and_the_stop_note`, `the_close_verification_prompt_holds_request_records_and_reply`, `the_final_answer_instruction_is_framed_and_forbids_quoting_tools_and_deliberation`, both quote guards, the repair re-ask, truncated/breaker copy, and both final-write checks. Keep full equality assertions unchanged, including `"\n- `read_file` — ok\n  > first line\n  > second line\n"`.
+2. Port `stop_summary_tests.rs`: exact expected full output from `a_halted_turn_gives_one_reason_and_collapses_identical_failures`, redaction/truncation, secret suppression, successful-repeat semantics, every key/copy, all stop-note categories, policy-refusal copy, and newest-eight retention. The golden has one reason line, `**What happened**`, grouped lines, and the exact final prompt; retain its assertions verbatim.
+3. Add the custom copy test with unmistakable sentinels in every copy field, then verify copy-aware checkpoint, final summary, repair, and stop renderers use them. This proves injection beyond the default English golden.
 3. Make the red test fail on a real mismatch, then implement. No host migration yet. Confirm old API tests still pass unchanged.
 
 ### 2. Consolidate checkpoint and grounded close
@@ -99,8 +138,10 @@ Files: `close.rs`, `close_tests.rs`; public paths remain `tinyagents_harness::cl
 
 1. Inventory existing `close.rs` entry points before editing: `CloseToolResult`, `results_from_tool_outcomes`, truncation/rendering, deterministic builders, `CloseViolation`, repair config/options and usage callbacks, required-output repair, grounded close and fallback. Extend those APIs rather than creating parallel algorithms.
 2. Add focused tests for both checkpoint and final close with a custom `CloseCopy` and byte equality against the OpenHuman host golden. Cover successful grounded close, verification reject/unclear, no reply, quoted instruction, exactly one repair, deterministic fallback, deadline/cancellation, and provider usage callback on completed/failed calls.
-3. Preserve `RepairUsage` and `SummarizerSourceModel` in OpenHuman because both depend on host model sourcing, provider usage/pricing, correlation, and trace. The harness API must continue to accept `ChatModel<()>`, `ToolDialect`, native messages, `RequiredOutput`, a caller-supplied verifier prompt/repair copy, budget and deterministic fallback closure. Keep provider callbacks in `CloseRequestOptions`; do not make the harness calculate host billing.
-4. Preserve classified halt's no-provider-call path by expressing it through the generic deterministic summary path plus host-owned classification check. Do not move `"Stopping after "`, the product's classifier or that condition into the harness.
+3. Move `SummarizerSourceModel` to harness as `CloseSourceModel<'a> { source: &'a dyn CloseModelSource, model: &'a str, temperature: f64, thread_id: Option<&'a str>, trace: Option<&'a SupplementalCallTrace> }`, implementing `ChatModel<()>` by obtaining the per-call model from `CloseModelSource::build_summarizer(model, temperature, thread_id)`, mapping its error to `tinyinference_llm::Error::Model(error)`, and forwarding `invoke`/`stream` requests and items unchanged. Exact port signature: `pub trait CloseModelSource: Send + Sync { fn build_summarizer(&self, model: &str, temperature: f64, thread_id: Option<&str>) -> Result<Arc<dyn ChatModel<()>>, String>; }`. OpenHuman implements the trait by delegating to `TurnModelSource`; this moves the adapter logic while keeping model construction host-owned.
+4. Move `RepairUsage`'s generic fields and accumulation into `CloseUsage`: `model_calls`, `input_tokens`, `output_tokens`, `cached_input_tokens`, `last_call_input_tokens`, and `last_call_output_tokens`. Keep cost pricing outside this record and pass `on_call_completed` through the existing `CloseRequestOptions`; host callback updates `CostTally` with `BilledUsage` and the selected pricing model. Preserve the source behavior: every attempted call increments `model_calls`; only completed usage adds token counts; verification calls do not replace final context token counts; a completed repair call supersedes the loop's token pair. The existing `grounded_close_tests.rs` tests already assert callbacks on complete/fail/timeout paths.
+5. Move `classified_halt_close` into harness as a generic selector over `(stop_reason: Option<&str>, is_classified_halt: impl Fn(&str)->bool, results, fallback: impl FnOnce()->String) -> Option<CloseOutput>`. On a match it calls the supplied deterministic fallback and returns zero additional model calls/usage; it must not contain OpenHuman's `"Stopping after "` marker. Port the test `classified_halt_returns_partial_work_without_provider_usage` to harness using an injected predicate and assert the fallback output, no raw success text, retained scrubbed failure line, and zero provider calls.
+6. Move `repair_required_output` orchestration to harness using the already-existing `RequiredOutputRepairConfig`, `RequiredOutputRepairOptions`, `RequiredOutputFallbackPlacement`, `ChatModel`, and `ToolDialect`. Retain its `reply_already_streamed` continuation behavior. Required-output contract construction and choice of `Prepend` stay with the host caller.
 
 ### 3. Adopt generic turn-stop output and typed terminal outcome
 
