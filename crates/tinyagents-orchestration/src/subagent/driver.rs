@@ -380,7 +380,7 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let mut timed_out = false;
         let mut turn_lease_lost = false;
         let mut omitted_chars = 0usize;
-        let mut token;
+        let mut token = execution.cancellation.clone();
         let executed = loop {
             if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
                 turn_lease_lost = true;
