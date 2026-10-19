@@ -267,7 +267,8 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
     let mut awaiting = crate::subagent::SubagentOutcome::completed("awaiting", "paused");
     awaiting.status = crate::subagent::SubagentOutcomeKind::AwaitingInput(
         crate::subagent::SubagentPause {
-            resume: "clarification".into(),
+            reason: "clarification".into(),
+            resume: crate::subagent::SubagentResume::default(),
         },
     );
     jobs.mark_driver_result(&awaiting_id, Ok(awaiting));
