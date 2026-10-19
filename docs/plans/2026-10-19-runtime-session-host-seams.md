@@ -853,8 +853,9 @@ let resume_preparation = cancelable(
     &cancellation,
     self.hooks.before_resume(request, options, self.state_view(false)),
 ).await?;
+let hook_target = resume_preparation.transcript.clone();
 self.apply_resume_preparation(resume_preparation)?;
-self.resolve_and_bind(options, self.target.as_ref())?;
+self.resolve_and_bind(options, hook_target.as_ref())?;
 let _turn_lock = cancelable(&cancellation, async { Ok(self.lock_turn(options).await) }).await?;
 let resumed = if options.resume == ResumeMode::Never {
     false
