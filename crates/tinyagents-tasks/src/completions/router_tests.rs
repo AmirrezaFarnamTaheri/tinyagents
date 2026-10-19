@@ -350,9 +350,14 @@ fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
         .put(&record("a-newer", "p").with_finished_at(now + std::time::Duration::from_secs(1)))
         .unwrap();
 
+    let gate = store
+        .acquire_parent_gate("p", "test", std::time::Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
     let claimed = store
         .claim_pending(
             "p",
+            &gate,
             CompletionClaimMode::Followup,
             1,
             "owner",

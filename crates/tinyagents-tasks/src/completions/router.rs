@@ -185,7 +185,8 @@ impl CompletionRouter {
         let records = state.store.try_list(None)?;
         for record in records {
             let parent_key = if record.parent_key.is_empty() {
-                parent_from_marker_id(&record.task_id).unwrap_or_else(|| record.task_id.clone())
+                Self::parent_from_marker_id(&record.task_id)
+                    .unwrap_or_else(|| record.task_id.clone())
             } else {
                 record.parent_key.clone()
             };
