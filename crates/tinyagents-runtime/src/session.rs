@@ -312,6 +312,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             });
         };
         let scanned_session_id = transcript.meta.session_id.clone();
+        let scanned_messages = transcript.messages.clone();
         if let Some(selected) = session_binding.as_ref() {
             let expected = selected.session_id();
             if transcript
@@ -608,7 +609,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .is_some_and(|session_id| {
                             scanned_session_id.as_deref() == Some(session_id)
                         })
-                        || destination_transcript.messages == transcript.messages
+                        || destination_transcript.messages == scanned_messages
                         || destination
                             .as_ref()
                             .is_some_and(|destination| destination.path() == read.path());
