@@ -173,19 +173,18 @@ Files: `turn_outcome.rs`, `turn_outcome_tests.rs`, `no_progress/classified_ladde
 
 Files: existing `crates/tinyagents-harness/src/cost/model_budget.rs` and `model_budget_tests.rs`; host `agent/tinyagents/budget.rs` and budget-focused tests.
 
-1. Verify existing `ModelBudget::new`, `wait_for_capacity`, and `wrap_model` contract and tests. Extend only for behavior used by OpenHuman; don't create a second wrapper. Port tests that verify shared ledger clones, child accounting, cache/retry placement expectations, normalization and reservation release.
-2. Update OpenHuman to use `tinyagents_harness::cost::ModelBudget` directly or retain a type alias only if host call sites need the distinct host name. Keep depth constants and policy installation in `budget.rs`.
+1. Keep the existing `wrapped_model_settles_the_reported_charge_once_into_shared_ledger` test in `model_budget_tests.rs`; its assertion requires normalized charge `7` micros and ledger spend `{ tokens: 5, cost_micros: 7 }`. Add a behavior test only if changing upstream wrapper behavior; issue #64 requires no accounting algorithm rewrite.
+2. Make the upstream wrapper public from the harness facade if it is not already exported, then replace the host `ModelBudget` struct with a type alias to `tinyagents_harness::cost::ModelBudget` if host call-site visibility allows it. Keep `TurnModels::with_budget` route wrapping and depth policy in OpenHuman.
 3. Ensure issue #60's runtime/job changes do not create a harness dependency on orchestration. No speculative session/runtime API is part of this step.
 
-### 7. Adapt OpenHuman and remove the migrated duplicate rows
+### 7. Future host adoption in OpenHuman #212 (not a #64 implementation task)
 
-Files limited to the listed OpenHuman source/tests and their module exports. This is a later implementation phase after the upstream PR is available; do not make these edits in the current plan phase.
+After the TinyAgents #64 PR merges into the fork epic branch, OpenHuman #212 consumes that published fork API and moves the gitlink. This section gives #212 acceptance constraints only; #64 changes no OpenHuman source.
 
-1. Change host close/checkpoint calls to the new `*_with_copy` APIs and inject a `CloseCopy` built from the exact existing constants and render behavior. Keep `SummarizerSourceModel`, `RepairUsage`, trace callback, provider limits, custom stop classifier, required-output host contract, and progress projection.
-2. Change stop rendering to inject OpenHuman `StopCopy`; retain `StopReasonKind`, classifier mapping and security-sensitive scrubber in OpenHuman. Confirm every existing complete output string remains byte-identical.
-3. Change journal, supplemental trace, tool outcome capture, repeated-failure ladder and budget imports to the upstream generic types. Remove host generic implementation files only after all call sites and tests compile against the new APIs.
-4. Remove duplicate `CloseViolation`, `truncate_chars`, `render_tool_results`, `harness_instruction_needles`, `DeferredTurnTerminal`, `TurnJournal`, and model-budget wrapper only when no call sites remain. Preserve host integration tests for storage, request correlation, provider accounting, headroom and fast halt.
-5. Host test names/path ownership must follow the OpenHuman sibling-test rule; keep behavior tests next to host adapters and remove only assertions now ported to harness. Do not delete a test merely because its old implementation file is deleted.
+1. Implement `CloseModelSource` for `TurnModelSource`; inject OpenHuman `CloseCopy` templates and the host result-render options. Keep model selection, output caps, billing/pricing callback, progress deltas, required-output contract construction, and fallback placement in host adapters.
+2. Implement the supplemental enricher with OpenHuman provider/catalog lookups. Keep `StopReasonKind`, failure-note parsing, identifier/secret scrub, failure classification, `HostFailurePolicy`, `StopLatch`, recoverable headroom, terminal-inference fast halt, flow-specific body failures, request correlation, status storage and replay in OpenHuman.
+3. Replace the host budget wrapper with the upstream `ModelBudget` at `TurnModels::with_budget`; retain depth and policy setup.
+4. Remove only generic duplicates actually consumed from TinyAgents; retain host policy/adapters. Ported goldens remain in the owning tests. Keep `journal_tests.rs`, UI metadata tests, policy and budget tests because their behavior is still host-owned.
 
 ## Deferred dependencies and integration order
 
@@ -197,12 +196,14 @@ Files limited to the listed OpenHuman source/tests and their module exports. Thi
 
 ## Acceptance and verification
 
-Behavioral acceptance before adapting/removing host code:
+Issue #64 acceptance (TinyAgents repository):
 
-1. Byte-identical golden comparisons for host-injected `CloseCopy` across deterministic checkpoint, deterministic final summary, grounded-close fallback, required-output repair, breaker halt, output-token exhaustion, iteration cap, and no completed tool calls.
-2. Byte-identical host-injected `StopCopy` output for classified halt, repeated failures, successful repeats, scrubbed/truncated errors, grouped counts, hidden older groups, and each `StopReasonKind`.
-3. All prior close, stop, journal, trace, tool-outcome, repeated-failure and budget assertions remain represented at the owning layer. Preserve public compatibility tests for old default-English APIs.
-4. Source audit confirms the generic implementations are gone from the listed host directories, host policy and persistence seams remain, and no TinyAgents dependency references OpenHuman types.
+1. Ported host golden outputs are byte-identical when host `CloseCopy`/`StopCopy` is injected: deterministic checkpoint, final summary, breaker halt, tool/no-tool output, no-reply/quoted/unverified close repairs, output-budget exhaustion and iteration cap.
+2. Preserve all generic close state-machine assertions in `close_tests.rs` (tool-less requests, verifier behavior, one repair, deterministic fallback, timeout/cancellation, usage callbacks, request properties, required-output placement) and stop serialization/classification assertions in `turn_stop_tests.rs`.
+3. Preserve supplemental trace event order, cache charge clearing, usage/enrichment, run correlation and cancellation/failure terminal event behavior. Retain the existing cost budget test unchanged. No external service calls in tests.
+4. Source audit confirms TinyAgents contains no OpenHuman type/dependency, new ports use only harness and inference contracts, no duplicated existing journal/close/cost algorithm was added, and all requested generic source rows have an upstream implementation or documented existing implementation.
+
+OpenHuman row removal, adapter compile, storage integration and all retained host policy tests are acceptance for future OpenHuman #212, not this PR.
 
 Run required repository gates from the super-worktree root through its long-command cancellation wrapper, pointing Cargo at the TinyAgents manifest (no temp build directory and no `CARGO_TARGET_DIR`):
 
