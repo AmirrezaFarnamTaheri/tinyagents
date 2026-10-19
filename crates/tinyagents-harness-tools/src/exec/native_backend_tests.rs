@@ -135,18 +135,39 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
     let command = format!(
-        "/bin/sh -c \"printf '%s\\\\n' \\$\\$ > {}; exec /bin/sleep 30\" & printf captured; wait",
+        "sleep 30 & child=$!; echo $child > {}; printf captured; wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = crate::exec::timeout::ProcessCleanup::default();
-    let outcome = cleanup
-        .scope(backend.execute(
-            request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
-            None,
-            None,
-        ))
-        .await;
+    let task_cleanup = cleanup.clone();
+    let task = tokio::spawn(async move {
+        task_cleanup
+            .scope(backend.execute(
+                request("sh", &["-c", &command], Some(Duration::from_secs(5)), true),
+                None,
+                None,
+            ))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok())
+                .is_some()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("native descendant started before timeout");
+    let outcome = tokio::time::timeout(Duration::from_secs(8), task)
+        .await
+        .expect("native timeout returned")
+        .expect("native process task completed");
     cleanup.wait().await;
     let ExecBackendOutcome::Completed(output) = outcome else {
         panic!("expected timeout completion")
@@ -171,7 +192,7 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
     let command = format!(
-        "/bin/sh -c \"printf '%s\\\\n' \\$\\$ > {}; exec /bin/sleep 30\" & wait",
+        "sleep 30 & child=$!; echo $child > {}; wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
