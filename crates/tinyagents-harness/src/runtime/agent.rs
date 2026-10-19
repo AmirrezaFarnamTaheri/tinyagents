@@ -138,6 +138,9 @@ pub struct HostedError {
     /// Which bound fired, set exactly when `kind` is
     /// [`HostedErrorKind::Timeout`] and `None` otherwise.
     pub timeout_bound: Option<TimeoutBound>,
+    /// Host dispatch refusal details when the failure was a physical
+    /// admission refusal. The value is a closed, content-free classification.
+    pub dispatch_refusal: Option<crate::cost::DispatchRefusal>,
     /// The accumulated transcript, usage, and executed-tool summary as far as
     /// the run got before failing, when available.
     pub run: Option<Box<AgentRun>>,
@@ -205,6 +208,7 @@ fn hosted_error(error: &TinyAgentsError, mut run: AgentRun) -> HostedError {
         kind,
         message: hosted_error_message(kind).to_string(),
         timeout_bound: classify_timeout_bound(error),
+        dispatch_refusal: None,
         run: Some(Box::new(run)),
     }
 }
@@ -239,6 +243,10 @@ impl From<HostedError> for TinyAgentsError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "agent_dispatch_refusal_tests.rs"]
+mod dispatch_refusal_tests;
 
 /// A host-owned turn request.
 ///
