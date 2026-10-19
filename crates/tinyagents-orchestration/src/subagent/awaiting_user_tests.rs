@@ -13,6 +13,8 @@ fn awaiting_user_envelope_round_trips_untrusted_multiline_question() {
     let rendered = pause.render();
 
     assert_eq!(SubagentAwaitingUser::parse(&rendered), Ok(pause));
+    assert!(rendered.contains("re-call spawn_subagent with the same task_key"));
+    assert!(!rendered.contains("continue_subagent"));
     assert_eq!(
         rendered
             .lines()
