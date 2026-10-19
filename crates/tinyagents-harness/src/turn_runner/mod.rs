@@ -7,6 +7,7 @@
 //! owned.
 
 mod types;
+mod work_tracker;
 
 pub use types::{
     EventSink, FailureClassifier, IngressDecision, IngressPolicy, IngressStage, LiveTurn,
@@ -14,6 +15,7 @@ pub use types::{
     TurnRequest, TurnResult, TurnRunner, TurnRunnerConfig, TurnRunnerError, TurnSession,
     TurnSignal, deterministic_reply_id,
 };
+pub use work_tracker::WorkTracker;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

@@ -27,11 +27,12 @@ including fork isolation for parallel runs, and must check a session back in
 after every successful checkout. The runner persists a deterministic reply
 id before emitting exactly one terminal event.
 
-The idle guard defaults to 900 seconds and resets on progress. Hosts signal
-`WorkStarted` and `WorkFinished` around model or tool work so a quiet but
-healthy request is not treated as idle. The optional wall deadline remains a
-separate total ceiling. Either guard cancels child work and asks the
-`Summarizer` for a bounded grounded close before classifying the turn as failed.
+The idle guard defaults to 900 seconds and resets on progress. Hosts can use
+`WorkTracker` to fold `AgentProgress` into `WorkStarted` and `WorkFinished`
+signals around model or tool work, so a quiet but healthy request is not
+treated as idle. The optional wall deadline remains a separate total ceiling.
+Either guard cancels child work and asks the `Summarizer` for a bounded
+grounded close before classifying the turn as failed.
 
 `AgentProgress` is the canonical channel-independent progress vocabulary.
 Hosts translate it to their own event wire format; this module does not define
