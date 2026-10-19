@@ -143,6 +143,35 @@ Its constructor remains private to `port`; only
 wrapping a live forwarding handle and accidentally calling that a pinned
 lease.
 
+Add this error and lease contract in `port/types.rs`:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum SessionStoreLeaseError {
+    #[error("provider cannot guarantee pinned session stores")]
+    Unsupported,
+    #[error("opening pinned session stores failed: {0}")]
+    Open(#[source] tinystoragedrivers_core::StorageError),
+}
+
+#[derive(Clone)]
+pub struct SessionStoreLease {
+    stores: AgentStores,
+    // Keeps the immutable provider/backend snapshot alive for all handles.
+    _owner: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl SessionStoreLease {
+    pub fn stores(&self) -> &AgentStores { &self.stores }
+    pub(crate) fn pinned(
+        stores: AgentStores,
+        owner: Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Self {
+        Self { stores, _owner: owner }
+    }
+}
+```
+
 Add `SessionStoreProvider::lease_for_agent(&self, agent_id: &str)` returning
 `Result<SessionStoreLease, SessionStoreLeaseError>`. Its default returns
 `Err(SessionStoreLeaseError::Unsupported)`; it must never wrap
@@ -151,7 +180,7 @@ pinned lifetime. `RebindableSessionStores` is the first supported provider: its
 override holds the same `current` read lock used by `current()`, clones the
 current `Arc<DriverSessionStores>`, opens the agent through that snapshot, and
 stores the resulting non-forwarding `AgentStores` in the lease. If agent open
-fails, return `SessionStoreLeaseError::Open(StorageError)` without creating a
+fails, return `SessionStoreLeaseError::Open(error)` without creating a
 lease. Keep `for_agent`, `try_for_agent`, and existing retained handles
 live-following `rebind` exactly as they are today. `bind_actor` remains the
 host-admission seam: the host resolves the actor and supplies the already
@@ -369,21 +398,17 @@ are part of this task, even though host deletion/adoption of the rest of
 ### Session identity resolution (`tinyagents-runtime`)
 
 Issue #63 implements and wires this seam; OpenHuman's concrete resolver and
-adapter migration remain in #212. One authority check covers every path that
-can touch a transcript locator. `Session::turn` resolves after
-`before_resume` and `apply_resume_preparation`, so hook-provided replacements
-are visible; it checks `TurnOptions::session`, the effective target session,
-and locator before lock acquisition. Public `Session::resume` performs that
-same resolution and validation before any locator method and never reuses a
-prior operation's identity. Move the existing implementation into private
-`resume_bound`; only checked paths may call it. Resolver-enabled sessions fail
-closed when a target is absent. These checks precede `head_generation`,
-`read_session_transcript`, legacy adoption, and lock lookup. Place the request
-and result in
-`runtime/types.rs`, the trait in `runtime/identity.rs`, register it on
-`SessionBuilder`, and invoke it in `Session::turn_inner` after its initial
-cancellation check and before `before_resume`, target binding, locking, or
-resume:
+adapter migration remain in #212. Put request/result in `runtime/types.rs`,
+the resolver trait in `runtime/identity.rs`, and the resolver on
+`SessionBuilder`/`Session`. One authority operation, `resolve_and_bind`, is
+used by every transcript-reading path. `Session::turn` calls it after
+`before_resume` and `apply_resume_preparation`, so hook-provided target
+replacements are visible, but before locks or locator methods. Public
+`Session::resume` calls it before any locator method and never reuses a prior
+operation's identity. Both then call private `resume_bound`. A
+resolver-enabled session rejects absent identity, conflicting
+`TurnOptions::session`, or changed hook-selected target before
+`head_generation`, `read_session_transcript`, legacy adoption, and lock lookup.
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -410,8 +435,42 @@ pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
 }
 ```
 
+Implement the binding predicate in `runtime/identity.rs` with the following
+comparison semantics (the current target locator is read from the target that
+will actually be resumed, after hook preparation):
+
+```rust
+fn same_admission(a: &SessionIdentity, b: &SessionIdentity) -> bool {
+    if a.session.first_generation() != b.session.first_generation()
+        || a.agent_id != b.agent_id
+    {
+        return false;
+    }
+    let left = a.stores.stores().transcripts.destination_key();
+    let right = b.stores.stores().transcripts.destination_key();
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => Arc::ptr_eq(
+            &a.stores.stores().transcripts,
+            &b.stores.stores().transcripts,
+        ),
+        _ => false,
+    }
+}
+```
+
+`resolve_and_bind` returns `InvalidSessionState` if this predicate fails for
+the established identity, if `options.session` has another
+`first_generation()`, or if the hook-selected target locator/session does not
+match the newly resolved admission. It updates the target only after all
+checks pass. `Session::turn` must call it after `apply_resume_preparation`;
+public `Session::resume` calls it before the first locator access. This order
+is intentional: hooks may prepare a lazy target but cannot grant authority to
+change its destination.
+
 The request has logical naming inputs only; there is no caller-provided
-agent/tenant scope field. The resolver uses `options.run_context.data` to authorize the actor,
+agent/tenant scope field. The resolver uses `options.run_context.data` to
+authorize the actor,
 choose the resolved agent id, and open a tenant-scoped lease. It returns a
 root `SessionRef::scoped(request.session_key, resolved_agent_id)` or child
 `SessionRef::child_of(parent, child_key)`. Runtime binds the target locator
@@ -530,21 +589,23 @@ to `SessionRef`.
 `runtime/types.rs`, `runtime/builder.rs`, `runtime/session.rs`, `runtime/lib.rs`,
 and new `runtime/identity_tests.rs` declared from `lib.rs`.
 
-First add a recording resolver and locator test. The resolver reads a marker
-from `RunContext::data` and returns a scoped identity plus a lease whose
-transcript locator records its methods. Assert `Session::turn` resumes through
-that locator and its `TranscriptTarget` metadata names the resolved agent.
-Add a second resolver that returns `Err` and assert the builder's configured
-fallback locator receives no `head_generation`, `read_session_transcript`, or
-write call. Both tests fail because the resolver API is absent. Implement the
-interface above; store the resolver on `SessionBuilder` and `Session`; invoke
-it in `turn_inner` after cancellation and before `before_resume`; build the
-target from the lease locator, canonical `SessionRef`, and existing metadata
-seed; expose the identity through `SessionStateView`. Require the builder
-metadata seed when a resolver is installed and reject missing seed at build.
-Check identity, agent, and locator destination against the existing binding
-before every handle open. Do not fall back after resolver errors. Run
-`cargo test -p tinyagents-runtime identity_resolver` and then
+Add these red tests first: (a) direct `Session::resume` uses the resolved
+locator; (b) a `before_resume` hook replacing `ResumePreparation.transcript`
+with another destination is rejected before either locator runs; (c)
+`TurnOptions::session` naming a different first generation is rejected before
+locator access; (d) resolver failure leaves the fallback locator untouched;
+(e) changing agent, first generation, or destination on a later turn returns
+`InvalidSessionState` before locator access; (f) a new generation with the
+same first generation and destination is accepted. Each recording locator
+asserts zero calls to `head_generation`, `read_session_transcript`,
+`adopt_legacy`, and lock lookup after rejection. Implement
+`resolve_and_bind(options)` in `session.rs`; turn calls it after hooks and
+public `resume` calls it directly, then both invoke private `resume_bound`.
+Bind the target locator from the lease, canonical `SessionRef`, and metadata
+seed; expose the identity through `SessionStateView`. Require metadata seed at
+builder build time if a resolver is installed. Check any explicit option or
+hook-selected target against this identity; they cannot replace authority.
+Run `cargo test -p tinyagents-runtime identity_resolver` and then
 `cargo test -p tinyagents-runtime`.
 
 ### 4. Add explicit pinned store leases without changing live rebind
@@ -553,7 +614,7 @@ before every handle open. Do not fall back after resolver errors. Run
 `port/drivers/rebound_tests.rs`, `port/workspace_tests.rs`, and
 `testkit/conformance.rs`.
 
-In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: create provider over `MemoryStorage`, open `lease_for_agent`, write key `("prefs", "key")`, rebind to a fresh `MemoryStorage`, assert the lease still reads/writes the old backend, and assert `lease_for_agent` after rebind reads/writes the new backend. Run `cargo test -p tinyagents-session a_lease_keeps_its_backend_while_new_opens_follow_rebind`; it must fail because `lease_for_agent` is missing. Implement `SessionStoreLease` as an owning `AgentStores` wrapper; add the default provider method wrapping `try_for_agent`; override it in `RebindableSessionStores` by calling `self.current().try_for_agent(agent_id)` and wrapping the returned non-live stores. Add tenant test with two `Scope`s and one backend proving each lease sees only its own agent records. Retain and run the existing `retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes` test unchanged. Then run `cargo test -p tinyagents-session port::drivers::rebound` and `cargo test -p tinyagents-session`.
+In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement `SessionStoreLease { stores: AgentStores }` with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `RebindableSessionStores::lease_for_agent` clones `self.current()` while holding the read lock and opens through that snapshot, retaining the snapshot's tenant. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
 
 ### 5. Capture tool observations and route post-commit sinks in the owned finalizer
 
