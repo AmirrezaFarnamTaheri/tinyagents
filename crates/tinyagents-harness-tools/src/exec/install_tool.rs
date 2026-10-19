@@ -182,7 +182,7 @@ impl Tool for InstallTool {
                     success: false,
                     timed_out: true,
                 },
-                ToolResult::error(format!("Install timed out after 300s and was killed")),
+                ToolResult::error("Install timed out after 300s and was killed"),
             ),
             ExecBackendOutcome::Completed(output) => {
                 let stdout = truncate_stream(&output.stdout, "stdout");

@@ -26,9 +26,9 @@ impl ExecTool {
         Self { gate, backend }
     }
 
-    fn operation(&self, args: &Value) -> Result<ExecOperation, ToolResult> {
+    fn operation(&self, args: &Value) -> Result<ExecOperation, String> {
         let Some(command) = args.get("command").and_then(Value::as_str) else {
-            return Err(ToolResult::error("Missing required command string."));
+            return Err("Missing required command string.".to_owned());
         };
         Ok(ExecOperation::Shell {
             command: command.to_owned(),
@@ -111,7 +111,7 @@ impl Tool for ExecTool {
     ) -> anyhow::Result<ToolResult> {
         let operation = match self.operation(&args) {
             Ok(operation) => operation,
-            Err(result) => return Ok(result),
+            Err(message) => return Ok(ToolResult::error(message)),
         };
         let timeout_secs = args.get("timeout_secs").and_then(Value::as_u64);
         let timeout = explicit_call_timeout_duration(timeout_secs, MAX_TIMEOUT_SECS);
