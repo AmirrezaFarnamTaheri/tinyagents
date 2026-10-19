@@ -657,14 +657,13 @@ In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_reb
 `turn_driver/driver.rs`, and their sibling `driver_tests.rs`,
 `hooks_tests.rs`, `session_tests.rs`, `turn_driver/driver_tests.rs`.
 
-First add a recording `SessionDriver` returning one `ToolCallOutcome`; pin
-that `DriverOutcome` carries the observation after execution. Then add a
-recording sink test that verifies it runs after the transcript append by
-reading the appended row inside the sink, and a cancellation test that drops
-the caller future after durable commit but still observes sink completion.
-Add a failure test proving pre-commit failure never invokes the sink and a
-sink-error test proving it cannot change the successful result. Each test
-must fail before the corresponding API/code exists. `DriverOutcome` derives
+First add a recording `SessionDriver` returning one `ToolCallOutcome`; assert
+the returned `DriverOutcome.tool_outcomes` equals it. Then add a recording
+sink test that reads the appended transcript row inside the callback, a
+cancellation test that drops the caller future after durable commit and
+awaits a oneshot sent by the sink, a pre-commit failure test asserting no
+callback, and a sink-error test asserting the turn result remains successful.
+Each test must fail before the corresponding API/code exists. `DriverOutcome` derives
 `PartialEq`, so add `PartialEq` to `ToolCallOutcome`'s existing `Debug, Clone`
 derive and preserve the `DriverOutcome` derive and its existing assertions.
 Add a value test comparing call id, name, structured arguments, success,
@@ -679,6 +678,36 @@ in that task and in its current position. The `TurnSummary` adapter consumes
 outcomes and must not persist the raw argument/result. Verify with
 `cargo test -p tinyagents-runtime post_commit` and then
 `cargo test -p tinyagents-runtime`.
+
+In `TurnDriver::execute`, construct `let tool_outcomes =
+new_tool_outcome_sink();`, append
+`Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&tool_outcomes)))` to
+the per-turn `TurnPlan.context`, and set
+`DriverOutcome.tool_outcomes = drain_tool_outcomes(&tool_outcomes)` after the
+harness run has settled. Add the field with `#[serde?]` nowhere (the outcome
+is an in-memory runtime value); initialize it to `Vec::new()` in every
+existing literal for custom drivers.
+
+Change the owned finalizer to accept the separate observation and sinks, not
+to reconstruct observations from `CommitReceipt`:
+
+```rust
+tokio::spawn(async move {
+    let _ = hooks.after_commit(receipt.clone()).await;
+    for sink in sinks {
+        let _ = sink.after_commit(&observation).await;
+    }
+    let _ = hooks.on_terminal_outcome(outcome).await;
+    let _ = hooks.on_terminal(terminal).await;
+})
+```
+
+Keep the existing `after_commit` call at the same place in the task. Build
+`PostCommitObservation` from the committed receipt, the original request
+input, usage captured from the completed turn, `DriverOutcome.tool_outcomes`,
+and the resolved thread/agent identity before transferring ownership to the
+spawned task. On `DriverFailure`, use observations only if a durable partial
+commit is actually produced; pre-commit errors do not invoke sinks.
 
 ### 6. Move tool policy and declaration preservation
 
