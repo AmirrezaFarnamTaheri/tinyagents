@@ -1332,9 +1332,11 @@ fn a_failed_store_migration_keeps_the_original_store_and_lease() {
         fail_from: std::sync::atomic::AtomicUsize::new(1),
     });
     let destination_port: Arc<dyn CompletionStore> = destination;
-    assert!(router
-        .replace_store_if_current(&source_port, destination_port)
-        .is_err());
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
     assert!(Arc::ptr_eq(&router.store(), &source_port));
     assert!(router.pull("p", 1).unwrap().is_empty());
 }
@@ -1347,9 +1349,11 @@ fn a_source_enumeration_error_does_not_replace_the_store() {
     let source_port: Arc<dyn CompletionStore> = source;
     let router = CompletionRouter::new(source_port.clone());
     let destination_port: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
-    assert!(router
-        .replace_store_if_current(&source_port, destination_port)
-        .is_err());
+    assert!(
+        router
+            .replace_store_if_current(&source_port, destination_port)
+            .is_err()
+    );
     assert!(Arc::ptr_eq(&router.store(), &source_port));
 }
 
@@ -1425,10 +1429,12 @@ async fn record_with_retries_survives_a_transient_store_failure() {
         fail_from: std::sync::atomic::AtomicUsize::new(1),
     });
     let router = CompletionRouter::new(store.clone());
-    assert!(router
-        .record_with_retries(record("t1", "p"), 1)
-        .await
-        .is_err());
+    assert!(
+        router
+            .record_with_retries(record("t1", "p"), 1)
+            .await
+            .is_err()
+    );
     // Fails once, then the store recovers.
     store.puts.store(0, SeqCst);
     store.fail_from.store(1, SeqCst);
@@ -1443,9 +1449,11 @@ async fn record_with_retries_survives_a_transient_store_failure() {
             store.fail_from.store(usize::MAX, SeqCst);
         })
     };
-    assert!(router
-        .record_with_retries(record("t3", "p"), 5)
-        .await
-        .is_ok());
+    assert!(
+        router
+            .record_with_retries(record("t3", "p"), 5)
+            .await
+            .is_ok()
+    );
     handle.await.unwrap();
 }

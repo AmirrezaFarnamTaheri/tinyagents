@@ -29,15 +29,15 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
     Blocking, Capability, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec,
-    Leases, Precondition, Query, Scope, StorageBackend, StorageError, Versioned, WriteOptions,
-    UPDATED_FIELD,
+    Leases, Precondition, Query, Scope, StorageBackend, StorageError, UPDATED_FIELD, Versioned,
+    WriteOptions,
 };
 use tokio::sync::OnceCell;
 
 use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
 use super::types::{CompletionRecord, CompletionState};
 use crate::storage::{
-    completions_spec, task_id_key, to_ms, CompletionDoc, COMPLETIONS, SCHEMA_VERSION,
+    COMPLETIONS, CompletionDoc, SCHEMA_VERSION, completions_spec, task_id_key, to_ms,
 };
 
 const LOG_PREFIX: &str = "[completion-store]";

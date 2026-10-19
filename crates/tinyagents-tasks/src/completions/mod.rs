@@ -37,12 +37,12 @@ pub use delivery::{
 pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
-    open_driver_completion_store, open_driver_completion_store_or_memory, CompletionRouterPool,
-    CompletionRouterPoolError, CompletionRouterReplaceOutcome, CompletionStoreFallback,
+    CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
+    CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
 };
 pub use router::{
-    CompletionRouter, CompletionStoreReplaceOutcome, RecordOutcome, TombstoneOutcome,
-    DEFAULT_MAX_ATTEMPTS,
+    CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
+    TombstoneOutcome,
 };
 pub use store::{
     ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore, ParentGateClaim,

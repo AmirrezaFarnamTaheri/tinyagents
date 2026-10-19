@@ -43,7 +43,9 @@ pub use forwarder::{
     forward_collects, forward_message_collects, forward_message_steers, forward_steers,
 };
 
-pub use types::{QueueAdmission, QueueAdmissionError, QueueLane, QueueMode, QueueStatus, RunQueueHandle};
+pub use types::{
+    QueueAdmission, QueueAdmissionError, QueueLane, QueueMode, QueueStatus, RunQueueHandle,
+};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
 ///
