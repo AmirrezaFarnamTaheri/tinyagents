@@ -241,8 +241,8 @@ source edits are part of this plan.
 Add cases for an orphan assistant call followed by no result, a partial set of
 results, a complete call/result round, and a legacy-envelope form. Assert the
 helper removes only the incomplete head and preserves the complete prefix.
-Run `cargo test -p tinyagents-session orphaned_tool_head -- --exact` (adjust
-the filter to the final test name), verify red, implement repair, then run
+Run `cargo test -p tinyagents-session orphaned_tool_head`, verify red,
+implement repair, then run
 `cargo test -p tinyagents-session`.
 
 ### 2. Build identity and metadata from durable session references
