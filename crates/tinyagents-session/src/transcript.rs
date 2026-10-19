@@ -96,7 +96,9 @@ pub mod view;
 #[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod writer;
 
-pub use adoption::SessionAdoption;
+pub use adoption::{
+    SessionAdoption, repair_orphaned_tool_head, repair_orphaned_tool_head_messages,
+};
 pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
 #[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]

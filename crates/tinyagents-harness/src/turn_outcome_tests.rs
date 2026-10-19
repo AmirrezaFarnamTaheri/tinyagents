@@ -1,4 +1,36 @@
 use super::*;
+
+#[test]
+fn tool_call_outcome_equality_covers_every_observed_field() {
+    let original = ToolCallOutcome {
+        call_id: "call-1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path": "notes.txt"}),
+        success: false,
+        content: "denied".into(),
+        duration_ms: 17,
+    };
+    assert_eq!(original, original.clone());
+
+    let mut changed = original.clone();
+    changed.call_id.push_str("-changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.name.push_str("_changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.arguments["path"] = serde_json::json!("other.txt");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.success = true;
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.content.push_str(" changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.duration_ms += 1;
+    assert_ne!(original, changed);
+}
 use tinyinference_llm::message::{AssistantMessage, ContentBlock};
 use tinyinference_llm::tool::ToolCall;
 

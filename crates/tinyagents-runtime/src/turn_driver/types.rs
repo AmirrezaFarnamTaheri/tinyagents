@@ -85,6 +85,8 @@ pub struct TurnReport {
     pub max_iterations: usize,
     /// How tool registration resolved (candidates, registered, refused).
     pub tools: ToolSetReport,
+    /// Tool-call outcomes captured at the harness boundary.
+    pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
     /// The completion signal was deferred to the caller. Call
     /// [`Self::emit_completed`] once its post-run work is done.
     pub completion_deferred: bool,
@@ -126,6 +128,7 @@ impl fmt::Debug for TurnReport {
             .field("model_calls", &self.model_calls)
             .field("max_iterations", &self.max_iterations)
             .field("tools", &self.tools)
+            .field("tool_outcomes", &self.tool_outcomes)
             .field("completion_deferred", &self.completion_deferred)
             .field("completed_emitted", &self.completed_emitted())
             .finish()
