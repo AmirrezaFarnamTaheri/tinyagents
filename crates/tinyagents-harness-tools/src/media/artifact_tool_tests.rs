@@ -128,12 +128,6 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
 
 #[test]
 fn configured_media_kinds_keep_their_exact_heartbeat_labels() {
-    assert_eq!(
-        super::artifact_tool::progress_label(&MediaArtifactKind::Image),
-        "Generating image"
-    );
-    assert_eq!(
-        super::artifact_tool::progress_label(&MediaArtifactKind::Video),
-        "Generating video"
-    );
+    assert_eq!(progress_label(&MediaArtifactKind::Image), "Generating image");
+    assert_eq!(progress_label(&MediaArtifactKind::Video), "Generating video");
 }
