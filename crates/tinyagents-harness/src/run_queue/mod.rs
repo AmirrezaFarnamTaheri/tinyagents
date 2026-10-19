@@ -103,7 +103,7 @@ impl<T> Queued<T> {
 pub struct AdmittedQueueItem<T> {
     /// The queued payload.
     pub value: T,
-    _permit: Option<Box<dyn types::QueueAdmissionPermit>>,
+    _permit: Option<std::sync::Arc<dyn types::QueueAdmissionPermit>>,
 }
 
 impl<T> RunQueue<T> {
