@@ -457,9 +457,12 @@ paths in `markdown_formatted`. Keep the `n > 1` title suffix and 60-character
 prompt title cap. OpenHuman's later adapter implements `ArtifactFiling` and
 retains the existing versioning, trusted-file-root checks, blob cleanup, and
 reference allowlist policy. Metadata tests use a fake inner tool with distinct
-name, description, schema, category, policy and permissions and assert the
-wrapper returns each declaration from the retained instance with and without a
-per-call factory. Image/video configuration tests assert the exact configured
+name, description, schema, category, policy, permission, scope, timeout,
+external-effect behavior, and result-size limit; assert every static/argument-
+based `Tool` declaration delegates to the retained instance with and without a
+per-call factory. In particular, assert `name()` and `description()` continue
+to return the retained instance's references after invoking a factory that
+returns a different temporary tool. Image/video configuration tests assert the exact configured
 kind passed to each filer and exact heartbeat label (`Generating image` /
 `Generating video`), including when the factory returns a new temporary inner
 tool. This catches both metadata borrowing from a temporary and accidental
