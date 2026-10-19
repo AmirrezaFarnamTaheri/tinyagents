@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_tasks::{
     CompletionRecord, CompletionResult, CompletionRouter, CompletionStatus, NotifyMode,
@@ -47,6 +48,8 @@ pub struct DetachedCompletionTarget {
     pub label: Option<String>,
     /// How the parent is told.
     pub notify_mode: NotifyMode,
+    /// Lifecycle generation captured when the child was admitted.
+    pub parent_epoch: u64,
 }
 
 impl DetachedCompletionTarget {
@@ -62,7 +65,33 @@ impl DetachedCompletionTarget {
             agent_id: agent_id.into(),
             label: None,
             notify_mode: NotifyMode::default(),
+            parent_epoch: 0,
         }
+    }
+
+    /// Creates a target only when the parent lifecycle is open and captures
+    /// the generation that every later pause and terminal record must retain.
+    pub fn try_new(
+        router: Arc<CompletionRouter>,
+        parent_key: impl Into<String>,
+        agent_id: impl Into<String>,
+    ) -> Result<Self, TinyAgentsError> {
+        let parent_key = parent_key.into();
+        let parent_epoch = router
+            .admit_child_generation(&parent_key)?
+            .ok_or_else(|| {
+                TinyAgentsError::Graph(format!(
+                    "detached child parent lifecycle is closed: {parent_key:?}"
+                ))
+            })?;
+        Ok(Self {
+            router,
+            parent_key,
+            agent_id: agent_id.into(),
+            label: None,
+            notify_mode: NotifyMode::default(),
+            parent_epoch,
+        })
     }
 
     /// Sets the human label.
@@ -102,6 +131,7 @@ impl DetachedCompletionTarget {
         )
         .with_notify_mode(self.notify_mode);
         record.label = self.label.clone();
+        record.parent_epoch = self.parent_epoch;
         Some(record)
     }
 
@@ -123,6 +153,7 @@ impl DetachedCompletionTarget {
         )
         .with_notify_mode(self.notify_mode);
         record.label = self.label.clone();
+        record.parent_epoch = self.parent_epoch;
         record
     }
 
