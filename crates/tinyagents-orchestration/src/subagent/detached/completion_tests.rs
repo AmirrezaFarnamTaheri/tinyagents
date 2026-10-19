@@ -18,7 +18,9 @@ fn router() -> Arc<CompletionRouter> {
 }
 
 fn target(router: &Arc<CompletionRouter>) -> DetachedCompletionTarget {
-    DetachedCompletionTarget::new(router.clone(), "p", "worker").with_label("indexer")
+    DetachedCompletionTarget::try_new(router.clone(), "p", "worker")
+        .expect("test parent starts open")
+        .with_label("indexer")
 }
 
 async fn settle(router: &CompletionRouter, parent: &str) {

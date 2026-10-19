@@ -127,7 +127,7 @@ impl Drop for StoreMigration<'_> {
 
 struct ParentGateGuard {
     store: Arc<dyn CompletionStore>,
-    _local: ParentLifecycleGuard,
+    _local: Option<ParentLifecycleGuard>,
     parent_key: String,
     claim: ParentGateClaim,
 }
@@ -176,7 +176,7 @@ impl ParentGateGuard {
             if let Some(claim) = store.acquire_parent_gate(parent_key, &holder, PARENT_GATE_TTL)? {
                 return Ok(Self {
                     store,
-                    _local: local,
+                    _local: Some(local),
                     parent_key: parent_key.to_owned(),
                     claim,
                 });
@@ -187,6 +187,27 @@ impl ParentGateGuard {
                 )));
             }
             std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn acquire_native(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
+        let holder = uuid::Uuid::new_v4().to_string();
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(claim) = store.acquire_parent_gate(parent_key, &holder, PARENT_GATE_TTL)? {
+                return Ok(Self {
+                    store,
+                    _local: None,
+                    parent_key: parent_key.to_owned(),
+                    claim,
+                });
+            }
+            if started.elapsed() >= PARENT_GATE_WAIT {
+                return Err(TinyAgentsError::Graph(format!(
+                    "completion store: timed out waiting for parent gate {parent_key}"
+                )));
+            }
+            std::thread::sleep(PARENT_GATE_POLL_INTERVAL);
         }
     }
 
