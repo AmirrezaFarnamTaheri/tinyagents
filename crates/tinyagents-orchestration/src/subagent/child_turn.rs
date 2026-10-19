@@ -8,7 +8,10 @@
 
 use async_trait::async_trait;
 use tinyagents_harness::cost::{CallCost, CostTally};
+use tinyagents_harness::CancellationToken;
+use tinyagents_tasks::DeliveryFence;
 use tinyinference_llm::usage::UsageTotals;
+use std::{future::Future, sync::Arc};
 
 /// Usage and pricing accumulated by one child graph turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -17,7 +20,7 @@ pub struct ChildTurnAccounting {
     pub usage: UsageTotals,
     /// Host-priced child calls, including unknown-cost propagation.
     pub cost: CostTally,
-    /// Model calls counted by the turn driver, including cap summarization.
+    /// Model calls counted by the host turn. Cap-summary calls are excluded.
     pub model_calls: usize,
 }
 
@@ -77,6 +80,70 @@ pub struct ChildTurnFailure<Message, Error> {
     pub accounting: ChildTurnAccounting,
 }
 
+/// Cancellation and ownership capability retained for the whole child turn.
+#[derive(Clone)]
+pub struct ChildTurnControl {
+    cancellation: CancellationToken,
+    fence: Arc<dyn DeliveryFence>,
+}
+
+impl ChildTurnControl {
+    /// Creates a turn control from the cancellation token and durable fence
+    /// acquired by the caller. A turn must never reacquire after fence loss.
+    pub fn new(cancellation: CancellationToken, fence: Arc<dyn DeliveryFence>) -> Self {
+        Self { cancellation, fence }
+    }
+
+    /// Returns the cancellation token passed to host provider/tool work.
+    pub fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    fn ensure_admitted<E>(&self) -> Result<(), ChildTurnError<E>> {
+        if self.cancellation.is_cancelled() {
+            Err(ChildTurnError::Cancelled)
+        } else if !self.fence.admitted() {
+            self.cancellation.cancel();
+            Err(ChildTurnError::LeaseLost)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn race<T, E>(
+        &self,
+        future: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, ChildTurnError<E>> {
+        self.ensure_admitted()?;
+        tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => Err(ChildTurnError::Cancelled),
+            _ = self.fence.lost() => {
+                self.cancellation.cancel();
+                Err(ChildTurnError::LeaseLost)
+            }
+            result = future => {
+                self.ensure_admitted()?;
+                result.map_err(ChildTurnError::Host)
+            }
+        }
+    }
+}
+
+/// Failure from host work or loss of the turn's cancellation/fencing authority.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum ChildTurnError<Error> {
+    /// A provider, transcript, or deferred host operation failed.
+    #[error("child turn host operation failed: {0}")]
+    Host(Error),
+    /// The parent explicitly cancelled this child turn.
+    #[error("child turn cancelled")]
+    Cancelled,
+    /// The durable thread/turn lease was lost and cannot be reacquired.
+    #[error("child turn lease lost")]
+    LeaseLost,
+}
+
 /// Host-owned ports used by [`drive_child_turn`].
 #[async_trait]
 pub trait ChildTurnHost: Send {
@@ -89,6 +156,7 @@ pub trait ChildTurnHost: Send {
     /// failure, retain and return the accepted-history snapshot for recovery.
     async fn run_turn(
         &mut self,
+        cancellation: CancellationToken,
     ) -> Result<ChildTurnRun<Self::Message>, ChildTurnFailure<Self::Message, Self::Error>>;
 
     /// Produce a resumable checkpoint only when the child hit its cap.
@@ -122,6 +190,7 @@ pub trait ChildTurnHost: Send {
     async fn after_commit(
         &mut self,
         result: &ChildTurnResult<Self::Message>,
+        cancellation: CancellationToken,
     ) -> Result<(), Self::Error>;
 }
 
@@ -129,8 +198,7 @@ pub trait ChildTurnHost: Send {
 /// and durable commit ordering.
 pub async fn drive_child_turn<H: ChildTurnHost>(
     host: &mut H,
-) -> Result<ChildTurnResult<H::Message>, H::Error> {
-    let mut run = match host.run_turn().await {
+) -> Result<ChildTurnResult<H::Message>, ChildTurnError<H::Error>> {
         Ok(run) => run,
         Err(failure) => {
             host.persist_failure(&failure.accepted_history, &failure.accounting)
