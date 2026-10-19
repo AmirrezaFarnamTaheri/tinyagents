@@ -1490,7 +1490,7 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
         "re-admission must not reset or rewrite the sealed generation");
     assert_eq!(locator.head_generation(&session_ref).generation, 1);
     let active = locator.read_session_transcript(&session_ref.next_generation())
-        .unwrap().unwrap().read_session().unwrap().unwrap();
+        .unwrap().read_session().unwrap().unwrap();
     assert_eq!(active.messages.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
         ["three", "third", "four", "fourth"]);
 }
