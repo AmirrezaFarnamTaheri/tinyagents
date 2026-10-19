@@ -436,6 +436,36 @@ impl DocumentStore for PauseAfterSelectorRead {
         }
         Ok(page)
     }
+
+    async fn count(
+        &self,
+        collection: &str,
+        filter: &tinystoragedrivers_core::Filter,
+    ) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.count(collection, filter).await
+    }
+
+    async fn delete_where(
+        &self,
+        collection: &str,
+        filter: &tinystoragedrivers_core::Filter,
+    ) -> tinystoragedrivers_core::Result<u64> {
+        self.inner.delete_where(collection, filter).await
+    }
+
+    async fn claim(
+        &self,
+        collection: &str,
+        filter: &tinystoragedrivers_core::Filter,
+        sort: &[tinystoragedrivers_core::Sort],
+        patch: &Value,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.inner.claim(collection, filter, sort, patch).await
+    }
+
+    async fn drop_collection(&self, collection: &str) -> tinystoragedrivers_core::Result<()> {
+        self.inner.drop_collection(collection).await
+    }
 }
 
 #[tokio::test]
