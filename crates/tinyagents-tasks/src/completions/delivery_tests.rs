@@ -498,10 +498,10 @@ fn release_all_clears_delivery_leases_without_touching_busy_state() {
 
     assert_eq!(delivery.release_all(), 2);
     let renewed_a = delivery.try_acquire(thread_a.clone()).unwrap();
-    let renewed_b = delivery.try_acquire(thread_b).unwrap();
+    let renewed_b = delivery.try_acquire(thread_b.clone()).unwrap();
     drop((lease_a, lease_b));
     assert!(delivery.try_acquire(thread_a.clone()).is_none());
-    assert!(delivery.try_acquire(renewed_b.key.clone()).is_none());
+    assert!(delivery.try_acquire(thread_b).is_none());
     assert!(busy.is_busy_scoped(&thread_a));
     drop((renewed_a, renewed_b));
 }
