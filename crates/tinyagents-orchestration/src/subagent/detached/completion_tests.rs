@@ -278,16 +278,19 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
             question: "new question".into(),
         })
         .unwrap();
+    let mut saw_pause = false;
     for _ in 0..100 {
         if router
             .pending_for("p")
             .iter()
             .any(|record| record.task_id.starts_with(&pause_record_prefix("new-child")))
         {
+            saw_pause = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    assert!(saw_pause, "watcher must persist the pause before it resumes");
     new_tx
         .send(DetachedSubagentStatus::Completed {
             output: "new answer".into(),
