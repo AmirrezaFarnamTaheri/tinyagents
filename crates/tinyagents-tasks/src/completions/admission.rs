@@ -67,9 +67,19 @@ impl CompletionAdmission {
         }
     }
 
-    fn key_for(&self, store: &Arc<dyn CompletionStore>) -> String {
+    fn lifecycle_for(&self, store: &Arc<dyn CompletionStore>) -> Arc<ParentLifecycle> {
+        if store.is_process_local() {
+            store
+                .parent_lifecycle()
+                .unwrap_or_else(|| Arc::clone(&self.lifecycle))
+        } else {
+            Arc::clone(&self.lifecycle)
+        }
+    }
+
+    fn key_for(&self, store: &Arc<dyn CompletionStore>, lifecycle: &Arc<ParentLifecycle>) -> String {
         let identity = if store.is_process_local() {
-            format!("lifecycle:{}", self.lifecycle.identity())
+            format!("lifecycle:{}", lifecycle.identity())
         } else {
             store
                 .coordination_identity()
@@ -90,7 +100,8 @@ impl QueueAdmission for CompletionAdmission {
         expected_key: Option<&str>,
     ) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         let store = CompletionRouter::admission_store_snapshot(&self.store)?;
-        if expected_key.is_some_and(|expected| self.key_for(&store) != expected) {
+        let lifecycle = self.lifecycle_for(&store);
+        if expected_key.is_some_and(|expected| self.key_for(&store, &lifecycle) != expected) {
             // The queue's key came from the immediately preceding snapshot.
             // A mismatch therefore means migration won between those steps;
             // carry the transient classification in this same result rather
@@ -99,13 +110,20 @@ impl QueueAdmission for CompletionAdmission {
         }
         let permit = super::router::ParentAdmissionPermit::acquire(
             Arc::clone(&store),
-            Arc::clone(&self.lifecycle),
+            Arc::clone(&lifecycle),
             &self.parent_key,
             self.parent_epoch,
         )
         .map_err(|_| QueueAdmissionError::Rejected)?
         .ok_or(QueueAdmissionError::Rejected)?;
         CompletionRouter::admission_store_is_current(&self.store, &store)?;
+        if store.is_process_local()
+            && store
+                .parent_lifecycle()
+                .is_some_and(|current| !Arc::ptr_eq(&current, &lifecycle))
+        {
+            return Err(QueueAdmissionError::Retry);
+        }
         Ok(Arc::new(permit))
     }
 
@@ -113,6 +131,7 @@ impl QueueAdmission for CompletionAdmission {
         let store = CompletionRouter::admission_store_snapshot(&self.store).ok()?;
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
-        Some(self.key_for(&store))
+        let lifecycle = self.lifecycle_for(&store);
+        Some(self.key_for(&store, &lifecycle))
     }
 }
