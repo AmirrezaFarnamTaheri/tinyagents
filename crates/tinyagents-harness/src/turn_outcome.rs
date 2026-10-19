@@ -27,7 +27,7 @@ pub fn ended_out_of_output_budget(final_response: Option<&ModelResponse>) -> boo
 
 /// One tool call's execution outcome, captured at the tool boundary before the
 /// harness folds the result into a message that drops its failure flag.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolCallOutcome {
     /// Provider call id.
     pub call_id: String,
