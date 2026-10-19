@@ -37,7 +37,7 @@ async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
     let parked = tokio::spawn(async move { waiter_store.request_review(1, "thread".into(), None, crate::plan_review::PlanReviewRequest { summary: "plan".into(), steps: vec![], tool_call_id: None }).await });
     tokio::task::yield_now().await;
     let changes = Arc::new(Changes::default());
-    let (tool, mode) = tool(RunMode::Plan, Some(reviews), changes.clone());
+    let (tool, mode) = tool(RunMode::Plan, Some(reviews.clone()), changes.clone());
     let parent = RunContext::new(RunConfig::new("plan-run"), ());
     let context = ToolExecutionContext::from_run_context(&parent, CallId::new("call-2"));
     let result = tool.execute_with_context(json!({"plan":"step"}), ToolCallOptions::default(), Some(&context)).await.unwrap();
