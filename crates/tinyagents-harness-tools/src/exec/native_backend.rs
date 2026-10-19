@@ -16,6 +16,10 @@ pub struct NativeExecBackend {
     flavor: ShellFlavor,
 }
 
+#[cfg(test)]
+#[path = "native_backend_tests.rs"]
+mod tests;
+
 impl NativeExecBackend {
     #[must_use]
     pub fn new(flavor: ShellFlavor) -> Self {
