@@ -355,7 +355,18 @@ impl CompletionStore for InMemoryCompletionStore {
     }
 
     fn put(&self, record: &CompletionRecord) -> Result<()> {
-        self.lock()?.insert(record.task_id.clone(), record.clone());
+        let mut records = self.lock()?;
+        let mut record = record.clone();
+        if record.parent_epoch == 0 && !record.parent_key.is_empty() {
+            let marker_id = format!("\u{1}parent-cancelled:{}", record.parent_key);
+            if let Some(marker) = records
+                .get(&marker_id)
+                .filter(|m| m.state == CompletionState::Delivered)
+            {
+                record.parent_epoch = marker.parent_epoch;
+            }
+        }
+        records.insert(record.task_id.clone(), record);
         Ok(())
     }
 
