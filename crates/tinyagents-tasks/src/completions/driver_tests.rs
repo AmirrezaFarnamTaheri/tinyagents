@@ -23,6 +23,30 @@ fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
         .collect()
 }
 
+#[test]
+fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let store = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+        .unwrap();
+    let stale = store
+        .acquire_parent_gate("parent", "router-a", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    assert!(store
+        .release_parent_gate("parent", &stale)
+        .unwrap());
+    let current = store
+        .acquire_parent_gate("parent", "router-b", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    assert!(current.epoch > stale.epoch);
+
+    assert!(store
+        .insert_if_absent(&record("late", "parent"), &stale)
+        .is_err());
+    assert!(store.get("late").is_none());
+}
+
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
@@ -200,9 +224,9 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     use crate::completions::{ClaimResolution, CompletionClaimMode};
 
     let storage = MemoryStorage::new();
-    let docs = docs_of(&storage, "shared");
-    let first = DriverCompletionStore::new(Arc::clone(&docs)).unwrap();
-    let second = DriverCompletionStore::new(docs).unwrap();
+    let backend: Arc<dyn StorageBackend> = Arc::new(storage);
+    let first = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap();
+    let second = DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap();
     let record = record("lease-task", "parent");
     first.put(&record).unwrap();
     let now = SystemTime::now();
@@ -453,7 +477,7 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
     use tinystoragedrivers_core::Precondition;
     let storage = MemoryStorage::new();
-    let docs = docs_of(&storage, "local");
+    let docs = Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
     let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("good", "p")).unwrap();
     docs.put(
@@ -490,7 +514,7 @@ async fn the_sync_trait_works_from_a_multi_thread_runtime() {
 #[tokio::test]
 async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
     let storage = MemoryStorage::new();
-    let docs = docs_of(&storage, "local");
+    let docs = Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
     let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("c/1", "p")).unwrap();
     let row = docs
