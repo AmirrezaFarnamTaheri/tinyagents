@@ -2,14 +2,15 @@ use super::{PlanReviewPort, PlanReviewRequest, PlanReviewResolution};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tinyagents_harness::middleware::library::RunMode;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext, ToolTimeout};
 
 pub struct RequestPlanReviewTool {
-    port: Option<Arc<dyn PlanReviewPort>>,
+    port: Option<Arc<dyn PlanReviewHost>>,
 }
 impl RequestPlanReviewTool {
     #[must_use]
-    pub fn new(port: Option<Arc<dyn PlanReviewPort>>) -> Self {
+    pub fn new(port: Option<Arc<dyn PlanReviewHost>>) -> Self {
         Self { port }
     }
 }
@@ -68,8 +69,16 @@ impl Tool for RequestPlanReviewTool {
                     .collect()
             })
             .unwrap_or_default();
+        let Some(()) = port.interactive_surface(context) else {
+            return Ok(ToolResult::success("approved: non-interactive turn (no review surface) — proceed with the plan."));
+        };
+        let thread_id = port.thread_id(context);
+        if port.run_mode(context, thread_id.as_deref()) != RunMode::Plan {
+            return Ok(ToolResult::success("not applicable: this thread is not in plan mode, so there is no plan to review. Do not call `request_plan_review` again this turn."));
+        }
+        let tool_call_id = port.tool_call_id(context);
         let resolution = match port
-            .request_review(PlanReviewRequest { summary, steps }, context)
+            .request_review(PlanReviewRequest { summary, steps, tool_call_id }, context)
             .await
         {
             Ok(value) => value,

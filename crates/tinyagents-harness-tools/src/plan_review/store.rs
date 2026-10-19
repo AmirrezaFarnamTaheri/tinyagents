@@ -48,10 +48,10 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
         Self { ttl, state: Mutex::new(State { entries: HashMap::new(), newest: HashMap::new() }), notifier }
     }
 
-    pub async fn request_review(&self, scope: S, thread_id: String, client_id: Option<String>, request: super::PlanReviewRequest, tool_call_id: Option<String>) -> PlanReviewResolution {
+    pub async fn request_review(&self, scope: S, thread_id: String, client_id: Option<String>, request: super::PlanReviewRequest) -> PlanReviewResolution {
         let id = format!("plan-{}", Uuid::new_v4());
         let expires_at = (chrono::Utc::now() + chrono::Duration::from_std(self.ttl).unwrap_or_default()).to_rfc3339();
-        let snapshot = ParkedReview { request_id: id.clone(), scope: scope.clone(), thread_id: thread_id.clone(), client_id, summary: request.summary, steps: request.steps, tool_call_id, expires_at };
+        let snapshot = ParkedReview { request_id: id.clone(), scope: scope.clone(), thread_id: thread_id.clone(), client_id, summary: request.summary, steps: request.steps, tool_call_id: request.tool_call_id, expires_at };
         let (tx, rx) = oneshot::channel();
         {
             let mut state = self.state.lock();

@@ -2,18 +2,11 @@ use async_trait::async_trait;
 use tinytools::ToolRunContext;
 use tinyagents_harness::middleware::library::RunMode;
 
-/// Generic host seam used by the review tool. A missing interactive surface
-/// means the caller has an explicit non-interactive auto-approval policy.
-pub trait PlanReviewHost: PlanReviewPort {
-    fn interactive_surface(&self, context: Option<&dyn ToolRunContext>) -> bool;
-    fn run_mode(&self, context: Option<&dyn ToolRunContext>, thread_id: Option<&str>) -> RunMode;
-    fn tool_call_id(&self, context: Option<&dyn ToolRunContext>) -> Option<String>;
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanReviewRequest {
     pub summary: String,
     pub steps: Vec<String>,
+    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,10 +19,19 @@ pub enum PlanReviewResolution {
 }
 
 #[async_trait]
-pub trait PlanReviewPort: Send + Sync {
+pub trait PlanReviewHost: Send + Sync {
+    /// `None` selects the established non-interactive auto-approval path.
+    fn interactive_surface(&self, _context: Option<&dyn ToolRunContext>) -> Option<()> { Some(()) }
+    fn thread_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> { None }
+    fn run_mode(&self, _context: Option<&dyn ToolRunContext>, _thread_id: Option<&str>) -> RunMode { RunMode::Plan }
+    fn tool_call_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> { None }
     async fn request_review(
         &self,
         request: PlanReviewRequest,
         context: Option<&dyn ToolRunContext>,
     ) -> Result<PlanReviewResolution, String>;
 }
+
+/// Compatibility name retained from the initial generic port introduced in
+/// the harness-tools crate.
+pub use PlanReviewHost as PlanReviewPort;

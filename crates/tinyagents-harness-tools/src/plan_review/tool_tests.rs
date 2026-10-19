@@ -11,7 +11,7 @@ struct Port {
 }
 struct FailingPort;
 #[async_trait]
-impl PlanReviewPort for FailingPort {
+impl PlanReviewHost for FailingPort {
     async fn request_review(
         &self,
         _: PlanReviewRequest,
@@ -21,7 +21,7 @@ impl PlanReviewPort for FailingPort {
     }
 }
 #[async_trait]
-impl PlanReviewPort for Port {
+impl PlanReviewHost for Port {
     async fn request_review(
         &self,
         request: PlanReviewRequest,
@@ -76,7 +76,8 @@ async fn request_is_trimmed_and_resolution_text_is_preserved() {
         *port.request.lock().unwrap(),
         Some(PlanReviewRequest {
             summary: "plan".into(),
-            steps: vec!["first".into(), "second".into()]
+            steps: vec!["first".into(), "second".into()],
+            tool_call_id: None,
         })
     );
 }
