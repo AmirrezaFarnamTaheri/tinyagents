@@ -28,9 +28,9 @@ use std::time::{Duration, SystemTime};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Leases,
-    Precondition, Query, Repo, Scope, StorageBackend, StorageError, UPDATED_FIELD, Versioned,
-    WriteOptions,
+    Blocking, Capability, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec,
+    Leases, Precondition, Query, Repo, Scope, StorageBackend, StorageError, UPDATED_FIELD,
+    Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -91,6 +91,7 @@ impl DriverCompletionStore {
         backend: Arc<dyn StorageBackend>,
         scope: Scope,
     ) -> std::result::Result<Self, StorageError> {
+        backend.capabilities().require(Capability::Fencing)?;
         Self::with_bridge(backend, scope, Blocking::new()?)
     }
 
@@ -106,6 +107,7 @@ impl DriverCompletionStore {
         scope: Scope,
         bridge: Blocking,
     ) -> std::result::Result<Self, StorageError> {
+        backend.capabilities().require(Capability::Fencing)?;
         let scoped = backend.for_scope(&scope)?;
         let docs = scoped.documents().clone();
         Ok(Self {
