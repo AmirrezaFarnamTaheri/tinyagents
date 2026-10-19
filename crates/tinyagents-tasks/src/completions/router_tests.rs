@@ -279,6 +279,8 @@ async fn another_router_cannot_ack_or_fail_an_active_claim_by_task_id() {
     let claimed = owner.claim_pending("p", 1).unwrap();
     let forged = CompletionReceipt {
         task_id: "owned".into(),
+        parent_key: "p".into(),
+        parent_epoch: 1,
         token: "not-the-owner".into(),
     };
     assert_eq!(
@@ -650,6 +652,8 @@ async fn mark_failed_on_a_settled_record_is_ignored() {
     let mut stale_and_unknown = receipts(&batch);
     stale_and_unknown.push(CompletionReceipt {
         task_id: "unknown".into(),
+        parent_key: "p".into(),
+        parent_epoch: 1,
         token: "no-claim".into(),
     });
     assert!(router.mark_failed(&stale_and_unknown).unwrap().is_empty());
