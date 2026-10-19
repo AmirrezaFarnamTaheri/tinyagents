@@ -6,14 +6,9 @@ use async_trait::async_trait;
 use serde_json::json;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
-use tinyagents_harness::middleware::library::{RunMode, RunModeHandle};
 
 /// Stable marker emitted for a plan-to-build handoff.
 pub const PLAN_EXIT_MARKER: &str = "[plan_exit]";
-
-/// Host callback that resolves the live mode handle only when this call may
-/// leave plan mode. Hosts can keep tenant lookup and approval checks here.
-pub type PlanExitModeLookup = dyn Fn(&dyn ToolRunContext) -> Option<RunModeHandle> + Send + Sync;
 
 /// Host-owned state operations required for a generic plan exit.
 pub trait PlanExitHost: Send + Sync {
@@ -23,8 +18,7 @@ pub trait PlanExitHost: Send + Sync {
 
 /// Tool that returns a plan and switches its host-selected run mode to Build.
 pub struct PlanExitTool {
-    lookup: Arc<PlanExitModeLookup>,
-    host: Option<Arc<dyn PlanExitHost>>,
+    host: Arc<dyn PlanExitHost>,
 }
 
 impl PlanExitTool {
@@ -34,15 +28,10 @@ impl PlanExitTool {
     /// Stable tool description advertised to the model and host registries.
     pub const DESCRIPTION: &'static str = "Exit plan mode and hand off the plan to execution. Call this once the plan is complete — the wrapped harness will switch to build mode (when wired). The `plan` argument is the user-facing plan text that downstream agents will execute against.";
 
-    /// Creates a tool using the host's run-mode lookup and policy checks.
-    pub fn new(lookup: Arc<PlanExitModeLookup>) -> Self {
-        Self { lookup, host: None }
-    }
-
     /// Creates a tool whose parked-review check and mode transition are
     /// delegated to the host's generic stores.
-    pub fn with_host(lookup: Arc<PlanExitModeLookup>, host: Arc<dyn PlanExitHost>) -> Self {
-        Self { lookup, host: Some(host) }
+    pub fn new(host: Arc<dyn PlanExitHost>) -> Self {
+        Self { host }
     }
 }
 
@@ -91,14 +80,10 @@ impl Tool for PlanExitTool {
         }
 
         if let Some(context) = context {
-            if self.host.as_ref().is_some_and(|host| host.review_is_parked(context)) {
+            if self.host.review_is_parked(context) {
                 return Ok(ToolResult::error("A plan review is still pending for this thread"));
             }
-            if let Some(host) = &self.host {
-                host.switch_to_build(context);
-            } else if let Some(mode) = (self.lookup)(context) {
-                mode.set(RunMode::Build);
-            }
+            self.host.switch_to_build(context);
         }
 
         Ok(ToolResult::success(format!("{PLAN_EXIT_MARKER}\n{plan}")))
