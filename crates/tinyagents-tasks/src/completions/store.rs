@@ -141,10 +141,12 @@ pub trait CompletionStore: Send + Sync {
     fn resolve_claim(
         &self,
         task_id: &str,
+        parent_key: &str,
+        gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, token, resolution);
+        let _ = (task_id, parent_key, gate, token, resolution);
         Err(store_err(
             "resolve claim",
             "store does not support atomic delivery claims",
@@ -446,6 +448,8 @@ impl CompletionStore for InMemoryCompletionStore {
     fn resolve_claim(
         &self,
         task_id: &str,
+        _parent_key: &str,
+        _gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
