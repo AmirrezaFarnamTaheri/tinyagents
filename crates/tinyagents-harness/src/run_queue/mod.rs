@@ -168,7 +168,9 @@ impl<T> RunQueue<T> {
     ) -> Vec<AdmittedQueueItem<T>> {
         if mode == QueueMode::OneAtATime {
             let mut permits = std::collections::HashMap::new();
-            loop {
+            let count = self.status().await.lane_count(lane);
+            let mut deferred = Vec::new();
+            for _ in 0..count {
                 let item = {
                     let mut inner = self.lock();
                     let items = match lane {
@@ -177,14 +179,21 @@ impl<T> RunQueue<T> {
                         QueueLane::Collect => &mut inner.collects,
                     };
                     if items.is_empty() {
-                        return Vec::new();
+                        break;
                     }
                     items.remove(0)
                 };
-                if let Some(item) = Self::admit_item(item, &mut permits) {
-                    return vec![item];
+                match Self::admit_item(item, &mut permits) {
+                    AdmissionDecision::Accepted(item) => {
+                        self.requeue_front_now(lane, deferred);
+                        return vec![item];
+                    }
+                    AdmissionDecision::Retry(item) => deferred.push(item),
+                    AdmissionDecision::Rejected => {}
                 }
             }
+            self.requeue_front_now(lane, deferred);
+            return Vec::new();
         }
         let queued = {
             let mut inner = self.lock();
@@ -196,10 +205,17 @@ impl<T> RunQueue<T> {
             std::mem::take(items)
         };
         let mut permits = std::collections::HashMap::new();
-        queued
-            .into_iter()
-            .filter_map(|item| Self::admit_item(item, &mut permits))
-            .collect()
+        let mut admitted = Vec::new();
+        let mut deferred = Vec::new();
+        for item in queued {
+            match Self::admit_item(item, &mut permits) {
+                AdmissionDecision::Accepted(item) => admitted.push(item),
+                AdmissionDecision::Retry(item) => deferred.push(item),
+                AdmissionDecision::Rejected => {}
+            }
+        }
+        self.requeue_front_now(lane, deferred);
+        admitted
     }
 
     fn admit_item(
@@ -208,7 +224,7 @@ impl<T> RunQueue<T> {
             String,
             std::sync::Arc<dyn types::QueueAdmissionPermit>,
         >,
-    ) -> Option<AdmittedQueueItem<T>> {
+    ) -> AdmissionDecision<T> {
         let permit = match item.admission {
             Some(admission) => {
                 let key = admission.batch_key();
@@ -216,21 +232,46 @@ impl<T> RunQueue<T> {
                     match permits.get(key) {
                         Some(permit) => Some(std::sync::Arc::clone(permit)),
                         None => {
-                            let permit = admission.acquire().ok()?;
+                            let permit = match admission.acquire_for(Some(key)) {
+                                Ok(permit) => permit,
+                                Err(_) if admission.retry_after_rejection(Some(key)) => {
+                                    return AdmissionDecision::Retry(item);
+                                }
+                                Err(_) => return AdmissionDecision::Rejected,
+                            };
                             permits.insert(key.clone(), std::sync::Arc::clone(&permit));
                             Some(permit)
                         }
                     }
                 } else {
-                    Some(admission.acquire().ok()?)
+                    match admission.acquire_for(None) {
+                        Ok(permit) => Some(permit),
+                        Err(_) if admission.retry_after_rejection(None) => {
+                            return AdmissionDecision::Retry(item);
+                        }
+                        Err(_) => return AdmissionDecision::Rejected,
+                    }
                 }
             }
             None => None,
         };
-        Some(AdmittedQueueItem {
+        AdmissionDecision::Accepted(AdmittedQueueItem {
             value: item.value,
             _permit: permit,
         })
+    }
+
+    fn requeue_front_now(&self, lane: QueueLane, items: Vec<Queued<T>>) {
+        if items.is_empty() {
+            return;
+        }
+        let mut inner = self.lock();
+        let target = match lane {
+            QueueLane::Steer => &mut inner.steers,
+            QueueLane::Followup => &mut inner.followups,
+            QueueLane::Collect => &mut inner.collects,
+        };
+        target.splice(0..0, items);
     }
 
     fn push_entry_now(&self, lane: QueueLane, item: Queued<T>) {

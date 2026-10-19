@@ -25,6 +25,22 @@ pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
     /// transfers the item into a turn, never across a provider await.
     fn acquire(&self) -> Result<std::sync::Arc<dyn QueueAdmissionPermit>, QueueAdmissionError>;
 
+    /// Acquires the identity returned by the queue's immediately preceding
+    /// `batch_key` call. Implementations with replaceable authority should
+    /// reject a changed identity so a permit is never cached under a stale key.
+    fn acquire_for(
+        &self,
+        _expected_key: Option<&str>,
+    ) -> Result<std::sync::Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        self.acquire()
+    }
+
+    /// Whether a failed acquisition is temporary and the item should remain
+    /// queued for a later attempt. Lifecycle rejection is permanent by default.
+    fn retry_after_rejection(&self, _expected_key: Option<&str>) -> bool {
+        false
+    }
+
     /// Stable identity for capabilities that may share one batch permit.
     /// `None` means each item requires an independent acquisition.
     fn batch_key(&self) -> Option<String> {
