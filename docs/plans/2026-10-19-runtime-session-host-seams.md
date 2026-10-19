@@ -289,7 +289,7 @@ impl ToolSnapshotExtensions {
     }
 
     pub fn get<T: ToolSnapshotExtension>(&self) -> Option<&T> {
-        self.values.get(&TypeId::of::<T>())?.as_any().downcast_ref::<T>()
+        self.values.get(&TypeId::of::<T>())?.as_ref().as_any().downcast_ref::<T>()
     }
 }
 
@@ -572,11 +572,12 @@ allowed name delegates exactly once; empty set denies all. Implement
 compose the wrapper around an optional host policy. Add first-wins spec test
 that checks names/order and `Arc::ptr_eq` with the winning allocation; add
 durable-wins-synthesized collision test. In `snapshot_tests.rs`, assert old
-array decode and byte-compatible `to_json` without extensions, new object
-round-trip with `Composio` and `Repl` extension payloads, duplicate namespace
-decode failure, extension preservation through `retaining` and
-`with_retained`, and exact snapshots never retaining recorded tools. Run each
-new filter and verify red before code, then run
+array decode and byte-compatible `to_json` without extensions, typed
+retrieval and replacement using two host-defined fixture types, clone
+preservation, extension preservation through `retaining` and `with_retained`,
+and exact snapshots never retaining recorded tools. Do not add object-envelope
+decoding or extension serialization. Run each new filter and verify red before
+code, then run
 `cargo test -p tinyagents-runtime -p tinyagents-harness`.
 
 ### 7. Move context configuration into harness
@@ -587,9 +588,11 @@ through `#[cfg(test)] #[path = "context_tests.rs"] mod tests;`. Update
 TinyAgents compaction consumers and config exports; do not change OpenHuman
 sources in this TinyAgents plan.
 
-Before moving the type, add exact tests: `serde_json::from_str::<ContextConfig>("{}") == ContextConfig::default()`;
-TOML fixture with all 12 fields and both aliases; strategy parse table for all
-six accepted spellings plus rejected unknown value; zero trigger yields
+Before moving the type, add exact tests: deserialize `{}` and compare its
+serialized value with serialized `ContextConfig::default()` (the existing type
+does not need a new `PartialEq` derive); a TOML fixture with all 12 canonical
+fields and a second fixture exercising both legacy aliases; strategy parse
+table for all six accepted spellings plus rejected unknown value; zero trigger yields
 `CompactionSettings { trigger_tokens: None, strategy: configured_strategy }`;
 nonzero trigger survives; and serializing/deserializing the full default
 preserves equality. The tests fail because harness has no `ContextConfig`.
@@ -617,7 +620,15 @@ cargo test --workspace
 ```
 
 Long commands must use `scripts/ci-cancel-aware.sh`, one job, and debug info
-disabled according to the workflow wrapper. Do not set `CARGO_TARGET_DIR`.
+disabled. Run exactly:
+
+```sh
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo check --workspace --all-targets
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo clippy --workspace --all-targets -- -Dwarnings
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo test --workspace
+```
+
+Do not set `CARGO_TARGET_DIR`.
 
 ## Risks to resolve during implementation
 
