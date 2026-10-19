@@ -344,6 +344,8 @@ async fn pool_release_all_releases_claims_from_every_cached_router() {
     });
     let first = pool.get_or_open(&"workspace-a").unwrap();
     let second = pool.get_or_open(&"workspace-b").unwrap();
+    let first_store = first.store();
+    let second_store = second.store();
     first
         .record(CompletionRecord::new(
             "first",
@@ -369,9 +371,10 @@ async fn pool_release_all_releases_claims_from_every_cached_router() {
 
     assert_eq!(pool.release_all().unwrap(), 2);
 
-    let restarted = CompletionRouter::new(store);
-    assert_eq!(restarted.claim_pending("parent-a", 1).unwrap().len(), 1);
-    assert_eq!(restarted.claim_pending("parent-b", 1).unwrap().len(), 1);
+    let restarted_first = CompletionRouter::new(first_store);
+    let restarted_second = CompletionRouter::new(second_store);
+    assert_eq!(restarted_first.claim_pending("parent-a", 1).unwrap().len(), 1);
+    assert_eq!(restarted_second.claim_pending("parent-b", 1).unwrap().len(), 1);
 }
 
 #[test]
