@@ -73,7 +73,10 @@ fn context_config_exposes_a_json_schema_for_host_configuration() {
         ("autocompact_enabled", serde_json::json!(true)),
         ("microcompact_keep_recent", serde_json::json!(5)),
         ("tool_result_budget_bytes", serde_json::json!(16_384)),
-        ("summarizer_payload_threshold_tokens", serde_json::json!(4_000)),
+        (
+            "summarizer_payload_threshold_tokens",
+            serde_json::json!(4_000),
+        ),
         ("summarizer_max_payload_tokens", serde_json::json!(64_000)),
         ("summarizer_model", serde_json::Value::Null),
         ("prefer_markdown_tool_output", serde_json::json!(true)),
