@@ -87,9 +87,6 @@ impl QueueAdmission for CompletionAdmission {
         )
         .map_err(|_| QueueAdmissionError)?
         .ok_or(QueueAdmissionError)?;
-        if !CompletionRouter::admission_store_is_current(&self.store, &store) {
-            return Err(QueueAdmissionError);
-        }
         Ok(Arc::new(permit))
     }
 

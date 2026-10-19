@@ -847,22 +847,30 @@ async fn queue_admission_does_not_deadlock_with_store_migration_waiting_for_pare
     // must see the slot as migrating and return the item to its lane without
     // holding the slot lock while waiting for that same parent gate.
     let queue_for_take = Arc::clone(&q);
-    let take = tokio::task::spawn_blocking(move || {
+    let mut take = tokio::task::spawn_blocking(move || {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
             .block_on(queue_for_take.take_admitted(QueueLane::Followup, QueueMode::All))
     });
-    let deferred = tokio::time::timeout(Duration::from_secs(2), take)
-        .await
-        .expect("queue admission must not deadlock with the migrator")
-        .unwrap();
-    let item_was_deferred = deferred.is_empty();
-    let queued_after_take = q.status().await.followups;
-    drop(deferred);
+    let take_before_release = tokio::time::timeout(Duration::from_secs(2), &mut take).await;
+    let take_timed_out = take_before_release.is_err();
+    let (item_was_deferred, queued_after_take) = match take_before_release {
+        Ok(result) => {
+            let items = result.unwrap();
+            let deferred = items.is_empty();
+            let queued = q.status().await.followups;
+            drop(items);
+            (deferred, queued)
+        }
+        Err(_) => (false, q.status().await.followups),
+    };
     resume_tx.send(()).unwrap();
     migration.join().unwrap();
+    if take_timed_out {
+        drop(take.await.unwrap());
+    }
     assert!(item_was_deferred);
     assert_eq!(queued_after_take, 1);
     let delivered = q.take_admitted(QueueLane::Followup, QueueMode::All).await;
