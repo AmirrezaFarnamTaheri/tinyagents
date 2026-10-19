@@ -118,18 +118,17 @@ async fn a_workspace_provider_lease_keeps_the_opened_store_alive() {
         .unwrap();
     drop(opened);
     assert_eq!(
-        lease
-            .stores()
-            .kv
-            .get("lease-test", "key")
-            .await
-            .unwrap(),
+        lease.stores().kv.get("lease-test", "key").await.unwrap(),
         Some(serde_json::json!("retained"))
     );
     lease
         .stores()
         .kv
-        .put("lease-test", "after-drop", serde_json::json!("written through lease"))
+        .put(
+            "lease-test",
+            "after-drop",
+            serde_json::json!("written through lease"),
+        )
         .await
         .unwrap();
 
