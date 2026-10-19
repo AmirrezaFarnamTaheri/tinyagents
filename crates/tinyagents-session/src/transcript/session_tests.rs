@@ -20,6 +20,15 @@ fn a_stem_is_deterministic_and_carries_no_timestamp() {
 }
 
 #[test]
+fn canonical_identity_is_stable_and_distinct_from_legacy_stems() {
+    let first = SessionRef::scoped("thread-legacy", "agent-legacy");
+    let second = SessionRef::scoped("thread-legacy", "agent-legacy");
+    assert_eq!(session_stem(&first), session_stem(&second));
+    assert_ne!(session_stem(&first), "1700000100_agent-legacy");
+    assert_eq!(first.first_generation(), second.first_generation());
+}
+
+#[test]
 fn two_agents_on_one_key_get_distinct_stems() {
     let left = session_stem(&SessionRef::scoped("thread-1", "orchestrator"));
     let right = session_stem(&SessionRef::scoped("thread-1", "researcher"));
