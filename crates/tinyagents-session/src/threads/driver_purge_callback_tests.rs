@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinystoragedrivers_core::{
     Capabilities, CollectionSpec, DocumentStore, Filter, Page, Precondition, Query, Sort,
-    StorageError, Version, Versioned,
+    StorageError, Version, Versioned, WriteOptions,
 };
 
 struct DeleteProbeDocs {
@@ -60,6 +60,19 @@ impl DocumentStore for DeleteProbeDocs {
         self.inner.put(collection, id, doc, precondition).await
     }
 
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        precondition: Precondition,
+        options: WriteOptions,
+    ) -> tinystoragedrivers_core::Result<Version> {
+        self.inner
+            .put_with(collection, id, doc, precondition, options)
+            .await
+    }
+
     async fn delete(
         &self,
         collection: &str,
@@ -90,7 +103,7 @@ impl DocumentStore for DeleteProbeDocs {
                         let key = DriverConversationStore::key(&thread.thread.id)
                             .expect("fixture thread id is valid");
                         self.inner
-                            .put(
+                            .put_with(
                                 COLLECTION,
                                 &key,
                                 serde_json::to_value(
@@ -98,6 +111,7 @@ impl DocumentStore for DeleteProbeDocs {
                                 )
                                 .expect("fixture thread DTO serializes"),
                                 Precondition::Absent,
+                                WriteOptions::new().schema(SCHEMA_VERSION),
                             )
                             .await?;
                     }
