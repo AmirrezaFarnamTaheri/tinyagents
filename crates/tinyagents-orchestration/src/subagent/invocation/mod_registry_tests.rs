@@ -289,6 +289,70 @@ async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
 }
 
 #[tokio::test]
+async fn dropping_terminal_waiters_releases_retention_pins() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    let jobs = SubAgentJobRegistry::new();
+    let ids: Vec<_> = (0..132)
+        .map(|index| register_driver_job(&jobs, format!("pinned-{index}")).1)
+        .collect();
+    for id in &ids {
+        jobs.mark_running(id);
+    }
+
+    let mut waiters: Vec<_> = ids
+        .iter()
+        .map(|id| Box::pin(jobs.wait_owned(id.as_str(), "owner")))
+        .collect();
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    for waiter in &mut waiters {
+        assert!(matches!(waiter.as_mut().poll(&mut context), Poll::Pending));
+    }
+
+    for id in &ids {
+        jobs.mark_driver_result(
+            id,
+            Ok(crate::subagent::SubagentOutcome::completed("pinned", "done")),
+        );
+    }
+    assert_eq!(jobs.tasks().len().unwrap(), ids.len());
+
+    drop(waiters);
+    let retained = jobs.tasks().len().unwrap();
+    assert!(retained <= 128, "terminal tasks retained after waiter drops: {retained}");
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+}
+
+#[tokio::test]
+async fn direct_cancellation_keeps_terminal_retention_bounded() {
+    let jobs = SubAgentJobRegistry::new();
+    let ids: Vec<_> = (0..256)
+        .map(|index| register_driver_job(&jobs, format!("cancel-{index}")).1)
+        .collect();
+    for id in &ids {
+        let mut awaiting = crate::subagent::SubagentOutcome::completed("cancel", "paused");
+        awaiting.status = crate::subagent::SubagentOutcomeKind::AwaitingInput(
+            crate::subagent::SubagentPause {
+                reason: "clarification".into(),
+                resume: crate::subagent::SubagentResume::default(),
+            },
+        );
+        jobs.mark_driver_result(id, Ok(awaiting));
+    }
+    for id in &ids {
+        jobs.cancel_owned(id.as_str(), "owner").expect("cancel");
+    }
+
+    let retained = jobs.tasks().len().unwrap();
+    assert!(retained <= 128, "cancelled tasks retained: {retained}");
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+}
+
+#[tokio::test]
 async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
     let jobs = SubAgentJobRegistry::new();
     let (active_key, active_id) = register_driver_job(&jobs, "active");
