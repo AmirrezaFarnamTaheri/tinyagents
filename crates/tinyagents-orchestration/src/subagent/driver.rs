@@ -1,6 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
-use tinyagents_tasks::CompletionRouter;
+use tinyagents_tasks::{CompletionRouter, DeliveryFence};
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::completion::{CompletionOrigin, deliver};
@@ -17,6 +17,44 @@ use super::{
 use tinyagents_harness::error::TinyAgentsError;
 
 const LOG_PREFIX: &str = "[subagent-driver]";
+
+fn ensure_turn_fence(
+    fence: Option<&Arc<dyn DeliveryFence>>,
+    cancellation: Option<&CancellationToken>,
+) -> Result<(), SubagentError> {
+    if fence.is_some_and(|fence| !fence.admitted()) {
+        if let Some(cancellation) = cancellation {
+            cancellation.cancel();
+        }
+        Err(SubagentError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+async fn await_with_turn_fence<T>(
+    fence: Option<&Arc<dyn DeliveryFence>>,
+    cancellation: Option<&CancellationToken>,
+    future: impl Future<Output = Result<T, SubagentError>>,
+) -> Result<T, SubagentError> {
+    ensure_turn_fence(fence, cancellation)?;
+    let Some(fence) = fence else {
+        return future.await;
+    };
+    tokio::select! {
+        biased;
+        _ = fence.lost() => {
+            if let Some(cancellation) = cancellation {
+                cancellation.cancel();
+            }
+            Err(SubagentError::Cancelled)
+        }
+        result = future => {
+            ensure_turn_fence(Some(fence), cancellation)?;
+            result
+        }
+    }
+}
 
 /// Cloneable process-scope in-flight registry that can be shared by drivers.
 pub type SubagentInFlight = SharedFlightMap<SubagentTaskKey, SubagentRunResult, SubagentError>;
@@ -252,15 +290,30 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         cancellation: CancellationToken,
     ) -> Result<SubagentRunResult, SubagentError> {
         let task_id = request.task_id().to_owned();
+        let turn_fence = request.turn_fence();
+
+        ensure_turn_fence(turn_fence.as_ref(), None)?;
 
         if cancellation.is_cancelled() {
-            return self
-                .persist_cancelled(task_key, SubagentOutcome::cancelled(task_id), None)
-                .await;
+            let result = await_with_turn_fence(
+                turn_fence.as_ref(),
+                None,
+                self.persist_cancelled(task_key, SubagentOutcome::cancelled(task_id), None),
+            )
+            .await?;
+            self.record_completion_under_fence(turn_fence.as_ref(), None, &result, 0)
+                .await?;
+            return Ok(result);
         }
 
         if request.resume().is_none() {
-            request.set_resume(self.persistence.load(&task_key).await?);
+            let resume = await_with_turn_fence(
+                turn_fence.as_ref(),
+                None,
+                self.persistence.load(&task_key),
+            )
+            .await?;
+            request.set_resume(resume);
         }
         // Keep the exact pause seen at the durable read boundary. The
         // persistence seam uses it as a scoped compare-and-swap expectation
@@ -268,13 +321,19 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         // duplicate continuation returns the newer durable winner.
         let expected_pause = request.resume().cloned();
         if cancellation.is_cancelled() {
-            return self
-                .persist_cancelled(
+            let result = await_with_turn_fence(
+                turn_fence.as_ref(),
+                None,
+                self.persist_cancelled(
                     task_key,
                     SubagentOutcome::cancelled(task_id),
                     expected_pause,
-                )
-                .await;
+                ),
+            )
+            .await?;
+            self.record_completion_under_fence(turn_fence.as_ref(), None, &result, 0)
+                .await?;
+            return Ok(result);
         }
 
         // Reserve before any planner/executor work. A resumed lifecycle is an
@@ -313,11 +372,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         };
         let mut reservation = reservation.map_err(SubagentError::SpawnRejected)?;
 
-        let turn_fence = request.turn_fence();
-        if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
-            return Err(SubagentError::Cancelled);
-        }
-        let mut prepared = self.planner.prepare(request).await?;
+        ensure_turn_fence(turn_fence.as_ref(), None)?;
+        let mut prepared = await_with_turn_fence(
+            turn_fence.as_ref(),
+            None,
+            self.planner.prepare(request),
+        )
+        .await?;
         if prepared.task_id != task_id {
             return Err(SubagentError::TaskIdMismatch {
                 expected: task_id,
@@ -331,18 +392,19 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         } else {
             None
         };
-        if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
-            return Err(SubagentError::Cancelled);
-        }
+        ensure_turn_fence(turn_fence.as_ref(), None)?;
         if cancellation.is_cancelled() {
-            let result = self
-                .persist_cancelled(
+            let result = await_with_turn_fence(
+                turn_fence.as_ref(),
+                None,
+                self.persist_cancelled(
                     task_key,
                     SubagentOutcome::cancelled(prepared.task_id),
                     expected_pause,
-                )
-                .await?;
-            self.record_completion(completion_origin.as_ref(), &result, 0)
+                ),
+            )
+            .await?;
+            self.record_completion_under_fence(turn_fence.as_ref(), completion_origin.as_ref(), &result, 0)
                 .await;
             return Ok(result);
         }
@@ -477,8 +539,14 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 if cancellation.is_cancelled() || (!timed_out && token.is_cancelled()) {
                     outcome.cancelled_preserving()
                 } else {
-                    let (outcome, omitted) =
-                        apply_outcome_policies(outcome, &policy, &result_policy).await;
+                    let (outcome, omitted) = await_with_turn_fence(
+                        turn_fence.as_ref(),
+                        Some(&token),
+                        async {
+                            Ok(apply_outcome_policies(outcome, &policy, &result_policy).await)
+                        },
+                    )
+                    .await?;
                     omitted_chars = omitted;
                     outcome
                 }
@@ -493,17 +561,43 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                     && let (Some(router), Some(origin)) = (&self.completions, &completion_origin)
                     && let Some(record) = origin.record_for_error(&error)
                 {
-                    deliver(router, record).await;
+                    await_with_turn_fence(turn_fence.as_ref(), Some(&token), async {
+                        deliver(router, record).await;
+                        Ok(())
+                    })
+                    .await?;
                 }
                 return Err(error);
             }
         };
-        let result = self
-            .persist(task_key, outcome, expected_pause, &cancellation)
-            .await?;
-        self.record_completion(completion_origin.as_ref(), &result, omitted_chars)
-            .await;
+        let result = await_with_turn_fence(
+            turn_fence.as_ref(),
+            Some(&token),
+            self.persist(task_key, outcome, expected_pause, &cancellation),
+        )
+        .await?;
+        self.record_completion_under_fence(
+            turn_fence.as_ref(),
+            completion_origin.as_ref(),
+            &result,
+            omitted_chars,
+        )
+        .await?;
         Ok(result)
+    }
+
+    async fn record_completion_under_fence(
+        &self,
+        fence: Option<&Arc<dyn DeliveryFence>>,
+        origin: Option<&CompletionOrigin>,
+        result: &SubagentRunResult,
+        omitted_chars: usize,
+    ) -> Result<(), SubagentError> {
+        await_with_turn_fence(fence, None, async {
+            self.record_completion(origin, result, omitted_chars).await;
+            Ok(())
+        })
+        .await
     }
 
     /// Records `result` when this invocation owns its host effects and the
