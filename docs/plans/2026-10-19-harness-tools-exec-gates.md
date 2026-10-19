@@ -39,9 +39,12 @@ tinyagents-harness-tools ──depends on──> tinyagents-harness ──does n
 ```
 
 Do not reverse this edge. Move the shared URL-validation implementation into
-an unconditional `tinyagents-harness::url_guard` module. Multimodal resolution
-uses it directly and `harness-tools/net` consumes it through its existing
-dependency on `tinyagents-harness`. This removes the optional
+an unconditional `tinyagents-harness::url_guard` module. It uses only `std`,
+`anyhow`, Tokio's already-enabled `rt` support, and `tracing`; convert the
+source `log::{debug,warn}` calls to equivalent `tracing` macros. It must not
+add reqwest, flate2, tar, zip, a resolver, or any multimodal feature as a
+dependency. Multimodal resolution uses it directly and `harness-tools/net`
+consumes it through its existing dependency on `tinyagents-harness`. This removes the optional
 `tinytools-std` dependency without creating a crate cycle or adding a shim
 crate. The module must retain the current `ValidatedUrl`, validation,
 DNS-resolution, public-address checks, and exact address-pinning contract;
@@ -103,7 +106,6 @@ pub enum ExecOperation {
 #[derive(Debug, Clone)]
 pub struct ExecAuthorizationRequest {
     pub operation: ExecOperation,
-    pub action_dir: PathBuf,
     pub timeout: Option<Duration>,
 }
 
@@ -153,8 +155,16 @@ pub struct ExecOutput {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellFlavor {
+    Posix,
+    Cmd,
+}
+
 #[async_trait]
 pub trait ExecBackend: Send + Sync {
+    fn shell_flavor(&self) -> ShellFlavor;
+
     async fn execute(
         &self,
         request: ExecRequest,
@@ -168,13 +178,16 @@ pub trait ExecBackend: Send + Sync {
 backend-neutral launched process request. `shell_command` is only populated
 for the shell operation, where the backend chooses the host's configured shell;
 install always uses `program` plus separate `args`, with no shell interpolation.
-The permit supplies the authorized working directory and environment. The
-backend receives the original tool context so the host implementation can
-select native, sandbox, Docker, TinyBox, or SaaS execution using its own
-existing rules. `ExecProgress` is the cloneable generic output meter, not a
+`ExecBackend::shell_flavor` supplies the model-facing shell description and
+parameter text. The permit supplies the authorized working directory and
+environment. The backend receives the original tool context so the host
+implementation can select native, sandbox, Docker, TinyBox, or SaaS execution
+using its own existing rules. `ExecProgress` is the cloneable generic output meter, not a
 host type; it provides `record(&[u8])` and `snapshot() -> (u64, Option<String>)`.
-The adapter feeds it for both stdout and stderr chunks. A completed or denied
-operation is audited once; process launch failures are audited as unsuccessful.
+The adapter feeds it for both stdout and stderr chunks. A denied operation is
+recorded once with `allowed = false` before returning; a permitted operation
+is recorded once after completion with `allowed = true` and the final success
+flag. Process launch failures are audited as unsuccessful.
 
 The shell result conversion must preserve the current behavior: output is
 decoded lossily as UTF-8; each stdout/stderr stream is capped at 1 MiB at a
@@ -296,10 +309,12 @@ Files: `crates/tinyagents-harness/src/url_guard.rs` (new),
 `crates/tinyagents-harness/Cargo.toml`,
 `crates/tinyagents-harness-tools/Cargo.toml`.
 
-Move `vendor/tinytools/crates/tinytools-std/src/url_guard/{mod.rs,mod_tests.rs}`
-to the harness module and its sibling tests. Preserve its full implementation
-and tests, adjusting crate paths only. Export `pub mod url_guard;` from the
-harness root. Change multimodal resolution and tests to use
+Move `vendor/tinytools/crates/tinytools-std/src/url_guard/mod.rs` to
+`crates/tinyagents-harness/src/url_guard.rs` and
+`url_guard/mod_tests.rs` to `crates/tinyagents-harness/src/url_guard_tests.rs`.
+Preserve its full implementation and tests, changing only the logging macros
+and crate paths. Export `pub mod url_guard;` from the harness root. Change
+multimodal resolution and tests to use
 `crate::url_guard`. Update the public docs so the SSRF rules and DNS pinning
 contract name the new owner. Remove the optional `tinytools-std` dependency and
 the `dep:tinytools-std` edge from the harness `multimodal` feature. Do not add
@@ -335,7 +350,23 @@ preserving modules and public APIs under `tinyagents_harness_tools::{fs,net,exec
 | `net` | `network/` (`http_request`, `web_fetch`, `curl`, `pushover`, `NetGate`, payment/extractor traits, test support, fixtures, contract tests); `url_guard` call sites are changed to harness utility imports |
 | `exec` | `detect_tools/` and `timeout/` (settings, command environment, output collection, process-group kill/reap, cleanup tracking, tests); `ExecGate`, `ExecBackend`, shell/install, and progress are added in later tasks |
 
-The source map is directory-to-directory, with file contents preserved
+The exact source-root map is:
+
+| Source root | Destination root |
+| --- | --- |
+| `vendor/tinytools/crates/tinytools-std/src/filesystem/**` | `crates/tinyagents-harness-tools/src/fs/filesystem/**` |
+| `vendor/tinytools/crates/tinytools-std/src/file_state/**` | `crates/tinyagents-harness-tools/src/fs/file_state/**` |
+| `vendor/tinytools/crates/tinytools-std/src/network/**` | `crates/tinyagents-harness-tools/src/net/network/**` |
+| `vendor/tinytools/crates/tinytools-std/src/detect_tools/**` | `crates/tinyagents-harness-tools/src/exec/detect_tools/**` |
+| `vendor/tinytools/crates/tinytools-std/src/timeout/**` | `crates/tinyagents-harness-tools/src/exec/timeout/**` |
+| `vendor/tinytools/crates/tinytools-std/src/url_guard/mod.rs` | `crates/tinyagents-harness/src/url_guard.rs` |
+| `vendor/tinytools/crates/tinytools-std/src/url_guard/mod_tests.rs` | `crates/tinyagents-harness/src/url_guard_tests.rs` |
+
+`**` includes all source files, nested modules, sibling test files, and
+fixtures below that directory, keeping relative paths. Do not copy
+`tinytools-std/src/lib.rs`, its manifest, or `sanitize/**`; explicitly declare
+the new root modules and keep sanitization with TinyTools. The remaining
+source map is directory-to-directory, with file contents preserved
 mechanically. Before deleting the source dependency, search all workspace
 members and examples for `tinytools_std` and `tinytools-std`; replace each
 actual implementation import with the new owning crate/module. Do not retain a
