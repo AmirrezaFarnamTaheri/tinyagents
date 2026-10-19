@@ -18,4 +18,3 @@ pub(super) fn shell_description(flavor: ShellFlavor) -> &'static str {
         }
     }
 }
-

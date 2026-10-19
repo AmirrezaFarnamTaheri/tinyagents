@@ -75,6 +75,60 @@ impl ArtifactFiling for RoutingFiler {
     }
 }
 
+struct OneFails;
+#[async_trait]
+impl ArtifactFiling for OneFails {
+    async fn file(
+        &self,
+        generated: GeneratedArtifact,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Result<FiledArtifact, String> {
+        if generated.path == PathBuf::from("blob:bad") {
+            return Err("filing failed".into());
+        }
+        Ok(FiledArtifact {
+            id: "good-id".into(),
+            path: "/files/good.png".into(),
+        })
+    }
+}
+
+struct MultiInner;
+#[async_trait]
+impl Tool for MultiInner {
+    fn name(&self) -> &str {
+        "multi"
+    }
+    fn description(&self) -> &str {
+        "multi description"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object","properties":{"prompt":{"type":"string"}}})
+    }
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Media
+    }
+    fn external_effect(&self) -> bool {
+        true
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Dangerous
+    }
+    fn timeout_policy(&self, _: &Value) -> ToolTimeout {
+        ToolTimeout::Unbounded
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success_with_markdown(
+            json!({"artifacts":[
+                {"type":"image","path":"blob:good","bytes":3},
+                {"type":"image","path":"blob:bad","bytes":4},
+                {"type":"image","path":"blob:last","bytes":5}
+            ],"other":"retained"}),
+            "good blob:good; bad blob:bad; last blob:last",
+        ))
+    }
+}
+
 #[tokio::test]
 async fn wrapper_keeps_metadata_and_files_each_artifact() {
     let filer = Arc::new(Filer::default());
@@ -132,6 +186,42 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
             format!("/files/{identity}.png")
         );
     }
+}
+
+#[tokio::test]
+async fn per_call_inner_preserves_stable_metadata_and_files_multiple_entries_independently() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let factory_calls = Arc::clone(&calls);
+    let tool = MediaArtifactTool::new(MultiInner, MediaArtifactKind::Image, Arc::new(OneFails))
+        .with_per_call_inner(Arc::new(move |_progress, _context| {
+            factory_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MultiInner
+        }));
+    assert_eq!(tool.name(), "multi");
+    assert_eq!(tool.description(), "multi description");
+    assert_eq!(tool.category(), ToolCategory::Media);
+    assert_eq!(tool.permission_level(), PermissionLevel::Dangerous);
+    assert!(tool.external_effect());
+    assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Unbounded);
+    let result = tool
+        .execute(json!({"prompt":format!(" {} ", "x".repeat(70))}))
+        .await
+        .unwrap();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let ToolContent::Json { data } = &result.content[0] else {
+        panic!("expected JSON")
+    };
+    assert_eq!(data["other"], "retained");
+    assert_eq!(data["artifacts"][0]["path"], "/files/good.png");
+    assert_eq!(data["artifacts"][0]["artifact_id"], "good-id");
+    assert_eq!(data["artifacts"][1]["path"], "blob:bad");
+    assert_eq!(data["artifacts"][1]["artifact_error"], "filing failed");
+    assert_eq!(data["artifacts"][2]["path"], "/files/good.png");
+    assert_eq!(data["artifacts"][2]["artifact_id"], "good-id");
+    assert_eq!(
+        result.markdown_formatted.as_deref(),
+        Some("good /files/good.png; bad blob:bad; last /files/good.png")
+    );
 }
 
 #[test]
