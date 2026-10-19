@@ -1240,10 +1240,14 @@ harness.push_middleware(Arc::new(
     ),
 ));
 
-// Add `outcomes: outcome_sink` to the TurnTail initializer.
+// In the existing TurnTail initializer:
+outcomes: Arc::clone(&outcome_sink),
 
-// In TurnTail::finish, add to the TurnReport literal:
-tool_outcomes: tinyagents_harness::turn_outcome::drain_tool_outcomes(&self.outcomes),
+// In TurnTail::finish, before constructing TurnReport:
+let tool_outcomes =
+    tinyagents_harness::turn_outcome::drain_tool_outcomes(&self.outcomes);
+// In the TurnReport literal:
+tool_outcomes,
 ```
 
 In `TurnDriver::prepare`, create `outcome_sink`, push
@@ -1251,12 +1255,29 @@ In `TurnDriver::prepare`, create `outcome_sink`, push
 the harness before the `for middleware in context` loop, and place the sink in
 `TurnTail`. In `TurnTail::finish`, call `drain_tool_outcomes(&self.outcomes)`
 and put the result into `TurnReport`. Add `tool_outcomes: Vec<ToolCallOutcome>`
-to `TurnReport`, defaulting empty. In `TurnDriver::execute`, destructure the
-`TurnRun { partial, report, input_len }`, call `outcome_from_partial`, then on
-both `Ok(outcome)` and `Err(failure)` assign the report outcomes to the
-successful outcome or `failure.partial`. The outcome is an in-memory runtime
-value; initialize `DriverOutcome.tool_outcomes` to `Vec::new()` in every
-literal for custom drivers.
+to `TurnReport`; add `tool_outcomes: Vec<ToolCallOutcome>` to
+`DriverOutcome` and initialize it to `Vec::new()` in `outcome_from_partial`
+and each custom-driver literal. In `TurnDriver::execute`, preserve observations
+on both result branches:
+
+```rust
+let TurnRun { partial, report, input_len } = prepared.run().await?;
+let tool_outcomes = report.tool_outcomes;
+match outcome_from_partial(partial, input_len) {
+    Ok(mut outcome) => {
+        outcome.tool_outcomes = tool_outcomes;
+        Ok(outcome)
+    }
+    Err(mut failure) => {
+        failure.partial.tool_outcomes = tool_outcomes;
+        Err(failure)
+    }
+}
+```
+
+Retain the existing `outcome_from_partial` argument list at this call site;
+the code above shows the required extraction and assignments. The outcome is
+an in-memory runtime value.
 
 Change the owned finalizer to accept the separate observation and sinks, not
 to reconstruct observations from `CommitReceipt`:
@@ -1533,13 +1554,13 @@ cargo clippy --workspace --all-targets -- -Dwarnings
 cargo test --workspace
 ```
 
-Long commands must use `scripts/ci-cancel-aware.sh`, one job, and debug info
-disabled. Run exactly:
+Long commands must use the super-worktree cancel-aware wrapper, one job, and
+debug info disabled. Run these from the TinyAgents workspace root:
 
 ```sh
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo check --workspace --all-targets
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo clippy --workspace --all-targets -- -Dwarnings
-CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 scripts/ci-cancel-aware.sh cargo test --workspace
+cd -- "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/vendor/tinyagents" && CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/scripts/ci-cancel-aware.sh" cargo check --workspace --all-targets
+cd -- "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/vendor/tinyagents" && CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/scripts/ci-cancel-aware.sh" cargo clippy --workspace --all-targets -- -Dwarnings
+cd -- "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/vendor/tinyagents" && CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/scripts/ci-cancel-aware.sh" cargo test --workspace
 ```
 
 Do not set `CARGO_TARGET_DIR`.
