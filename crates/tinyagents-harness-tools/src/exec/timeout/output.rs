@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use super::command_environment::CommandEnvironment;
 use super::group_exit;
+use super::ProcessCleanup;
 use super::process_cleanup::Reaped;
+use crate::exec::ExecProgress;
 
 type BoxTask = Pin<Box<dyn Future<Output = std::io::Result<std::process::Output>> + Send>>;
 
@@ -49,7 +51,26 @@ pub async fn output_or_kill(
     cmd: &mut tokio::process::Command,
     deadline: Duration,
 ) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
-    tokio::time::timeout(deadline, output_unbounded(cmd)).await
+    output_or_kill_with_progress(cmd, deadline, None).await
+}
+
+/// `output_or_kill` with streamed bytes sent to the supplied progress meter.
+pub async fn output_or_kill_with_progress(
+    cmd: &mut tokio::process::Command,
+    deadline: Duration,
+    progress: Option<ExecProgress>,
+) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    let cleanup = ProcessCleanup::default();
+    match cleanup
+        .scope(tokio::time::timeout(deadline, output_unbounded_with_progress(cmd, progress)))
+        .await
+    {
+        Ok(result) => Ok(result),
+        Err(elapsed) => {
+            cleanup.wait().await;
+            Err(elapsed)
+        }
+    }
 }
 
 /// Capture a command with no deadline, killing its process group if the
@@ -58,13 +79,31 @@ pub async fn output_or_kill(
 pub async fn output_unbounded(
     cmd: &mut tokio::process::Command,
 ) -> std::io::Result<std::process::Output> {
-    output_with_input(cmd, None).await
+    output_with_input_and_progress(cmd, None, None).await
+}
+
+/// Capture a command with no deadline while reporting output chunks.
+pub async fn output_unbounded_with_progress(
+    cmd: &mut tokio::process::Command,
+    progress: Option<ExecProgress>,
+) -> std::io::Result<std::process::Output> {
+    output_with_input_and_progress(cmd, None, progress).await
 }
 
 /// Capture a command, optionally supplying stdin, in the current cleanup scope.
 pub async fn output_with_input(
     cmd: &mut tokio::process::Command,
     input: Option<Vec<u8>>,
+) -> std::io::Result<std::process::Output> {
+    output_with_input_and_progress(cmd, input, None).await
+}
+
+/// Capture a command, optionally supplying stdin, and stream output bytes to
+/// the execution progress meter.
+pub async fn output_with_input_and_progress(
+    cmd: &mut tokio::process::Command,
+    input: Option<Vec<u8>>,
+    progress: Option<ExecProgress>,
 ) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     cmd.stdin(if input.is_some() {
@@ -91,7 +130,10 @@ pub async fn output_with_input(
                 let _ = stdin.write_all(&input).await;
             }
         };
-        let (_, output) = tokio::join!(write_input, collect_command_output(child, cancellation));
+        let (_, output) = tokio::join!(
+            write_input,
+            collect_command_output(child, cancellation, progress)
+        );
         output
     });
     let _cancel_on_drop = CancelOnDrop(cancel);
@@ -127,9 +169,8 @@ impl Drop for CommandGroup {
 async fn collect_command_output(
     mut child: tokio::process::Child,
     mut cancellation: tokio::sync::watch::Receiver<bool>,
+    progress: Option<ExecProgress>,
 ) -> std::io::Result<std::process::Output> {
-    use tokio::io::AsyncReadExt;
-
     let mut group = CommandGroup(child.id());
     let mut stdout = child
         .stdout
@@ -144,8 +185,8 @@ async fn collect_command_output(
     {
         let drain = async {
             tokio::try_join!(
-                stdout.read_to_end(&mut stdout_bytes),
-                stderr.read_to_end(&mut stderr_bytes),
+                read_stream(&mut stdout, &mut stdout_bytes, progress.as_ref()),
+                read_stream(&mut stderr, &mut stderr_bytes, progress.as_ref()),
             )
         };
         tokio::pin!(drain);
@@ -190,6 +231,25 @@ async fn collect_command_output(
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
+}
+
+async fn read_stream(
+    reader: &mut (impl tokio::io::AsyncRead + Unpin),
+    output: &mut Vec<u8>,
+    progress: Option<&ExecProgress>,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let mut chunk = [0; 8_192];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(());
+        }
+        output.extend_from_slice(&chunk[..read]);
+        if let Some(progress) = progress {
+            progress.record(&chunk[..read]);
+        }
+    }
 }
 
 /// Make `cmd` the leader of a new process group when it is spawned, so that
