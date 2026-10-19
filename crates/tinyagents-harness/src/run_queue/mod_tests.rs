@@ -107,7 +107,18 @@ async fn take_discards_items_whose_retained_admission_was_revoked() {
 
     assert_eq!(
         queue.take(QueueLane::Followup, QueueMode::All).await,
-        vec!["ordinary follow-up"]
+        vec!["ordinary follow-up"],
+        "legacy extraction must not transfer a guarded payload without its permit"
+    );
+    assert_eq!(
+        queue
+            .take_admitted(QueueLane::Followup, QueueMode::All)
+            .await
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new(),
+        "a revoked item is rejected at the lifecycle admission boundary"
     );
 }
 
@@ -121,7 +132,21 @@ async fn one_at_a_time_skips_a_revoked_oldest_item_without_blocking_the_lane() {
     queue.push(QueueLane::Steer, "current").await;
 
     assert_eq!(
-        queue.take(QueueLane::Steer, QueueMode::OneAtATime).await,
+        queue
+            .take_admitted(QueueLane::Steer, QueueMode::OneAtATime)
+            .await
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+    assert_eq!(
+        queue
+            .take_admitted(QueueLane::Steer, QueueMode::OneAtATime)
+            .await
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>(),
         vec!["current"]
     );
 }

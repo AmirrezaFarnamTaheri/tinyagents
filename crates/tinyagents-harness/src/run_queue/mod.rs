@@ -339,21 +339,18 @@ impl<T> RunQueue<T> {
             inner
                 .steers
                 .iter()
-                .filter(|item| !item.is_guarded())
                 .map(|item| (QueueLane::Steer, item.value.clone())),
         );
         items.extend(
             inner
                 .followups
                 .iter()
-                .filter(|item| !item.is_guarded())
                 .map(|item| (QueueLane::Followup, item.value.clone())),
         );
         items.extend(
             inner
                 .collects
                 .iter()
-                .filter(|item| !item.is_guarded())
                 .map(|item| (QueueLane::Collect, item.value.clone())),
         );
         items
@@ -368,9 +365,9 @@ impl<T> RunQueue<T> {
     pub async fn remove_where(&self, pred: impl Fn(&T) -> bool) -> usize {
         let mut inner = self.lock();
         let before = inner.steers.len() + inner.followups.len() + inner.collects.len();
-        inner.steers.retain(|item| item.is_guarded() || !pred(&item.value));
-        inner.followups.retain(|item| item.is_guarded() || !pred(&item.value));
-        inner.collects.retain(|item| item.is_guarded() || !pred(&item.value));
+        inner.steers.retain(|item| !pred(&item.value));
+        inner.followups.retain(|item| !pred(&item.value));
+        inner.collects.retain(|item| !pred(&item.value));
         let after = inner.steers.len() + inner.followups.len() + inner.collects.len();
         before - after
     }
