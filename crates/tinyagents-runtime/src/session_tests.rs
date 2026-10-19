@@ -7,9 +7,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 use tinyagents_session::transcript::{
-    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptHistory,
-    TranscriptLocator, TranscriptMessage, TranscriptMeta, TranscriptRead, TranscriptTurn,
-    session_stem,
+    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptLocator,
+    TranscriptMessage, TranscriptMeta, TranscriptTurn, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tokio::sync::Notify;
@@ -67,7 +66,7 @@ fn seed_replay_transcript(
 ) {
     let mut transcript_meta = meta();
     transcript_meta.session_id = Some(session.session_id());
-    transcript_meta.agent_id = Some(session.agent_id.clone());
+    transcript_meta.agent_id = session.agent_id.clone();
     transcript_meta.thread_id = Some(session.session_key.clone());
     let handle = locator.open_session(session, transcript_meta.clone()).unwrap();
     handle.append_turn(TranscriptTurn {
