@@ -69,7 +69,7 @@ impl Tool for RequestPlanReviewTool {
                     .collect()
             })
             .unwrap_or_default();
-        let Some(()) = port.interactive_surface(context) else {
+        let Some(_) = port.interactive_surface(context) else {
             return Ok(ToolResult::success(
                 "approved: non-interactive turn (no review surface) — proceed with the plan.",
             ));
