@@ -29,7 +29,7 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
     Blocking, Capability, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec,
-    Leases, Precondition, Query, Repo, Scope, StorageBackend, StorageError, UPDATED_FIELD,
+    Leases, Precondition, Query, Scope, StorageBackend, StorageError, UPDATED_FIELD,
     Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
@@ -77,7 +77,6 @@ pub struct DriverCompletionStore {
     scope: Scope,
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
-    repo: Repo<CompletionDoc>,
     declared: Arc<OnceCell<()>>,
 }
 
@@ -111,9 +110,6 @@ impl DriverCompletionStore {
         let scoped = backend.for_scope(&scope)?;
         let docs = scoped.documents().clone();
         Ok(Self {
-            repo: Repo::new(&docs, COMPLETIONS)
-                .expect("tasks.completions is a valid collection")
-                .with_options(WriteOptions::new().schema(SCHEMA_VERSION)),
             docs,
             backend,
             scope,

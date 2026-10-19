@@ -29,7 +29,7 @@ pub use completions::{
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
     CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{
