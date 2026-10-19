@@ -422,6 +422,8 @@ are part of this task, even though host deletion/adoption of the rest of
 Keep these implementation bodies and values when moving the definitions:
 
 ```rust
+pub const DEFAULT_KEEP_RECENT_TOOL_RESULTS: usize = 5;
+
 impl ContextConfig {
     pub fn compaction_settings(&self) -> CompactionSettings {
         CompactionSettings {
@@ -448,7 +450,7 @@ impl Default for ContextConfig {
             microcompact_enabled: true,
             autocompact_enabled: true,
             microcompact_keep_recent: DEFAULT_KEEP_RECENT_TOOL_RESULTS,
-            tool_result_budget_bytes: TurnConfig::default().tool_result_budget_bytes,
+            tool_result_budget_bytes: crate::config::TurnConfig::default().tool_result_budget_bytes,
             summarizer_payload_threshold_tokens: 4_000,
             summarizer_max_payload_tokens: 64_000,
             summarizer_model: None,
