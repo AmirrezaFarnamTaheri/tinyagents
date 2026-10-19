@@ -16,6 +16,10 @@ struct FakeHost {
     fail_persist: bool,
     wait_on_run: bool,
     run_started: Option<oneshot::Sender<()>>,
+    wait_on_summary: bool,
+    summary_started: Option<oneshot::Sender<()>>,
+    wait_on_persist: bool,
+    persist_started: Option<oneshot::Sender<()>>,
 }
 
 #[async_trait::async_trait]
@@ -42,6 +46,12 @@ impl ChildTurnHost for FakeHost {
         _: &ChildTurnRun<String>,
     ) -> Result<ChildTurnCapSummary, &'static str> {
         self.events.push("summary");
+        if let Some(started) = self.summary_started.take() {
+            let _ = started.send(());
+        }
+        if self.wait_on_summary {
+            std::future::pending().await
+        }
         Ok(self.summary.take().unwrap())
     }
 
@@ -60,6 +70,12 @@ impl ChildTurnHost for FakeHost {
         result: &ChildTurnResult<String>,
     ) -> Result<(), &'static str> {
         self.events.push("persist-success");
+        if let Some(started) = self.persist_started.take() {
+            let _ = started.send(());
+        }
+        if self.wait_on_persist {
+            std::future::pending().await
+        }
         if self.fail_persist {
             return Err("persist failed");
         }
@@ -310,5 +326,74 @@ async fn losing_turn_fence_cancels_host_work_and_skips_persistence() {
     assert!(cancellation.is_cancelled());
     assert!(host.persisted.is_none());
     assert!(!host.events.contains(&"persist-success"));
+    assert!(!host.events.contains(&"after-commit"));
+}
+
+#[tokio::test]
+async fn losing_turn_fence_during_cap_summary_skips_transcript_commit() {
+    let fence = Arc::new(RevocableFence::new());
+    let cancellation = CancellationToken::new();
+    let control = ChildTurnControl::new(cancellation.clone(), fence.clone());
+    let (started, started_rx) = oneshot::channel();
+    let mut host = FakeHost {
+        run: Some(Ok(ChildTurnRun {
+            accepted_history: vec!["accepted".into()],
+            output: "partial".into(),
+            model_calls: 4,
+            accounting: ChildTurnAccounting::default(),
+            hit_cap: true,
+            early_exit: false,
+        })),
+        wait_on_summary: true,
+        summary_started: Some(started),
+        ..FakeHost::default()
+    };
+
+    let (outcome, ()) = tokio::join!(
+        drive_child_turn(&mut host, control),
+        async {
+            started_rx.await.unwrap();
+            fence.revoke();
+        }
+    );
+
+    assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
+    assert!(cancellation.is_cancelled());
+    assert!(host.persisted.is_none());
+    assert!(!host.events.contains(&"persist-success"));
+    assert!(!host.events.contains(&"after-commit"));
+}
+
+#[tokio::test]
+async fn losing_turn_fence_during_transcript_commit_skips_deferred_terminal_work() {
+    let fence = Arc::new(RevocableFence::new());
+    let cancellation = CancellationToken::new();
+    let control = ChildTurnControl::new(cancellation.clone(), fence.clone());
+    let (started, started_rx) = oneshot::channel();
+    let mut host = FakeHost {
+        run: Some(Ok(ChildTurnRun {
+            accepted_history: vec!["accepted".into()],
+            output: "done".into(),
+            model_calls: 1,
+            accounting: ChildTurnAccounting::default(),
+            hit_cap: false,
+            early_exit: false,
+        })),
+        wait_on_persist: true,
+        persist_started: Some(started),
+        ..FakeHost::default()
+    };
+
+    let (outcome, ()) = tokio::join!(
+        drive_child_turn(&mut host, control),
+        async {
+            started_rx.await.unwrap();
+            fence.revoke();
+        }
+    );
+
+    assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
+    assert!(cancellation.is_cancelled());
+    assert!(host.persisted.is_none());
     assert!(!host.events.contains(&"after-commit"));
 }
