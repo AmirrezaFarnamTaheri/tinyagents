@@ -3,6 +3,59 @@ use std::sync::Arc;
 
 use crate::completions::{CompletionRouter, InMemoryCompletionStore};
 
+#[derive(Debug)]
+struct UnfencedBackend(tinystoragedrivers_core::MemoryStorage);
+
+#[async_trait::async_trait]
+impl tinystoragedrivers_core::StorageBackend for UnfencedBackend {
+    fn driver(&self) -> &'static str {
+        "unfenced-test"
+    }
+
+    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+        tinystoragedrivers_core::Capabilities::none()
+    }
+
+    fn for_scope(
+        &self,
+        scope: &tinystoragedrivers_core::Scope,
+    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::ScopedStorage> {
+        self.0.for_scope(scope)
+    }
+}
+
+#[tokio::test]
+async fn durable_completion_open_fails_closed_while_explicit_local_fallback_remains_usable() {
+    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> =
+        Arc::new(UnfencedBackend(tinystoragedrivers_core::MemoryStorage::new()));
+    let scope = tinystoragedrivers_core::Scope::new("shared").unwrap();
+    assert!(open_driver_completion_store_or_memory(
+        Arc::clone(&backend),
+        scope.clone(),
+        CompletionStoreFallback::FailClosed,
+    )
+    .is_err());
+
+    let local = open_driver_completion_store_or_memory(
+        backend,
+        scope,
+        CompletionStoreFallback::LocalMemory,
+    )
+    .unwrap();
+    let router = CompletionRouter::new(local);
+    let outcome = router
+        .record(crate::completions::CompletionRecord::new(
+            "local-task",
+            "local-parent",
+            "worker",
+            crate::completions::CompletionStatus::Success,
+            crate::completions::CompletionResult::default(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, crate::completions::RecordOutcome::Recorded { .. }));
+}
+
 #[test]
 fn router_pool_opens_once_per_key_and_reuses_the_router() {
     let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));

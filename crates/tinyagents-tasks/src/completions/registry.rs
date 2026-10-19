@@ -38,6 +38,19 @@ impl std::error::Error for CompletionRouterPoolError {}
 
 type OpenFn<K> = dyn Fn(&K) -> Arc<CompletionRouter> + Send + Sync;
 
+/// Whether a failed durable completion-store open may use process-local
+/// storage. Shared-backend callers must use
+/// [`CompletionStoreFallback::FailClosed`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionStoreFallback {
+    /// Return the backend or declaration error; never make cross-process work
+    /// appear durable when it is only held in process memory.
+    FailClosed,
+    /// Explicitly permit ephemeral local behavior if durable storage cannot be
+    /// opened. The caller owns deciding that the scope is local-only.
+    LocalMemory,
+}
+
 /// Process-local cache of one durable completion router per scope key.
 pub struct CompletionRouterPool<K: Eq + Hash + Clone + Send + Sync> {
     routers: Mutex<HashMap<K, Arc<CompletionRouter>>>,
@@ -154,4 +167,25 @@ pub fn open_driver_completion_store(
         .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
     store.declare_collections()?;
     Ok(Arc::new(store))
+}
+
+/// Opens a driver-backed store, optionally falling back to explicit local
+/// memory behavior when the caller has established that the scope is local.
+///
+/// Shared/durable scopes must pass [`CompletionStoreFallback::FailClosed`].
+/// The local-memory option is an explicit policy choice, never an automatic
+/// response to a shared-backend failure.
+pub fn open_driver_completion_store_or_memory(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    fallback: CompletionStoreFallback,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    match open_driver_completion_store(backend, scope) {
+        Ok(store) => Ok(store),
+        Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
+            tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");
+            Ok(Arc::new(super::InMemoryCompletionStore::new()))
+        }
+        Err(error) => Err(error),
+    }
 }

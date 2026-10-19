@@ -36,7 +36,7 @@ pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
-    open_driver_completion_store,
+    CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
 };
 pub use router::{
     CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
