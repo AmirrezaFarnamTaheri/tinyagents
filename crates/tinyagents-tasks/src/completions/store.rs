@@ -71,8 +71,12 @@ pub trait CompletionStore: Send + Sync {
 
     /// Creates a record only if its key is absent. Shared stores must make the
     /// absence check and write atomic; unsupported stores fail closed.
-    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
-        let _ = record;
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+        gate: &ParentGateClaim,
+    ) -> Result<bool> {
+        let _ = (record, gate);
         Err(store_err(
             "conditional create",
             "store does not support atomic create",
@@ -85,12 +89,13 @@ pub trait CompletionStore: Send + Sync {
     fn claim_pending(
         &self,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Vec<CompletionRecord>> {
-        let _ = (parent_key, mode, max, token, visible_after);
+        let _ = (parent_key, gate, mode, max, token, visible_after);
         Err(store_err(
             "claim",
             "store does not support atomic delivery claims",
@@ -103,11 +108,12 @@ pub trait CompletionStore: Send + Sync {
         &self,
         task_id: &str,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, parent_key, mode, token, visible_after);
+        let _ = (task_id, parent_key, gate, mode, token, visible_after);
         Err(store_err(
             "claim task",
             "store does not support atomic delivery claims",
@@ -320,7 +326,11 @@ impl CompletionStore for InMemoryCompletionStore {
         Ok(())
     }
 
-    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+        _gate: &ParentGateClaim,
+    ) -> Result<bool> {
         let mut records = self.lock()?;
         if records.contains_key(&record.task_id) {
             return Ok(false);
@@ -332,6 +342,7 @@ impl CompletionStore for InMemoryCompletionStore {
     fn claim_pending(
         &self,
         parent_key: &str,
+        _gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
@@ -378,6 +389,7 @@ impl CompletionStore for InMemoryCompletionStore {
         &self,
         task_id: &str,
         parent_key: &str,
+        _gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,

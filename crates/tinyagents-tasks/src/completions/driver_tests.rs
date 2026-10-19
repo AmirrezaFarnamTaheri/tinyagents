@@ -42,9 +42,18 @@ fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
     assert!(current.epoch > stale.epoch);
 
     assert!(store
-        .insert_if_absent(&record("late", "parent"), &stale)
+        .insert_if_absent(&record("late", "parent"), &current)
+        .unwrap());
+    assert!(store
+        .insert_if_absent(&record("late", "other-parent"), &stale)
         .is_err());
-    assert!(store.get("late").is_none());
+    let preserved = store.get("late").unwrap();
+    assert_eq!(preserved.parent_key, "parent");
+
+    assert!(store
+        .insert_if_absent(&record("stale-create", "parent"), &stale)
+        .is_err());
+    assert!(store.get("stale-create").is_none());
 }
 
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
