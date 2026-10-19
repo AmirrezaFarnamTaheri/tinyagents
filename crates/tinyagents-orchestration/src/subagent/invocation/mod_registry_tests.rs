@@ -333,3 +333,33 @@ async fn message_request_ids_are_bounded_per_job() {
     );
     assert_eq!(steering.pending(), 66);
 }
+
+#[tokio::test]
+async fn cancel_all_for_workspace_does_not_cross_workspace_boundaries() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let workspace_a = tinytools::WorkspaceDescriptor::new("/workspace/a");
+    let workspace_b = tinytools::WorkspaceDescriptor::new("/workspace/b");
+    let token_a = CancellationToken::new();
+    let token_b = CancellationToken::new();
+    for (token, workspace) in [
+        (token_a.clone(), workspace_a.clone()),
+        (token_b.clone(), workspace_b),
+    ] {
+        jobs.create_with_cancellation(
+            "worker",
+            7,
+            token,
+            JobLink {
+                workspace: Some(workspace),
+                ..JobLink::default()
+            },
+        );
+    }
+
+    assert_eq!(jobs.cancel_all_for_workspace(&workspace_a).unwrap(), 1);
+    assert!(token_a.is_cancelled());
+    assert!(!token_b.is_cancelled());
+    assert_eq!(jobs.cancel_all_for_workspace(&workspace_a).unwrap(), 0);
+}

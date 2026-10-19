@@ -627,8 +627,18 @@ impl SubAgentJobRegistry {
         })
     }
 
+    /// Requests cancellation for every live job in one exact workspace.
+    /// Jobs with incomplete workspace metadata never match this scoped call.
+    pub fn cancel_all_for_workspace(
+        &self,
+        workspace: &tinytools::WorkspaceDescriptor,
+    ) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|metadata| metadata.workspace.as_ref() == Some(workspace))
+    }
+
     /// Requests cancellation for every live job while retaining each public
-    /// job record for the normal settlement path.
+    /// job record for the normal settlement path. This is trusted process-wide
+    /// supervision; tenant controls should use [`Self::cancel_all_for_workspace`].
     pub fn cancel_all(&self) -> Result<usize, SubAgentJobError> {
         self.cancel_matching(|_| true)
     }
