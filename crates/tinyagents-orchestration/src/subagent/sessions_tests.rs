@@ -468,7 +468,7 @@ impl DocumentStore for PauseAfterSelectorRead {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stale_reuse_selection_cannot_overwrite_a_newer_session_owner() {
     let backend = MemoryStorage::new();
     let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
