@@ -96,6 +96,7 @@ TinyAgents importing or downcasting to a host type.
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, time::Duration};
 use async_trait::async_trait;
 use tinytools::ToolRunContext;
+use crate::exec::ExecProgress;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecOperation {
@@ -243,6 +244,9 @@ pub trait PlanReviewPort: Send + Sync {
 }
 ```
 
+`RequestPlanReviewTool` stores `Option<Arc<dyn PlanReviewPort>>`; its
+constructor accepts that option. A missing port returns a stable error result
+before any auto-approval decision, making the fail-closed test meaningful.
 The tool keeps `request_plan_review`, `PermissionLevel::None`, no external
 effect, and an unbounded timeout because the port's review deadline is
 authoritative. It trims summary and nonempty string steps exactly as the source
@@ -343,12 +347,27 @@ Files: `crates/tinyagents-harness-tools/Cargo.toml`,
 new `src/fs/`, `src/net/`, and `src/exec/` modules; remove the harness's
 `tinytools-std` manifest entry. Add opt-in `fs`, `net`, and `exec` features;
 preserve the existing `default = ["todos", "goals", "skills"]` behavior.
-Make dependencies optional at the narrowest family feature that uses them.
-The `fs` feature owns filesystem/search/git/file-state helpers and their
-dependencies, `net` owns reqwest/futures/sha helpers and uses
-`tinyagents_harness::url_guard`, and `exec` owns process, timeout, and
-`detect_tools` dependencies. Preserve target-specific Unix/Windows
-dependencies. Do not make a new feature activate an unrelated old default.
+Use this dependency-to-feature mapping, retaining existing mandatory
+dependencies (`anyhow`, `async-trait`, `chrono`, `serde`, `serde_json`,
+`tinyagents-harness`, `tinytools`, `tokio` base, and `tracing`) for old tool
+families:
+
+| Dependency / Tokio capability | Feature |
+| --- | --- |
+| `base64`, `fs2`, `glob`, `parking_lot`, `regex`, `walkdir`, `libc`, `log` | `fs` |
+| `futures-util`, `reqwest`, `sha2`, `log` | `net` |
+| `rustix` (`fs`, `process` as target permits) | `exec` |
+| Tokio `fs`, `io-util` capabilities | `fs`, `net`, and `exec` where used |
+| Tokio `process` capability | `exec` |
+| `tinyinference-video` | `media` only, for `ProgressFn` |
+| `tempfile`, Tokio `test-util` | dev-dependencies only |
+
+The URL guard itself uses no optional dependency; replace its `log` calls with
+`tracing`, because `tinyagents-harness` already depends on tracing. Keep
+`tinyinference-video` optional and do not forward `media` to the harness's
+`multimodal` feature. Make dependencies optional at the narrowest family
+feature that uses them. Preserve target-specific Unix/Windows dependencies.
+Do not make a new feature activate an unrelated old default.
 
 Move all `tinytools-std` files except `sanitize` with their fixtures and tests,
 preserving modules and public APIs under `tinyagents_harness_tools::{fs,net,exec}`:
