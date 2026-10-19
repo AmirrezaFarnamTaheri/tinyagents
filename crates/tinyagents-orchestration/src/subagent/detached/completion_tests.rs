@@ -143,7 +143,13 @@ async fn the_watcher_pushes_to_a_live_parent_by_notify_mode() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(queue.drain(QueueLane::Collect).await.len(), 1);
+    let admitted = queue
+        .take_admitted(
+            QueueLane::Collect,
+            tinyagents_harness::run_queue::QueueMode::All,
+        )
+        .await;
+    assert_eq!(admitted.len(), 1);
 }
 
 #[tokio::test]
