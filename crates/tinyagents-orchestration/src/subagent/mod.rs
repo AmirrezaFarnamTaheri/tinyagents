@@ -70,9 +70,9 @@ pub use role::{
 };
 pub use sessions::{
     DriverSubagentSessionStore, DurableSubagentSession, DurableSubagentSessionSummary,
-    DurableSubagentStatus, ReuseDecision, SubagentSessionSelector, SubagentSessionStore,
-    SubagentSessionUpsert, find_reusable_session, normalize_task_key, reuse_decision,
-    task_title_from_prompt,
+    DurableSubagentStatus, ReuseDecision, ScopedSubagentSessionStore, SubagentSessionSelector,
+    SubagentSessionStore, SubagentSessionUpsert, find_reusable_session, normalize_task_key,
+    reuse_decision, task_title_from_prompt,
 };
 pub use step::{
     AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,

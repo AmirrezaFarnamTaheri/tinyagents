@@ -55,7 +55,12 @@ async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
             .unwrap()
     );
     assert_eq!(
-        store.get(&second.subagent_session_id).await.unwrap().unwrap().status,
+        store
+            .get(&second.subagent_session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         DurableSubagentStatus::Running
     );
     assert!(
@@ -64,4 +69,26 @@ async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
             .await
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn scoped_session_store_rejects_other_parent_identity() {
+    let backend = MemoryStorage::new();
+    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let inner = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
+    let scoped =
+        ScopedSubagentSessionStore::new(inner, "parent-session", Some("thread".to_owned()));
+    assert!(
+        scoped
+            .list_for_parent("other-session", Some("thread"))
+            .await
+            .is_err()
+    );
+    assert!(
+        scoped
+            .list_for_parent("parent-session", None)
+            .await
+            .is_err()
+    );
+    assert!(scoped.get("not-owned").await.unwrap().is_none());
 }
