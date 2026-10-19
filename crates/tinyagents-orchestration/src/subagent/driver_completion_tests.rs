@@ -742,3 +742,92 @@ fn the_overflow_artifact_is_the_one_a_completion_names() {
     assert_eq!(record.result.artifact.unwrap().id, "overflow");
     assert_eq!(record.parent_key, "p");
 }
+
+struct RevocableTurnFence {
+    state: tokio::sync::watch::Sender<bool>,
+    receiver: tokio::sync::watch::Receiver<bool>,
+}
+
+impl RevocableTurnFence {
+    fn new() -> Self {
+        let (state, receiver) = tokio::sync::watch::channel(true);
+        Self { state, receiver }
+    }
+
+    fn revoke(&self) {
+        self.state.send_replace(false);
+    }
+}
+
+impl tinyagents_tasks::DeliveryFence for RevocableTurnFence {
+    fn admitted(&self) -> bool {
+        *self.receiver.borrow()
+    }
+
+    fn lost(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let mut receiver = self.receiver.clone();
+        Box::pin(async move {
+            loop {
+                if !*receiver.borrow() || receiver.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+    }
+}
+
+struct WaitingExecutor {
+    started: Arc<tokio::sync::Notify>,
+    observed_cancellation: Arc<Mutex<Option<CancellationToken>>>,
+}
+
+#[async_trait]
+impl SubagentExecutor<String> for WaitingExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        *self.observed_cancellation.lock().unwrap() = Some(execution.cancellation);
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn generic_child_driver_cancels_dispatch_and_skips_persistence_when_turn_fence_is_lost() {
+    let fence = Arc::new(RevocableTurnFence::new());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let observed_cancellation = Arc::new(Mutex::new(None));
+    let persistence = Arc::new(Memory::default());
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: None,
+            parent: None,
+        })),
+        executor: Some(Arc::new(WaitingExecutor {
+            started: started.clone(),
+            observed_cancellation: observed_cancellation.clone(),
+        })),
+        persistence: persistence.clone(),
+    })
+    .unwrap();
+    let request = request_in_scope("parent-a", "root-a", "thread-a")
+        .with_turn_fence(fence.clone());
+    let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
+    started.notified().await;
+
+    fence.revoke();
+    assert!(matches!(turn.await.unwrap(), Err(SubagentError::Cancelled)));
+    assert!(
+        observed_cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled),
+        "loss cancels the executor's in-flight turn token"
+    );
+    assert!(
+        persistence.terminals.lock().unwrap().is_empty(),
+        "a stale turn must not persist a terminal outcome after losing its fence"
+    );
+}
