@@ -1382,7 +1382,7 @@ pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
 // In TurnDriver::prepare, before pushing planner middleware:
 let outcome_sink = tinyagents_harness::turn_outcome::new_tool_outcome_sink();
 harness.push_middleware(Arc::new(
-    tinyagents_harness::middleware::ToolOutcomeCaptureMiddleware::new(
+    tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(
         Arc::clone(&outcome_sink),
     ),
 ));
@@ -1398,7 +1398,7 @@ tool_outcomes,
 ```
 
 In `TurnDriver::prepare`, create `outcome_sink`, push
-`Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&outcome_sink)))` into
+`Arc::new(tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(Arc::clone(&outcome_sink)))` into
 the harness before the `for middleware in context` loop, and place the sink in
 `TurnTail`. In `TurnTail::finish`, call `drain_tool_outcomes(&self.outcomes)`
 and put the result into `TurnReport`. Add `tool_outcomes: Vec<ToolCallOutcome>`
