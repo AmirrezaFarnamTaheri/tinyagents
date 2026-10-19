@@ -57,7 +57,7 @@ async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epo
     successor.release().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
     use serde_json::json;
     use tinystoragedrivers_core::{Key, Precondition};
@@ -111,6 +111,7 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
         .await
         .unwrap();
     assert!(first.admitted(), "the takeover is written before renewal runs");
+    tokio::time::advance(Duration::from_millis(100)).await;
 
     tokio::time::timeout(Duration::from_secs(2), turn_cancellation.cancelled())
         .await
