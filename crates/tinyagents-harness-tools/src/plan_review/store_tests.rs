@@ -4,16 +4,19 @@ use std::sync::Mutex as StdMutex;
 use std::{sync::Arc, time::Duration};
 
 #[derive(Default)]
-struct Events(StdMutex<Vec<(String, PlanReviewReason)>>);
+struct Events {
+    decisions: StdMutex<Vec<(String, PlanReviewReason)>>,
+    requested: tokio::sync::Notify,
+}
 impl PlanReviewNotifier<u8> for Events {
-    fn requested(&self, _: &ParkedReview<u8>) {}
+    fn requested(&self, _: &ParkedReview<u8>) { self.requested.notify_one(); }
     fn decided(
         &self,
         review: &ParkedReview<u8>,
         _: &PlanReviewResolution,
         reason: PlanReviewReason,
     ) {
-        self.0
+        self.decisions
             .lock()
             .unwrap()
             .push((review.request_id.clone(), reason));
@@ -52,28 +55,28 @@ fn request(
 async fn timeout_rejects_and_reports_expired() {
     let (store, events) = store(Duration::from_secs(600));
     let task = request(store.clone(), 1, "t");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     assert!(store.parked_review_for_thread(&1, "t").is_some());
     tokio::time::advance(Duration::from_secs(600)).await;
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(events.0.lock().unwrap()[0].1, PlanReviewReason::Expired);
+    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Expired);
     assert!(!store.has_parked_review(&1, "t"));
 }
 
 #[tokio::test]
 async fn approve_resolves_the_parked_turn() {
-    let (store, _) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     let task = request(store.clone(), 1, "approve");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     assert!(store.decide_by_thread(&1, "approve", PlanReviewResolution::Approve));
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Approve);
 }
 
 #[tokio::test]
 async fn revise_returns_feedback_to_the_parked_turn() {
-    let (store, _) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     let task = request(store.clone(), 1, "revise");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     let resolution = PlanReviewResolution::Revise {
         feedback: "add tests".into(),
     };
@@ -83,7 +86,7 @@ async fn revise_returns_feedback_to_the_parked_turn() {
 
 #[test]
 fn unknown_request_cannot_be_decided() {
-    let (store, _) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     assert!(!store.decide(&1, "missing", PlanReviewResolution::Approve));
     assert!(!store.decide_by_thread(&1, "missing", PlanReviewResolution::Approve));
 }
@@ -106,7 +109,7 @@ async fn parked_snapshot_replays_routing_call_id_and_expiry() {
             )
             .await
     });
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     let snapshot = store.parked_review_for_thread(&1, "replay").unwrap();
     assert_eq!(snapshot.client_id.as_deref(), Some("client"));
     assert_eq!(snapshot.tool_call_id.as_deref(), Some("call"));
@@ -127,32 +130,32 @@ fn no_snapshot_exists_for_an_unparked_thread() {
 async fn dropped_park_reports_cancelled_and_cleans_snapshot() {
     let (store, events) = store(Duration::from_secs(600));
     let task = request(store.clone(), 1, "t");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     task.abort();
     let _ = task.await;
     assert!(!store.has_parked_review(&1, "t"));
-    assert_eq!(events.0.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
+    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
 }
 
 #[tokio::test]
 async fn dropped_sender_is_cancelled_not_expired() {
     let (store, events) = store(Duration::from_secs(600));
     let task = request(store.clone(), 1, "t");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     let id = store.parked_review_for_thread(&1, "t").unwrap().request_id;
     assert!(store.cancel(&1, &id));
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(events.0.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
+    assert_eq!(events.decisions.lock().unwrap()[0].1, PlanReviewReason::Cancelled);
 }
 
 #[tokio::test]
 async fn decisions_are_scope_isolated_and_newest_review_is_replayed() {
-    let (store, _) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     let one = request(store.clone(), 1, "same");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     let old = store.parked_review_for_thread(&1, "same").unwrap();
     let two = request(store.clone(), 1, "same");
-    tokio::task::yield_now().await;
+    events.requested.notified().await;
     let newest = store.parked_review_for_thread(&1, "same").unwrap();
     assert_ne!(old.request_id, newest.request_id);
     assert!(store.parked_review_for_thread(&2, "same").is_none());
