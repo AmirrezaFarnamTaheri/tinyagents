@@ -332,9 +332,10 @@ revise: revise: the user requested changes before executing. Their feedback:
 {feedback}
 Revise the plan accordingly, then call `request_plan_review` again before executing.
 ```
-Tests assert all five outcomes and exact strings;
-missing port, port error, and expired review remain errors and can never map
-to an approval variant.
+Tests assert all five outcomes and exact strings. A timeout/dropped review
+continues to resolve as the host's fail-closed `Reject` (with its expiry
+metadata); a missing port or port error remains an error and can never map to
+an approval variant.
 
 ### Media artifact filing port
 
@@ -668,10 +669,10 @@ until its wait has completed. On Windows use the existing platform-supported
 cleanup path; do not claim descendant termination where the platform does not
 provide it. Tests use a temporary executable
 script/process and assert: only the expected argv reaches it; malformed
-package inputs never launch; denied calls have a zero backend count; timeout
-does not return until an acknowledgment written by the owned waiter after
-process-group kill, output-pipe drain, and child reap; assert on return that neither the child nor its descendant
-remains alive and that captured pipes are closed. Separate stdout/stderr
+package inputs never launch; denied calls have a zero backend count; timeout does not return until the owned waiter's `Reaped` acknowledgment after
+process-group kill, output-pipe drain, and child reap; assert on return that
+neither the child nor its descendant remains alive and that captured pipes
+are closed. Separate stdout/stderr
 truncation remains Unicode safe; exit status survives. Cancellation tests run
 the call under `ProcessCleanup::scope`, drop the call future, then await
 `ProcessCleanup::wait()` and assert the child and descendant are gone. The
