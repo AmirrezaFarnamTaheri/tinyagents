@@ -39,6 +39,6 @@ async fn a_denied_gate_never_calls_the_backend() {
     let backend = Arc::new(CountingBackend(AtomicUsize::new(0)));
     let tool = ExecTool::new(Arc::new(DenyingGate), backend.clone());
     let result = tool.execute(serde_json::json!({"command":"echo should-not-run"})).await.unwrap();
-    assert!(result.is_error, "a denied command must return an error");
     assert_eq!(backend.0.load(Ordering::SeqCst), 0, "denial must precede backend dispatch");
+    assert!(result.is_error, "a denied command must return an error");
 }
