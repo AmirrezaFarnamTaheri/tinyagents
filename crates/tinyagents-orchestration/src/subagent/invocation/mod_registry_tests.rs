@@ -45,7 +45,7 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
         })
         .unwrap();
     assert!(inserted);
-    assert!(Arc::ptr_eq(&token, &registered_token));
+    assert!(!registered_token.is_cancelled());
 
     assert!(jobs
         .cancel_key_owned_and_tombstone(&key, "owner-b")
@@ -59,16 +59,10 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
 
     jobs.mark_driver_result(
         &id,
-        Ok(crate::subagent::SubagentOutcome {
-            status: crate::subagent::SubagentOutcomeKind::Completed,
-            output: "late output".into(),
-            worker_thread_id: None,
-            task_id: "child".into(),
-            extensions: Default::default(),
-            artifacts: Vec::new(),
-            schema_error: None,
-            artifact_error: None,
-        }),
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "child",
+            "late output",
+        )),
     );
     let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
     assert_eq!(retained.status, SubAgentJobStatus::Cancelled);

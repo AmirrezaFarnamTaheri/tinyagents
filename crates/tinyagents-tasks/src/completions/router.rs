@@ -8,7 +8,10 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
-use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
+use super::store::{
+    ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim, PendingClaimRequest,
+    ResolveClaimRequest, TaskClaimRequest,
+};
 use super::types::{CompletionReceipt, CompletionRecord, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
@@ -406,14 +409,14 @@ impl CompletionRouter {
         for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
             if let Some(receipt) = state.active_receipts.remove(&record.task_id) {
-                let _ = state.store.resolve_claim(
-                    &record.task_id,
-                    parent_key,
-                    receipt.parent_epoch,
-                    gate.claim(),
-                    &receipt.token,
-                    ClaimResolution::Release,
-                );
+                let _ = state.store.resolve_claim(ResolveClaimRequest {
+                    task_id: record.task_id,
+                    parent_key: parent_key.to_owned(),
+                    parent_epoch: receipt.parent_epoch,
+                    gate: gate.claim().clone(),
+                    token: receipt.token,
+                    resolution: ClaimResolution::Release,
+                });
             }
         }
     }
@@ -433,14 +436,14 @@ impl CompletionRouter {
                 else {
                     continue;
                 };
-                let _ = state.store.resolve_claim(
-                    &receipt.task_id,
-                    &receipt.parent_key,
-                    receipt.parent_epoch,
-                    gate.claim(),
-                    &receipt.token,
-                    ClaimResolution::Release,
-                );
+                let _ = state.store.resolve_claim(ResolveClaimRequest {
+                    task_id: receipt.task_id.clone(),
+                    parent_key: receipt.parent_key.clone(),
+                    parent_epoch: receipt.parent_epoch,
+                    gate: gate.claim().clone(),
+                    token: receipt.token.clone(),
+                    resolution: ClaimResolution::Release,
+                });
             }
         }
     }
@@ -454,14 +457,14 @@ impl CompletionRouter {
         let mut released = 0;
         for receipt in receipts {
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?;
-            let resolved = state.store.resolve_claim(
-                &receipt.task_id,
-                &receipt.parent_key,
-                receipt.parent_epoch,
-                gate.claim(),
-                &receipt.token,
-                ClaimResolution::Release,
-            )?;
+            let resolved = state.store.resolve_claim(ResolveClaimRequest {
+                task_id: receipt.task_id.clone(),
+                parent_key: receipt.parent_key.clone(),
+                parent_epoch: receipt.parent_epoch,
+                gate: gate.claim().clone(),
+                token: receipt.token.clone(),
+                resolution: ClaimResolution::Release,
+            })?;
             if state.active_receipts.get(&receipt.task_id) == Some(&receipt) {
                 state.leased.remove(&receipt.task_id);
                 state.active_receipts.remove(&receipt.task_id);
@@ -584,15 +587,15 @@ impl CompletionRouter {
                 Some((lane, queue)) => {
                     let token = uuid::Uuid::new_v4().to_string();
                     let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
-                    let Some(claimed) = state.store.claim_task(
-                        &record.task_id,
-                        &record.parent_key,
-                        record.parent_epoch,
-                        gate.claim(),
-                        CompletionClaimMode::Followup,
-                        &token,
+                    let Some(claimed) = state.store.claim_task(TaskClaimRequest {
+                        task_id: record.task_id.clone(),
+                        parent_key: record.parent_key.clone(),
+                        parent_epoch: record.parent_epoch,
+                        gate: gate.claim().clone(),
+                        mode: CompletionClaimMode::Followup,
+                        token,
                         visible_after,
-                    )?
+                    })?
                     else {
                         return Ok(RecordOutcome::Recorded {
                             lane: None,
@@ -988,15 +991,15 @@ impl CompletionRouter {
         };
         let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
-        let mut candidates = state.store.claim_pending(
-            parent_key,
+        let mut candidates = state.store.claim_pending(PendingClaimRequest {
+            parent_key: parent_key.to_owned(),
             parent_epoch,
-            _gate.claim(),
+            gate: _gate.claim().clone(),
             mode,
             max,
-            &token,
+            token,
             visible_after,
-        )?;
+        })?;
         sort_oldest_first(&mut candidates);
         for record in &candidates {
             state.leased.insert(record.task_id.clone());
@@ -1022,14 +1025,15 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let mut changed = 0;
         for receipt in receipts {
-            let resolved = state.store.resolve_claim(
-                &receipt.task_id,
-                &receipt.parent_key,
-                receipt.parent_epoch,
-                ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
-                &receipt.token,
-                ClaimResolution::Delivered,
-            )?;
+            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?;
+            let resolved = state.store.resolve_claim(ResolveClaimRequest {
+                task_id: receipt.task_id.clone(),
+                parent_key: receipt.parent_key.clone(),
+                parent_epoch: receipt.parent_epoch,
+                gate: gate.claim().clone(),
+                token: receipt.token.clone(),
+                resolution: ClaimResolution::Delivered,
+            })?;
             if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
                 state.active_receipts.remove(&receipt.task_id);
                 state.leased.remove(&receipt.task_id);
@@ -1050,16 +1054,17 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
         for receipt in receipts {
-            let record = state.store.resolve_claim(
-                &receipt.task_id,
-                &receipt.parent_key,
-                receipt.parent_epoch,
-                ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
-                &receipt.token,
-                ClaimResolution::Failed {
+            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?;
+            let record = state.store.resolve_claim(ResolveClaimRequest {
+                task_id: receipt.task_id.clone(),
+                parent_key: receipt.parent_key.clone(),
+                parent_epoch: receipt.parent_epoch,
+                gate: gate.claim().clone(),
+                token: receipt.token.clone(),
+                resolution: ClaimResolution::Failed {
                     max_attempts: self.max_attempts,
                 },
-            )?;
+            })?;
             if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
                 state.active_receipts.remove(&receipt.task_id);
                 state.leased.remove(&receipt.task_id);
