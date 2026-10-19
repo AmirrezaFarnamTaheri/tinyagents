@@ -311,6 +311,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 history: self.history.clone(),
             });
         };
+        let scanned_session_id = transcript.meta.session_id.clone();
         if let Some(selected) = session_binding.as_ref() {
             let expected = selected.session_id();
             if transcript
@@ -605,7 +606,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .session_id
                         .as_deref()
                         .is_some_and(|session_id| {
-                            transcript.meta.session_id.as_deref() == Some(session_id)
+                            scanned_session_id.as_deref() == Some(session_id)
                         })
                         || destination
                             .as_ref()
