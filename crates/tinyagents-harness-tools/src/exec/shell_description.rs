@@ -19,9 +19,3 @@ pub(super) fn shell_description(flavor: ShellFlavor) -> &'static str {
     }
 }
 
-pub(super) fn command_param_description(flavor: ShellFlavor) -> &'static str {
-    match flavor {
-        ShellFlavor::Cmd => "The cmd.exe command to execute (cmd syntax, not POSIX)",
-        ShellFlavor::Posix => "The shell command to execute",
-    }
-}

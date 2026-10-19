@@ -91,7 +91,6 @@ impl<T: Tool> MediaArtifactTool<T> {
     async fn run_with_heartbeat<F: std::future::Future<Output = anyhow::Result<ToolResult>>>(
         &self,
         context: Option<&dyn ToolRunContext>,
-        call_id: Option<&str>,
         status: Arc<std::sync::Mutex<Option<MediaJobProgress>>>,
         run: F,
     ) -> anyhow::Result<ToolResult> {
@@ -265,7 +264,7 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
                 }
             }
         };
-        let result = self.run_with_heartbeat(context, None, status, run).await?;
+        let result = self.run_with_heartbeat(context, status, run).await?;
         if result.is_error {
             return Ok(result);
         }
