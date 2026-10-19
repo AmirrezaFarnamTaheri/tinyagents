@@ -31,8 +31,10 @@ fn tool(
     let handle = modes.handle_for_thread(&1, "thread");
     (PlanExitTool::new(Arc::new(Host), modes, reviews), handle)
 }
+#[cfg(feature = "plan-review")]
 #[derive(Default)]
 struct NoopReviews(tokio::sync::Notify);
+#[cfg(feature = "plan-review")]
 impl crate::plan_review::PlanReviewNotifier<u8> for NoopReviews {
     fn requested(&self, _: &crate::plan_review::ParkedReview<u8>) {
         self.0.notify_one();
@@ -69,6 +71,7 @@ async fn plan_exit_switches_mode_through_notifying_store_and_keeps_marker() {
 }
 
 #[tokio::test]
+#[cfg(feature = "plan-review")]
 async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
     let notifier = Arc::new(NoopReviews::default());
     let reviews = Arc::new(PlanReviewStore::new(notifier.clone()));
