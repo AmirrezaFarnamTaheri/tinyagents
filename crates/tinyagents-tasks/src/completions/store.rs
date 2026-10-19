@@ -105,28 +105,8 @@ pub trait CompletionStore: Send + Sync {
     /// Atomically leases matching pending completions until `visible_after`.
     /// Implementations shared across processes must use backend CAS/claim
     /// semantics; the default fails closed rather than emulating a local lock.
-    // These are independent claim predicates and fencing inputs, not one
-    // loosely-related options bag.
-    #[allow(clippy::too_many_arguments)]
-    fn claim_pending(
-        &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Vec<CompletionRecord>> {
-        let _ = (
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            max,
-            token,
-            visible_after,
-        );
+    fn claim_pending(&self, request: PendingClaimRequest) -> Result<Vec<CompletionRecord>> {
+        let _ = request;
         Err(store_err(
             "claim",
             "store does not support atomic delivery claims",
@@ -135,28 +115,8 @@ pub trait CompletionStore: Send + Sync {
 
     /// Atomically claims one pending record for a live push. The default fails
     /// closed; a process-local lock is not a substitute for backend ownership.
-    // These are independent claim predicates and fencing inputs, not one
-    // loosely-related options bag.
-    #[allow(clippy::too_many_arguments)]
-    fn claim_task(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Option<CompletionRecord>> {
-        let _ = (
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        );
+    fn claim_task(&self, request: TaskClaimRequest) -> Result<Option<CompletionRecord>> {
+        let _ = request;
         Err(store_err(
             "claim task",
             "store does not support atomic delivery claims",
@@ -219,6 +179,30 @@ pub enum CompletionClaimMode {
     HoldForNextTurn,
     /// Pull-only completions.
     Pull,
+}
+
+/// Inputs for an atomic batch claim from a parent queue.
+#[derive(Debug, Clone)]
+pub struct PendingClaimRequest {
+    pub parent_key: String,
+    pub parent_epoch: u64,
+    pub gate: ParentGateClaim,
+    pub mode: CompletionClaimMode,
+    pub max: usize,
+    pub token: String,
+    pub visible_after: SystemTime,
+}
+
+/// Inputs for an atomic claim of one live-push record.
+#[derive(Debug, Clone)]
+pub struct TaskClaimRequest {
+    pub task_id: String,
+    pub parent_key: String,
+    pub parent_epoch: u64,
+    pub gate: ParentGateClaim,
+    pub mode: CompletionClaimMode,
+    pub token: String,
+    pub visible_after: SystemTime,
 }
 
 impl CompletionClaimMode {
@@ -458,17 +442,17 @@ impl CompletionStore for InMemoryCompletionStore {
         })
     }
 
-    fn claim_pending(
-        &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Vec<CompletionRecord>> {
-        self.with_current_gate(parent_key, gate, |records| {
+    fn claim_pending(&self, request: PendingClaimRequest) -> Result<Vec<CompletionRecord>> {
+        let PendingClaimRequest {
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        } = request;
+        self.with_current_gate(&parent_key, &gate, |records| {
             let now = SystemTime::now();
             let mut candidates: Vec<_> = records
                 .values()
@@ -507,19 +491,19 @@ impl CompletionStore for InMemoryCompletionStore {
         })
     }
 
-    fn claim_task(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Option<CompletionRecord>> {
-        self.with_current_gate(parent_key, gate, |records| {
+    fn claim_task(&self, request: TaskClaimRequest) -> Result<Option<CompletionRecord>> {
+        let TaskClaimRequest {
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        } = request;
+        self.with_current_gate(&parent_key, &gate, |records| {
             let now = SystemTime::now();
-            let Some(record) = records.get_mut(task_id) else {
+            let Some(record) = records.get_mut(&task_id) else {
                 return Ok(None);
             };
             if record.parent_key != parent_key
