@@ -754,16 +754,18 @@ public `Session::resume` calls it before the first locator access. This order
 is intentional: hooks may prepare a lazy target but cannot grant authority to
 change its destination.
 
-Extract the current public `Session::resume` body verbatim into private
-`async fn resume_bound(&mut self, options: &TurnOptions<C>) ->
-Result<SessionResume, RuntimeError>`. The public wrapper first calls
-`self.resolve_and_bind(options)?` and then awaits `self.resume_bound(options)`.
-In `turn_inner`, retain the existing `before_resume` and preparation calls,
-then call `apply_resume_preparation(preparation)?`,
-`self.resolve_and_bind(options)?`, acquire `lock_turn(options)`, and await
-`self.resume_bound(options)`. Do not call the public wrapper from `turn_inner`,
-because that would resolve twice. The old body remains line-for-line aside
-from its visibility/name and follows the single guard.
+Extract the existing public `Session::resume` implementation into a private
+`resume_bound` helper only after extracting its pre-resume hook/preparation
+portion into `prepare_resume`. Both public `resume` and `turn_inner` must use
+this sequence: run `before_resume`, apply its `ResumePreparation`, validate
+`TurnOptions::session`, resolve actor admission, compare the hook-selected
+target to the admitted destination, then acquire the turn lock or call any
+locator method. This prevents `options.session` from selecting an old
+target before binding and prevents a hook from opening a replacement target
+before validation. The helper receives the already-validated preparation and
+does no hook, resolver, lock, or locator work before that validation. Keep
+`Session::resume` as a full public path through this same sequence; do not
+leave it as a resolver-only shortcut.
 
 The request has logical naming inputs only; there is no caller-provided
 agent/tenant scope field. The resolver uses `options.run_context.data` to
