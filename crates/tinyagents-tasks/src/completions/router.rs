@@ -461,7 +461,11 @@ impl CompletionRouter {
             )));
         }
         let message = self.formatter.to_message(std::slice::from_ref(&record));
-        queue.push(lane, message).await;
+        let admission = Arc::new(super::CompletionAdmission::for_store(
+            self.store(),
+            &record,
+        ));
+        queue.push_guarded(lane, message, admission).await;
         tracing::debug!(
             task_id = %record.task_id,
             parent_key = %record.parent_key,
@@ -628,32 +632,6 @@ impl CompletionRouter {
         Ok(marker.is_some_and(|marker| {
             marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
         }))
-    }
-
-    /// Acquires the durable parent gate and verifies that `parent_epoch` is
-    /// still open. The returned permit orders this queue-to-turn handoff
-    /// against cancellation, deletion, and resume on every router sharing the
-    /// backing store.
-    pub fn acquire_parent_generation(
-        &self,
-        parent_key: &str,
-        parent_epoch: u64,
-    ) -> Result<Option<Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>>> {
-        let store = self.store();
-        Ok(ParentAdmissionPermit::acquire(store, parent_key, parent_epoch)?.map(|permit| {
-            Arc::new(permit) as Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>
-        }))
-    }
-
-    /// Returns a process-local coalescing key for queue batches. Durable
-    /// drivers use backend identity plus tenant scope, so independent router
-    /// instances sharing one lease domain reuse one held parent permit.
-    pub fn parent_admission_batch_key(&self, parent_key: &str, parent_epoch: u64) -> Result<String> {
-        let state = self.lock()?;
-        let identity = state.store.coordination_identity().unwrap_or_else(|| {
-            format!("store:{:p}", Arc::as_ptr(&state.store))
-        });
-        Ok(format!("{identity}:{parent_key}:{parent_epoch}"))
     }
 
     fn admit_child_locked(
