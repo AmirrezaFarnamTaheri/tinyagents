@@ -185,6 +185,26 @@ admitted backend; TinyAgents neither resolves tenant scope nor infers it from
 agent/session keys. A provider that cannot attest that its handles pin their
 backend returns `Unsupported`.
 
+The override body is:
+
+```rust
+fn lease_for_agent(
+    &self,
+    agent_id: &str,
+) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    let snapshot = self.current();
+    let stores = snapshot
+        .try_for_agent(agent_id)
+        .map_err(SessionStoreLeaseError::Open)?;
+    Ok(SessionStoreLease::pinned(stores, snapshot))
+}
+```
+
+`current()` takes and releases the `RwLock` read guard while cloning the
+current `Arc`; the subsequent `try_for_agent` runs against that immutable
+snapshot. `DriverSessionStores` carries the tenant `Scope`, so no second scope
+lookup occurs after opening.
+
 Rebind may update the provider's current backend for future opens, but must
 not mutate an already returned lease. `WorkspaceStores::open`
 continues to cache its ordinary workspace-bound handles; it must not become a
@@ -314,6 +334,36 @@ input order, and `drop_synthesized_name_collisions(&[Arc<ToolSpec>],
 Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>>`, which removes synthesized specs
 whose names occur in the durable set before the first-wins pass.
 
+Implement those helpers with this code (imports are `HashSet`, `Arc`, and
+`tinytools::ToolSpec`):
+
+```rust
+pub fn dedup_visible_tool_specs(specs: Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>> {
+    let mut names = HashSet::new();
+    specs.into_iter()
+        .filter(|spec| names.insert(spec.name.clone()))
+        .collect()
+}
+
+pub fn drop_synthesized_name_collisions(
+    durable: &[Arc<ToolSpec>],
+    synthesized: Vec<Arc<ToolSpec>>,
+) -> Vec<Arc<ToolSpec>> {
+    let durable_names: HashSet<&str> = durable.iter()
+        .map(|spec| spec.name.as_str())
+        .collect();
+    synthesized.into_iter()
+        .filter(|spec| !durable_names.contains(spec.name.as_str()))
+        .collect()
+}
+```
+
+Test order and allocation directly with two `Arc<ToolSpec>` values named
+`"read"`: the returned first element is `Arc::ptr_eq` to the first allocation,
+and the second distinct name remains second. For durable collision, pass a
+durable `"search"` and synthesized `["search", "render"]`; assert only
+`"render"` survives before deduplication.
+
 The host-policy test uses a counter-backed host policy and calls
 `ToolCallPolicy::check` directly with a real `RunContext::new(RunConfig::new("test"), ())`:
 assert unknown name yields `PolicyDecision::Deny` with counter `0`, admitted
@@ -381,6 +431,15 @@ This lets `ToolSnapshot` keep its current `Debug` derive. Replacing an existing 
 type replaces that value; different host types coexist. Clones share immutable
 `Arc` payloads. `retaining` and `with_retained` copy the extension collection;
 `exact` semantics remain unchanged.
+
+In the existing `ToolSnapshot::new`, initialize `extensions` to
+`ToolSnapshotExtensions::default()`. In `retaining`, add
+`extensions: self.extensions.clone()` to the returned `Self`. In
+`with_retained`, construct the merged spec set with `let mut merged =
+Self::new(...)`, then assign `merged.extensions = self.extensions.clone()` before returning it with
+the retained count. Keep `from_json` going through `Self::new`; decoded
+snapshots therefore have an empty extension collection, and the existing
+array wire format stays unchanged.
 
 Keep `ToolSnapshot::to_json` and `from_json` as the existing array-of-specs
 format with no extension serialization. The harness transcript record already
