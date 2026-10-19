@@ -56,6 +56,9 @@ hosts with stable task ids without exposing executor handles such as
   `cancel_all`, `snapshot(s)`, or fetch a `steering_handle` for a task it
   still owns in-process. `sweep_terminal` / the `soft_cap` passed to `new`
   bound unbounded growth from tasks nobody ever waited on.
+  Adapters with sidecar maps can use `register_cooperative_managed` and
+  `prune_terminal_trusted` to coordinate removal with their own waiter pins;
+  that registration path requires the adapter to enforce its finite cap.
 
 ### Orphan reconciliation (`reconcile.rs`)
 
