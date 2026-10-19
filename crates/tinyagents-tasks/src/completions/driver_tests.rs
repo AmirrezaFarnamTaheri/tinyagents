@@ -1,5 +1,6 @@
 use super::*;
 use crate::completions::CompletionReceipt;
+use crate::open_driver_completion_store_with_coordination_domain;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use std::sync::Arc;
