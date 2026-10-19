@@ -138,15 +138,6 @@ async fn one_at_a_time_skips_a_revoked_oldest_item_without_blocking_the_lane() {
             .into_iter()
             .map(|item| item.value)
             .collect::<Vec<_>>(),
-        Vec::<&str>::new()
-    );
-    assert_eq!(
-        queue
-            .take_admitted(QueueLane::Steer, QueueMode::OneAtATime)
-            .await
-            .into_iter()
-            .map(|item| item.value)
-            .collect::<Vec<_>>(),
         vec!["current"]
     );
 }
