@@ -9,6 +9,7 @@ fn context_config_exposes_a_json_schema_for_host_configuration() {
 
     let schema = schemars::schema_for!(ContextConfig);
     let value = serde_json::to_value(schema).unwrap();
+    println!("{value:#}");
     let properties = value["properties"].as_object().unwrap();
 
     for field in [
@@ -29,7 +30,10 @@ fn context_config_exposes_a_json_schema_for_host_configuration() {
     }
     assert_eq!(properties["enabled"]["type"], "boolean");
     assert_eq!(properties["microcompact_keep_recent"]["type"], "integer");
-    assert_eq!(properties["summarizer_model"]["type"], "string");
+    assert_eq!(
+        properties["summarizer_model"]["type"],
+        serde_json::json!(["string", "null"])
+    );
     assert_eq!(
         properties["compaction_strategy"]["enum"],
         serde_json::json!(["task_state", "summary"])
