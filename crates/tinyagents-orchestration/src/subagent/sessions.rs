@@ -445,8 +445,15 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
             return Ok(false);
         };
-        let _ = (task_id, lifecycle_key);
-        self.inner.close(id).await
+        self.inner
+            .close_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
+            .await
     }
 
     async fn close_if_current(
@@ -486,8 +493,17 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
             return Ok(false);
         };
-        let _ = lifecycle_key;
-        self.inner.mark_finished(id, task_id, status, history).await
+        self.inner
+            .mark_finished_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                status,
+                history,
+            )
+            .await
     }
 
     async fn mark_failed(
@@ -502,8 +518,16 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
             return Ok(false);
         };
-        let _ = lifecycle_key;
-        self.inner.mark_failed(id, task_id, error).await
+        self.inner
+            .mark_failed_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                error,
+            )
+            .await
     }
 }
 
