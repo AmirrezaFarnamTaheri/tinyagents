@@ -138,6 +138,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
         "/bin/sh -c \"printf '%s\\\\n' \\$\\$ > {}; exec /bin/sleep 30\" & printf captured; wait",
         shell_quote(&pidfile),
     );
+    eprintln!("native timeout command={command}");
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = crate::exec::timeout::ProcessCleanup::default();
     let outcome = cleanup
