@@ -286,8 +286,11 @@ impl CompletionRouter {
             slot: &self.admission_store,
             replacement: None,
         };
-        let records = state.store.try_list(None)?;
-        let mut parents = records
+        // The first snapshot discovers which parent gates must be acquired.
+        // It is deliberately not copied: another router may close or update a
+        // parent while this migration is waiting for those gates.
+        let discovered = state.store.try_list(None)?;
+        let mut parents = discovered
             .iter()
             .map(|record| {
                 if record.parent_key.is_empty() {
@@ -304,6 +307,21 @@ impl CompletionRouter {
             .iter()
             .map(|parent| ParentGateGuard::acquire(Arc::clone(&state.store), parent))
             .collect::<Result<Vec<_>>>()?;
+        let records = state.store.try_list(None)?;
+        let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
+        if records.iter().any(|record| {
+            let parent = if record.parent_key.is_empty() {
+                Self::parent_from_marker_id(&record.task_id)
+                    .unwrap_or_else(|| record.task_id.clone())
+            } else {
+                record.parent_key.clone()
+            };
+            !gated_parents.contains(&parent)
+        }) {
+            return Err(TinyAgentsError::Graph(
+                "completion store: migration snapshot gained a parent while acquiring gates; retry migration".into(),
+            ));
+        }
         for record in records {
             let parent_key = if record.parent_key.is_empty() {
                 Self::parent_from_marker_id(&record.task_id)
