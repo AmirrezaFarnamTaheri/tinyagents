@@ -4,8 +4,37 @@
 //! a host can share one policy across model wrappers and child agents.
 
 use std::sync::Arc;
+use std::future::Future;
+use std::sync::Mutex;
 
 use super::ModelBudget;
+
+tokio::task_local! {
+    static INVOCATION_DISPATCH_OUTCOME: Arc<Mutex<Option<DispatchRefusal>>>;
+}
+
+/// Runs one ChatModel invocation with its own typed admission outcome slot.
+pub(crate) async fn with_dispatch_outcome_scope<F: Future>(
+    future: F,
+) -> (F::Output, Option<DispatchRefusal>) {
+    let outcome = Arc::new(Mutex::new(None));
+    let value = INVOCATION_DISPATCH_OUTCOME
+        .scope(outcome.clone(), future)
+        .await;
+    let refusal = outcome
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    (value, refusal)
+}
+
+pub(super) fn record_invocation_refusal(refusal: DispatchRefusal) {
+    let _ = INVOCATION_DISPATCH_OUTCOME.try_with(|outcome| {
+        *outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+    });
+}
 
 /// Optional policies attached to one physical model wrapper.
 ///

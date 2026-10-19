@@ -21,6 +21,7 @@ pub use dispatch_admission::{
     ControlledDispatchError, DispatchModelOptions, DispatchRefusal, DispatchRefusalReason,
     PhysicalDispatchAdmission, PhysicalDispatchPermit,
 };
+pub(crate) use dispatch_admission::with_dispatch_outcome_scope;
 pub use gateway_charge::GatewayChargeModel;
 pub(crate) use gateway_charge::has_authoritative_billing_source;
 pub(crate) use gateway_charge::provider_cost_usd;

@@ -708,10 +708,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
                     let fut = async {
-                        model
-                            .invoke(state, attempt_request.clone())
-                            .await
-                            .map_err(TinyAgentsError::from)
+                        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
+                            model.invoke(state, attempt_request.clone()),
+                        )
+                        .await;
+                        match refusal {
+                            Some(refusal) => {
+                                Err(TinyAgentsError::PhysicalDispatchAdmission(refusal))
+                            }
+                            None => result.map_err(TinyAgentsError::from),
+                        }
                     };
                     let budgeted = Self::with_call_budget(
                         remaining,
