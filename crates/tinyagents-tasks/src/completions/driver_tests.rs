@@ -742,15 +742,15 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
 
     let gate = parent_gate(&store, "p");
     let claimed = store
-        .claim_pending(
-            "p",
-            0,
-            &gate,
-            CompletionClaimMode::Followup,
-            1,
-            "owner",
-            now + Duration::from_secs(30),
-        )
+        .claim_pending(crate::completions::PendingClaimRequest {
+            parent_key: "p".into(),
+            parent_epoch: 0,
+            gate: gate.clone(),
+            mode: CompletionClaimMode::Followup,
+            max: 1,
+            token: "owner".into(),
+            visible_after: now + Duration::from_secs(30),
+        })
         .unwrap();
     assert_eq!(
         claimed
@@ -772,15 +772,15 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     let gate = parent_gate(&store, "parent");
     assert!(store.insert_if_absent(&original, &gate).unwrap());
     let claimed = store
-        .claim_task(
-            "claim-owner",
-            "parent",
-            0,
-            &gate,
-            CompletionClaimMode::Followup,
-            "owner-token",
-            SystemTime::now() + Duration::from_secs(30),
-        )
+        .claim_task(crate::completions::TaskClaimRequest {
+            task_id: "claim-owner".into(),
+            parent_key: "parent".into(),
+            parent_epoch: 0,
+            gate: gate.clone(),
+            mode: CompletionClaimMode::Followup,
+            token: "owner-token".into(),
+            visible_after: SystemTime::now() + Duration::from_secs(30),
+        })
         .unwrap()
         .unwrap();
 
@@ -798,14 +798,14 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     let receipt = claimed.receipt().unwrap();
     assert_eq!(
         store
-            .resolve_claim(
-                &receipt.task_id,
-                "parent",
-                receipt.parent_epoch,
-                &gate,
-                &receipt.token,
-                ClaimResolution::Delivered,
-            )
+            .resolve_claim(crate::completions::ResolveClaimRequest {
+                task_id: receipt.task_id,
+                parent_key: "parent".into(),
+                parent_epoch: receipt.parent_epoch,
+                gate,
+                token: receipt.token,
+                resolution: ClaimResolution::Delivered,
+            })
             .unwrap()
             .unwrap()
             .state,
@@ -847,15 +847,15 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     let now = SystemTime::now();
     let first_gate = parent_gate(&first, "parent");
     let first_claim = first
-        .claim_pending(
-            "parent",
-            0,
-            &first_gate,
-            CompletionClaimMode::Followup,
-            1,
-            "first",
-            now - Duration::from_secs(1),
-        )
+        .claim_pending(crate::completions::PendingClaimRequest {
+            parent_key: "parent".into(),
+            parent_epoch: 0,
+            gate: first_gate.clone(),
+            mode: CompletionClaimMode::Followup,
+            max: 1,
+            token: "first".into(),
+            visible_after: now - Duration::from_secs(1),
+        })
         .unwrap()
         .pop()
         .unwrap();
@@ -865,27 +865,29 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     assert!(
         first
             .resolve_claim(
-                "lease-task",
-                "parent",
-                first_claim.parent_epoch,
-                &second_gate,
-                &first_token,
-                ClaimResolution::Delivered,
+                crate::completions::ResolveClaimRequest {
+                    task_id: "lease-task".into(),
+                    parent_key: "parent".into(),
+                    parent_epoch: first_claim.parent_epoch,
+                    gate: second_gate.clone(),
+                    token: first_token.clone(),
+                    resolution: ClaimResolution::Delivered,
+                },
             )
             .unwrap()
             .is_none(),
         "an expired owner cannot settle before another router reclaims"
     );
     let second_claim = second
-        .claim_pending(
-            "parent",
-            0,
-            &second_gate,
-            CompletionClaimMode::Followup,
-            1,
-            "second",
-            now + Duration::from_secs(10),
-        )
+        .claim_pending(crate::completions::PendingClaimRequest {
+            parent_key: "parent".into(),
+            parent_epoch: 0,
+            gate: second_gate.clone(),
+            mode: CompletionClaimMode::Followup,
+            max: 1,
+            token: "second".into(),
+            visible_after: now + Duration::from_secs(10),
+        })
         .unwrap();
     assert_eq!(
         second_claim.len(),
@@ -897,24 +899,28 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     assert!(
         first
             .resolve_claim(
-                "lease-task",
-                "parent",
-                first_claim.parent_epoch,
-                &second_gate,
-                &first_token,
-                ClaimResolution::Delivered,
+                crate::completions::ResolveClaimRequest {
+                    task_id: "lease-task".into(),
+                    parent_key: "parent".into(),
+                    parent_epoch: first_claim.parent_epoch,
+                    gate: second_gate.clone(),
+                    token: first_token,
+                    resolution: ClaimResolution::Delivered,
+                },
             )
             .unwrap()
             .is_none()
     );
     let settled = second
         .resolve_claim(
-            "lease-task",
-            "parent",
-            second_claim[0].parent_epoch,
-            &second_gate,
-            &second_token,
-            ClaimResolution::Delivered,
+            crate::completions::ResolveClaimRequest {
+                task_id: "lease-task".into(),
+                parent_key: "parent".into(),
+                parent_epoch: second_claim[0].parent_epoch,
+                gate: second_gate,
+                token: second_token,
+                resolution: ClaimResolution::Delivered,
+            },
         )
         .unwrap()
         .unwrap();

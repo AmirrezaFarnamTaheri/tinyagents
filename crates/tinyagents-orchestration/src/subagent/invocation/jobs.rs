@@ -788,17 +788,35 @@ impl SubAgentJobRegistry {
         owner: &str,
         scope: &ParentJobScope,
     ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
-        let mut jobs: Vec<SubAgentJob> = self
+        let snapshots = self
             .tasks
             .snapshots(Some(owner))
-            .map_err(registry_failure)?
+            .map_err(registry_failure)?;
+        let driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut jobs: Vec<SubAgentJob> = snapshots
             .into_iter()
             .filter(|snapshot| {
                 snapshot.metadata.workspace.as_ref() == Some(&scope.workspace)
                     && snapshot.metadata.parent_thread_id.as_deref()
                         == Some(scope.thread_id.as_str())
             })
-            .map(|snapshot| snapshot.status)
+            .map(|snapshot| {
+                let mut job = snapshot.status;
+                if !job.extensions.contains_key("task_id")
+                    && let Some(key) = driver_jobs
+                        .iter()
+                        .find_map(|(key, id)| (id == &job.id).then_some(key))
+                {
+                    job.extensions.insert(
+                        "task_id".into(),
+                        serde_json::Value::String(key.task_id.clone()),
+                    );
+                }
+                job
+            })
             .collect();
         jobs.sort_by(|left, right| left.id.0.cmp(&right.id.0));
         Ok(jobs)
