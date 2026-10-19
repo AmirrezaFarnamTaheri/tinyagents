@@ -228,22 +228,32 @@ impl CompletionRouter {
             max_attempts: DEFAULT_MAX_ATTEMPTS,
             state: Mutex::new(RouterState {
                 store,
-                lifecycle,
+                lifecycle: Arc::clone(&lifecycle),
                 leased: HashSet::new(),
                 active_receipts: HashMap::new(),
                 parents: HashMap::new(),
             }),
             admission_store,
+            lifecycle: Mutex::new(lifecycle),
         }
     }
 
     pub(super) fn attach_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
-        self.lock()?.lifecycle = lifecycle;
+        self.lock()?.lifecycle = Arc::clone(&lifecycle);
+        *self
+            .lifecycle
+            .lock()
+            .map_err(|_| TinyAgentsError::Graph("router lifecycle lock poisoned".into()))? = lifecycle;
         Ok(())
     }
 
-    pub(super) fn parent_lifecycle_handle(&self) -> Result<Arc<ParentLifecycle>> {
-        Ok(Arc::clone(&self.lock()?.lifecycle))
+    pub(super) fn parent_lifecycle_handle(&self) -> Arc<ParentLifecycle> {
+        Arc::clone(
+            &self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     pub(super) fn parent_lifecycle_status(
