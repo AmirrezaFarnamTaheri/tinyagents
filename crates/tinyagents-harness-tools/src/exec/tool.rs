@@ -1,12 +1,17 @@
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc};
+use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use serde_json::Value;
-use tinytools::{PermissionLevel, Tool, ToolResult, ToolTimeout};
+use serde_json::{Value, json};
+use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout, ToolRunContext};
 
 use super::{
-    ExecAuthorizationRequest, ExecBackend, ExecBackendCapability, ExecBackendOutcome, ExecGate,
-    ExecOperation, ExecRequest,
+    ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend,
+    ExecBackendOutcome, ExecDenied, ExecGate, ExecOperation, ExecRefusalKind, ExecRequest,
+    ShellFlavor,
+    progress::{HEARTBEAT_INTERVAL, with_exec_progress},
+    shell_description::{command_param_description, shell_description},
+    shell_support::{exec_result, python_environment},
+    timeout::{MAX_TIMEOUT_SECS, explicit_call_timeout_duration},
 };
 
 /// Generic shell execution tool. Host policy and process selection are injected.
@@ -16,46 +21,182 @@ pub struct ExecTool {
 }
 
 impl ExecTool {
+    /// Creates an exec tool with its host authorization gate and selected backend.
     #[must_use]
     pub fn new(gate: Arc<dyn ExecGate>, backend: Arc<dyn ExecBackend>) -> Self {
         Self { gate, backend }
+    }
+
+    fn operation(&self, args: &Value) -> Result<ExecOperation, ToolResult> {
+        let Some(command) = args.get("command").and_then(Value::as_str) else {
+            return Err(ToolResult::error("Missing required command string."));
+        };
+        Ok(ExecOperation::Shell {
+            command: command.to_owned(),
+            category: args.get("category").and_then(Value::as_str).map(ToOwned::to_owned),
+        })
     }
 }
 
 #[async_trait]
 impl Tool for ExecTool {
-    fn name(&self) -> &str { "exec" }
-    fn description(&self) -> &str { "Execute a command." }
-    fn parameters_schema(&self) -> Value { serde_json::json!({"type":"object"}) }
-    fn permission_level(&self) -> PermissionLevel { PermissionLevel::Execute }
+    fn name(&self) -> &str {
+        "exec"
+    }
+
+    fn description(&self) -> &str {
+        shell_description(self.backend.shell_flavor())
+    }
+
+    fn parameters_schema(&self) -> Value {
+        let flavor = self.backend.shell_flavor();
+        json!({
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": command_param_description(flavor)
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["read", "write", "network", "install", "destructive"],
+                    "description": "Optional self-declared risk; can only raise the approval requirement."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 3600,
+                    "description": "Optional wall-clock timeout (seconds, up to 3600) for this command before it is killed. Use a larger value for long-running work (builds, test suites, solvers). Omitted or 0 runs without a deadline."
+                }
+            },
+            "required": ["command"]
+        })
+    }
+
+    fn max_result_size_chars(&self) -> Option<usize> {
+        Some(30_000)
+    }
+
     fn timeout_policy(&self, args: &Value) -> ToolTimeout {
         match args.get("timeout_secs").and_then(Value::as_u64) {
             None | Some(0) => ToolTimeout::Unbounded,
-            Some(secs) => ToolTimeout::Millis(secs.saturating_mul(1000)),
+            Some(secs) => ToolTimeout::Millis(secs.saturating_mul(1_000)),
         }
     }
-    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
-        self.gate.prepare_authorization(args).await
+
+    fn permission_level(&self) -> PermissionLevel {
+        PermissionLevel::Execute
     }
+
     fn external_effect_with_args(&self, args: &Value) -> bool {
         self.gate.external_effect_with_args(args)
     }
+
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        self.gate.prepare_authorization(args).await
+    }
+
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        let command = args.get("command").and_then(Value::as_str).unwrap_or_default();
-        let operation = ExecOperation::Shell { command: command.to_string(), category: None };
-        let request = ExecRequest {
-            program: OsString::from("sh"), args: vec!["-c".into(), command.into()],
-            action_dir: PathBuf::new(), environment: BTreeMap::new(),
-            timeout: None, shell_command: Some(command.to_string()), backend_selection: String::new(),
-            backend_capability: ExecBackendCapability::new(()),
+        self.execute_with_context(args, ToolCallOptions::default(), None).await
+    }
+
+    async fn execute_with_context(
+        &self,
+        args: Value,
+        _options: ToolCallOptions,
+        context: Option<&dyn ToolRunContext>,
+    ) -> anyhow::Result<ToolResult> {
+        let operation = match self.operation(&args) {
+            Ok(operation) => operation,
+            Err(result) => return Ok(result),
         };
-        let outcome = self.backend.execute(request, None, None).await;
-        let _ = self.gate.authorize(&ExecAuthorizationRequest { operation, timeout: None }, None).await;
-        match outcome {
-            ExecBackendOutcome::Completed(output) => Ok(ToolResult::success(String::from_utf8_lossy(&output.stdout).into_owned())),
-            ExecBackendOutcome::Refused { reason, .. } => Ok(ToolResult::error(reason)),
-            ExecBackendOutcome::LaunchFailed { error } => Ok(ToolResult::error(error)),
-        }
+        let timeout_secs = args.get("timeout_secs").and_then(Value::as_u64);
+        let timeout = explicit_call_timeout_duration(timeout_secs, MAX_TIMEOUT_SECS);
+        let authorization = ExecAuthorizationRequest {
+            operation: operation.clone(),
+            timeout,
+        };
+        let approval_required = self.gate.external_effect_with_args(&args);
+        let started = Instant::now();
+        let permit = match self.gate.authorize(&authorization, context).await {
+            Ok(permit) => permit,
+            Err(ExecDenied(reason)) => {
+                self.gate.record(ExecAuditEvent {
+                    operation,
+                    approval_required,
+                    authorized: false,
+                    allowed: false,
+                    backend_selection: None,
+                    process_attempted: false,
+                    outcome: ExecAuditOutcome::GateDenied,
+                    duration: started.elapsed(),
+                });
+                return Ok(ToolResult::error(reason));
+            }
+        };
+
+        let flavor = self.backend.shell_flavor();
+        let command = match &authorization.operation {
+            ExecOperation::Shell { command, .. } => command.clone(),
+            ExecOperation::Install { .. } => unreachable!("ExecTool only handles shell operations"),
+        };
+        let (program, args): (OsString, Vec<OsString>) = match flavor {
+            ShellFlavor::Posix => ("sh".into(), vec!["-c".into(), command.clone().into()]),
+            ShellFlavor::Cmd => ("cmd.exe".into(), vec!["/C".into(), command.clone().into()]),
+        };
+        let backend_selection = permit.backend_selection.clone();
+        let request = ExecRequest {
+            program,
+            args,
+            action_dir: permit.action_dir,
+            environment: python_environment(permit.environment),
+            timeout,
+            shell_command: Some(command),
+            backend_selection: permit.backend_selection,
+            backend_capability: permit.backend_capability,
+        };
+        let backend = Arc::clone(&self.backend);
+        let outcome = with_exec_progress(context, HEARTBEAT_INTERVAL, |progress| async move {
+            backend.execute(request, context, progress).await
+        })
+        .await;
+
+        let (allowed, process_attempted, audit_outcome, result) = match outcome {
+            ExecBackendOutcome::Refused { kind, reason } => (
+                false,
+                false,
+                ExecAuditOutcome::BackendRefused { kind },
+                ToolResult::error(reason),
+            ),
+            ExecBackendOutcome::LaunchFailed { error } => (
+                true,
+                true,
+                ExecAuditOutcome::LaunchFailed,
+                ToolResult::error(format!("Sandbox execution failed: {error}")),
+            ),
+            ExecBackendOutcome::Completed(output) => {
+                let timed_out = output.timed_out;
+                let result = exec_result(output, timeout);
+                let success = !result.is_error;
+                (
+                    true,
+                    true,
+                    ExecAuditOutcome::Completed { success, timed_out },
+                    result,
+                )
+            }
+        };
+        self.gate.record(ExecAuditEvent {
+            operation,
+            approval_required,
+            authorized: true,
+            allowed,
+            backend_selection: Some(backend_selection),
+            process_attempted,
+            outcome: audit_outcome,
+            duration: started.elapsed(),
+        });
+        Ok(result)
     }
 }
 
