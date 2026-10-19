@@ -28,6 +28,32 @@ impl SessionDriver for ReplayCaptureDriver {
     }
 }
 
+struct AppendReplyDriver;
+
+#[async_trait]
+impl SessionDriver for AppendReplyDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        let mut history = request.history;
+        history.push(Message::assistant("reply after replay"));
+        Ok(DriverOutcome {
+            history,
+            output: Some("reply after replay".into()),
+            partial: None,
+            interrupted: false,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+struct NativeReplayCodec;
+
+impl TranscriptCodec for NativeReplayCodec {
+    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        crate::transcript::native_transcript_to_messages(&transcript.messages)
+    }
+}
+
 struct ReplayProbeCodec {
     seen_rows: Arc<Mutex<Vec<TranscriptMessage>>>,
     synthesize_leading_tool: bool,
@@ -230,6 +256,105 @@ async fn resume_repairs_a_leading_tool_synthesized_by_the_decoder() {
     assert_eq!(
         after, before,
         "decoded repair must leave durable rows unchanged"
+    );
+}
+
+#[tokio::test]
+async fn successful_turn_after_orphan_replay_preserves_user_row_and_original_generation() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-orphan-append", "agent");
+    let mut system = TranscriptMessage::system("frozen prompt");
+    system.extra_metadata = Some(serde_json::json!({"host": "system metadata"}));
+    let mut orphan = TranscriptMessage::tool("orphan result").with_id("orphan-call");
+    orphan.extra_metadata = Some(serde_json::json!({"host": "retained only in sealed source"}));
+    let mut user = TranscriptMessage::user("persisted user");
+    user.extra_metadata = Some(serde_json::json!({"source": "original user row"}));
+    let rows = vec![system, orphan, user];
+    seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
+    let original = locator
+        .read_session_transcript(&session_ref)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    let original_fingerprint = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
+    let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
+        .codec(Arc::new(NativeReplayCodec))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("new user turn")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                thread_id: Some(session_ref.session_key.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let old_generation = locator
+        .read_session_transcript(&session_ref)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_generation.messages, original.messages);
+    assert_eq!(
+        fingerprint(
+            locator
+                .read_session_transcript(&session_ref)
+                .unwrap()
+                .as_ref()
+        ),
+        original_fingerprint,
+        "the sealed source generation must remain unchanged"
+    );
+    let active_ref = locator.head_generation(&session_ref);
+    assert_eq!(
+        active_ref.generation, 1,
+        "repairing history commits a successor generation"
+    );
+    let active = locator
+        .read_session_transcript(&active_ref)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        active
+            .messages
+            .iter()
+            .map(|row| (row.role.as_str(), row.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("system", "frozen prompt"),
+            ("user", "persisted user"),
+            ("user", "new user turn"),
+            ("assistant", "reply after replay"),
+        ],
+        "the active generation retains prior conversation and commits the new turn"
+    );
+    assert_eq!(
+        active.messages[1].extra_metadata,
+        Some(serde_json::json!({"source": "original user row"})),
+        "the matched user row keeps its opaque durable metadata"
+    );
+    assert_eq!(
+        active.meta.session_id.as_deref(),
+        Some(active_ref.session_id().as_str())
+    );
+    assert_eq!(
+        active.meta.thread_id.as_deref(),
+        Some("thread-orphan-append")
     );
 }
 
