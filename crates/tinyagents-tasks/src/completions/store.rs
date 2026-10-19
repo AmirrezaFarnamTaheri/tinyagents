@@ -347,15 +347,6 @@ impl CompletionStore for InMemoryCompletionStore {
             .lifecycle
             .lock()
             .map_err(|_| store_err("parent lifecycle", "lock poisoned"))?;
-        if current
-            .as_ref()
-            .is_some_and(|existing| !Arc::ptr_eq(existing, &lifecycle))
-        {
-            return Err(store_err(
-                "parent lifecycle",
-                "store is already bound to a different pool scope",
-            ));
-        }
         *current = Some(lifecycle);
         Ok(())
     }
