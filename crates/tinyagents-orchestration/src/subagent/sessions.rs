@@ -236,6 +236,147 @@ pub trait SubagentSessionStore: Send + Sync {
     ) -> Result<bool, SubagentError>;
 }
 
+/// Owner-bound view of a session store for one exact parent session/thread.
+/// Missing thread identity is exact (threadless), never a wildcard.
+#[derive(Clone)]
+pub struct ScopedSubagentSessionStore<S> {
+    inner: Arc<S>,
+    parent_session: String,
+    parent_thread_id: Option<String>,
+}
+
+impl<S> ScopedSubagentSessionStore<S> {
+    /// Binds the underlying store to one parent owner.
+    pub fn new(
+        inner: Arc<S>,
+        parent_session: impl Into<String>,
+        parent_thread_id: Option<String>,
+    ) -> Self {
+        Self {
+            inner,
+            parent_session: parent_session.into(),
+            parent_thread_id,
+        }
+    }
+
+    fn owns(&self, session: &DurableSubagentSession) -> bool {
+        session.parent_session == self.parent_session
+            && session.parent_thread_id == self.parent_thread_id
+    }
+
+    fn owns_selector(&self, selector: &SubagentSessionSelector) -> bool {
+        selector.parent_session == self.parent_session
+            && selector.parent_thread_id == self.parent_thread_id
+    }
+
+    fn owner_error() -> SubagentError {
+        SubagentError::Persistence("subagent session is outside the bound owner scope".into())
+    }
+}
+
+#[async_trait]
+impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentSessionStore<S> {
+    async fn list_for_parent(
+        &self,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<Vec<DurableSubagentSession>, SubagentError> {
+        if parent_session != self.parent_session
+            || parent_thread_id != self.parent_thread_id.as_deref()
+        {
+            return Err(Self::owner_error());
+        }
+        Ok(self
+            .inner
+            .list_for_parent(&self.parent_session, self.parent_thread_id.as_deref())
+            .await?
+            .into_iter()
+            .filter(|session| self.owns(session))
+            .collect())
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<DurableSubagentSession>, SubagentError> {
+        Ok(self
+            .inner
+            .get(id)
+            .await?
+            .filter(|session| self.owns(session)))
+    }
+
+    async fn upsert_running(
+        &self,
+        upsert: SubagentSessionUpsert,
+    ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        if !self.owns_selector(&upsert.selector) {
+            return Err(Self::owner_error());
+        }
+        let (session, decision) = self.inner.upsert_running(upsert).await?;
+        if !self.owns(&session) {
+            return Err(Self::owner_error());
+        }
+        Ok((session, decision))
+    }
+
+    async fn close(&self, id: &str) -> Result<bool, SubagentError> {
+        let Some(session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        let Some(task_id) = session.current_task_id.as_deref() else {
+            return Ok(false);
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        self.inner
+            .close_if_current(id, task_id, lifecycle_key)
+            .await
+    }
+
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+    ) -> Result<bool, SubagentError> {
+        let Some(session) = self.get(id).await? else {
+            return Ok(false);
+        };
+        if session.current_task_id.as_deref() != Some(task_id)
+            || session.lifecycle_key.as_ref() != Some(lifecycle_key)
+        {
+            return Ok(false);
+        }
+        self.inner
+            .close_if_current(id, task_id, lifecycle_key)
+            .await
+    }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        if self.get(id).await?.is_none() {
+            return Ok(false);
+        }
+        self.inner.mark_finished(id, task_id, status, history).await
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        if self.get(id).await?.is_none() {
+            return Ok(false);
+        }
+        self.inner.mark_failed(id, task_id, error).await
+    }
+}
+
 /// A `SubagentSessionStore` backed by the host's `tinystoragedrivers` document
 /// port. The document handle is already scoped by the host.
 #[derive(Clone)]
