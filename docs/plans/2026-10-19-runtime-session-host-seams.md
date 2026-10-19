@@ -832,7 +832,8 @@ Extract the storage-reading body of `Session::resume` into private
 `resume_admitted`. Public `resume` invokes `resolve_and_bind(options, None)`
 and then `resume_admitted`; it must not add hooks or a synthetic request.
 `turn_inner` retains its existing `before_resume` and preparation calls, then
-calls `resolve_and_bind(options, self.target.as_ref())`, acquires
+snapshots `resume_preparation.transcript`, applies the preparation, then calls
+`resolve_and_bind(options, hook_target.as_ref())` and acquires
 `lock_turn(options)`, and calls `resume_admitted` directly. Both paths share
 one authority predicate without changing public resume hook semantics. The
 private reader performs no hook, resolver, lock, or target-selection work.
@@ -1013,8 +1014,9 @@ locator access; (d) resolver failure leaves the fallback locator untouched;
 same first generation and destination is accepted. Each recording locator
 asserts zero calls to `head_generation`, `read_session_transcript`,
 `adopt_legacy`, and lock lookup after rejection. Implement
-`resolve_and_bind(options)` in `session.rs`; turn calls it after hooks and
-public `resume` calls it directly, then both invoke private `resume_bound`.
+`resolve_and_bind(options, hook_target)` in `session.rs`; turn calls it after
+hooks and public `resume` calls it directly with `None`, then both invoke
+private `resume_admitted`.
 Bind the target locator from the lease, canonical `SessionRef`, and metadata
 seed; expose the identity through `SessionStateView`. Require metadata seed at
 builder build time if a resolver is installed. Check any explicit option or
