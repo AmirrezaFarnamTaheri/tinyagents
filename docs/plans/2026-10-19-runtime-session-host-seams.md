@@ -594,15 +594,19 @@ resolver-enabled session rejects absent identity, conflicting
 pub struct SessionIdentityRequest {
     pub thread_id: Option<String>,
     pub session_key: String,
-    pub parent: Option<SessionRef>,
-    pub child_key: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ResolvedSessionStores {
+    pub agent_id: String,
+    pub stores: tinyagents_session::port::SessionStoreLease,
 }
 
 #[derive(Clone)]
 pub struct SessionIdentity {
-    pub session: SessionRef,
-    pub agent_id: String,
-    pub stores: tinyagents_session::port::SessionStoreLease,
+    session: SessionRef,
+    agent_id: String,
+    stores: tinyagents_session::port::SessionStoreLease,
 }
 
 pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
@@ -610,9 +614,99 @@ pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
         &self,
         request: &SessionIdentityRequest,
         context: &C,
-    ) -> Result<SessionIdentity, RuntimeError>;
+    ) -> Result<ResolvedSessionStores, RuntimeError>;
 }
 ```
+
+Add the builder/storage wiring with these exact ownership fields. Put the
+resolver and identity seed in a private builder config so existing
+`.transcript(...)` and `.session(...)` remain source-compatible:
+
+```rust
+struct IdentityConfig<C: Send + Sync + 'static> {
+    resolver: Arc<dyn SessionIdentityResolver<C>>,
+    session_key: String,
+    meta: TranscriptMeta,
+}
+// Add `identity: Option<IdentityConfig<C>>` to SessionBuilder and
+// `identity_config: Option<IdentityConfig<C>>` plus
+// `identity: Option<SessionIdentity>` to Session<C>.
+
+pub fn identity_resolver(
+    mut self,
+    session_key: impl Into<String>,
+    meta: TranscriptMeta,
+    resolver: Arc<dyn SessionIdentityResolver<C>>,
+) -> Self {
+    self.identity = Some(IdentityConfig {
+        resolver,
+        session_key: session_key.into(),
+        meta,
+    });
+    self
+}
+```
+
+In `SessionBuilder::build`, require a codec when either transcript or
+identity config is present, then pass the identity config into `Session::new`.
+Do not require a fallback `TranscriptTarget`; the resolver's lease is the
+target. Retain an optional legacy transcript target only as an unselected
+fallback: resolver failure must not access it. Add this exact helper body to
+`Session<C>`; pass the hook-selected target separately so the builder's
+fallback is never mistaken for hook authority:
+
+```rust
+fn resolve_and_bind(
+    &mut self,
+    options: &TurnOptions<C>,
+    hook_target: Option<&TranscriptTarget>,
+) -> Result<(), RuntimeError> {
+    let Some(config) = self.identity_config.as_ref() else { return Ok(()); };
+    self.identity = None;
+    let request = SessionIdentityRequest {
+        thread_id: options.thread_id.clone(),
+        session_key: config.session_key.clone(),
+    };
+    let resolved = config.resolver.resolve(&request, &options.run_context.data)?;
+    if resolved.agent_id.is_empty() {
+        return Err(RuntimeError::InvalidSessionState("resolver returned empty agent id".into()));
+    }
+    let session = SessionRef::scoped(&request.session_key, &resolved.agent_id);
+    let identity = SessionIdentity {
+        session,
+        agent_id: resolved.agent_id,
+        stores: resolved.stores,
+    };
+    if options.session.as_ref().is_some_and(|selected|
+        selected.first_generation() != identity.session.first_generation())
+    {
+        return Err(RuntimeError::InvalidSessionState("TurnOptions.session conflicts with resolved identity".into()));
+    }
+    let target = TranscriptTarget::for_session(
+        identity.stores.stores().transcripts.clone(),
+        identity.session.clone(),
+        config.meta.clone(),
+    );
+    if hook_target.is_some_and(|selected| !selected.same_binding(&target)) {
+        return Err(RuntimeError::InvalidSessionState("before_resume target conflicts with resolved identity".into()));
+    }
+    if let Some(previous) = self.established_identity.as_ref()
+        && !same_admission(previous, &identity)
+    {
+        return Err(RuntimeError::InvalidSessionState("session identity or pinned store changed".into()));
+    }
+    self.target = Some(target);
+    self.established_identity = Some(identity.clone());
+    self.identity = Some(identity);
+    Ok(())
+}
+```
+
+`SessionIdentity` is a runtime-created private binding; the host result is
+only `ResolvedSessionStores { agent_id, stores }`. Runtime constructs the
+canonical root `SessionRef` from the configured logical key and resolved agent
+id; it accepts no host-provided stem. `same_admission` compares the identity's first generation, agent id, and
+locator key/pointer as specified above.
 
 Implement the binding predicate in `runtime/identity.rs` with the following
 comparison semantics (the current target locator is read from the target that
