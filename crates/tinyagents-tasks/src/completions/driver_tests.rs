@@ -352,6 +352,50 @@ async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit(
     assert_eq!(admitted[1].value, Message::user("second"));
 }
 
+#[tokio::test]
+async fn batch_admission_does_not_alias_distinct_scopes_and_parent_keys() {
+    use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
+    use tinyinference_llm::message::Message;
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let scope_a = Arc::new(
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("user:a").unwrap()).unwrap(),
+    ) as Arc<dyn CompletionStore>;
+    let scope_b = Arc::new(
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("user:a:b").unwrap()).unwrap(),
+    ) as Arc<dyn CompletionStore>;
+    let router_a = Arc::new(CompletionRouter::new(scope_a));
+    let router_b = Arc::new(CompletionRouter::new(scope_b));
+    router_a.record(record("a", "b:c")).await.unwrap();
+    router_b.record(record("b", "c")).await.unwrap();
+    let a = router_a.pending_for("b:c").remove(0);
+    let b = router_b.pending_for("c").remove(0);
+    router_b.cancel_parent("c").unwrap();
+
+    let queue = RunQueue::new();
+    for (router, completion) in [(&router_a, &a), (&router_b, &b)] {
+        queue
+            .push_guarded(
+                QueueLane::Followup,
+                Message::user(completion.task_id.clone()),
+                Arc::new(crate::completions::CompletionAdmission::for_record(
+                    Arc::clone(router),
+                    completion,
+                )),
+            )
+            .await;
+    }
+
+    let admitted = queue
+        .take_admitted(QueueLane::Followup, QueueMode::All)
+        .await;
+    assert_eq!(
+        admitted.iter().map(|item| item.value.clone()).collect::<Vec<_>>(),
+        [Message::user("a")],
+        "a closed tenant-parent must not reuse another tenant's batch permit"
+    );
+}
+
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
