@@ -53,6 +53,12 @@ pub struct DetachedAbortEvent<Metadata, Status> {
 type RegistryGuard<'a, Metadata, Status> =
     MutexGuard<'a, HashMap<TaskId, DetachedTaskEntry<Metadata, Status>>>;
 
+enum RegistrationKind {
+    Spawned(AbortHandle),
+    Cooperative,
+    ManagedCooperative,
+}
+
 /// Ownership-aware registry for live detached task executors.
 ///
 /// The registry is generic over application metadata and status payloads. A
@@ -125,8 +131,7 @@ where
             metadata,
             status,
             cancellation,
-            Some(abort),
-            true,
+            RegistrationKind::Spawned(abort),
         )
     }
 
@@ -147,8 +152,7 @@ where
             metadata,
             status,
             cancellation,
-            None,
-            true,
+            RegistrationKind::Cooperative,
         )
     }
 
@@ -171,8 +175,7 @@ where
             metadata,
             status,
             cancellation,
-            None,
-            false,
+            RegistrationKind::ManagedCooperative,
         )
     }
 
@@ -183,9 +186,13 @@ where
         metadata: Metadata,
         status: watch::Receiver<Status>,
         cancellation: CancellationToken,
-        abort: Option<AbortHandle>,
-        sweep_at_cap: bool,
+        registration: RegistrationKind,
     ) -> Result<()> {
+        let (abort, sweep_at_cap) = match registration {
+            RegistrationKind::Spawned(abort) => (Some(abort), true),
+            RegistrationKind::Cooperative => (None, true),
+            RegistrationKind::ManagedCooperative => (None, false),
+        };
         if sweep_at_cap && self.len().map_err(Self::tinyagents_error)? >= self.soft_cap {
             self.sweep_terminal().map_err(Self::tinyagents_error)?;
         }
