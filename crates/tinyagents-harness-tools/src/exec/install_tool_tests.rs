@@ -1,4 +1,5 @@
 use super::*;
+use crate::exec::{ExecBackendCapability, ExecDenied, ExecOutput, ExecPermit, ExecProgress};
 use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, sync::{Mutex, atomic::{AtomicUsize, Ordering}}};
 
 #[derive(Default)]
@@ -9,9 +10,9 @@ struct Gate(Arc<State>);
 impl ExecGate for Gate {
     async fn prepare_authorization(&self, _: &Value) -> anyhow::Result<Option<Value>> { Ok(None) }
     fn external_effect_with_args(&self, _: &Value) -> bool { true }
-    async fn authorize(&self, _: &ExecAuthorizationRequest, _: Option<&dyn ToolRunContext>) -> Result<super::ExecPermit, super::ExecDenied> {
-        if self.0.denied { return Err(super::ExecDenied("installation denied".into())); }
-        Ok(super::ExecPermit { action_dir:PathBuf::from("/tmp"), environment:BTreeMap::new(), backend_selection:"test".into(), backend_capability:super::ExecBackendCapability::new(()) })
+    async fn authorize(&self, _: &ExecAuthorizationRequest, _: Option<&dyn ToolRunContext>) -> Result<ExecPermit, ExecDenied> {
+        if self.0.denied { return Err(ExecDenied("installation denied".into())); }
+        Ok(ExecPermit { action_dir:PathBuf::from("/tmp"), environment:BTreeMap::new(), backend_selection:"test".into(), backend_capability:ExecBackendCapability::new(()) })
     }
     fn record(&self, event: ExecAuditEvent) { self.0.events.lock().unwrap().push(event); }
 }
@@ -23,7 +24,7 @@ impl ExecBackend for Backend {
     async fn execute(&self, request: ExecRequest, _: Option<&dyn ToolRunContext>, _: Option<ExecProgress>) -> ExecBackendOutcome {
         self.0.backend_calls.fetch_add(1, Ordering::SeqCst);
         *self.0.request.lock().unwrap() = Some(request);
-        ExecBackendOutcome::Completed(super::ExecOutput { stdout:b"ok".to_vec(), stderr:Vec::new(), exit_code:Some(0), timed_out:false })
+        ExecBackendOutcome::Completed(ExecOutput { stdout:b"ok".to_vec(), stderr:Vec::new(), exit_code:Some(0), timed_out:false })
     }
 }
 
