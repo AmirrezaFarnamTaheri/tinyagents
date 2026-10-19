@@ -461,7 +461,14 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         id: &str,
         task_id: &str,
         lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
     ) -> Result<bool, SubagentError> {
+        if parent_session != self.parent_session
+            || parent_thread_id != self.parent_thread_id.as_deref()
+        {
+            return Ok(false);
+        }
         self.inner
             .close_if_current(
                 id,
