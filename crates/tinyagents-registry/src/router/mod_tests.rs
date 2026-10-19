@@ -237,7 +237,7 @@ fn configured_role_and_literal_cloud_or_whitespace_routes_use_expected_defaults(
     let with_default = TestRoutes {
         routes: HashMap::from([
             ("chat".into(), "  configured:model  ".into()),
-            ("coding".into(), "cloud".into()),
+            ("embeddings".into(), "cloud".into()),
             ("reasoning".into(), "   ".into()),
         ]),
         primary: "legacy-primary-route".into(),
@@ -249,7 +249,7 @@ fn configured_role_and_literal_cloud_or_whitespace_routes_use_expected_defaults(
         "configured:model"
     );
     assert_eq!(
-        router.provider_for_role("coding", &with_default),
+        router.provider_for_role("embeddings", &with_default),
         "legacy-primary-route"
     );
     assert_eq!(
