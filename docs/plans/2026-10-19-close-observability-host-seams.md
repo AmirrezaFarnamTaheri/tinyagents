@@ -38,22 +38,29 @@ The harness already accepts copy as template arguments in `deterministic_checkpo
 pub struct CloseCopy {
     pub checkpoint_template: &'static str,
     pub final_summary_template: &'static str,
+    pub empty_checkpoint_results: &'static str,
+    pub empty_final_summary: &'static str,
     pub repair_template: &'static str,
 }
 
 pub const ENGLISH_CLOSE_COPY: CloseCopy = CloseCopy {
-    checkpoint_template: "I reached the tool-call limit for this turn ({steps} steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n{results}\n**Next steps:** I'll continue from here — just reply (e.g. \\\"continue\\\") and I'll pick up where I left off.",
+    checkpoint_template: "I reached the tool-call limit for this turn ({steps} steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n{results}\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off.",
     final_summary_template: "I finished this turn without writing up a result. Here is what each tool call returned:\n{results}\nTell me how you'd like to proceed.",
+    empty_checkpoint_results: "\n- (no tools completed yet)\n",
+    empty_final_summary: "I finished this turn but produced no result to report.",
     repair_template: "{repair_reason} Write the message again.\n\n{instruction}",
 };
 
-pub fn checkpoint_with_copy(copy: &CloseCopy, steps: usize, rendered_results: &str) -> String {
+pub fn checkpoint_with_copy(copy: &CloseCopy, steps: usize, rendered_results: &str, has_results: bool) -> String {
     copy.checkpoint_template
         .replace("{steps}", &steps.to_string())
-        .replace("{results}", rendered_results)
+        .replace("{results}", if has_results { rendered_results } else { copy.empty_checkpoint_results })
 }
 
-pub fn final_summary_with_copy(copy: &CloseCopy, rendered_results: &str) -> String {
+pub fn final_summary_with_copy(copy: &CloseCopy, rendered_results: &str, has_results: bool) -> String {
+    if !has_results {
+        return copy.empty_final_summary.to_owned();
+    }
     copy.final_summary_template.replace("{results}", rendered_results)
 }
 
@@ -88,6 +95,20 @@ pub const ENGLISH_STOP_COPY: StopCopy = StopCopy {
 
 pub struct StopSummaryGroup { pub name: String, pub success: bool, pub error: Option<String>, pub count: usize }
 
+pub fn group_stop_results<F>(results: &[CloseToolResult], mut scrubbed_error_line: F) -> Vec<StopSummaryGroup>
+where F: FnMut(&str) -> String {
+    let mut groups: Vec<StopSummaryGroup> = Vec::new();
+    for result in results {
+        let error = if result.success { None } else { Some(scrubbed_error_line(&result.content)).filter(|line| !line.is_empty()) };
+        if let Some(group) = groups.iter_mut().find(|g| g.name == result.name && g.success == result.success && g.error == error) {
+            group.count += 1;
+        } else {
+            groups.push(StopSummaryGroup { name: result.name.clone(), success: result.success, error, count: 1 });
+        }
+    }
+    groups
+}
+
 pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], copy: &StopCopy) -> String {
     use std::fmt::Write as _;
     let mut out = copy.opening_template.replace("{reason}", reason);
@@ -95,7 +116,7 @@ pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], 
         out.push_str(copy.what_happened_heading);
         let shown_from = groups.len().saturating_sub(8);
         for group in groups.iter().skip(shown_from) {
-            let name: String = group.name.chars().take(60).collect();
+            let name = truncate_with_ellipsis(&group.name, 60);
             let count = if group.count == 1 { String::new() } else { format!(" {} times", group.count) };
             let line = if group.success {
                 copy.success_template.replace("{name}", &name).replace("{count}", &count)
@@ -113,6 +134,13 @@ pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], 
     out.push_str(copy.proceed_prompt);
     out
 }
+
+fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((idx, _)) => format!("{}...", text[..idx].trim_end()),
+        None => text.to_owned(),
+    }
+}
 ```
 
 `StopSummaryGroup.error` contains only the already-scrubbed `short_error_line` output. Move the host grouping and scrub logic into harness and pass the resulting groups to the renderer above. Host `StopCopy` provides the reason sentence through `StopReasonKind.copy()`; it does not move the product's failure-note parser or security scrubber. Keep the existing total-budget result rendering APIs and let OpenHuman supply its existing `CloseResultRenderOptions` block/omission closures.
@@ -129,7 +157,8 @@ Files: `crates/tinyagents-harness/src/close.rs`, `close_tests.rs`, `turn_stop.rs
 
 1. Port the exact behavior assertions from OpenHuman `turn_checkpoint_tests.rs`: `the_deterministic_checkpoint_reproduces_each_result_body`, `checkpoint_records_keep_the_captured_tool_failure_status_and_body`, `tool_result_renderer_preserves_the_openhuman_block_format`, `results_over_the_budget_are_omitted_with_a_disclosure`, `one_oversized_result_is_still_shown`, `no_completed_tools_says_so`, `newline_heavy_results_are_charged_what_they_render`, `the_final_summary_quotes_each_failure_message`, `the_final_summary_of_a_halted_turn_gives_a_reason_and_names_the_tools`, `the_final_answer_instruction_carries_the_records_and_the_stop_note`, `the_close_verification_prompt_holds_request_records_and_reply`, `the_final_answer_instruction_is_framed_and_forbids_quoting_tools_and_deliberation`, both quote guards, the repair re-ask, truncated/breaker copy, and both final-write checks. Keep full equality assertions unchanged, including `"\n- `read_file` — ok\n  > first line\n  > second line\n"`.
 2. Port `stop_summary_tests.rs`: exact expected full output from `a_halted_turn_gives_one_reason_and_collapses_identical_failures`, redaction/truncation, secret suppression, successful-repeat semantics, every key/copy, all stop-note categories, policy-refusal copy, and newest-eight retention. The golden has one reason line, `**What happened**`, grouped lines, and the exact final prompt; retain its assertions verbatim.
-3. Add the custom copy test with unmistakable sentinels in every copy field, then verify copy-aware checkpoint, final summary, repair, and stop renderers use them. This proves injection beyond the default English golden.
+   Add a whole-string assertion for the production three-timeout case with the transient English copy: `I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- \`get_profile\` succeeded\n- \`use_skill\` failed 3 times: tool \`use_skill\` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again.` The existing component assertions remain too.
+3. First add/run the output behavior tests against existing functions. The OpenHuman block-format golden is a real behavioral gap against the harness's current default renderer; it fails because the harness defaults to inline `- \`name\` (ok):` instead of OpenHuman's quoted multiline block. Do not count adding a new API's compile failure as a behavioral RED. After the algorithmic output test is red, add the sentinel copy test with every field, then implement the new copy API and confirm both pass.
 4. Make the red test fail on a real behavior mismatch, then implement. No host migration occurs in #64. Confirm existing APIs and tests still pass unchanged.
 
 ### 2. Consolidate checkpoint and grounded close
@@ -153,7 +182,7 @@ Files: `turn_stop.rs`, `turn_stop_tests.rs`, `turn_outcome.rs`, `turn_outcome_te
 
 ### 4. Move observability bridge behavior without moving host persistence
 
-Files: `observability/mod.rs`, `observability/mod_journal_tests.rs` and a new sibling `observability/turn_journal_tests.rs` only if the current test module cannot host focused coverage; update `observability/mod.rs` declarations. Host files: `agent/tinyagents/journal.rs`, `supplemental_trace.rs`.
+Files: `observability/mod.rs` and its existing `mod_journal_tests.rs` only for changes required by supplemental tracing. No new journal facade/test is planned. Host files are evidence inputs; #64 does not edit OpenHuman.
 
 1. Do not add/move `TurnJournal` into harness. The inspected type at host lines 123-225 includes `DriverStatusStore`, `HarnessRunStatus`, sealing, and host logging. The generic event path already uses `StoreEventJournal`, `JournalSink`, and `HarnessEventJournal`.
 2. Keep attachment, status lifecycle and `merge_run_observations` on the host. `journal_tests.rs` only tests that the request/run map stays scoped to the registering `DispatchCtx`; keep it there. Existing harness observability tests cover generic append/read/offset/lineage behavior; add no duplicate tests.
@@ -162,7 +191,7 @@ Files: `observability/mod.rs`, `observability/mod_journal_tests.rs` and a new si
 
 ### 5. Move capture middleware and repeated-failure ladder core
 
-Files: `turn_outcome.rs`, `turn_outcome_tests.rs`, `no_progress/classified_ladder.rs`, `classified_ladder_tests.rs`, `no_progress/mod.rs` exports. Host files: middleware capture and repeated failure.
+Files: `turn_outcome.rs`, `turn_outcome_tests.rs`, `close.rs`, `close_tests.rs`, and `observability/mod.rs` plus its existing sibling tests. The existing `classified_ladder.rs` is already the generic owner and does not need a duplicate implementation. Host files are evidence inputs; #64 does not edit OpenHuman.
 
 1. The host capture wrapper delegates to `tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware` already. In #212 delete only this adapter after direct construction is wired. Keep host policy enrichment, TinyTools failure classification, `mcp_result` metadata filtering and `ToolFailureMap`. Preserve the host tests for same-name calls by call id, forwarding structured MCP presentation, and dropping undecorated MCP envelopes. Harness `turn_outcome_tests.rs` already tests poison-safe drain and one-time take.
 2. The inspected 541-line `RepeatedToolFailureMiddleware` already delegates to harness `FailureScopeMiddleware`, `FailurePolicy`, `ClassifiedFailureTracker`, and `classified_step`; its remaining `HostFailurePolicy` owns host `RunContext`, call-resource scope, sanitization, flow-body failure detection, TinyTools classifier, recoverable headroom, terminal-inference fast halt, StopLatch and OpenHuman copy. Make no source move for this file in #64; preserving host tests is the acceptance evidence.
@@ -171,7 +200,7 @@ Files: `turn_outcome.rs`, `turn_outcome_tests.rs`, `no_progress/classified_ladde
 
 ### 6. Replace the host model-budget wrapper
 
-Files: existing `crates/tinyagents-harness/src/cost/model_budget.rs` and `model_budget_tests.rs`; host `agent/tinyagents/budget.rs` and budget-focused tests.
+Files: existing `crates/tinyagents-harness/src/cost/model_budget.rs` and `model_budget_tests.rs`; host files are evidence inputs only.
 
 1. Keep the existing `wrapped_model_settles_the_reported_charge_once_into_shared_ledger` test in `model_budget_tests.rs`; its assertion requires normalized charge `7` micros and ledger spend `{ tokens: 5, cost_micros: 7 }`. Add a behavior test only if changing upstream wrapper behavior; issue #64 requires no accounting algorithm rewrite.
 2. Make the upstream wrapper public from the harness facade if it is not already exported, then replace the host `ModelBudget` struct with a type alias to `tinyagents_harness::cost::ModelBudget` if host call-site visibility allows it. Keep `TurnModels::with_budget` route wrapping and depth policy in OpenHuman.
@@ -218,7 +247,7 @@ Also run focused tests for changed harness modules during implementation. The Op
 
 ## Resolved source audits
 
-1. CloseCopy inventory is complete: exact host text/rendering is in `turn_checkpoint.rs:49-126,152-169,198-258,260-372,388-514`. Existing generic algorithms are in harness `close.rs`; the new seam injects copy while reusing those algorithms. No string inventory is deferred.
-2. Do not add `TurnJournal` to harness. `journal.rs:123-225` couples terminal status writes to host `DriverStatusStore`; the generic event side already uses `StoreEventJournal`, `JournalSink`, and `HarnessEventJournal`. Keep attachment, status lifecycle, correlation, and replay host-side. Move only event terminal emission from `DeferredTurnTerminal` and leave durable status finalization with its host owner.
-3. `SupplementalTrace` (13-169) uses harness `EventSink`, `AgentEvent`, ids, `ModelResponse`, `GenerationPricing`, and `GenerationEnrichment` for call lifecycle. It uses host `agent::cost` and provider conversion for catalog pricing, charge estimates, and `RepairUsage` fields. Move event lifecycle to harness behind a host enrichment callback; retain catalog/billing and final cost projection on the host callback.
+1. CloseCopy inventory is complete: prompt/copy literals and render rules are in `turn_checkpoint.rs:49-126,152-169,198-258,260-372,388-514`. Existing generic algorithms are in harness `close.rs`; move all user/model-facing literals into `CloseCopy`, with default values copied verbatim from those exact source ranges, and reuse existing result-render options. Keep the OpenHuman golden test strings unchanged.
+2. Do not add `TurnJournal` to harness. `journal.rs:123-225` couples terminal status writes to host `DriverStatusStore`; the generic event side already uses `StoreEventJournal`, `JournalSink`, and `HarnessEventJournal`. The listed generic row is already represented upstream. Keep attachment, status lifecycle, correlation, and replay host-side. Move only event terminal emission from `DeferredTurnTerminal` and leave durable status finalization with its host owner.
+3. `SupplementalTrace` (13-169) uses harness `EventSink`, `AgentEvent`, ids, `ModelResponse`, `GenerationPricing`, and `GenerationEnrichment` for call lifecycle. It uses host `agent::cost` and provider conversion for catalog pricing, charge estimates, and `RepairUsage` fields. Move event lifecycle to harness behind the typed host enrichment callback; retain catalog/billing and final cost projection on the host callback.
 4. Upstream `ModelBudget::new`, `wait_for_capacity`, and `wrap_model` are verified in `tinyagents-harness/src/cost/model_budget.rs:22-42`; retain host depth/policy setup and replace only the wrapper type.
