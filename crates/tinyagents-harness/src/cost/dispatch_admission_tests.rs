@@ -279,8 +279,10 @@ fn options(
 }
 
 fn model(counts: &Arc<Counts>, behavior: ModelBehavior) -> Arc<dyn ChatModel<()>> {
-    let mut profile = ModelProfile::default();
-    profile.model = Some("dispatch-test-model".to_owned());
+    let profile = ModelProfile {
+        model: Some("dispatch-test-model".to_owned()),
+        ..ModelProfile::default()
+    };
     Arc::new(TestModel {
         counts: counts.clone(),
         behavior,

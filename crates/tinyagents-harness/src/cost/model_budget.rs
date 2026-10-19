@@ -134,14 +134,11 @@ impl ControlledChatModel {
             hook,
         );
 
-        if permit.is_some() && self.options.monetary_budget.is_none() {
-            if let Err(refusal) = permit
-                .as_ref()
-                .expect("admission permit was acquired")
-                .mark_dispatched()
-            {
-                return Err(refusal.into());
-            }
+        if self.options.monetary_budget.is_none()
+            && let Some(permit) = permit.as_ref()
+            && let Err(refusal) = permit.mark_dispatched()
+        {
+            return Err(refusal.into());
         }
 
         match wrapped.invoke(state, request).await {
@@ -185,14 +182,11 @@ impl ControlledChatModel {
             self.options.observer.clone(),
             hook,
         );
-        if permit.is_some() && self.options.monetary_budget.is_none() {
-            if let Err(refusal) = permit
-                .as_ref()
-                .expect("admission permit was acquired")
-                .mark_dispatched()
-            {
-                return Err(refusal.into());
-            }
+        if self.options.monetary_budget.is_none()
+            && let Some(permit) = permit.as_ref()
+            && let Err(refusal) = permit.mark_dispatched()
+        {
+            return Err(refusal.into());
         }
         let stream = match wrapped.stream(state, request).await {
             Ok(stream) => stream,
