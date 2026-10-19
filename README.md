@@ -30,7 +30,7 @@ TinyAgents is a Cargo workspace, not one crate. Depend on the pieces you need:
   caching, and a Claude Code CLI model adapter with stream-json,
   session, authentication, and MCP endpoint support. Features: `sqlite`,
   `storage-drivers`, `multimodal`, `png-optimize` (opt-in PNG re-compression), `media`,
-  `claude-code` and `langfuse` (both default), `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
+  `claude-code` and `langfuse` (both default), `json-schema` (opt-in `JsonSchema` for context config types), and `tracing` (forwards to `tinytools-agent/tracing` for its parsing diagnostics; the harness's own instrumentation is always compiled in).
 - **`tinyagents-harness-tools`** — reusable implementations for the harness:
   goals and budgets, per-thread todos, skill tool packs, subagent control
   tools, time and clarification tools, plan exit, per-call binding, and
