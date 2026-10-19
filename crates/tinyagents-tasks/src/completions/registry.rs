@@ -204,12 +204,11 @@ pub fn open_driver_completion_store_with_coordination_domain(
     scope: Scope,
     coordination_domain: impl Into<String>,
 ) -> HarnessResult<Arc<dyn CompletionStore>> {
-    let store = DriverCompletionStore::new_with_coordination_domain(
-        backend,
-        scope,
-        coordination_domain,
-    )
-    .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    let store =
+        DriverCompletionStore::new_with_coordination_domain(backend, scope, coordination_domain)
+            .map_err(|error| {
+                tinyagents_harness::error::TinyAgentsError::Storage(error.to_string())
+            })?;
     store.declare_collections()?;
     Ok(Arc::new(store))
 }
@@ -246,11 +245,8 @@ pub fn open_driver_completion_store_or_memory_with_coordination_domain(
     coordination_domain: impl Into<String>,
     fallback: CompletionStoreFallback,
 ) -> HarnessResult<Arc<dyn CompletionStore>> {
-    match open_driver_completion_store_with_coordination_domain(
-        backend,
-        scope,
-        coordination_domain,
-    ) {
+    match open_driver_completion_store_with_coordination_domain(backend, scope, coordination_domain)
+    {
         Ok(store) => Ok(store),
         Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
             tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");

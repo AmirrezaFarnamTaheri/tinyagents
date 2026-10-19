@@ -110,12 +110,9 @@ fn driver_stores_can_share_an_explicit_backend_domain_without_coalescing_other_d
         "shared-backend",
     )
     .unwrap();
-    let unrelated = DriverCompletionStore::new_with_coordination_domain(
-        other_backend,
-        scope,
-        "other-backend",
-    )
-    .unwrap();
+    let unrelated =
+        DriverCompletionStore::new_with_coordination_domain(other_backend, scope, "other-backend")
+            .unwrap();
 
     assert_eq!(
         first.coordination_identity(),
@@ -136,19 +133,21 @@ async fn separate_database_domains_do_not_share_a_same_parent_queue_permit() {
     let backend_b: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let scope = Scope::new("shared-tenant").unwrap();
     let router_a = Arc::new(CompletionRouter::new(Arc::new(
-        DriverCompletionStore::new_with_coordination_domain(
-            backend_a,
-            scope.clone(),
-            "database-a",
-        )
-        .unwrap(),
+        DriverCompletionStore::new_with_coordination_domain(backend_a, scope.clone(), "database-a")
+            .unwrap(),
     )));
     let router_b = Arc::new(CompletionRouter::new(Arc::new(
         DriverCompletionStore::new_with_coordination_domain(backend_b, scope, "database-b")
             .unwrap(),
     )));
-    router_a.record(record("database-a-child", "same-parent")).await.unwrap();
-    router_b.record(record("database-b-child", "same-parent")).await.unwrap();
+    router_a
+        .record(record("database-a-child", "same-parent"))
+        .await
+        .unwrap();
+    router_b
+        .record(record("database-b-child", "same-parent"))
+        .await
+        .unwrap();
     router_b.cancel_parent("same-parent").unwrap();
 
     let queue = RunQueue::new();
@@ -174,7 +173,10 @@ async fn separate_database_domains_do_not_share_a_same_parent_queue_permit() {
         .take_admitted(QueueLane::Followup, QueueMode::All)
         .await;
     assert_eq!(
-        admitted.iter().map(|item| item.value.clone()).collect::<Vec<_>>(),
+        admitted
+            .iter()
+            .map(|item| item.value.clone())
+            .collect::<Vec<_>>(),
         [Message::user("database-a-child")],
         "a permit from one database must not authorize an unrelated store with the same scope and parent text"
     );

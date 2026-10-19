@@ -225,7 +225,10 @@ impl CompletionRouter {
 
     pub(super) fn admission_store_snapshot(
         slot: &Mutex<AdmissionStoreSlot>,
-    ) -> Result<Arc<dyn CompletionStore>, tinyagents_harness::run_queue::QueueAdmissionError> {
+    ) -> std::result::Result<
+        Arc<dyn CompletionStore>,
+        tinyagents_harness::run_queue::QueueAdmissionError,
+    > {
         let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -239,7 +242,7 @@ impl CompletionRouter {
     pub(super) fn admission_store_is_current(
         slot: &Mutex<AdmissionStoreSlot>,
         store: &Arc<dyn CompletionStore>,
-    ) -> Result<(), tinyagents_harness::run_queue::QueueAdmissionError> {
+    ) -> std::result::Result<(), tinyagents_harness::run_queue::QueueAdmissionError> {
         let slot = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
