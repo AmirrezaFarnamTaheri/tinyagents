@@ -4,7 +4,7 @@ use tinytools::ToolRunContext;
 
 use super::{
     ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress, ExecRequest, ShellFlavor,
-    timeout::{output_or_kill_with_progress_isolated, output_unbounded_with_progress_isolated},
+    timeout::{CapturedCommandResult, output_or_kill_captured_isolated, output_unbounded_with_progress_isolated},
 };
 
 /// Capability token required by [`NativeExecBackend`] before it may spawn.
@@ -67,23 +67,20 @@ impl ExecBackend for NativeExecBackend {
         let run = async {
             match request.timeout {
                 Some(timeout) => {
-                    match output_or_kill_with_progress_isolated(&mut command, timeout, progress)
-                        .await
-                    {
-                        Ok(Ok(output)) => Ok(ExecOutput {
+                    match output_or_kill_captured_isolated(&mut command, timeout, progress).await {
+                        CapturedCommandResult::Completed(Ok(output)) => Ok(ExecOutput {
                             stdout: output.stdout,
                             stderr: output.stderr,
                             exit_code: output.status.code(),
                             timed_out: false,
                         }),
-                        Ok(Err(error)) => Err(error),
-                        Err(_) => Ok(ExecOutput {
-                            stdout: Vec::new(),
-                            stderr: Vec::new(),
-                            exit_code: None,
+                        CapturedCommandResult::Completed(Err(error)) => Err(error),
+                        CapturedCommandResult::TimedOut(output) => Ok(ExecOutput {
+                            stdout: output.stdout,
+                            stderr: output.stderr,
+                            exit_code: output.status.code(),
                             timed_out: true,
                         }),
-                    }
                 }
                 None => output_unbounded_with_progress_isolated(&mut command, progress)
                     .await
