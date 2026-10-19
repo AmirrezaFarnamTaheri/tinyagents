@@ -2,14 +2,238 @@ use super::*;
 use crate::test_store::{memory, read, seed};
 use crate::{DriverFailure, DriverOutcome, SessionBuilder, TranscriptCodec};
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use tinyagents_session::transcript::{
-    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptMessage,
+    BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, session_stem,
 };
 use tinyinference_llm::message::Message;
 use tokio::sync::Notify;
 use tokio::time::{Duration, timeout};
+
+struct BlockingReadSink {
+    locator: Arc<dyn TranscriptLocator>,
+    session: SessionRef,
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: Arc<Notify>,
+    finished: Arc<Notify>,
+}
+
+#[async_trait]
+impl crate::PostCommitSink for BlockingReadSink {
+    async fn after_commit(
+        &self,
+        observation: &crate::PostCommitObservation,
+    ) -> Result<(), RuntimeError> {
+        assert!(observation.receipt.transcript.is_some());
+        assert_eq!(observation.input, Message::user("commit this"));
+        let head = self.locator.head_generation(&self.session);
+        let read = self.locator.read_session_transcript(&head).unwrap();
+        let transcript = read.read_session().unwrap().unwrap();
+        assert!(transcript.messages.iter().any(|row| row.content == "committed reply"));
+        if let Some(started) = self.started.lock().unwrap().take() {
+            let _ = started.send(());
+        }
+        self.release.notified().await;
+        self.finished.notify_one();
+        Ok(())
+    }
+}
+
+struct ReplyDriver;
+
+#[async_trait]
+impl SessionDriver for ReplyDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        let mut history = request.history;
+        history.push(Message::assistant("committed reply"));
+        Ok(DriverOutcome {
+            history,
+            output: Some("committed reply".into()),
+            partial: None,
+            interrupted: false,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn owned_post_commit_sink_finishes_after_caller_abort() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-post-commit", "agent");
+    let release = Arc::new(Notify::new());
+    let finished = Arc::new(Notify::new());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let sink = Arc::new(BlockingReadSink {
+        locator: locator.clone(),
+        session: session_ref.clone(),
+        started: Mutex::new(Some(started_tx)),
+        release: release.clone(),
+        finished: finished.clone(),
+    });
+    let session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .codec(Arc::new(RoleCodec))
+        .session(locator, session_ref, meta())
+        .post_commit_sink(sink)
+        .build().unwrap();
+    let turn = tokio::spawn(async move {
+        let mut session = session;
+        session.turn(Message::user("commit this"), TurnOptions::default()).await
+    });
+    started_rx.await.unwrap();
+    turn.abort();
+    release.notify_one();
+    timeout(Duration::from_secs(1), finished.notified()).await.unwrap();
+}
+
+struct CountSink(Arc<AtomicUsize>);
+
+#[async_trait]
+impl crate::PostCommitSink for CountSink {
+    async fn after_commit(&self, _: &crate::PostCommitObservation) -> Result<(), RuntimeError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct FailureTerminalRecorder(Arc<Mutex<Vec<SessionTerminal>>>);
+
+#[async_trait]
+impl SessionHooks for FailureTerminalRecorder {
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> { Ok(()) }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.0.lock().unwrap().push(terminal);
+        Ok(())
+    }
+}
+
+struct FailingPartialDriver;
+
+#[async_trait]
+impl SessionDriver for FailingPartialDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        let mut history = request.history;
+        history.push(Message::assistant("durable partial"));
+        Err(DriverFailure {
+            error: RuntimeError::Driver("provider failed".into()),
+            partial: Some(DriverOutcome {
+                history,
+                output: Some("durable partial".into()),
+                partial: None,
+                interrupted: false,
+                outcome: None,
+                tool_outcomes: Vec::new(),
+            }),
+            outcome: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn persisted_failure_partial_skips_post_commit_sinks_and_fails_once() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-failure-partial", "agent");
+    let sink_calls = Arc::new(AtomicUsize::new(0));
+    let terminals = Arc::new(Mutex::new(Vec::new()));
+    let mut session = SessionBuilder::new(Arc::new(FailingPartialDriver))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(FailureTerminalRecorder(terminals.clone())))
+        .post_commit_sink(Arc::new(CountSink(sink_calls.clone())))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build().unwrap();
+    assert!(session.turn(Message::user("fail"), TurnOptions::default()).await.is_err());
+    assert_eq!(sink_calls.load(Ordering::SeqCst), 0);
+    let terminals = terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(terminals[0], SessionTerminal::Failed(_)));
+    let head = locator.head_generation(&session_ref);
+    let transcript = locator.read_session_transcript(&head).unwrap()
+        .read_session().unwrap().unwrap();
+    assert!(transcript.messages.iter().any(|row| row.content == "durable partial"));
+}
+
+struct RejectBeforeCommit;
+
+#[async_trait]
+impl SessionHooks for RejectBeforeCommit {
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Driver("reject before durable append".into()))
+    }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> { Ok(()) }
+}
+
+#[tokio::test]
+async fn precommit_error_does_not_call_post_commit_sink() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .hooks(Arc::new(RejectBeforeCommit))
+        .post_commit_sink(Arc::new(CountSink(calls.clone())))
+        .build().unwrap();
+    assert!(session.turn(Message::user("reject"), TurnOptions::default()).await.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+struct InterruptedDriver;
+
+#[async_trait]
+impl SessionDriver for InterruptedDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        Ok(DriverOutcome {
+            history: request.history,
+            output: None,
+            partial: None,
+            interrupted: true,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn normal_interrupted_commit_still_invokes_post_commit_sink() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut session = SessionBuilder::new(Arc::new(InterruptedDriver))
+        .post_commit_sink(Arc::new(CountSink(calls.clone())))
+        .build().unwrap();
+    let outcome = session.turn(Message::user("stop"), TurnOptions::default()).await.unwrap();
+    assert!(outcome.interrupted);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+struct ErrorSink;
+
+#[async_trait]
+impl crate::PostCommitSink for ErrorSink {
+    async fn after_commit(&self, _: &crate::PostCommitObservation) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Driver("sink failed after commit".into()))
+    }
+}
+
+#[tokio::test]
+async fn post_commit_sink_error_does_not_change_successful_turn_result() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-sink-error", "agent");
+    let mut session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .codec(Arc::new(RoleCodec))
+        .post_commit_sink(Arc::new(ErrorSink))
+        .session(locator, session_ref, meta())
+        .build().unwrap();
+    let outcome = session.turn(Message::user("succeed"), TurnOptions::default()).await.unwrap();
+    assert_eq!(outcome.output.as_deref(), Some("committed reply"));
+}
 
 fn meta() -> TranscriptMeta {
     TranscriptMeta {
