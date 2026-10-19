@@ -1416,6 +1416,48 @@ impl CompletionStore for BlockingTryList {
     ) -> tinyagents_harness::error::Result<()> {
         self.inner.put_fenced(record, parent_key, gate)
     }
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+        gate: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.insert_if_absent(record, gate)
+    }
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.claim_task(task_id, parent_key, parent_epoch, gate, mode, token, visible_after)
+    }
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        self.inner.claim_pending(parent_key, parent_epoch, gate, mode, max, token, visible_after)
+    }
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        parent_epoch: u64,
+        gate: &ParentGateClaim,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
+    }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
@@ -1473,71 +1515,6 @@ impl CompletionStore for FailingList {
         gate: &ParentGateClaim,
     ) -> tinyagents_harness::error::Result<()> {
         self.inner.put_fenced(record, parent_key, gate)
-    }
-    fn insert_if_absent(
-        &self,
-        record: &CompletionRecord,
-        gate: &ParentGateClaim,
-    ) -> tinyagents_harness::error::Result<bool> {
-        self.inner.insert_if_absent(record, gate)
-    }
-    fn claim_task(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        )
-    }
-    fn claim_pending(
-        &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner.claim_pending(
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            max,
-            token,
-            visible_after,
-        )
-    }
-    fn resolve_claim(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
-    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.resolve_claim(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            token,
-            resolution,
-        )
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
