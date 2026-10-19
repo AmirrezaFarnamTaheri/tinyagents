@@ -113,6 +113,10 @@ pub enum TinyAgentsError {
     #[error("model error: {0}")]
     Provider(Box<tinyinference_llm::model::ProviderError>),
 
+    /// The host's physical-dispatch policy refused a model call.
+    #[error("physical dispatch refused: {0}")]
+    PhysicalDispatchAdmission(#[source] crate::cost::DispatchRefusal),
+
     /// The request did not fit in the model's context window.
     ///
     /// Distinguished from the generic [`TinyAgentsError::Provider`] because the
