@@ -407,6 +407,9 @@ impl CompletionRouter {
             slot: &self.admission_store,
             replacement: None,
         };
+        if replacement.is_process_local() {
+            replacement.bind_parent_lifecycle(Arc::clone(&state.lifecycle))?;
+        }
         // The first snapshot discovers which parent gates must be acquired.
         // It is deliberately not copied: another router may close or update a
         // parent while this migration is waiting for those gates.

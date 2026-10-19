@@ -77,7 +77,11 @@ impl CompletionAdmission {
         }
     }
 
-    fn key_for(&self, store: &Arc<dyn CompletionStore>, lifecycle: &Arc<ParentLifecycle>) -> String {
+    fn key_for(
+        &self,
+        store: &Arc<dyn CompletionStore>,
+        lifecycle: &Arc<ParentLifecycle>,
+    ) -> String {
         let identity = if store.is_process_local() {
             format!("lifecycle:{}", lifecycle.identity())
         } else {
