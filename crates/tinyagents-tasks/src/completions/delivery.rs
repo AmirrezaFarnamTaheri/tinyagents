@@ -47,8 +47,10 @@ pub enum DeliveryOutcome {
     Delivered { count: usize },
     /// Delivery failed and the records remain retryable or gave up.
     Failed { count: usize, gave_up: usize },
+    /// Another drain already owns the tenant-scoped thread delivery lease.
+    LeaseHeld,
     /// The parent remained busy beyond the configured polling window.
-    Busy,
+    ParentBusy,
     /// The host's ownership fence stopped this drain.
     Fenced,
 }
@@ -559,7 +561,10 @@ pub struct ThreadDeliveryLease {
 
 impl ThreadDeliveryLeases {
     /// Acquires the per-thread delivery slot, if currently free.
-    pub fn try_acquire(&self, thread_key: impl Into<TenantThreadKey>) -> Option<ThreadDeliveryLease> {
+    pub fn try_acquire(
+        &self,
+        thread_key: impl Into<TenantThreadKey>,
+    ) -> Option<ThreadDeliveryLease> {
         let key = thread_key.into();
         let mut leases = self.0.lock().ok()?;
         if !leases.insert(key.clone()) {

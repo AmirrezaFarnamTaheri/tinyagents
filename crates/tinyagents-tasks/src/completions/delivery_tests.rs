@@ -13,6 +13,7 @@ fn target(router: &CompletionRouter) -> DeliveryTarget<'_> {
     DeliveryTarget {
         router,
         parent_key: "parent",
+        tenant_key: "test-tenant",
         thread_key: "thread",
     }
 }
@@ -456,12 +457,33 @@ async fn shared_thread_lease_prevents_overlapping_delivery_turns() {
             |_| {},
         )
         .await;
-    assert_eq!(second, DeliveryOutcome::Busy);
+    assert_eq!(second, DeliveryOutcome::LeaseHeld);
     release_tx.send(()).unwrap();
     assert_eq!(
         first.await.unwrap(),
         DeliveryOutcome::Delivered { count: 1 }
     );
+}
+
+#[test]
+fn same_thread_id_is_isolated_between_tenants_for_delivery_and_busy_gates() {
+    let delivery = ThreadDeliveryLeases::default();
+    let thread_a = TenantThreadKey::new("tenant-a", "thread");
+    let thread_b = TenantThreadKey::new("tenant-b", "thread");
+    let lease_a = delivery.try_acquire(thread_a.clone()).unwrap();
+    let lease_b = delivery.try_acquire(thread_b.clone()).unwrap();
+    assert!(delivery.try_acquire(thread_a.clone()).is_none());
+
+    let busy = ParentBusyGate::default();
+    let session_a = TenantThreadKey::new("tenant-a", "session");
+    assert!(busy.alias_session_to_thread(session_a.clone(), thread_a.clone()));
+    let _busy_a = busy.enter(session_a).unwrap();
+    assert!(busy.is_busy_scoped(&thread_a));
+    assert!(!busy.is_busy_scoped(&thread_b));
+    assert_eq!(busy.clear(&thread_a), 1);
+    assert!(!busy.is_busy_scoped(&thread_a));
+
+    drop((lease_a, lease_b));
 }
 
 #[tokio::test]

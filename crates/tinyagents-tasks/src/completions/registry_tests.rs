@@ -26,15 +26,18 @@ impl tinystoragedrivers_core::StorageBackend for UnfencedBackend {
 
 #[tokio::test]
 async fn durable_completion_open_fails_closed_while_explicit_local_fallback_remains_usable() {
-    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> =
-        Arc::new(UnfencedBackend(tinystoragedrivers_core::MemoryStorage::new()));
+    let backend: Arc<dyn tinystoragedrivers_core::StorageBackend> = Arc::new(UnfencedBackend(
+        tinystoragedrivers_core::MemoryStorage::new(),
+    ));
     let scope = tinystoragedrivers_core::Scope::new("shared").unwrap();
-    assert!(open_driver_completion_store_or_memory(
-        Arc::clone(&backend),
-        scope.clone(),
-        CompletionStoreFallback::FailClosed,
-    )
-    .is_err());
+    assert!(
+        open_driver_completion_store_or_memory(
+            Arc::clone(&backend),
+            scope.clone(),
+            CompletionStoreFallback::FailClosed,
+        )
+        .is_err()
+    );
 
     let local = open_driver_completion_store_or_memory(
         backend,
@@ -53,7 +56,10 @@ async fn durable_completion_open_fails_closed_while_explicit_local_fallback_rema
         ))
         .await
         .unwrap();
-    assert!(matches!(outcome, crate::completions::RecordOutcome::Recorded { .. }));
+    assert!(matches!(
+        outcome,
+        crate::completions::RecordOutcome::Recorded { .. }
+    ));
 }
 
 #[test]

@@ -28,8 +28,8 @@ pub use completions::{
 };
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
-    CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    CompletionStoreFallback, ParentBusyLease, ThreadDeliveryLeases,
+    CompletionRouterReplaceOutcome, CompletionStoreFallback, DeliveryFence, DeliveryOutcome,
+    DeliveryTarget, ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
     open_driver_completion_store, open_driver_completion_store_or_memory,
 };
 pub use driver_store::DriverTaskStore;

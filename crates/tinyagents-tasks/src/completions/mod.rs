@@ -30,7 +30,7 @@ mod types;
 
 pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
-    ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases,
+    ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
 };
 pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
