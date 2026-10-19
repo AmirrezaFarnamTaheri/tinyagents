@@ -263,7 +263,7 @@ async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
     let jobs = SubAgentJobRegistry::new();
     let total = 256;
     let ids: Vec<_> = (0..total)
-        .map(|index| register_driver_job(&jobs, format!("prestarted-{index}" )).1)
+        .map(|index| register_driver_job(&jobs, format!("prestarted-{index}")).1)
         .collect();
     for id in &ids {
         jobs.mark_running(id);
