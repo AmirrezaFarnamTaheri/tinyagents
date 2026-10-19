@@ -43,12 +43,19 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> RunModeStore<S> for InMemoryR
     fn set_mode(&self, scope: &S, thread_id: &str, mode: RunMode) {
         let changed = {
             let _update = self.update.lock();
-            let handle = self.handle_for_thread(scope, thread_id);
-            if handle.get() == mode {
-                false
-            } else {
-                handle.set(mode);
-                true
+            let key = (scope.clone(), thread_id.to_owned());
+            let mut handles = self.handles.lock();
+            match handles.get(&key) {
+                Some(handle) if handle.get() == mode => false,
+                Some(handle) => {
+                    handle.set(mode);
+                    true
+                }
+                None if mode == RunMode::Build => false,
+                None => {
+                    handles.insert(key, RunModeHandle::new(mode));
+                    true
+                }
             }
         };
         if changed {
