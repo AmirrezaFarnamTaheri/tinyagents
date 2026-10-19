@@ -8,3 +8,6 @@ pub use tool::RequestPlanReviewTool;
 #[cfg(test)]
 #[path = "tool_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod store_tests;
