@@ -48,6 +48,24 @@ impl SessionIdentityResolver<()> for FailingIdentityResolver {
     }
 }
 
+struct SwitchableActorResolver {
+    provider: Arc<Mutex<Arc<dyn tinyagents_session::port::SessionStoreProvider>>>,
+}
+
+impl SessionIdentityResolver<()> for SwitchableActorResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        let provider = self.provider.lock().unwrap().clone();
+        let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+            provider.as_ref(), "shared-agent",
+        ).map_err(|error| RuntimeError::InvalidSessionState(error.to_string()))?;
+        Ok(ResolvedSessionStores { agent_id: "shared-agent".into(), stores })
+    }
+}
+
 impl SessionIdentityResolver<()> for FixedIdentityResolver {
     fn resolve(
         &self,
@@ -4862,4 +4880,55 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
         .unwrap().read_session().unwrap().unwrap();
     assert_eq!(active.messages.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
         ["three", "third", "four", "fourth"]);
+}
+
+#[tokio::test]
+async fn same_agent_backend_change_is_rejected_until_a_fresh_session_admits_it() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let alice_root = DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::tenant("alice").unwrap(),
+    ).unwrap();
+    let bob_root = DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::tenant("bob").unwrap(),
+    ).unwrap();
+    let alice: Arc<dyn SessionStoreProvider> = alice_root.bind_actor(backend.clone()).unwrap().unwrap();
+    let bob: Arc<dyn SessionStoreProvider> = bob_root.bind_actor(backend).unwrap().unwrap();
+    let provider = Arc::new(Mutex::new(alice));
+    let resolver = Arc::new(SwitchableActorResolver { provider: provider.clone() });
+    let first_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("first"), Message::assistant("alice"),
+    ]))]));
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("tenant-thread".into()),
+        ..TurnOptions::default()
+    };
+    let mut established = SessionBuilder::new(first_driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("tenant-thread", meta(), resolver.clone())
+        .build().unwrap();
+    established.turn(
+        SessionTurnRequest::new(Message::user("first")), options(),
+    ).await.unwrap();
+    *provider.lock().unwrap() = bob;
+    assert!(matches!(
+        established.turn(SessionTurnRequest::new(Message::user("second")), options()).await,
+        Err(RuntimeError::InvalidSessionState(_)),
+    ));
+    assert_eq!(first_driver.requests.lock().unwrap().len(), 1);
+
+    let fresh_driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("fresh"), Message::assistant("bob"),
+    ]))]));
+    let mut fresh = SessionBuilder::new(fresh_driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("tenant-thread", meta(), resolver)
+        .build().unwrap();
+    fresh.turn(
+        SessionTurnRequest::new(Message::user("fresh")), options(),
+    ).await.unwrap();
+    assert_eq!(fresh_driver.requests.lock().unwrap().len(), 1);
 }
