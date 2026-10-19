@@ -399,11 +399,23 @@ async fn successful_replay_repairs_same_source_for_thread_and_latest_modes() {
             .unwrap();
         assert_eq!(active_ref.generation, 1, "{resume:?}");
         assert_eq!(
-            active.messages.iter().map(|row| (row.role.as_str(), row.content.as_str())).collect::<Vec<_>>(),
-            [("system", "frozen prompt"), ("user", "persisted user"), ("user", "new user turn"), ("assistant", "reply after replay")],
+            active
+                .messages
+                .iter()
+                .map(|row| (row.role.as_str(), row.content.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("system", "frozen prompt"),
+                ("user", "persisted user"),
+                ("user", "new user turn"),
+                ("assistant", "reply after replay")
+            ],
             "same-source {resume:?} replay keeps repaired raw/message correspondence"
         );
-        assert_eq!(active.messages[1].extra_metadata, Some(serde_json::json!({"source": "kept"})));
+        assert_eq!(
+            active.messages[1].extra_metadata,
+            Some(serde_json::json!({"source": "kept"}))
+        );
     }
 }
 
@@ -437,7 +449,12 @@ async fn successful_replay_keeps_raw_rows_aligned_after_decoded_tool_repair() {
         TranscriptMessage::user("persisted user"),
     ];
     seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
-    let original_fingerprint = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
+    let original_fingerprint = fingerprint(
+        locator
+            .read_session_transcript(&session_ref)
+            .unwrap()
+            .as_ref(),
+    );
     let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
         .codec(Arc::new(LegacyToolReplayCodec))
         .session(locator.clone(), session_ref.clone(), meta())
@@ -457,16 +474,35 @@ async fn successful_replay_keeps_raw_rows_aligned_after_decoded_tool_repair() {
         .unwrap();
 
     assert_eq!(
-        fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref()),
+        fingerprint(
+            locator
+                .read_session_transcript(&session_ref)
+                .unwrap()
+                .as_ref()
+        ),
         original_fingerprint,
         "the original legacy raw row remains in the sealed source generation"
     );
     let active_ref = locator.head_generation(&session_ref);
-    let active = locator.read_session_transcript(&active_ref).unwrap().read_session().unwrap().unwrap();
+    let active = locator
+        .read_session_transcript(&active_ref)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
     assert_eq!(active_ref.generation, 1);
     assert_eq!(
-        active.messages.iter().map(|row| (row.role.as_str(), row.content.as_str())).collect::<Vec<_>>(),
-        [("system", "frozen prompt"), ("user", "persisted user"), ("user", "new user turn"), ("assistant", "reply after replay")]
+        active
+            .messages
+            .iter()
+            .map(|row| (row.role.as_str(), row.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("system", "frozen prompt"),
+            ("user", "persisted user"),
+            ("user", "new user turn"),
+            ("assistant", "reply after replay")
+        ]
     );
 }
 

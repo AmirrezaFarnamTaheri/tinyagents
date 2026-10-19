@@ -354,9 +354,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .take_while(|message| matches!(message, Message::Tool(_)))
             .count();
         if decoded_orphan_count != 0 && reconcile_prior.len() == decoded.len() {
-            reconcile_prior.drain(
-                decoded_system_prefix..decoded_system_prefix + decoded_orphan_count,
-            );
+            reconcile_prior
+                .drain(decoded_system_prefix..decoded_system_prefix + decoded_orphan_count);
         }
         decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
             .into_owned();
