@@ -114,12 +114,14 @@ composed transcript, and a security-authorized tool set, which is what keeps
 the loop reusable for both hosted and unhosted (explicit-model) callers.
 
 ModelResolveRequest carries model_hint separately from model_pin. Hints are
-host-interpreted routing vocabulary; pins are concrete model identifiers.
+host-interpreted routing vocabulary. A construction-time model pin may be a
+requested alias; `ResolvedModelRoute` records the concrete provider and model
+the host selected.
 
-`ModelBuildRequest` is a construction-time request. Its `model_pin` may be a
-host route alias such as `hint:reasoning`; `ResolvedModelRoute` records the
-concrete provider and model the host selected. Hosts gate each request before
-factory construction, then can use `TurnModelSet::map_models` to apply a
-per-turn wrapper to every built model before obtaining an owned resolver.
-Definition hints reach every hosted provider resolution, unless an exact model
-override is present. Missing hints in older serialized requests remain None.
+`ModelBuildRequest` is a construction-time request. Hosts gate each request
+before factory construction, then can use `TurnModelSet::map_models` to apply a
+per-turn wrapper to every built model before obtaining an owned resolver,
+ordered registrations, or summarizer. Models and resolvers obtained before
+mapping retain the earlier model instances. Definition hints reach every
+hosted provider resolution, unless an exact model override is present. Missing
+hints in older serialized requests remain None.

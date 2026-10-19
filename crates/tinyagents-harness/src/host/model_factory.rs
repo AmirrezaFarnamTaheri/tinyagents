@@ -357,7 +357,10 @@ impl<State: Send + Sync + 'static> TurnModelSet<State> {
 
     /// Applies a host-owned decorator once to the primary, every built
     /// workload route, and the summarizer before the resolver/error slots are
-    /// assembled. Hosts use this for per-turn wrappers such as model budgets.
+    /// assembled. Hosts use this for per-turn wrappers such as model budgets,
+    /// then obtain `resolver`, `registrations`, and `summarizer` from the
+    /// returned set. Any Arcs or resolver obtained earlier keep their prior
+    /// model instances.
     #[must_use]
     pub fn map_models<F>(mut self, mut map: F) -> Self
     where
