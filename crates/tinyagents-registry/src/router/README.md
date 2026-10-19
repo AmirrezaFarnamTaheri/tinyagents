@@ -22,6 +22,20 @@ per-tier capability gates and same-family fallback ordering that go with them.
 Build with the infallible last-write-wins builder (`with_route`/`with_default`)
 or the duplicate-rejecting `register`.
 
+Hosts can also implement [`RouteSource`] and use `provider_for_role` to share
+role routing without moving configuration, credentials, billing, or catalog
+policy into TinyAgents. The source supplies explicit routes, the already
+resolved primary cloud route, managed-route classification, default-model
+classification, managed catalog default, and any host-retired tier aliases.
+The router applies the canonical chat-role default rules and never inherits a
+sibling's provider. `resolve_model_for_hint` returns `None` when the selected
+route is managed but the host has no managed default model to return.
+
+`fallback_diagnostics` returns typed routing facts for implicit cloud fallback
+roles. Its role list is independent of the seven canonical model routes, so
+roles such as `embeddings` and `memory` can be explained without changing the
+TinyInference route inventory or adding product-specific copy.
+
 `WorkloadRouter::from_workload_routes(vision_hint)` projects TinyInference's
 shared `WORKLOAD_ROUTES` table into registry routes. Supply the host's vision
 hint spelling; the inference table remains the owner of the route data and
