@@ -1,7 +1,7 @@
 use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext, ToolTimeout};
 
 use super::{
@@ -51,28 +51,10 @@ impl Tool for ExecTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        let flavor = self.backend.shell_flavor();
-        json!({
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": command_param_description(flavor)
-                },
-                "category": {
-                    "type": "string",
-                    "enum": ["read", "write", "network", "install", "destructive"],
-                    "description": "Optional self-declared risk; can only raise the approval requirement."
-                },
-                "timeout_secs": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 3600,
-                    "description": "Optional wall-clock timeout (seconds, up to 3600) for this command before it is killed. Use a larger value for long-running work (builds, test suites, solvers). Omitted or 0 runs without a deadline."
-                }
-            },
-            "required": ["command"]
-        })
+        match self.backend.shell_flavor() {
+            ShellFlavor::Posix => crate::static_schema!(include_str!("shell_schema_posix.json")),
+            ShellFlavor::Cmd => crate::static_schema!(include_str!("shell_schema_cmd.json")),
+        }
     }
 
     fn max_result_size_chars(&self) -> Option<usize> {

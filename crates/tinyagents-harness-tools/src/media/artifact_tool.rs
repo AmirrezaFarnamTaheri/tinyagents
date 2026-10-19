@@ -18,7 +18,7 @@ pub struct MediaJobProgress {
     pub error: Option<String>,
 }
 pub type MediaProgressFn = Arc<dyn Fn(&MediaJobProgress) + Send + Sync>;
-type PerCall<T> =
+pub type MediaInnerFactory<T> =
     Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>;
 /// Host-supplied extraction of its provider-assigned call identifier.
 pub type ToolCallIdExtractor =
@@ -47,7 +47,7 @@ fn heartbeat_message(label: &str, elapsed: Duration, job_state: Option<&str>) ->
 pub struct MediaArtifactTool<T: Tool> {
     inner: T,
     kind: MediaArtifactKind,
-    per_call: Option<PerCall<T>>,
+    per_call: Option<MediaInnerFactory<T>>,
     call_id: Option<ToolCallIdExtractor>,
     filing: Arc<dyn ArtifactFiling>,
 }
@@ -63,7 +63,7 @@ impl<T: Tool> MediaArtifactTool<T> {
         }
     }
     #[must_use]
-    pub fn with_per_call_inner(mut self, factory: PerCall<T>) -> Self {
+    pub fn with_per_call_inner(mut self, factory: MediaInnerFactory<T>) -> Self {
         self.per_call = Some(factory);
         self
     }
