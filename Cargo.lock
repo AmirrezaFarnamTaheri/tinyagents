@@ -2110,6 +2110,7 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinytools",
  "tokio",
  "tracing",

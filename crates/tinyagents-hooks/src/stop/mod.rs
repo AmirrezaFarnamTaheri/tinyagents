@@ -3,16 +3,21 @@
 mod budget;
 #[cfg(feature = "goals")]
 mod goal_budget;
+pub mod halt_summary;
 mod hooks;
 mod latch;
 
 pub use budget::BudgetStopHook;
 #[cfg(feature = "goals")]
 pub use goal_budget::GoalBudgetStopHook;
+pub use halt_summary::{
+    HaltSummary, TerminalInferenceFailureKind, terminal_inference_failure_kind,
+};
 pub use hooks::{
     StopDecision, StopHook, StopHookMetrics, StopHookMiddleware, StopReport, TurnState,
 };
 pub use latch::StopLatch;
+pub use tinyagents_harness::turn_stop::truncate_for_halt;
 
 impl StopHookMetrics for tinyagents_harness::cost::TurnCost {
     fn record_model(&mut self, model: &str, response: &tinyinference_llm::model::ModelResponse) {
