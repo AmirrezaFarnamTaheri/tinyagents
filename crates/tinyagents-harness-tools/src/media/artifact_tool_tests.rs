@@ -216,6 +216,9 @@ impl Tool for MetadataInner {
     fn max_result_size_chars(&self) -> Option<usize> {
         Some(if self.temporary { 22 } else { 11 })
     }
+    fn timeout_policy(&self, _: &Value) -> ToolTimeout {
+        ToolTimeout::Millis(if self.temporary { 22_000 } else { 11_000 })
+    }
     fn supports_markdown(&self) -> bool {
         !self.temporary
     }
@@ -255,6 +258,7 @@ async fn assert_retained_metadata(factory: bool) {
         assert!(!tool.external_effect());
         assert!(tool.external_effect_with_args(&json!({"send":true})));
         assert_eq!(tool.max_result_size_chars(), Some(11));
+        assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Millis(11_000));
         assert!(tool.supports_markdown());
     };
     assert_metadata(&tool);
