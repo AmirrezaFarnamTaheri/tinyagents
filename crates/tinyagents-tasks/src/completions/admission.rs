@@ -2,12 +2,10 @@
 
 use std::sync::Arc;
 
-use tinyagents_harness::run_queue::{
-    QueueAdmission, QueueAdmissionError, QueueAdmissionPermit,
-};
+use tinyagents_harness::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
 
-use super::{CompletionRecord, CompletionRouter};
 use super::CompletionStore;
+use super::{CompletionRecord, CompletionRouter};
 
 /// Retained admission capability for one queued completion message.
 ///
@@ -54,16 +52,17 @@ impl QueueAdmission for CompletionAdmission {
             &self.parent_key,
             self.parent_epoch,
         )
-            .ok()
-            .flatten()
-            .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
-            .ok_or(QueueAdmissionError)
+        .ok()
+        .flatten()
+        .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
+        .ok_or(QueueAdmissionError)
     }
 
     fn batch_key(&self) -> Option<String> {
-        let identity = self.store.coordination_identity().unwrap_or_else(|| {
-            format!("store:{:p}", Arc::as_ptr(&self.store))
-        });
+        let identity = self
+            .store
+            .coordination_identity()
+            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(&self.store)));
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
         Some(

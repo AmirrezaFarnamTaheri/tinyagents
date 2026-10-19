@@ -47,17 +47,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // transcript, and on every exit path — a host that pushed
         // observations during a run that then failed still gets them back.
         if let Some(queue) = ctx.run_queue.clone() {
-            run.collected
-                .extend(
-                    queue
-                        .take_admitted(
-                            crate::run_queue::QueueLane::Collect,
-                            self.policy.queue_mode,
-                        )
-                        .await
-                        .into_iter()
-                        .map(|item| item.value.clone()),
-                );
+            run.collected.extend(
+                queue
+                    .take_admitted(crate::run_queue::QueueLane::Collect, self.policy.queue_mode)
+                    .await
+                    .into_iter()
+                    .map(|item| item.value.clone()),
+            );
         }
 
         let exit = match outcome {

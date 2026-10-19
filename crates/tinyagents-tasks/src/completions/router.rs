@@ -104,7 +104,9 @@ impl tinyagents_harness::run_queue::QueueAdmissionPermit for ParentAdmissionPerm
 
 impl std::fmt::Debug for ParentAdmissionPermit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ParentAdmissionPermit").finish_non_exhaustive()
+        formatter
+            .debug_struct("ParentAdmissionPermit")
+            .finish_non_exhaustive()
     }
 }
 
@@ -476,10 +478,7 @@ impl CompletionRouter {
             )));
         }
         let message = self.formatter.to_message(std::slice::from_ref(&record));
-        let admission = Arc::new(super::CompletionAdmission::for_store(
-            self.store(),
-            &record,
-        ));
+        let admission = Arc::new(super::CompletionAdmission::for_store(self.store(), &record));
         queue.push_guarded(lane, message, admission).await;
         tracing::debug!(
             task_id = %record.task_id,
@@ -754,13 +753,18 @@ impl CompletionRouter {
         let (mut parents, records) = {
             let state = self.lock()?;
             let records = state.store.try_list(None)?;
-            let mut parents = state.parents.keys().cloned().collect::<std::collections::BTreeSet<_>>();
+            let mut parents = state
+                .parents
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
             for record in &records {
                 if let Some(parent) = Self::parent_from_marker_id(&record.task_id) {
                     if record.state == CompletionState::Delivered {
                         parents.insert(parent);
                     }
-                } else if record.state == CompletionState::Pending && !record.parent_key.is_empty() {
+                } else if record.state == CompletionState::Pending && !record.parent_key.is_empty()
+                {
                     parents.insert(record.parent_key.clone());
                 }
             }
@@ -774,11 +778,10 @@ impl CompletionRouter {
                 .filter(|record| record.state == CompletionState::Pending)
                 .map(|record| record.parent_key),
         );
-        parents
-            .into_iter()
-            .try_fold(0usize, |total, parent| {
-                self.cancel_parent(&parent).map(|withdrawn| total + withdrawn)
-            })
+        parents.into_iter().try_fold(0usize, |total, parent| {
+            self.cancel_parent(&parent)
+                .map(|withdrawn| total + withdrawn)
+        })
     }
 
     /// Claims up to `max` `Followup`/`Collect` completions for the idle-time

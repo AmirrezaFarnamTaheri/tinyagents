@@ -740,7 +740,10 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         (1, 0, 0)
     );
     let pushed = q
-        .take_admitted(QueueLane::Followup, tinyagents_harness::run_queue::QueueMode::All)
+        .take_admitted(
+            QueueLane::Followup,
+            tinyagents_harness::run_queue::QueueMode::All,
+        )
         .await;
     assert!(format!("{:?}", pushed[0].value).contains("t1"));
     // Taking the item models the queue-to-turn handoff. Once the turn has
@@ -946,7 +949,10 @@ async fn cancel_all_closes_an_attached_parent_before_its_first_completion() {
 
     assert_eq!(router.cancel_all_parents().unwrap(), 0);
     assert!(matches!(
-        router.record(record("late-child", "idle-parent")).await.unwrap(),
+        router
+            .record(record("late-child", "idle-parent"))
+            .await
+            .unwrap(),
         RecordOutcome::Suppressed
     ));
     assert_eq!(queue.status().await.total, 0);
@@ -982,7 +988,10 @@ async fn a_custom_formatter_frames_the_pushed_message() {
     router.attach_parent("p", q.clone());
     router.record(record("t1", "p")).await.unwrap();
     let pushed = q
-        .take_admitted(QueueLane::Followup, tinyagents_harness::run_queue::QueueMode::All)
+        .take_admitted(
+            QueueLane::Followup,
+            tinyagents_harness::run_queue::QueueMode::All,
+        )
         .await;
     assert!(format!("{:?}", pushed[0].value).contains("background_agent_result count=1"));
 }

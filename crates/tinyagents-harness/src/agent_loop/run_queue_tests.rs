@@ -401,8 +401,8 @@ async fn collect_lane_lands_on_the_run_and_never_reaches_the_model() {
 
 #[tokio::test]
 async fn collect_lane_rejects_revoked_guarded_messages_before_returning_the_run() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[derive(Debug)]
     struct Revocable(AtomicBool);

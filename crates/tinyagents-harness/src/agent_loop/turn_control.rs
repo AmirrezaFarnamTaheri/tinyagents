@@ -38,7 +38,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             Message::Tool(_) => self.policy.capture.tool_io,
             _ => self.policy.capture.model_io,
         };
-        let captured: Vec<serde_json::Value> = if items.iter().any(|item| is_captured(&item.value)) {
+        let captured: Vec<serde_json::Value> = if items.iter().any(|item| is_captured(&item.value))
+        {
             items
                 .iter()
                 .map(|item| {

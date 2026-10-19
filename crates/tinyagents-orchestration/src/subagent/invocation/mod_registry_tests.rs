@@ -38,7 +38,10 @@ async fn live_job_metadata_retains_parent_thread_and_workspace() {
         .tasks()
         .snapshot(&TaskId::new(job_id.as_str()), "7")
         .unwrap();
-    assert_eq!(snapshot.metadata.parent_thread_id.as_deref(), Some("thread-7"));
+    assert_eq!(
+        snapshot.metadata.parent_thread_id.as_deref(),
+        Some("thread-7")
+    );
     assert_eq!(snapshot.metadata.workspace, Some(workspace));
 }
 

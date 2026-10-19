@@ -2,8 +2,8 @@
 //! snapshots, `clear`, and lane independence.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug)]
 struct MutableAdmission(AtomicBool);

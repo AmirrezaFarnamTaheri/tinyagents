@@ -417,8 +417,8 @@ async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items()
 
 #[tokio::test]
 async fn native_forwarder_requeues_residual_without_stripping_guarded_queue_items() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[derive(Debug)]
     struct Admission(AtomicBool);

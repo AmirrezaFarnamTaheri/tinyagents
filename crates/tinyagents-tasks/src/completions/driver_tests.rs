@@ -329,8 +329,14 @@ async fn router_live_push_closed_before_agent_turn_never_reaches_provider() {
     let canceller = CompletionRouter::new(open());
     let queue = Arc::new(RunQueue::new());
     producer.attach_parent("parent", queue.clone());
-    let queued = producer.record(record("queued-child", "parent")).await.unwrap();
-    assert!(matches!(queued, RecordOutcome::Recorded { lane: Some(_), .. }));
+    let queued = producer
+        .record(record("queued-child", "parent"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        queued,
+        RecordOutcome::Recorded { lane: Some(_), .. }
+    ));
     assert_eq!(queue.status().await.followups, 1);
     canceller.cancel_parent("parent").unwrap();
 
@@ -360,14 +366,19 @@ async fn router_live_push_reaches_provider_when_parent_remains_open() {
     use tinyinference_llm::model::ModelResponse;
 
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let store = Arc::new(
-        DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap(),
-    );
+    let store =
+        Arc::new(DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap());
     let producer = CompletionRouter::new(store);
     let queue = Arc::new(RunQueue::new());
     producer.attach_parent("parent", queue.clone());
-    let outcome = producer.record(record("live-child", "parent")).await.unwrap();
-    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(_), .. }));
+    let outcome = producer
+        .record(record("live-child", "parent"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        RecordOutcome::Recorded { lane: Some(_), .. }
+    ));
     assert_eq!(queue.status().await.followups, 1);
 
     let model = Arc::new(ScriptedModel::new(vec![
@@ -384,7 +395,12 @@ async fn router_live_push_reaches_provider_when_parent_remains_open() {
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
-    assert!(requests[1].messages.iter().any(|message| message.text().contains("live-child")));
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|message| message.text().contains("live-child"))
+    );
 }
 
 #[tokio::test]
@@ -418,9 +434,11 @@ async fn child_completion_keeps_its_spawn_generation_across_cancel_and_resume() 
         lifecycle.record(current).await.unwrap(),
         RecordOutcome::Recorded { .. }
     ));
-    assert!(lifecycle.pending_for("parent").iter().any(|row| {
-        row.task_id == "current-child" && row.parent_epoch == current_generation
-    }));
+    assert!(
+        lifecycle.pending_for("parent").iter().any(|row| {
+            row.task_id == "current-child" && row.parent_epoch == current_generation
+        })
+    );
 }
 
 #[tokio::test]
@@ -507,7 +525,10 @@ async fn batch_admission_does_not_alias_distinct_scopes_and_parent_keys() {
         .take_admitted(QueueLane::Followup, QueueMode::All)
         .await;
     assert_eq!(
-        admitted.iter().map(|item| item.value.clone()).collect::<Vec<_>>(),
+        admitted
+            .iter()
+            .map(|item| item.value.clone())
+            .collect::<Vec<_>>(),
         [Message::user("a")],
         "a closed tenant-parent must not reuse another tenant's batch permit"
     );

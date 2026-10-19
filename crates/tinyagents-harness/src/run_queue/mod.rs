@@ -272,9 +272,8 @@ impl<T> RunQueue<T> {
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
         };
-        let (unguarded, guarded): (Vec<_>, Vec<_>) = items
-            .into_iter()
-            .partition(|item| !item.is_guarded());
+        let (unguarded, guarded): (Vec<_>, Vec<_>) =
+            items.into_iter().partition(|item| !item.is_guarded());
         let target = match lane {
             QueueLane::Steer => &mut inner.steers,
             QueueLane::Followup => &mut inner.followups,
