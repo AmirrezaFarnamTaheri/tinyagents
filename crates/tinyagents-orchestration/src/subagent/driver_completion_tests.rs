@@ -781,6 +781,26 @@ struct WaitingExecutor {
     observed_cancellation: Arc<Mutex<Option<CancellationToken>>>,
 }
 
+struct BarrierExecutor {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl SubagentExecutor<String> for BarrierExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "finished after parent reopened",
+        ))
+    }
+}
+
 #[async_trait]
 impl SubagentExecutor<String> for WaitingExecutor {
     async fn execute(
@@ -908,5 +928,57 @@ async fn losing_turn_fence_during_artifact_storage_skips_terminal_and_completion
     assert!(
         router.pending_for("parent-a").is_empty(),
         "lease loss must not dispatch a completion"
+    );
+}
+
+#[tokio::test]
+async fn a_running_child_completion_keeps_its_spawned_parent_generation() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router_a = Arc::new(CompletionRouter::new(store.clone()));
+    let router_b = Arc::new(CompletionRouter::new(Arc::new(store.as_ref().clone())));
+    let spawned_generation = router_a
+        .admit_child_generation("parent-a")
+        .unwrap()
+        .unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: Some(NotifyMode::Followup),
+            parent: Some("parent-a"),
+        })),
+        executor: Some(Arc::new(BarrierExecutor {
+            started: started.clone(),
+            release: release.clone(),
+        })),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap()
+    .with_completion_router(router_a.clone());
+    let run = tokio::spawn(async move {
+        driver
+            .run(
+                request_in_scope("parent-a-run", "root-a", "thread-a"),
+                CancellationToken::new(),
+            )
+            .await
+    });
+
+    started.notified().await;
+    router_b.cancel_parent("parent-a").unwrap();
+    router_b.resume_parent("parent-a");
+    assert!(
+        router_b
+            .admit_child_generation("parent-a")
+            .unwrap()
+            .unwrap()
+            > spawned_generation
+    );
+    release.notify_one();
+
+    assert!(run.await.unwrap().is_ok());
+    assert!(
+        router_a.pending_for("parent-a").is_empty(),
+        "a child admitted in the old generation must not become a new-generation completion"
     );
 }
