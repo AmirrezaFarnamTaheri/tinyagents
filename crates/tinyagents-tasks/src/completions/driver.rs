@@ -273,16 +273,34 @@ impl CompletionStore for DriverCompletionStore {
     }
 
     fn put(&self, record: &CompletionRecord) -> Result<()> {
+        let _ = record;
+        Err(TinyAgentsError::Storage(
+            "completion store: durable writes require a parent gate claim".into(),
+        ))
+    }
+
+    fn put_fenced(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<()> {
         let this = self.clone();
         let record = record.clone();
+        let gate = gate.clone();
         self.run(async move {
             this.declare().await?;
+            let docs = this.fenced_docs(&record.parent_key, &gate).await?;
             let id = task_id_key(&record.task_id).map_err(map_error)?;
-            this.repo
-                .put(&id, &CompletionDoc::from_record(&record))
-                .await
-                .map(|_| ())
-                .map_err(map_error)
+            let current = docs.get(COMPLETIONS, &id).await.map_err(map_error)?;
+            let precondition = current
+                .as_ref()
+                .map_or(Precondition::Absent, |row| Precondition::Version(row.version));
+            docs.put_with(
+                COMPLETIONS,
+                &id,
+                serde_json::to_value(CompletionDoc::from_record(&record))?,
+                precondition,
+                WriteOptions::new().schema(SCHEMA_VERSION),
+            )
+            .await
+            .map(|_| ())
+            .map_err(map_error)
         })
     }
 

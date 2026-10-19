@@ -69,6 +69,17 @@ pub trait CompletionStore: Send + Sync {
     /// Upserts a record. Durable stores persist it before returning.
     fn put(&self, record: &CompletionRecord) -> Result<()>;
 
+    /// Upserts a record only through the supplied current parent tenure.
+    /// Shared durable stores must fence the write atomically; the default
+    /// fails closed rather than accepting an unguarded write.
+    fn put_fenced(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<()> {
+        let _ = (record, gate);
+        Err(store_err(
+            "fenced write",
+            "store does not support epoch-fenced writes",
+        ))
+    }
+
     /// Creates a record only if its key is absent. Shared stores must make the
     /// absence check and write atomic; unsupported stores fail closed.
     fn insert_if_absent(
@@ -324,6 +335,10 @@ impl CompletionStore for InMemoryCompletionStore {
     fn put(&self, record: &CompletionRecord) -> Result<()> {
         self.lock()?.insert(record.task_id.clone(), record.clone());
         Ok(())
+    }
+
+    fn put_fenced(&self, record: &CompletionRecord, _gate: &ParentGateClaim) -> Result<()> {
+        self.put(record)
     }
 
     fn insert_if_absent(
