@@ -202,10 +202,8 @@ pub fn build_ingestion_batch(trace: LangfuseTraceConfig, spans: &[Span]) -> Resu
         let start = iso_ms(span.start_ms);
         let end = span.end_ms.map(iso_ms);
         let event_id = span.event_id.as_deref().unwrap_or(&span.span_id);
-        let (level, status_message) = match span.status {
-            SpanState::Error => (Some("ERROR"), span.status_message.as_deref()),
-            SpanState::Unset | SpanState::Ok => (None, None),
-        };
+        let level = matches!(span.status, SpanState::Error).then_some("ERROR");
+        let status_message = span.status_message.as_deref();
         let mut metadata = span.metadata.clone();
         metadata.insert("run_id".to_string(), json!(span.run_id));
         if let Some(root_run_id) = &span.root_run_id {
