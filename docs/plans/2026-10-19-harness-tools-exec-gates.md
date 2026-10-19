@@ -232,12 +232,12 @@ preflight refusal are typed `Refused` outcomes before process creation; they
 are not policy denials and are not launch failures. `LaunchFailed` means a
 process-creation attempt failed. Audit exactly once for each call, recording the source approval-required
 proxy (`external_effect_with_args(args)`) separately from authorization and
-allowed status. Gate denial is `authorized=false, allowed=false,
-process_attempted=false`; backend refusal (including SaaS refusal or Docker
-configuration/preflight failure) is `authorized=true, allowed=false,
-process_attempted=false`; launch failure is `authorized=true, allowed=true,
-process_attempted=true`; completed execution is allowed and attempted, with
-success derived from the source result mapping. Include the selected backend
+allowed status. Gate denial is
+`authorized=false, allowed=false, process_attempted=false`; backend refusal
+(including SaaS refusal or Docker configuration/preflight failure) is
+`authorized=true, allowed=false, process_attempted=false`; launch failure is
+`authorized=true, allowed=true, process_attempted=true`; completed execution
+is allowed and attempted, with success derived from the source result mapping. Include the selected backend
 when a permit exists. Never represent a backend refusal as an allowed successful
 execution.
 
@@ -320,17 +320,18 @@ effect, and an unbounded timeout because the port's review deadline is
 authoritative. It trims summary and nonempty string steps exactly as the source
 does. The port reads the provider-assigned call id from the generic
 `ToolExecutionContext` exposed through `ToolRunContext::host_extension()`;
-the request itself contains no OpenHuman identifier type. Preserve exact
-source result text: interactive approval is `approved: the user approved the
-plan — proceed and execute it now.`, non-interactive approval is
-`approved: non-interactive turn (no review surface) — proceed with the plan.`,
-and outside-plan success is `not applicable: this thread is not in plan mode,
-so there is no plan to review. Do not call \`request_plan_review\` again
-this turn.` Preserve exact reject text `rejected: the user rejected the plan — do NOT
-execute it. Briefly ask what they would like to do instead.` and revise text
-`revise: the user requested changes before executing. Their feedback:
+the request itself contains no OpenHuman identifier type. Preserve exact source result strings as constants/tests:
+
+```text
+interactive approve: approved: the user approved the plan — proceed and execute it now.
+non-interactive approve: approved: non-interactive turn (no review surface) — proceed with the plan.
+not applicable: not applicable: this thread is not in plan mode, so there is no plan to review. Do not call `request_plan_review` again this turn.
+reject: rejected: the user rejected the plan — do NOT execute it. Briefly ask what they would like to do instead.
+revise: revise: the user requested changes before executing. Their feedback:
 {feedback}
-Revise the plan accordingly, then call \`request_plan_review\` again before executing.` Tests assert all five outcomes and exact strings;
+Revise the plan accordingly, then call `request_plan_review` again before executing.
+```
+Tests assert all five outcomes and exact strings;
 missing port, port error, and expired review remain errors and can never map
 to an approval variant.
 
