@@ -120,7 +120,7 @@ async fn resume_repairs_only_the_leading_orphan_tool_head_for_dispatch() {
     let replay = dispatched.lock().unwrap().clone();
     assert_eq!(
         replay.iter().map(Message::text).collect::<Vec<_>>(),
-        ["frozen prompt", "keep this user turn", "later malformed tool", "trailing assistant remains"],
+        ["frozen prompt", "keep this user turn", "later malformed tool", "trailing assistant remains", "next"],
         "later malformed tool rows and trailing assistant rows remain visible to dispatch"
     );
     let after = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
