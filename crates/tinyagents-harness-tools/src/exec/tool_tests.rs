@@ -1,7 +1,7 @@
 use super::*;
 use crate::exec::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
-    ExecDenied, ExecGate, ExecOperation, ExecOutput, ExecPermit, ExecProgress, ExecRefusalKind,
+    ExecDenied, ExecGate, ExecOutput, ExecPermit, ExecProgress, ExecRefusalKind,
     ExecRequest, ShellFlavor,
 };
 use std::{
