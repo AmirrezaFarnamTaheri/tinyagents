@@ -20,6 +20,35 @@ fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
 /// must perform atomically. Synchronous on purpose, like
 /// [`TaskStore`](crate::TaskStore).
 pub trait CompletionStore: Send + Sync {
+    /// Acquires the cross-router parent admission gate. Shared durable stores
+    /// must implement this with a backend lease; the default fails closed.
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: Duration,
+    ) -> Result<Option<ParentGateClaim>> {
+        let _ = (parent_key, holder, ttl);
+        Err(store_err("parent gate", "store does not support durable leases"))
+    }
+
+    /// Renews the exact holder and epoch returned by `acquire_parent_gate`.
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: Duration,
+    ) -> Result<bool> {
+        let _ = (parent_key, claim, ttl);
+        Err(store_err("parent gate", "store does not support durable leases"))
+    }
+
+    /// Releases only the holder and epoch returned by `acquire_parent_gate`.
+    fn release_parent_gate(&self, parent_key: &str, claim: &ParentGateClaim) -> Result<bool> {
+        let _ = (parent_key, claim);
+        Err(store_err("parent gate", "store does not support durable leases"))
+    }
+
     /// The latest record for `task_id`.
     fn get(&self, task_id: &str) -> Option<CompletionRecord>;
 
@@ -111,6 +140,15 @@ pub trait CompletionStore: Send + Sync {
     }
 }
 
+/// Fencing identity for one held parent admission lease.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParentGateClaim {
+    /// Unique holder identity for this lease tenure.
+    pub holder: String,
+    /// Backend epoch that fences any earlier tenure.
+    pub epoch: u64,
+}
+
 /// Which pending completion lane a delivery worker may lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompletionClaimMode {
@@ -154,6 +192,14 @@ fn expired(record: &CompletionRecord, now: SystemTime, retain: Duration) -> bool
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryCompletionStore {
     inner: Arc<Mutex<HashMap<String, CompletionRecord>>>,
+    parent_gates: Arc<Mutex<HashMap<String, MemoryParentGate>>>,
+    parent_gate_epochs: Arc<Mutex<HashMap<String, u64>>>,
+}
+
+#[derive(Clone, Debug)]
+struct MemoryParentGate {
+    claim: ParentGateClaim,
+    expires_at: SystemTime,
 }
 
 impl InMemoryCompletionStore {
@@ -168,6 +214,94 @@ impl InMemoryCompletionStore {
 }
 
 impl CompletionStore for InMemoryCompletionStore {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: Duration,
+    ) -> Result<Option<ParentGateClaim>> {
+        let now = SystemTime::now();
+        let expires_at = now
+            .checked_add(ttl)
+            .ok_or_else(|| store_err("parent gate", "ttl out of range"))?;
+        let mut gates = self
+            .parent_gates
+            .lock()
+            .map_err(|_| store_err("parent gate", "lock poisoned"))?;
+        if let Some(existing) = gates.get(parent_key) {
+            if existing.expires_at > now {
+                return if existing.claim.holder == holder {
+                    Ok(Some(existing.claim.clone()))
+                } else {
+                    Ok(None)
+                };
+            }
+        }
+        let mut epochs = self
+            .parent_gate_epochs
+            .lock()
+            .map_err(|_| store_err("parent gate epoch", "lock poisoned"))?;
+        let epoch = epochs
+            .get(parent_key)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| store_err("parent gate epoch", "epoch overflow"))?;
+        epochs.insert(parent_key.to_owned(), epoch);
+        let claim = ParentGateClaim {
+            holder: holder.to_owned(),
+            epoch,
+        };
+        gates.insert(
+            parent_key.to_owned(),
+            MemoryParentGate {
+                claim: claim.clone(),
+                expires_at,
+            },
+        );
+        Ok(Some(claim))
+    }
+
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: Duration,
+    ) -> Result<bool> {
+        let now = SystemTime::now();
+        let expires_at = now
+            .checked_add(ttl)
+            .ok_or_else(|| store_err("parent gate", "ttl out of range"))?;
+        let mut gates = self
+            .parent_gates
+            .lock()
+            .map_err(|_| store_err("parent gate", "lock poisoned"))?;
+        let Some(gate) = gates.get_mut(parent_key) else {
+            return Ok(false);
+        };
+        if gate.claim != *claim || gate.expires_at <= now {
+            return Ok(false);
+        }
+        gate.expires_at = expires_at;
+        Ok(true)
+    }
+
+    fn release_parent_gate(&self, parent_key: &str, claim: &ParentGateClaim) -> Result<bool> {
+        let mut gates = self
+            .parent_gates
+            .lock()
+            .map_err(|_| store_err("parent gate", "lock poisoned"))?;
+        if gates
+            .get(parent_key)
+            .is_some_and(|gate| gate.claim == *claim && gate.expires_at > SystemTime::now())
+        {
+            gates.remove(parent_key);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         self.inner.lock().ok()?.get(task_id).cloned()
     }

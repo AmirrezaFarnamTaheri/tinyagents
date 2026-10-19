@@ -27,18 +27,20 @@ use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Precondition,
-    Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
+    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Leases,
+    Precondition, Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
 };
+use tinystoragedrivers_core::primitives::LEASES;
 use tokio::sync::OnceCell;
 
-use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore};
+use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
 use super::types::{CompletionRecord, CompletionState};
 use crate::storage::{
     COMPLETIONS, CompletionDoc, SCHEMA_VERSION, completions_spec, task_id_key, to_ms,
 };
 
 const LOG_PREFIX: &str = "[completion-store]";
+const PARENT_GATE_OWNER: &str = "tinyagents.tasks.completions";
 
 fn map_error(error: StorageError) -> TinyAgentsError {
     TinyAgentsError::Storage(format!("completion store: {error}"))
@@ -133,6 +135,10 @@ impl DriverCompletionStore {
                 self.docs
                     .ensure_collection(&completions_spec())
                     .await
+                    .map_err(map_error)?;
+                self.docs
+                    .ensure_collection(&CollectionSpec::new(LEASES))
+                    .await
                     .map_err(map_error)
             })
             .await
@@ -141,6 +147,75 @@ impl DriverCompletionStore {
 }
 
 impl CompletionStore for DriverCompletionStore {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: Duration,
+    ) -> Result<Option<ParentGateClaim>> {
+        let this = self.clone();
+        let parent_key = parent_key.to_owned();
+        let holder = holder.to_owned();
+        let ttl_ms = duration_ms(ttl)?;
+        self.run(async move {
+            this.declare().await?;
+            Leases::new(&this.docs)
+                .acquire(PARENT_GATE_OWNER, &parent_key, &holder, ttl_ms)
+                .await
+                .map(|lease| {
+                    lease.map(|lease| ParentGateClaim {
+                        holder: lease.holder,
+                        epoch: lease.epoch,
+                    })
+                })
+                .map_err(map_error)
+        })
+    }
+
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: Duration,
+    ) -> Result<bool> {
+        let this = self.clone();
+        let parent_key = parent_key.to_owned();
+        let claim = claim.clone();
+        let ttl_ms = duration_ms(ttl)?;
+        self.run(async move {
+            this.declare().await?;
+            Leases::new(&this.docs)
+                .renew(
+                    PARENT_GATE_OWNER,
+                    &parent_key,
+                    &claim.holder,
+                    claim.epoch,
+                    ttl_ms,
+                )
+                .await
+                .map(|lease| lease.is_some())
+                .map_err(map_error)
+        })
+    }
+
+    fn release_parent_gate(&self, parent_key: &str, claim: &ParentGateClaim) -> Result<bool> {
+        let this = self.clone();
+        let parent_key = parent_key.to_owned();
+        let claim = claim.clone();
+        self.run(async move {
+            this.declare().await?;
+            Leases::new(&this.docs)
+                .release(
+                    PARENT_GATE_OWNER,
+                    &parent_key,
+                    &claim.holder,
+                    claim.epoch,
+                )
+                .await
+                .map_err(map_error)
+        })
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let this = self.clone();
         let task_id = task_id.to_owned();
@@ -457,6 +532,12 @@ impl CompletionStore for DriverCompletionStore {
             Ok(dropped)
         })
     }
+}
+
+fn duration_ms(duration: Duration) -> Result<i64> {
+    i64::try_from(duration.as_millis()).map_err(|_| {
+        TinyAgentsError::Storage("completion store: parent gate ttl out of range".into())
+    })
 }
 
 #[cfg(test)]

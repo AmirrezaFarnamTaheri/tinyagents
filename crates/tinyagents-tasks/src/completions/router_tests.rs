@@ -92,11 +92,14 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
     let inner = InMemoryCompletionStore::new();
     let observed = Arc::new(std::sync::Barrier::new(2));
     let resume = Arc::new(std::sync::Barrier::new(2));
+    let cancel_waiting = Arc::new(std::sync::Barrier::new(2));
     let store = Arc::new(BlockingParentMarkerRead {
         inner: inner.clone(),
         marker_id: "\u{1}parent-cancelled:p".to_owned(),
         observed: Arc::clone(&observed),
         resume: Arc::clone(&resume),
+        gate_attempts: std::sync::atomic::AtomicUsize::new(0),
+        cancel_waiting: Arc::clone(&cancel_waiting),
     });
     let router = Arc::new(CompletionRouter::new(store));
     let cancel_router = CompletionRouter::new(Arc::new(inner));
@@ -108,12 +111,27 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
         tokio::spawn(async move { router.record(record("late", "p")).await })
     };
     observed.wait();
-    cancel_router.cancel_parent("p").unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let cancellation = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let result = cancel_router.cancel_parent("p");
+        done_tx.send(result).unwrap();
+    });
+    started_rx.recv().unwrap();
+    cancel_waiting.wait();
     resume.wait();
     let outcome = recording.await.unwrap().unwrap();
-    assert_eq!(outcome, RecordOutcome::Suppressed);
+    assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
+    assert_eq!(done_rx.recv().unwrap().unwrap(), 1);
+    cancellation.join().unwrap();
     assert!(router.pending_for("p").is_empty());
-    assert_eq!(q.status().await.total, 0);
+    let delivered_before_rejected_admission = q.status().await.total;
+    assert_eq!(
+        router.record(record("after-cancel", "p")).await.unwrap(),
+        RecordOutcome::Suppressed
+    );
+    assert_eq!(q.status().await.total, delivered_before_rejected_admission);
 }
 
 struct BlockingParentMarkerRead {
@@ -121,6 +139,8 @@ struct BlockingParentMarkerRead {
     marker_id: String,
     observed: Arc<std::sync::Barrier>,
     resume: Arc<std::sync::Barrier>,
+    gate_attempts: std::sync::atomic::AtomicUsize,
+    cancel_waiting: Arc<std::sync::Barrier>,
 }
 
 impl CompletionStore for BlockingParentMarkerRead {
