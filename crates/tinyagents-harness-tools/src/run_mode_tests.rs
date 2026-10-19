@@ -36,3 +36,45 @@ fn run_mode_labels_round_trip() {
     assert_eq!(parse_mode_label("build"), Some(RunMode::Build));
     assert_eq!(parse_mode_label("other"), None);
 }
+
+#[test]
+fn unchanged_mode_does_not_notify_and_unknown_reads_do_not_create_handles() {
+    let events = Arc::new(Events::default());
+    let store = InMemoryRunModeStore::new(events.clone());
+
+    assert_eq!(store.get_mode(&1, "unseen"), RunMode::Build);
+    assert!(store.handles.lock().is_empty());
+    store.set_mode(&1, "unseen", RunMode::Build);
+    assert!(events.0.lock().unwrap().is_empty());
+    assert!(store.handles.lock().is_empty());
+}
+
+struct ReentrantNotifier {
+    store: std::sync::OnceLock<std::sync::Weak<InMemoryRunModeStore<u8>>>,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl ModeChangeNotifier<u8> for ReentrantNotifier {
+    fn changed(&self, scope: &u8, thread: &str, mode: RunMode) {
+        if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            self.store
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .unwrap()
+                .set_mode(scope, thread, mode);
+        }
+    }
+}
+
+#[test]
+fn reentrant_same_mode_change_notifies_once() {
+    let notifier = Arc::new(ReentrantNotifier {
+        store: std::sync::OnceLock::new(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let store = Arc::new(InMemoryRunModeStore::new(notifier.clone()));
+    notifier.store.set(Arc::downgrade(&store)).unwrap();
+
+    store.set_mode(&1, "thread", RunMode::Plan);
+    assert_eq!(notifier.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
