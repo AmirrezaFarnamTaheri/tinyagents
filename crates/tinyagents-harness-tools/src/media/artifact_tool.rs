@@ -2,9 +2,10 @@ use super::{ArtifactFiling, GeneratedArtifact, MediaArtifactKind};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc};
+use std::time::Duration;
 use tinytools::{
     PermissionLevel, Tool, ToolCallOptions, ToolCategory, ToolContent, ToolPolicy, ToolResult,
-    ToolRunContext, ToolScope, ToolTimeout,
+    ToolProgress, ToolRunContext, ToolScope, ToolTimeout,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +55,30 @@ impl<T: Tool> MediaArtifactTool<T> {
         } else {
             base
         }
+    }
+
+    async fn run_with_heartbeat<F: std::future::Future<Output = anyhow::Result<ToolResult>>>(
+        &self,
+        context: Option<&dyn ToolRunContext>,
+        status: Arc<std::sync::Mutex<Option<MediaJobProgress>>>,
+        run: F,
+    ) -> anyhow::Result<ToolResult> {
+        let Some(context) = context else { return run.await; };
+        let label = match self.kind { MediaArtifactKind::Image => "Generating image", MediaArtifactKind::Video => "Generating video" };
+        let start=tokio::time::Instant::now();
+        let mut run=Box::pin(run);
+        let mut ticker=tokio::time::interval_at(tokio::time::Instant::now()+Duration::from_secs(15),Duration::from_secs(15));
+        loop { tokio::select! {
+            result=&mut run => return result,
+            _=ticker.tick()=>{
+                let state=status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+                let message=match state {
+                    Some(state)=>format!("{label} · {} · {} output(s)",state.state,state.outputs),
+                    None=>format!("{label} · running {}s",start.elapsed().as_secs()),
+                };
+                context.report_progress(ToolProgress::message(message));
+            }
+        }}
     }
     async fn file_entries(
         &self,
@@ -179,22 +204,22 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
         options: ToolCallOptions,
         context: Option<&dyn ToolRunContext>,
     ) -> anyhow::Result<ToolResult> {
-        let progress: MediaProgressFn = Arc::new(|_| {});
+        let status=Arc::new(std::sync::Mutex::new(None));
+        let callback_status=Arc::clone(&status);
+        let progress: MediaProgressFn = Arc::new(move |update| {
+            *callback_status.lock().unwrap_or_else(std::sync::PoisonError::into_inner)=Some(update.clone());
+        });
         let inner = self
             .per_call
             .as_ref()
             .map(|factory| factory(progress, context));
-        let result = match inner {
-            Some(tool) => {
-                tool.execute_with_context(args.clone(), options, context)
-                    .await?
-            }
-            None => {
-                self.inner
-                    .execute_with_context(args.clone(), options, context)
-                    .await?
+        let run=async {
+            match inner {
+                Some(tool) => tool.execute_with_context(args.clone(), options, context).await,
+                None => self.inner.execute_with_context(args.clone(), options, context).await,
             }
         };
+        let result=self.run_with_heartbeat(context,status,run).await?;
         if result.is_error {
             return Ok(result);
         }

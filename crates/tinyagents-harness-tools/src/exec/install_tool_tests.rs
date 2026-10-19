@@ -93,6 +93,39 @@ fn package_validation_rejects_shell_injection_and_oversized_input() {
     }
 }
 
+#[test]
+fn every_supported_manager_keeps_its_exact_argument_prefix() {
+    let cases = [
+        ("apt", "apt-get", &["install", "-y"][..]),
+        ("apt-get", "apt-get", &["install", "-y"][..]),
+        ("dnf", "dnf", &["install", "-y"][..]),
+        ("yum", "yum", &["install", "-y"][..]),
+        ("pacman", "pacman", &["-S", "--noconfirm"][..]),
+        ("apk", "apk", &["add"][..]),
+        ("brew", "brew", &["install"][..]),
+        ("winget", "winget", &["install", "-e", "--id"][..]),
+        ("pipx", "pipx", &["install"][..]),
+        ("npm", "npm", &["install", "-g"][..]),
+        ("cargo", "cargo", &["install"][..]),
+    ];
+    for (manager, program, prefix) in cases {
+        let (actual_program, actual_prefix) = manager_argv(manager).unwrap();
+        assert_eq!(actual_program, program);
+        assert_eq!(actual_prefix, prefix);
+    }
+    assert_eq!(manager_argv("unknown"), None);
+}
+
+#[test]
+fn package_output_truncation_is_per_stream_and_utf8_safe() {
+    let text = format!("{}é", "a".repeat(MAX_OUTPUT_BYTES - 1));
+    assert_eq!(text.len(), MAX_OUTPUT_BYTES + 1);
+    let truncated = truncate_stream(text.as_bytes(), "stdout");
+    assert!(truncated.ends_with("\n... [stdout truncated at 1 MiB]"));
+    assert!(truncated.is_char_boundary(truncated.len()));
+    assert!(!truncated[..MAX_OUTPUT_BYTES].ends_with('�'));
+}
+
 #[tokio::test]
 async fn invalid_package_never_reaches_gate_or_backend() {
     let (tool, state) = tool(false);
