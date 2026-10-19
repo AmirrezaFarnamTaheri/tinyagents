@@ -296,6 +296,26 @@ impl CompletionRouter {
             _ => ParentLifecycleStatus::Stopped(marker.parent_epoch),
         });
 
+        if store.is_process_local() {
+            let cached = lifecycle.status(parent_key)?;
+            let status = match (marker_status, cached) {
+                (Some(ParentLifecycleStatus::Deleted(epoch)), _)
+                | (_, Some(ParentLifecycleStatus::Deleted(epoch))) => {
+                    Some(ParentLifecycleStatus::Deleted(epoch))
+                }
+                (Some(marker), Some(snapshot)) => Some(if status_epoch(marker) >= status_epoch(snapshot) {
+                    marker
+                } else {
+                    snapshot
+                }),
+                (Some(marker), None) => Some(marker),
+                (None, snapshot) => snapshot,
+            };
+            if let Some(status) = status {
+                lifecycle.set_status(gate, status)?;
+            }
+            return Ok(status);
+        }
         if let Some(status) = marker_status {
             lifecycle.set_status(gate, status)?;
             return Ok(Some(status));
