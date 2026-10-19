@@ -880,7 +880,7 @@ impl CompletionRouter {
     pub fn admit_child_generation(&self, parent_key: &str) -> Result<Option<u64>> {
         let state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-        Self::admit_child_locked(&state, parent_key, gate.claim())
+        Self::admit_child_locked(&state, parent_key, &gate)
     }
 
     /// Whether a generation carried by a queued completion still belongs to
@@ -888,23 +888,42 @@ impl CompletionRouter {
     /// to discard queue entries that raced with stop, delete, or reopen.
     pub fn parent_generation_admitted(&self, parent_key: &str, parent_epoch: u64) -> Result<bool> {
         let state = self.lock()?;
-        let marker = state.store.try_get(&Self::parent_marker_id(parent_key))?;
-        Ok(marker.is_some_and(|marker| {
-            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
-        }))
+        let gate = ParentGateGuard::acquire(
+            Arc::clone(&state.store),
+            Arc::clone(&state.lifecycle),
+            parent_key,
+        )?;
+        Ok(Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?
+            == Some(ParentLifecycleStatus::Open(parent_epoch)))
     }
 
     fn admit_child_locked(
         router: &RouterState,
         parent_key: &str,
-        gate: &ParentGateClaim,
+        gate: &ParentGateGuard,
     ) -> Result<Option<u64>> {
         let marker_id = Self::parent_marker_id(parent_key);
-        match router.store.try_get(&marker_id)? {
-            Some(marker) if marker.state == CompletionState::Delivered => {
-                Ok(Some(marker.parent_epoch))
+        match Self::parent_lifecycle_status(&router.store, &router.lifecycle, gate.local_guard())? {
+            Some(ParentLifecycleStatus::Open(epoch)) => {
+                if !router.store.is_process_local() || router.store.try_get(&marker_id)?.is_none() {
+                    Self::write_parent_marker(
+                        router,
+                        parent_key,
+                        ParentLifecycleStatus::Open(epoch),
+                        gate,
+                    )?;
+                }
+                Ok(Some(epoch))
             }
-            Some(_) => Ok(None),
+            Some(ParentLifecycleStatus::Stopped(_)) | Some(ParentLifecycleStatus::Deleted(_)) => {
+                if !router.store.is_process_local() && router.store.try_get(&marker_id)?.is_none() {
+                    let status = router.lifecycle.status(parent_key)?.ok_or_else(|| {
+                        TinyAgentsError::Graph("completion router: lifecycle marker disappeared".into())
+                    })?;
+                    Self::write_parent_marker(router, parent_key, status, gate)?;
+                }
+                Ok(None)
+            }
             None => {
                 // Records written before lifecycle markers existed carry
                 // generation zero. First sight admits those durable records
@@ -912,7 +931,7 @@ impl CompletionRouter {
                 for mut legacy in router.store.try_list(Some(parent_key))? {
                     if legacy.parent_epoch == 0 {
                         legacy.parent_epoch = 1;
-                        router.store.put_fenced(&legacy, parent_key, gate)?;
+                        router.store.put_fenced(&legacy, parent_key, gate.claim())?;
                     }
                 }
                 Self::set_parent_marker(router, parent_key, CompletionState::Delivered, gate)?;
@@ -930,16 +949,41 @@ impl CompletionRouter {
         router: &RouterState,
         parent_key: &str,
         state: CompletionState,
-        gate: &ParentGateClaim,
+        gate: &ParentGateGuard,
     ) -> Result<()> {
         let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
         marker.parent_key = parent_key.to_owned();
         marker.state = state;
-        marker.parent_epoch = router
+        let current = router.store.try_get(&marker.task_id)?;
+        let local = router.lifecycle.status(parent_key)?;
+        let epoch = if router.store.is_process_local() {
+            local.map(status_epoch).or_else(|| current.map(|record| record.parent_epoch))
+        } else {
+            current.map(|record| record.parent_epoch).or_else(|| local.map(status_epoch))
+        };
+        marker.parent_epoch = epoch.map_or(1, |epoch| epoch.saturating_add(1));
+        router
             .store
-            .try_get(&marker.task_id)?
-            .map_or(1, |current| current.parent_epoch.saturating_add(1));
-        router.store.put_fenced(&marker, parent_key, gate)
+            .put_fenced(&marker, parent_key, gate.claim())?;
+        router.lifecycle.set_status(
+            gate.local_guard(),
+            status_from_marker(state, marker.parent_epoch),
+        )
+    }
+
+    fn write_parent_marker(
+        router: &RouterState,
+        parent_key: &str,
+        status: ParentLifecycleStatus,
+        gate: &ParentGateGuard,
+    ) -> Result<()> {
+        let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
+        marker.parent_key = parent_key.to_owned();
+        marker.parent_epoch = status_epoch(status);
+        marker.state = marker_state(status);
+        router
+            .store
+            .put_fenced(&marker, parent_key, gate.claim())
     }
 
     /// Every undelivered completion for `parent_key`, oldest first, in every
