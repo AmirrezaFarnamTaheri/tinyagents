@@ -435,7 +435,7 @@ async fn a_push_lost_with_the_queue_is_redelivered() {
 async fn release_makes_an_abandoned_claim_claimable_again() {
     let router = router();
     router.record(record("t1", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
+    let first = router.claim_pending("p", 1).unwrap();
     assert!(router.claim_pending("p", 1).unwrap().is_empty());
     router.release(&receipts(&first));
     assert_eq!(router.claim_pending("p", 1).unwrap().len(), 1);

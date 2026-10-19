@@ -15,6 +15,7 @@ tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", defaul
 tinyinference-llm = { path = "../../vendor/tinyinference/crates/tinyinference-llm", version = "0.4.1" }
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread"] }
 tracing = { workspace = true }
+uuid = { workspace = true }
 # Storage ports (no database client). `blocking` bridges the synchronous
 # `TaskStore` / `CompletionStore` traits onto the async ports.
 tinystoragedrivers-core = { workspace = true, features = ["blocking"] }

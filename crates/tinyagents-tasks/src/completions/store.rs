@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 
-use super::types::{CompletionClaim, CompletionRecord, CompletionState, CompletionReceipt, NotifyMode};
+use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
 
 fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("completion store: {what}: {err}"))
@@ -187,7 +187,7 @@ impl CompletionStore for InMemoryCompletionStore {
             record.attempts = record.attempts.saturating_add(1);
             record.updated_at = now;
             record.claim = Some(CompletionClaim {
-                token: format!("{token}:{id}"),
+                token: format!("{token}:{}", record.task_id),
                 visible_after,
             });
             claimed.push(record.clone());

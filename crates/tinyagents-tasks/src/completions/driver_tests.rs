@@ -1,4 +1,5 @@
 use super::*;
+use crate::completions::CompletionReceipt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::completions::{CompletionResult, RecordOutcome};

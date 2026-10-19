@@ -18,7 +18,7 @@ const CLAIM_VISIBILITY: Duration = Duration::from_secs(30);
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 5;
 
 /// What [`CompletionRouter::record`] did with a completion.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordOutcome {
     /// Stored. `lane` is set when it was pushed onto a live parent's queue; the
     /// record is then pending and leased until the host calls
