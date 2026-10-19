@@ -27,7 +27,30 @@ use crate::{
     ResumeMode, ResumePreparation, RuntimeError, SessionBuilder, SessionDriver, SessionHooks,
     SessionStateView, SessionTerminal, SessionTurnOutcome, SessionTurnRequest, TranscriptCodec,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
+    ResolvedSessionStores, SessionIdentityRequest, SessionIdentityResolver,
 };
+
+struct FixedIdentityResolver {
+    provider: Arc<tinyagents_session::port::DriverSessionStores>,
+    calls: Arc<Mutex<usize>>,
+    agent_id: Arc<Mutex<String>>,
+}
+
+impl SessionIdentityResolver<()> for FixedIdentityResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        *self.calls.lock().unwrap() += 1;
+        let agent_id = self.agent_id.lock().unwrap().clone();
+        let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+            self.provider.as_ref(), &agent_id,
+        )
+        .map_err(|error| RuntimeError::InvalidSessionState(error.to_string()))?;
+        Ok(ResolvedSessionStores { agent_id, stores })
+    }
+}
 
 struct Driver {
     results: Mutex<VecDeque<Result<DriverOutcome, DriverFailure>>>,
