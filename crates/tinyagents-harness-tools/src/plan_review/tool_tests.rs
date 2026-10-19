@@ -169,3 +169,85 @@ async fn each_resolution_has_its_distinct_result() {
         );
     }
 }
+
+#[tokio::test]
+async fn interactive_tool_parks_in_the_scoped_store_until_decided() {
+    use crate::plan_review::{ParkedReview, PlanReviewNotifier, PlanReviewReason, PlanReviewStore};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct StoreEvents {
+        requested: tokio::sync::Notify,
+        decided: Mutex<Vec<(String, PlanReviewResolution, Option<String>, PlanReviewReason)>>,
+    }
+    impl PlanReviewNotifier<u8> for StoreEvents {
+        fn requested(&self, _: &ParkedReview<u8>) {
+            self.requested.notify_one();
+        }
+        fn decided(
+            &self,
+            review: &ParkedReview<u8>,
+            resolution: &PlanReviewResolution,
+            reason: PlanReviewReason,
+        ) {
+            self.decided.lock().unwrap().push((
+                review.thread_id.clone(),
+                resolution.clone(),
+                review.tool_call_id.clone(),
+                reason,
+            ));
+        }
+    }
+    struct StorePort(Arc<PlanReviewStore<u8>>);
+    #[async_trait]
+    impl PlanReviewHost for StorePort {
+        fn thread_id(&self, _: Option<&dyn ToolRunContext>) -> Option<String> {
+            Some("thread-7".into())
+        }
+        fn tool_call_id(&self, _: Option<&dyn ToolRunContext>) -> Option<String> {
+            Some("call-9".into())
+        }
+        async fn request_review(
+            &self,
+            request: PlanReviewRequest,
+            _: Option<&dyn ToolRunContext>,
+        ) -> Result<PlanReviewResolution, String> {
+            Ok(self
+                .0
+                .request_review(42, "thread-7".into(), Some("client-3".into()), request)
+                .await)
+        }
+    }
+
+    let events = Arc::new(StoreEvents::default());
+    let store = Arc::new(PlanReviewStore::with_ttl(
+        Duration::from_secs(60),
+        events.clone(),
+    ));
+    let tool = RequestPlanReviewTool::new(Some(Arc::new(StorePort(store.clone()))));
+    let pending = tool.execute(json!({"summary":"ship it","steps":["build"]}));
+    tokio::pin!(pending);
+    assert!(tokio::time::timeout(Duration::ZERO, &mut pending).await.is_err());
+    events.requested.notified().await;
+    let parked = store.parked_review_for_thread(&42, "thread-7").unwrap();
+    assert_eq!(parked.client_id.as_deref(), Some("client-3"));
+    assert_eq!(parked.tool_call_id.as_deref(), Some("call-9"));
+    assert_eq!(parked.summary, "ship it");
+    assert_eq!(parked.steps, vec!["build"]);
+    assert!(store.decide(&42, &parked.request_id, PlanReviewResolution::Approve));
+    let result = pending.await.unwrap();
+    assert_eq!(
+        result.text(),
+        "approved: the user approved the plan — proceed and execute it now."
+    );
+    assert!(!store.has_parked_review(&42, "thread-7"));
+    assert_eq!(
+        *events.decided.lock().unwrap(),
+        vec![(
+            "thread-7".into(),
+            PlanReviewResolution::Approve,
+            Some("call-9".into()),
+            PlanReviewReason::Approved,
+        )]
+    );
+}
