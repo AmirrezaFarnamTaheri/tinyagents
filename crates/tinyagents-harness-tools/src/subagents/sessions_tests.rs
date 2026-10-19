@@ -250,6 +250,7 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
     let rendered = envelope["awaiting_user_envelope"].as_str().unwrap();
     let pause = crate::subagent::SubagentAwaitingUser::parse(rendered).unwrap();
     assert_eq!(pause.task_id, session.current_task_id.clone().unwrap());
+    assert_eq!(pause.task_key, session.task_key);
     assert_eq!(pause.agent_id, "researcher");
     let collected = ToolDispatch::<(), ()>::execute(
         &jobs,
@@ -273,6 +274,13 @@ async fn jobs_tool_overlays_scoped_sessions_and_awaits_user_envelopes() {
             .unwrap()
             .contains("[SUBAGENT_AWAITING_USER]")
     );
+    let collected_pause = crate::subagent::SubagentAwaitingUser::parse(
+        collected["awaiting_user"][0]["awaiting_user_envelope"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(collected_pause.task_key, session.task_key);
     let closed = ToolDispatch::<(), ()>::execute(
         &jobs,
         &(),
@@ -394,6 +402,9 @@ async fn jobs_wait_recovers_terminal_results_from_the_durable_task_store() {
     assert_eq!(awaiting["status"], "awaiting_user");
     assert_eq!(awaiting["output"], "Which environment?");
     assert_eq!(awaiting["agent"], "planner");
+    let awaiting_pause = awaiting["awaiting_user_envelope"].as_str().unwrap();
+    let awaiting_pause = crate::subagent::SubagentAwaitingUser::parse(awaiting_pause).unwrap();
+    assert_eq!(awaiting_pause.task_key, "task-awaiting");
 
     let failed = ToolDispatch::<(), ()>::execute(
         &jobs,
