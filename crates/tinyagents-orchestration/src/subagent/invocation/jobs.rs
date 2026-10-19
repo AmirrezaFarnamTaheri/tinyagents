@@ -132,6 +132,10 @@ impl SubAgentJobRegistry {
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
+        let metadata = JobMeta {
+            parent_thread_id: link.parent_thread_id.clone(),
+            workspace: link.workspace.clone(),
+        };
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -158,7 +162,7 @@ impl SubAgentJobRegistry {
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
             owner,
-            JobMeta,
+            metadata,
             watcher,
             execution.cancellation.clone(),
         ) {
@@ -198,6 +202,7 @@ impl SubAgentJobRegistry {
             key,
             agent,
             owner,
+            workspace,
             cancellation,
             steering,
             run_queue,
@@ -266,7 +271,11 @@ impl SubAgentJobRegistry {
             id.clone(),
             &agent,
             owner,
-            JobLink::default(),
+            JobLink {
+                parent_thread_id: key.thread_id.clone(),
+                workspace,
+                ..JobLink::default()
+            },
             JobExecutionControls {
                 cancellation,
                 steering: steering.clone(),

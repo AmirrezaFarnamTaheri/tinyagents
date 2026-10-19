@@ -301,6 +301,8 @@ pub struct SubAgentJob {
 pub(crate) struct JobLink {
     pub(crate) subagent_run_id: Option<String>,
     pub(crate) parent_tool_call_id: Option<String>,
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
 }
 
 /// Shared registry behind asynchronous subagent spawning and host controls.
@@ -346,7 +348,10 @@ impl Default for SubAgentJobRegistry {
 
 /// Application metadata kept with each job in the detached registry.
 #[derive(Debug, Default)]
-pub(crate) struct JobMeta;
+pub(crate) struct JobMeta {
+    pub(crate) parent_thread_id: Option<String>,
+    pub(crate) workspace: Option<tinytools::WorkspaceDescriptor>,
+}
 
 impl Clone for JobMeta {
     fn clone(&self) -> Self {
@@ -354,7 +359,10 @@ impl Clone for JobMeta {
         if PANIC_ON_JOB_META_CLONE.with(std::cell::Cell::get) {
             panic!("poison subagent detached registry during metadata clone");
         }
-        Self
+        Self {
+            parent_thread_id: self.parent_thread_id.clone(),
+            workspace: self.workspace.clone(),
+        }
     }
 }
 
@@ -379,6 +387,7 @@ pub struct DriverJobRegistration {
     pub key: crate::subagent::SubagentTaskKey,
     pub agent: String,
     pub owner: String,
+    pub workspace: Option<tinytools::WorkspaceDescriptor>,
     pub cancellation: CancellationToken,
     pub steering: Option<tinyagents_harness::steering::SteeringHandle>,
     pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
