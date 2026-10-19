@@ -1,6 +1,10 @@
 use super::*;
 use tinyagents_harness::cost::{CallCost, CostSource};
 use tinyinference_llm::usage::{ChargedAmount, Usage};
+use tinyagents_harness::CancellationToken;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Notify, oneshot};
 
 #[derive(Default)]
 struct FakeHost {
@@ -10,6 +14,8 @@ struct FakeHost {
     persisted: Option<ChildTurnResult<String>>,
     failure_history: Option<Vec<String>>,
     fail_persist: bool,
+    wait_on_run: bool,
+    run_started: Option<oneshot::Sender<()>>,
 }
 
 #[async_trait::async_trait]
@@ -19,7 +25,14 @@ impl ChildTurnHost for FakeHost {
 
     async fn run_turn(
         &mut self,
+        cancellation: CancellationToken,
     ) -> Result<ChildTurnRun<String>, ChildTurnFailure<String, &'static str>> {
+        if let Some(started) = self.run_started.take() {
+            let _ = started.send(());
+        }
+        if self.wait_on_run {
+            cancellation.cancelled().await;
+        }
         self.events.push("run");
         self.run.take().unwrap()
     }
@@ -64,9 +77,46 @@ impl ChildTurnHost for FakeHost {
         Ok(())
     }
 
-    async fn after_commit(&mut self, _: &ChildTurnResult<String>) -> Result<(), &'static str> {
+    async fn after_commit(
+        &mut self,
+        _: &ChildTurnResult<String>,
+        _: CancellationToken,
+    ) -> Result<(), &'static str> {
         self.events.push("after-commit");
         Ok(())
+    }
+}
+
+fn active_control() -> ChildTurnControl {
+    ChildTurnControl::new(CancellationToken::new(), Arc::new(|| true))
+}
+
+struct RevocableFence {
+    admitted: AtomicBool,
+    lost: Notify,
+}
+
+impl RevocableFence {
+    fn new() -> Self {
+        Self {
+            admitted: AtomicBool::new(true),
+            lost: Notify::new(),
+        }
+    }
+
+    fn revoke(&self) {
+        self.admitted.store(false, Ordering::SeqCst);
+        self.lost.notify_waiters();
+    }
+}
+
+impl tinyagents_tasks::DeliveryFence for RevocableFence {
+    fn admitted(&self) -> bool {
+        self.admitted.load(Ordering::SeqCst)
+    }
+
+    fn lost(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move { self.lost.notified().await })
     }
 }
 
@@ -119,7 +169,7 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
         ..FakeHost::default()
     };
 
-    let result = drive_child_turn(&mut host).await.unwrap();
+    let result = drive_child_turn(&mut host, active_control()).await.unwrap();
 
     assert_eq!(
         host.events,
@@ -170,7 +220,7 @@ async fn early_exit_appends_typed_question_without_cap_summary() {
         ..FakeHost::default()
     };
 
-    let result = drive_child_turn(&mut host).await.unwrap();
+    let result = drive_child_turn(&mut host, active_control()).await.unwrap();
 
     assert_eq!(
         host.events,
@@ -204,7 +254,10 @@ async fn failed_turn_persists_only_accepted_history_before_returning_error() {
         ..FakeHost::default()
     };
 
-    assert_eq!(drive_child_turn(&mut host).await, Err("provider failed"));
+    assert_eq!(
+        drive_child_turn(&mut host, active_control()).await,
+        Err(ChildTurnError::Host("provider failed"))
+    );
     assert_eq!(host.events, ["run", "persist-failure"]);
     assert_eq!(
         host.failure_history,
@@ -228,7 +281,34 @@ async fn failed_transcript_commit_never_runs_deferred_terminal_effects() {
         ..FakeHost::default()
     };
 
-    assert_eq!(drive_child_turn(&mut host).await, Err("persist failed"));
+    assert_eq!(
+        drive_child_turn(&mut host, active_control()).await,
+        Err(ChildTurnError::Host("persist failed"))
+    );
     assert_eq!(host.events, ["run", "persist-success"]);
     assert!(host.persisted.is_none());
+}
+
+#[tokio::test]
+async fn losing_turn_fence_cancels_host_work_and_skips_persistence() {
+    let fence = Arc::new(RevocableFence::new());
+    let cancellation = CancellationToken::new();
+    let control = ChildTurnControl::new(cancellation.clone(), fence.clone());
+    let (started, started_rx) = oneshot::channel();
+    let mut host = FakeHost {
+        wait_on_run: true,
+        run_started: Some(started),
+        ..FakeHost::default()
+    };
+
+    let running = drive_child_turn(&mut host, control);
+    tokio::pin!(running);
+    started_rx.await.unwrap();
+    fence.revoke();
+
+    assert_eq!(running.await, Err(ChildTurnError::LeaseLost));
+    assert!(cancellation.is_cancelled());
+    assert!(host.persisted.is_none());
+    assert!(!host.events.contains(&"persist-success"));
+    assert!(!host.events.contains(&"after-commit"));
 }

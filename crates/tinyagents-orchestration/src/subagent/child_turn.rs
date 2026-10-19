@@ -198,17 +198,27 @@ pub trait ChildTurnHost: Send {
 /// and durable commit ordering.
 pub async fn drive_child_turn<H: ChildTurnHost>(
     host: &mut H,
+    control: ChildTurnControl,
 ) -> Result<ChildTurnResult<H::Message>, ChildTurnError<H::Error>> {
+    let result = match control
+        .race(host.run_turn(control.cancellation()))
+        .await?
+    {
         Ok(run) => run,
         Err(failure) => {
-            host.persist_failure(&failure.accepted_history, &failure.accounting)
+            control
+                .race(host.persist_failure(&failure.accepted_history, &failure.accounting))
                 .await?;
-            return Err(failure.error);
+            return Err(ChildTurnError::Host(failure.error));
         }
     };
+    let mut run = result;
+    // This is the one canonical child-turn model-call counter. A cap summary
+    // contributes usage and price, but not to this host-defined count.
+    run.accounting.model_calls = run.model_calls;
 
     if run.hit_cap {
-        let summary = host.summarize_cap(&run).await?;
+        let summary = control.race(host.summarize_cap(&run)).await?;
         run.output = summary.text;
         run.accounting.usage.calls = run
             .accounting
@@ -220,6 +230,7 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
     }
 
     if (run.hit_cap || run.early_exit) && !run.output.trim().is_empty() {
+        control.ensure_admitted()?;
         host.append_final_message(&mut run.accepted_history, &run.output)?;
     }
 
@@ -230,8 +241,9 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
         hit_cap: run.hit_cap,
         early_exit: run.early_exit,
     };
-    host.persist_success(&result).await?;
-    host.after_commit(&result).await?;
+    control.race(host.persist_success(&result)).await?;
+    control.race(host.after_commit(&result, control.cancellation()))
+        .await?;
     Ok(result)
 }
 
