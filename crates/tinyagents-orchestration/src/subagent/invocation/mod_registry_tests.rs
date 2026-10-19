@@ -278,6 +278,7 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
         jobs.mark_driver_result(&id, Err("finished".into()));
     }
 
+    assert!(jobs.tasks().len().unwrap() < 2_002);
     assert!(jobs.get(active_id.as_str()).is_some());
     assert_eq!(
         jobs.get(awaiting_id.as_str()).unwrap().status,
