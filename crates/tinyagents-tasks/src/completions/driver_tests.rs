@@ -307,30 +307,31 @@ async fn cross_router_cancellation_rejects_a_queued_completion_at_turn_consumpti
 }
 
 #[tokio::test]
-async fn same_parent_batch_shares_one_lifecycle_admission_permit() {
+async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit() {
     use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
     use tinyinference_llm::message::Message;
 
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let store = DriverCompletionStore::new(
-        Arc::clone(&backend),
-        Scope::new("shared").unwrap(),
-    )
-    .unwrap();
-    let router = Arc::new(CompletionRouter::new(Arc::new(store)));
-    router.record(record("first", "parent")).await.unwrap();
-    router.record(record("second", "parent")).await.unwrap();
-    let records = router.pending_for("parent");
+    let producer = Arc::new(CompletionRouter::new(open()));
+    let observer = Arc::new(CompletionRouter::new(open()));
+    producer.record(record("first", "parent")).await.unwrap();
+    producer.record(record("second", "parent")).await.unwrap();
+    let records = producer.pending_for("parent");
     assert_eq!(records.len(), 2);
 
     let queue = RunQueue::new();
-    for completion in records {
+    for (index, completion) in records.into_iter().enumerate() {
+        let admission_router = if index == 0 {
+            Arc::clone(&producer)
+        } else {
+            Arc::clone(&observer)
+        };
         queue
             .push_guarded(
                 QueueLane::Followup,
                 Message::user(completion.task_id.clone()),
                 Arc::new(crate::completions::CompletionAdmission::for_record(
-                    Arc::clone(&router),
+                    admission_router,
                     &completion,
                 )),
             )
