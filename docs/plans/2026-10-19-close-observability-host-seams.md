@@ -162,13 +162,13 @@ Behavioral acceptance before adapting/removing host code:
 3. All prior close, stop, journal, trace, tool-outcome, repeated-failure and budget assertions remain represented at the owning layer. Preserve public compatibility tests for old default-English APIs.
 4. Source audit confirms the generic implementations are gone from the listed host directories, host policy and persistence seams remain, and no TinyAgents dependency references OpenHuman types.
 
-Run required repository gates from the TinyAgents repository root through the super-worktree's long-command cancellation wrapper (no temp build directory and no `CARGO_TARGET_DIR`):
+Run required repository gates from the super-worktree root through its long-command cancellation wrapper, pointing Cargo at the TinyAgents manifest (no temp build directory and no `CARGO_TARGET_DIR`):
 
 ```sh
-scripts/ci-cancel-aware.sh cargo fmt --all -- --check
-scripts/ci-cancel-aware.sh cargo check --workspace --all-targets
-scripts/ci-cancel-aware.sh cargo clippy --workspace --all-targets -- -D warnings
-scripts/ci-cancel-aware.sh cargo test --workspace
+scripts/ci-cancel-aware.sh cargo fmt --manifest-path vendor/tinyagents/Cargo.toml --all -- --check
+scripts/ci-cancel-aware.sh cargo check --manifest-path vendor/tinyagents/Cargo.toml --workspace --all-targets
+scripts/ci-cancel-aware.sh cargo clippy --manifest-path vendor/tinyagents/Cargo.toml --workspace --all-targets -- -D warnings
+scripts/ci-cancel-aware.sh cargo test --manifest-path vendor/tinyagents/Cargo.toml --workspace
 ```
 
 Also run focused tests for changed harness modules during implementation. The OpenHuman adapter phase separately runs its required focused tests and layout checks. This plan phase runs no builds or tests and makes no gate claim.
