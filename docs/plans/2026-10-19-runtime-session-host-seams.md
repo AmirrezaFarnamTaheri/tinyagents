@@ -505,8 +505,10 @@ from its visibility/name and follows the single guard.
 
 The request has logical naming inputs only; there is no caller-provided
 agent/tenant scope field. The resolver uses `options.run_context.data` to
-authorize the actor,
-choose the resolved agent id, and open a tenant-scoped lease. It returns a
+authorize the actor, choose the resolved agent id, and open a tenant-scoped
+lease. Map `SessionStoreLeaseError::Unsupported` or `Open(_)` into
+`RuntimeError::InvalidSessionState(error.to_string())`; host resolver errors
+remain the host's `RuntimeError`. It returns a
 root `SessionRef::scoped(request.session_key, resolved_agent_id)` or child
 `SessionRef::child_of(parent, child_key)`. Runtime binds the target locator
 from `identity.stores.stores().transcripts`, sets target `session`, `stem`,
