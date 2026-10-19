@@ -101,8 +101,8 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
         gate_attempts: std::sync::atomic::AtomicUsize::new(0),
         cancel_waiting: Arc::clone(&cancel_waiting),
     });
-    let router = Arc::new(CompletionRouter::new(store));
-    let cancel_router = CompletionRouter::new(Arc::new(inner));
+    let router = Arc::new(CompletionRouter::new(store.clone()));
+    let cancel_router = CompletionRouter::new(store);
     let q = queue();
     router.attach_parent("p", q.clone());
 
@@ -144,6 +144,36 @@ struct BlockingParentMarkerRead {
 }
 
 impl CompletionStore for BlockingParentMarkerRead {
+    fn acquire_parent_gate(
+        &self,
+        parent_key: &str,
+        holder: &str,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.gate_attempts.fetch_add(1, SeqCst) == 1 {
+            self.cancel_waiting.wait();
+        }
+        self.inner.acquire_parent_gate(parent_key, holder, ttl)
+    }
+
+    fn renew_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        ttl: std::time::Duration,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.renew_parent_gate(parent_key, claim, ttl)
+    }
+
+    fn release_parent_gate(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.release_parent_gate(parent_key, claim)
+    }
+
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let record = self.inner.get(task_id);
         if task_id == self.marker_id {
