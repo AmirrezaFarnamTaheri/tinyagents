@@ -94,6 +94,35 @@ fn cloned_memory_stores_share_a_batch_admission_identity() {
 }
 
 #[test]
+fn driver_stores_can_share_an_explicit_backend_domain_without_coalescing_other_domains() {
+    let memory = MemoryStorage::new();
+    let first_backend: Arc<dyn StorageBackend> = Arc::new(memory.clone());
+    let second_backend: Arc<dyn StorageBackend> = Arc::new(memory);
+    let scope = Scope::new("tenant").unwrap();
+    let first = DriverCompletionStore::new_with_coordination_domain(
+        first_backend,
+        scope.clone(),
+        "shared-backend",
+    )
+    .unwrap();
+    let second = DriverCompletionStore::new_with_coordination_domain(
+        second_backend.clone(),
+        scope.clone(),
+        "shared-backend",
+    )
+    .unwrap();
+    let unrelated = DriverCompletionStore::new_with_coordination_domain(
+        second_backend,
+        scope,
+        "other-backend",
+    )
+    .unwrap();
+
+    assert_eq!(first.coordination_identity(), second.coordination_identity());
+    assert_ne!(first.coordination_identity(), unrelated.coordination_identity());
+}
+
+#[test]
 fn in_memory_store_rejects_mutations_from_a_released_parent_gate() {
     let store = InMemoryCompletionStore::new();
     let stale = store

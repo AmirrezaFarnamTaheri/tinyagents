@@ -75,6 +75,7 @@ fn decode_strict(row: Versioned<serde_json::Value>) -> Result<CompletionRecord> 
 pub struct DriverCompletionStore {
     backend: Arc<dyn StorageBackend>,
     scope: Scope,
+    coordination_domain: String,
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
     declared: Arc<OnceCell<()>>,
@@ -90,8 +91,26 @@ impl DriverCompletionStore {
         backend: Arc<dyn StorageBackend>,
         scope: Scope,
     ) -> std::result::Result<Self, StorageError> {
+        let coordination_domain = format!("backend-handle:{:p}", Arc::as_ptr(&backend));
+        Self::new_with_coordination_domain(backend, scope, coordination_domain)
+    }
+
+    /// Creates a driver-backed store with an explicit identity for a shared
+    /// backend domain. Hosts opening distinct handles to the same database
+    /// must pass the same opaque domain id; unrelated databases must use
+    /// different ids. Scope remains part of the resulting identity.
+    pub fn new_with_coordination_domain(
+        backend: Arc<dyn StorageBackend>,
+        scope: Scope,
+        coordination_domain: impl Into<String>,
+    ) -> std::result::Result<Self, StorageError> {
         backend.capabilities().require(Capability::Fencing)?;
-        Self::with_bridge(backend, scope, Blocking::new()?)
+        Self::with_bridge_and_coordination_domain(
+            backend,
+            scope,
+            Blocking::new()?,
+            coordination_domain,
+        )
     }
 
     /// Store completions in `tasks.completions`, running the synchronous trait
@@ -106,6 +125,18 @@ impl DriverCompletionStore {
         scope: Scope,
         bridge: Blocking,
     ) -> std::result::Result<Self, StorageError> {
+        let coordination_domain = format!("backend-handle:{:p}", Arc::as_ptr(&backend));
+        Self::with_bridge_and_coordination_domain(backend, scope, bridge, coordination_domain)
+    }
+
+    /// Like [`Self::with_bridge`], with the caller's stable shared-backend
+    /// coordination identity.
+    pub fn with_bridge_and_coordination_domain(
+        backend: Arc<dyn StorageBackend>,
+        scope: Scope,
+        bridge: Blocking,
+        coordination_domain: impl Into<String>,
+    ) -> std::result::Result<Self, StorageError> {
         backend.capabilities().require(Capability::Fencing)?;
         let scoped = backend.for_scope(&scope)?;
         let docs = scoped.documents().clone();
@@ -113,6 +144,7 @@ impl DriverCompletionStore {
             docs,
             backend,
             scope,
+            coordination_domain: coordination_domain.into(),
             bridge,
             declared: Arc::new(OnceCell::new()),
         })
@@ -181,9 +213,9 @@ impl DriverCompletionStore {
 impl CompletionStore for DriverCompletionStore {
     fn coordination_identity(&self) -> Option<String> {
         Some(format!(
-            "driver:{:p}:{}",
-            Arc::as_ptr(&self.backend),
-            self.scope
+            "driver:{}",
+            serde_json::to_string(&(self.coordination_domain.as_str(), self.scope.to_string()))
+                .expect("driver coordination identity is serializable")
         ))
     }
 
