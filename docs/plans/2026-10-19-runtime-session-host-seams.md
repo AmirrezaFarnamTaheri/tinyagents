@@ -1866,6 +1866,33 @@ async fn precommit_error_does_not_call_post_commit_sink() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
+struct InterruptedDriver;
+
+#[async_trait]
+impl SessionDriver for InterruptedDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        Ok(DriverOutcome {
+            history: request.history,
+            output: None,
+            partial: None,
+            interrupted: true,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn normal_interrupted_commit_still_invokes_post_commit_sink() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut session = SessionBuilder::new(Arc::new(InterruptedDriver))
+        .post_commit_sink(Arc::new(CountSink(calls.clone())))
+        .build().unwrap();
+    let outcome = session.turn(Message::user("stop"), TurnOptions::default()).await.unwrap();
+    assert!(outcome.interrupted);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
 struct ErrorSink;
 
 #[async_trait]
