@@ -920,6 +920,19 @@ async fn parents_with_pending_and_cancel_all_use_durable_parent_markers() {
 }
 
 #[test]
+fn cancelling_a_deleted_parent_does_not_reopen_its_lifecycle() {
+    let router = router();
+    router.delete_parent("deleted").unwrap();
+    router.cancel_parent("deleted").unwrap();
+    router.resume_parent("deleted");
+
+    assert!(
+        !router.admit_child("deleted").unwrap(),
+        "a later stop marker must not downgrade permanent deletion"
+    );
+}
+
+#[test]
 fn neutral_formatter_escapes_child_text() {
     let hostile = CompletionRecord::new(
         "t1",
