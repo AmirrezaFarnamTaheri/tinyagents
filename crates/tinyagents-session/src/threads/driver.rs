@@ -230,7 +230,7 @@ impl DriverConversationStore {
         Fut: Future<Output = ()> + Send,
     {
         self.admit().await?;
-        self.purge_native_with(after_delete).await
+        self.purge_native_with_async(after_delete).await
     }
 
     fn key(id: &str) -> ConversationResult<String> {

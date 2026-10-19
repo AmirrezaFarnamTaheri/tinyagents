@@ -12,6 +12,7 @@
 //! belonged to it are removed after the swap, best effort.
 use super::pending::APPENDS;
 use super::*;
+use std::future::Future;
 
 /// Messages written per stream append while copying a log.
 const COPY_BATCH: usize = 128;
@@ -165,10 +166,21 @@ impl DriverConversationStore {
 
     pub(super) async fn purge_native_with<F>(
         &self,
+        after_delete: F,
+    ) -> ConversationResult<ConversationPurgeStats>
+    where
+        F: FnMut(String) -> std::future::Ready<()> + Send,
+    {
+        self.purge_native_with_async(after_delete).await
+    }
+
+    pub(super) async fn purge_native_with_async<F, Fut>(
+        &self,
         mut after_delete: F,
     ) -> ConversationResult<ConversationPurgeStats>
     where
-        F: FnMut(&str) + Send,
+        F: FnMut(String) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
     {
         let mut stats = ConversationPurgeStats::default();
         let mut query = Query::filter(Filter::All).limit(PAGE_SIZE);
@@ -186,7 +198,7 @@ impl DriverConversationStore {
                     .delete(COLLECTION, &row.id, Precondition::None)
                     .await?;
                 if deleted {
-                    after_delete(&row.doc.thread.id);
+                    after_delete(row.doc.thread.id).await;
                 }
             }
             // Deleting shifts later rows into the first page, so restart from

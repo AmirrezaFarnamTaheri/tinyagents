@@ -298,6 +298,40 @@ async fn purge_callback_keeps_successful_ids_when_a_later_document_delete_fails(
 }
 
 #[tokio::test]
+async fn async_purge_callback_keeps_completed_ids_when_a_later_delete_fails() {
+    let (store, docs) = probed_store(Some(2), None, None).await;
+    for id in ["logical/one", "logical/two", "logical/three"] {
+        store.ensure_thread(request(id)).await.unwrap();
+    }
+    let page = store
+        .docs
+        .query(COLLECTION, &Query::filter(Filter::All).limit(PAGE_SIZE))
+        .await
+        .unwrap();
+    let expected_first = DriverConversationStore::decode(page.items.into_iter().next().unwrap())
+        .unwrap()
+        .doc
+        .thread
+        .id;
+
+    let mut callbacks = Vec::new();
+    let result = store
+        .purge_threads_with_async(|thread_id| {
+            callbacks.push(thread_id);
+            std::future::ready(())
+        })
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ConversationError::Driver(error)) if error.kind() == tinystoragedrivers_core::ErrorKind::Unavailable
+    ));
+    assert_eq!(callbacks, vec![expected_first]);
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 2);
+}
+
+#[tokio::test]
 async fn purge_callback_enumerates_paged_and_new_threads() {
     let inserted_id = "channel/inserted-during-purge";
     let (store, docs) = probed_store(None, Some(inserted_id), None).await;
