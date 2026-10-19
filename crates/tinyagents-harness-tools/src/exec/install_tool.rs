@@ -5,12 +5,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
 use super::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
-    ExecGate, ExecOperation, ExecRequest, ShellFlavor, detect_tools::find_on_path,
+    ExecGate, ExecOperation, ExecRequest, detect_tools::find_on_path,
 };
 
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
