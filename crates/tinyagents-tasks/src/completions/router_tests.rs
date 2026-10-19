@@ -576,6 +576,42 @@ impl CompletionStore for FailingSecondPut {
         }
         self.inner.put(record)
     }
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let claimed = self.inner.claim_pending(parent_key, mode, max, token, visible_after)?;
+        if (0..claimed.len()).any(|_| {
+            self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst)
+        }) {
+            for record in &claimed {
+                if let Some(receipt) = record.receipt() {
+                    self.inner.resolve_claim(&receipt.task_id, &receipt.token, ClaimResolution::Release)?;
+                }
+            }
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph("disk".into()));
+        }
+        Ok(claimed)
+    }
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
+            return Err(tinyagents_harness::error::TinyAgentsError::Graph("disk".into()));
+        }
+        self.inner.claim_task(task_id, parent_key, mode, token, visible_after)
+    }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
     }
