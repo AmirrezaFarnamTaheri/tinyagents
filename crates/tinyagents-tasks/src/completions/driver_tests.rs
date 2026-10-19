@@ -312,6 +312,12 @@ async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit(
     use tinyinference_llm::message::Message;
 
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ) as Arc<dyn CompletionStore>
+    };
     let producer = Arc::new(CompletionRouter::new(open()));
     let observer = Arc::new(CompletionRouter::new(open()));
     producer.record(record("first", "parent")).await.unwrap();

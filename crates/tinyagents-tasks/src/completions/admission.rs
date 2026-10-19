@@ -47,7 +47,6 @@ impl QueueAdmission for CompletionAdmission {
             .acquire_parent_generation(&self.parent_key, self.parent_epoch)
             .ok()
             .flatten()
-            .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
             .ok_or(QueueAdmissionError)
     }
 

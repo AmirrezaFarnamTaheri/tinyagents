@@ -622,14 +622,17 @@ impl CompletionRouter {
         &self,
         parent_key: &str,
         parent_epoch: u64,
-    ) -> Result<Option<ParentAdmissionPermit>> {
+    ) -> Result<Option<Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>>> {
         let state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
         let current = state.store.try_get(&Self::parent_marker_id(parent_key))?;
         let admitted = current.is_some_and(|marker| {
             marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
         });
-        Ok(admitted.then_some(ParentAdmissionPermit { _guard: gate }))
+        Ok(admitted.then(|| {
+            Arc::new(ParentAdmissionPermit { _guard: gate })
+                as Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>
+        }))
     }
 
     /// Returns a process-local coalescing key for queue batches. Durable
