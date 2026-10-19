@@ -585,6 +585,17 @@ impl CompletionRouter {
         Ok(Self::admit_child_locked(&state, parent_key, gate.claim())?.is_some())
     }
 
+    /// Whether a generation carried by a queued completion still belongs to
+    /// the currently open parent lifecycle. Hosts use this at turn admission
+    /// to discard queue entries that raced with stop, delete, or reopen.
+    pub fn parent_generation_admitted(&self, parent_key: &str, parent_epoch: u64) -> Result<bool> {
+        let state = self.lock()?;
+        let marker = state.store.try_get(&Self::parent_marker_id(parent_key))?;
+        Ok(marker.is_some_and(|marker| {
+            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
+        }))
+    }
+
     fn admit_child_locked(
         router: &RouterState,
         parent_key: &str,
@@ -666,7 +677,8 @@ impl CompletionRouter {
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, _gate.claim())? else {
+        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, _gate.claim())?
+        else {
             return Ok(Vec::new());
         };
         let token = uuid::Uuid::new_v4().to_string();

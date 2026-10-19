@@ -108,7 +108,15 @@ pub trait CompletionStore: Send + Sync {
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Vec<CompletionRecord>> {
-        let _ = (parent_key, parent_epoch, gate, mode, max, token, visible_after);
+        let _ = (
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        );
         Err(store_err(
             "claim",
             "store does not support atomic delivery claims",
@@ -127,7 +135,15 @@ pub trait CompletionStore: Send + Sync {
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, parent_key, parent_epoch, gate, mode, token, visible_after);
+        let _ = (
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        );
         Err(store_err(
             "claim task",
             "store does not support atomic delivery claims",

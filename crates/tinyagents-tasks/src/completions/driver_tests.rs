@@ -158,6 +158,52 @@ async fn closed_parent_markers_survive_compaction_and_a_router_restart() {
     assert!(restarted.pending_for("deleted-thread").is_empty());
 }
 
+#[tokio::test]
+async fn queued_completion_generation_is_rejected_after_cross_router_close_and_reopen() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ) as Arc<dyn CompletionStore>
+    };
+    let delivery_router = CompletionRouter::new(open());
+    let lifecycle_router = CompletionRouter::new(open());
+    delivery_router
+        .record(record("queued", "parent"))
+        .await
+        .unwrap();
+    let claimed = delivery_router.claim_pending("parent", 1).unwrap();
+    let stale_receipt = claimed[0].receipt().unwrap();
+
+    lifecycle_router.cancel_parent("parent").unwrap();
+    lifecycle_router.resume_parent("parent");
+    assert!(
+        !delivery_router
+            .parent_generation_admitted("parent", stale_receipt.parent_epoch)
+            .unwrap()
+    );
+    assert_eq!(
+        delivery_router
+            .mark_delivered(std::slice::from_ref(&stale_receipt))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        delivery_router
+            .record(record("new-generation", "parent"))
+            .await
+            .unwrap(),
+        RecordOutcome::Recorded {
+            lane: None,
+            receipt: None
+        }
+    );
+    assert!(delivery_router.pending_for("parent").iter().any(|item| {
+        item.task_id == "new-generation" && item.parent_epoch > stale_receipt.parent_epoch
+    }));
+}
+
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
