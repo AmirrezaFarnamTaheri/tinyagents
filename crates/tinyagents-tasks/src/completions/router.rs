@@ -76,9 +76,10 @@ struct RouterState {
 
 /// Durable, deduplicating hand-off of finished children to their parents.
 ///
-/// See the `completions` module docs for the division of labour with the host. One
-/// router serves one process: its read-modify-write sequences are serialised
-/// by an in-process lock, so two processes must not share a store.
+/// See the `completions` module docs for the division of labour with the host.
+/// Router locks protect local bookkeeping; shared stores coordinate delivery
+/// ownership through atomic claims, so independent routers may safely share a
+/// backend that implements those claims.
 pub struct CompletionRouter {
     formatter: Arc<dyn CompletionFormatter>,
     max_attempts: u32,

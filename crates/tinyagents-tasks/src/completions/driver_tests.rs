@@ -91,9 +91,16 @@ async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
 async fn a_live_push_claim_blocks_a_second_driver_router() {
     let storage = MemoryStorage::new();
     let docs = docs_of(&storage, "shared");
-    let first = CompletionRouter::new(Arc::new(DriverCompletionStore::new(Arc::clone(&docs)).unwrap()));
+    let first = CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new(Arc::clone(&docs)).unwrap(),
+    ));
     let second = CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()));
-    first.attach_parent("parent", Arc::new(tinyagents_harness::run_queue::RunQueue::<tinyinference_llm::message::Message>::new()));
+    first.attach_parent(
+        "parent",
+        Arc::new(tinyagents_harness::run_queue::RunQueue::<
+            tinyinference_llm::message::Message,
+        >::new()),
+    );
     first.record(record("live-push", "parent")).await.unwrap();
 
     assert!(second.claim_pending("parent", 1).unwrap().is_empty());

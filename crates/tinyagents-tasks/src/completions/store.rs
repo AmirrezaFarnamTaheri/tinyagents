@@ -14,10 +14,11 @@ fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
 
 /// Durable bookkeeping behind [`CompletionRouter`](super::CompletionRouter).
 ///
-/// A store holds the latest [`CompletionRecord`] per task id. It is a plain
-/// persistence seam: the router serialises its read-modify-write sequences, so
-/// an implementation only has to make `put` durable before it returns.
-/// Synchronous on purpose, like [`TaskStore`](crate::TaskStore).
+/// A store holds the latest [`CompletionRecord`] per task id. `put` persists
+/// unconditional record changes; delivery ownership uses `claim_pending`,
+/// `claim_task`, and `resolve_claim`, which implementations shared by routers
+/// must perform atomically. Synchronous on purpose, like
+/// [`TaskStore`](crate::TaskStore).
 pub trait CompletionStore: Send + Sync {
     /// The latest record for `task_id`.
     fn get(&self, task_id: &str) -> Option<CompletionRecord>;

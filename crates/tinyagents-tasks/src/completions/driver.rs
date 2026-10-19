@@ -12,9 +12,9 @@
 //! body (`task_id`, `parent_key`, `agent_id`, `state`, `result`, `finished_ms`,
 //! ...). `parent_key` and `state` are indexed for [`CompletionStore::list`] and
 //! [`CompletionStore::compact`]. The record's last-update time is the document's
-//! `updated_ms` metadata, which the driver stamps on every write. `put` is an
-//! upsert, which is all the contract asks of it: the router serialises its
-//! read-modify-write sequences.
+//! `updated_ms` metadata, which the driver stamps on every write. Ordinary
+//! `put` is an upsert; claim, reclaim, and settlement operations use a row
+//! version precondition so concurrent routers cannot overwrite one another.
 //!
 //! # Sync trait
 //!
