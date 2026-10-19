@@ -145,6 +145,29 @@ fn router_pool_does_not_resurrect_a_router_after_clear() {
     assert!(!Arc::ptr_eq(&reopened, &stale));
 }
 
+#[test]
+fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
+    let pool = CompletionRouterPool::new(|_| {
+        Arc::new(CompletionRouter::new(Arc::new(
+            InMemoryCompletionStore::new(),
+        )))
+    });
+    let first = pool.get_or_open(&"workspace").unwrap();
+    assert_eq!(
+        first.admit_child_generation("parent").unwrap(),
+        Some(1)
+    );
+    first.cancel_parent("parent").unwrap();
+
+    pool.clear().unwrap();
+    let reopened = pool.get_or_open(&"workspace").unwrap();
+
+    assert!(
+        !reopened.admit_child("parent").unwrap(),
+        "clearing the router cache must not implicitly reopen a stopped parent"
+    );
+}
+
 #[tokio::test]
 async fn evicting_one_key_preserves_other_cached_routers_and_held_claims() {
     let pool = CompletionRouterPool::new(|_| {

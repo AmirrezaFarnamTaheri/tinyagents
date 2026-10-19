@@ -7,6 +7,11 @@ use tinytools::WorkspaceDescriptor;
 fn parent_job_scope_is_available_from_the_public_subagent_facade() {
     let constructor: fn(WorkspaceDescriptor, String) -> ParentJobScope = ParentJobScope::new;
     let _ = constructor;
-    let _public_roster = format_parent_roster_for_owner;
-    let _registry_api = SubAgentJobRegistry::list_for_parent_scope;
+    let registry = SubAgentJobRegistry::new();
+    let scope = ParentJobScope::new(WorkspaceDescriptor::new("/workspace"), "thread");
+    let rendered = format_parent_roster_for_owner(&registry, "owner", &scope, &[], |_| {
+        "empty".to_owned()
+    })
+    .unwrap();
+    assert_eq!(rendered, "empty");
 }
