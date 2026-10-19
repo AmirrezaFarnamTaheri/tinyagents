@@ -26,11 +26,8 @@ impl Tool for Inner {
     }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success_with_markdown(
-            json!({"artifacts":[
-                {"type":"image","path":"blob:key","bytes":4},
-                {"type":"video","path":"blob:second","bytes":5}
-            ]}),
-            "saved blob:key and blob:second",
+            json!({"artifacts":[{"type":"image","path":"blob:key","bytes":4}]}),
+            "saved blob:key",
         ))
     }
 }
@@ -304,7 +301,7 @@ impl Tool for ConcurrentInner {
                 {"type":"image","path":format!("blob:{}-one", self.identity)},
                 {"type":"image","path":format!("blob:{}-two", self.identity)}
             ]}),
-            format!("{}-one and {}-two", self.identity, self.identity),
+            format!("blob:{}-one and blob:{}-two", self.identity, self.identity),
         ))
     }
 }
@@ -650,13 +647,14 @@ async fn image_and_video_factory_calls_keep_configured_kind_and_heartbeat() {
         .with_per_call_inner(Arc::new(|progress, _context| {
             ProgressArtifactInner(progress)
         }));
-        assert_eq!(
-            tool.execute_with_context(json!({}), ToolCallOptions::default(), Some(&recorder))
-                .await
-                .unwrap()
-                .text(),
-            "blob:kind"
-        );
+        let result = tool
+            .execute_with_context(json!({}), ToolCallOptions::default(), Some(&recorder))
+            .await
+            .unwrap();
+        let ToolContent::Json { data } = &result.content[0] else {
+            panic!("expected JSON result")
+        };
+        assert_eq!(data["artifacts"][0]["path"], "/files/image.png");
         assert_eq!(
             *recorder.0.lock().unwrap(),
             vec![format!("{label} — 15s elapsed (job running)")]
