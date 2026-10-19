@@ -1,5 +1,8 @@
 use super::*;
-use crate::exec::{ExecBackendCapability, ExecDenied, ExecOutput, ExecPermit, ExecProgress};
+use crate::exec::{
+    ExecBackendCapability, ExecDenied, ExecOutput, ExecPermit, ExecProgress, ShellFlavor,
+};
+use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
