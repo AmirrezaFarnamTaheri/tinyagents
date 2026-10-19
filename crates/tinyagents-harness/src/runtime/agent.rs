@@ -208,7 +208,10 @@ fn hosted_error(error: &TinyAgentsError, mut run: AgentRun) -> HostedError {
         kind,
         message: hosted_error_message(kind).to_string(),
         timeout_bound: classify_timeout_bound(error),
-        dispatch_refusal: None,
+        dispatch_refusal: match error {
+            TinyAgentsError::PhysicalDispatchAdmission(refusal) => Some(*refusal),
+            _ => None,
+        },
         run: Some(Box::new(run)),
     }
 }
@@ -225,6 +228,9 @@ fn hosted_error(error: &TinyAgentsError, mut run: AgentRun) -> HostedError {
 /// `HostedError` existed.
 impl From<HostedError> for TinyAgentsError {
     fn from(error: HostedError) -> Self {
+        if let Some(refusal) = error.dispatch_refusal {
+            return Self::PhysicalDispatchAdmission(refusal);
+        }
         match error.kind {
             HostedErrorKind::Cancelled => TinyAgentsError::Cancelled,
             HostedErrorKind::Timeout => match error.timeout_bound {
