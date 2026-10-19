@@ -15,6 +15,21 @@ use super::{
 pub struct NativeExecCapability;
 
 /// Runs an authorized request as a local child process.
+///
+/// Hosts opt into this backend by constructing it with the selected
+/// [`ShellFlavor`] and providing it to an [`ExecTool`](super::ExecTool) through
+/// the execution ports. The backend only checks the opaque native capability
+/// supplied by the host; it does not implement approval, command policy,
+/// sandbox selection, or audit policy.
+///
+/// A host that acknowledges cancellation must retain a
+/// [`super::timeout::ProcessCleanup`] for the turn, run the turn inside
+/// [`ProcessCleanup::scope`](super::timeout::ProcessCleanup::scope), drop the
+/// scoped turn future on cancellation, and await
+/// [`ProcessCleanup::wait`](super::timeout::ProcessCleanup::wait) before
+/// acknowledging cleanup. This lets the backend's child waiter finish and
+/// close captured output pipes before the host reports that cancellation is
+/// complete.
 pub struct NativeExecBackend {
     flavor: ShellFlavor,
 }
@@ -24,6 +39,10 @@ pub struct NativeExecBackend {
 mod tests;
 
 impl NativeExecBackend {
+    /// Selects the shell syntax used by this local backend.
+    ///
+    /// The host remains responsible for authorizing a request and attaching a
+    /// [`NativeExecCapability`] only when local execution is permitted.
     #[must_use]
     pub fn new(flavor: ShellFlavor) -> Self {
         Self { flavor }
