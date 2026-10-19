@@ -25,6 +25,34 @@ pub struct AgentStores {
     pub journal: Arc<dyn AppendStore>,
 }
 
+/// A set of agent stores whose handles retain the backend admitted at open.
+#[derive(Clone)]
+pub struct SessionStoreLease {
+    stores: AgentStores,
+}
+
+impl SessionStoreLease {
+    /// The stores pinned by this lease.
+    pub fn stores(&self) -> &AgentStores {
+        &self.stores
+    }
+
+    pub(crate) fn pinned(stores: AgentStores) -> Self {
+        Self { stores }
+    }
+}
+
+/// Why a provider could not open an explicitly pinned set of session stores.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionStoreLeaseError {
+    /// The provider cannot guarantee that its handles retain one backend.
+    #[error("provider cannot guarantee pinned session stores")]
+    Unsupported,
+    /// Opening the pinned stores failed.
+    #[error("opening pinned session stores failed: {0}")]
+    Open(#[source] tinystoragedrivers_core::StorageError),
+}
+
 impl std::fmt::Debug for AgentStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentStores")

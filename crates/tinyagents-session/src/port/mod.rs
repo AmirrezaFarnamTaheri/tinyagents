@@ -60,7 +60,7 @@ pub use drivers::{
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
-pub use types::AgentStores;
+pub use types::{AgentStores, SessionStoreLease, SessionStoreLeaseError};
 #[cfg(feature = "legacy-import")]
 pub use types::WorkspaceStores;
 #[cfg(feature = "legacy-import")]
@@ -92,6 +92,18 @@ pub trait SessionStoreProvider: Send + Sync {
         agent_id: &str,
     ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
         Ok(self.for_agent(agent_id))
+    }
+
+    /// Opens stores whose handles pin the provider backend and admitted scope.
+    ///
+    /// Providers without an explicit pinning guarantee fail closed. This
+    /// default intentionally does not wrap `try_for_agent`, whose handles may
+    /// continue forwarding to a rebound backend.
+    fn lease_for_agent(
+        &self,
+        _agent_id: &str,
+    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        Err(SessionStoreLeaseError::Unsupported)
     }
 
     /// Optionally create an independent actor provider over a host-admitted backend.
@@ -297,6 +309,13 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         agent_id: &str,
     ) -> Result<AgentStores, tinystoragedrivers_core::StorageError> {
         (**self).try_for_agent(agent_id)
+    }
+
+    fn lease_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+        (**self).lease_for_agent(agent_id)
     }
 
     fn bind_actor(
