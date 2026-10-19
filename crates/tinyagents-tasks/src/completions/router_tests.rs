@@ -141,20 +141,17 @@ async fn an_old_claim_receipt_cannot_settle_a_reclaimed_attempt() {
     let old = router.claim_pending("p", 1).unwrap().remove(0);
 
     // Simulate another process reclaiming the durable row after visibility.
-    store
-        .claim_pending(
-            "p",
-            CompletionClaimMode::Followup,
-            1,
-            "new-owner",
-            SystemTime::now() + std::time::Duration::from_secs(30),
-        )
-        .unwrap();
-
+    let mut expired = store.get("reclaimed").unwrap();
+    expired.claim.as_mut().unwrap().visible_after = SystemTime::now() - std::time::Duration::from_secs(1);
+    store.put(&expired).unwrap();
+    let new = router.claim_pending("p", 1).unwrap();
+    assert_eq!(new.len(), 1);
     let old_receipt = old.receipt().unwrap();
     assert_eq!(router.mark_delivered(std::slice::from_ref(&old_receipt)).unwrap(), 0);
-    assert_eq!(router.mark_delivered(&[old_receipt]).unwrap(), 0);
+    assert_eq!(router.mark_failed(std::slice::from_ref(&old_receipt)).unwrap().len(), 0);
+    router.release(std::slice::from_ref(&old_receipt));
     assert_eq!(router.pending_for("p").len(), 1);
+    assert_eq!(router.mark_delivered(&receipts(&new)).unwrap(), 1);
 }
 
 #[tokio::test]
@@ -296,7 +293,7 @@ async fn collect_mode_pushes_onto_the_collect_lane() {
 async fn followup_without_a_live_parent_stays_pending() {
     let router = router();
     let outcome = router.record(record("t1", "p")).await.unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None });
+    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
     assert_eq!(ids(&router.claim_pending("p", 10).unwrap()), ["t1"]);
 }
 
@@ -319,7 +316,7 @@ async fn hold_mode_waits_for_the_next_turn() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::HoldForNextTurn))
         .await
         .unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None });
+    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
     assert_eq!(q.status().await.total, 0);
     assert!(
         router.claim_pending("p", 10).unwrap().is_empty(),
@@ -342,7 +339,7 @@ async fn off_mode_is_recorded_for_the_parent_to_pull() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Off))
         .await
         .unwrap();
-    assert_eq!(outcome, RecordOutcome::Recorded { lane: None });
+    assert_eq!(outcome, RecordOutcome::Recorded { lane: None, receipt: None });
     assert_eq!(q.status().await.total, 0);
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
     assert!(router.begin_turn("p").unwrap().is_empty());
@@ -385,7 +382,7 @@ async fn pending_for_lists_only_undelivered_records_of_the_parent() {
     router.record(record("t2", "p")).await.unwrap();
     router.record(record("t3", "other")).await.unwrap();
     let first = router.claim_pending("p", 1).unwrap();
-    router.mark_delivered(&["t1"]).unwrap();
+    router.mark_delivered(&receipts(&first)).unwrap();
     assert_eq!(ids(&router.pending_for("p")), ["t2"]);
 }
 
