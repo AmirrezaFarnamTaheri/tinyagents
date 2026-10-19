@@ -20,33 +20,49 @@
 //! Live pushes are at-least-once: the host acknowledges with
 //! `mark_delivered`. Nothing here relaunches a child.
 
+mod admission;
 mod delivery;
 mod driver;
+mod durable_lease;
 mod format;
+mod lifecycle;
 mod registry;
 mod router;
 mod store;
 mod types;
 
+pub use admission::CompletionAdmission;
 pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
-    ParentBusyGate, ParentBusyLease, ThreadDeliveryLeases,
+    ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
 };
 pub use driver::DriverCompletionStore;
+pub use durable_lease::{DurableThreadDeliveryLease, DurableThreadDeliveryLeases};
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
+#[doc(hidden)]
+pub use lifecycle::ParentLifecycle;
 pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
-    open_driver_completion_store_or_memory,
+    CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
+    open_driver_completion_store_or_memory_with_coordination_domain,
+    open_driver_completion_store_with_coordination_domain,
 };
 pub use router::{
     CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
     TombstoneOutcome,
 };
-pub use store::{CompletionStore, InMemoryCompletionStore};
-pub use types::{
-    CompletionArtifact, CompletionRecord, CompletionResult, CompletionState, CompletionStatus,
-    NotifyMode,
+pub use store::{
+    ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore,
+    ParentGateClaim, PendingClaimRequest, ResolveClaimRequest, TaskClaimRequest,
 };
+pub use types::{
+    CompletionArtifact, CompletionClaim, CompletionReceipt, CompletionRecord, CompletionResult,
+    CompletionState, CompletionStatus, NotifyMode,
+};
+
+#[cfg(test)]
+#[path = "durable_lease_tests.rs"]
+mod durable_lease_tests;
 
 #[cfg(test)]
 #[path = "router_tests.rs"]

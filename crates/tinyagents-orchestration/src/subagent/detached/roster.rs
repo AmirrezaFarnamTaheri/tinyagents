@@ -6,6 +6,89 @@ use super::types::{
     DetachedSubagentStatus, SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitError,
 };
 
+/// One owner-scoped live job and its matching durable reusable-session view.
+#[derive(Clone, Debug)]
+pub struct ParentRosterEntry {
+    /// Stable child task identity.
+    pub task_id: String,
+    /// Child agent identifier.
+    pub agent_id: String,
+    /// Current live job, when the child is still registered in this process.
+    pub live_job: Option<crate::subagent::SubAgentJob>,
+    /// Durable resumable-session summary for this task, when present.
+    pub session: Option<crate::subagent::DurableSubagentSessionSummary>,
+}
+
+/// Builds a stable roster from the actual subagent-job registry and sessions
+/// already read through a [`ScopedSubagentSessionStore`][crate::subagent::ScopedSubagentSessionStore]
+/// bound to the same authenticated parent/workspace. Session summaries do not
+/// carry workspace ownership, so callers must not pass summaries from a global
+/// store or another workspace. Sessions with another parent thread are still
+/// excluded here; the owner and workspace/thread scope live jobs.
+pub fn parent_roster_for_owner(
+    jobs: &crate::subagent::SubAgentJobRegistry,
+    owner: &str,
+    scope: &crate::subagent::ParentJobScope,
+    sessions: &[crate::subagent::DurableSubagentSessionSummary],
+) -> Result<Vec<ParentRosterEntry>, crate::subagent::SubAgentJobError> {
+    let mut entries = std::collections::BTreeMap::<String, ParentRosterEntry>::new();
+    for job in jobs.list_for_parent_scope(owner, scope)? {
+        let task_id = job
+            .extensions
+            .get("task_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(job.id.as_str())
+            .to_owned();
+        entries.insert(
+            task_id.clone(),
+            ParentRosterEntry {
+                task_id,
+                agent_id: job.agent.clone(),
+                live_job: Some(job),
+                session: None,
+            },
+        );
+    }
+    for session in sessions
+        .iter()
+        .filter(|session| session.parent_thread_id.as_deref() == Some(scope.thread_id.as_str()))
+    {
+        let Some(task_id) = session.current_task_id.as_deref() else {
+            continue;
+        };
+        let entry = entries
+            .entry(task_id.to_owned())
+            .or_insert_with(|| ParentRosterEntry {
+                task_id: task_id.to_owned(),
+                agent_id: session.agent_id.clone(),
+                live_job: None,
+                session: None,
+            });
+        entry.session = Some(session.clone());
+    }
+    let mut entries: Vec<_> = entries.into_values().collect();
+    entries.sort_by(|left, right| {
+        left.agent_id
+            .cmp(&right.agent_id)
+            .then_with(|| left.task_id.cmp(&right.task_id))
+    });
+    Ok(entries)
+}
+
+/// Applies host wording to the actual owner-filtered live and durable roster.
+/// The callback receives stable data, including `AwaitingUser` session state,
+/// without TinyAgents imposing product-specific prose.
+pub fn format_parent_roster_for_owner(
+    jobs: &crate::subagent::SubAgentJobRegistry,
+    owner: &str,
+    scope: &crate::subagent::ParentJobScope,
+    sessions: &[crate::subagent::DurableSubagentSessionSummary],
+    format: impl FnOnce(&[ParentRosterEntry]) -> String,
+) -> Result<String, crate::subagent::SubAgentJobError> {
+    let entries = parent_roster_for_owner(jobs, owner, scope, sessions)?;
+    Ok(format(&entries))
+}
+
 /// Snapshot the subagents registered under `owner`, with live status, ordered
 /// by `agent_id` then `task_id` so a rendered roster is stable across turns.
 /// A poisoned registry lock surfaces as [`WaitError::RegistryPoisoned`].
@@ -32,6 +115,22 @@ where
             .then_with(|| a.task_id.cmp(&b.task_id))
     });
     Ok(out)
+}
+
+/// Formats an owner's stable roster through host-supplied wording.
+///
+/// The callback receives only the owner-filtered, deterministically ordered
+/// snapshot. TinyAgents supplies data and ordering; hosts own prompt wording.
+pub fn format_roster_for_owner<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    owner: &str,
+    format: impl FnOnce(&[SubagentSnapshot]) -> String,
+) -> Result<String, WaitError>
+where
+    M: SubagentIdentity + Clone + Send + Sync + 'static,
+{
+    let snapshot = snapshot_for_owner(registry, owner)?;
+    Ok(format(&snapshot))
 }
 
 /// Resolve a durable session id to the live task id, enforcing ownership. A

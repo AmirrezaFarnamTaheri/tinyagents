@@ -21,6 +21,182 @@ async fn jobs_are_registered_in_the_shared_detached_registry() {
 }
 
 #[tokio::test]
+async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
+    use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_tasks::{
+        CompletionRecord, CompletionResult, CompletionRouter, CompletionStatus,
+        InMemoryCompletionStore, RecordOutcome,
+    };
+
+    let jobs = SubAgentJobRegistry::new();
+    let completions = CompletionRouter::new(std::sync::Arc::new(InMemoryCompletionStore::new()));
+    let key = crate::subagent::SubagentTaskKey {
+        root_run_id: "root".into(),
+        parent_run_id: "parent".into(),
+        thread_id: Some("thread".into()),
+        task_id: "child".into(),
+    };
+    let token = CancellationToken::new();
+    let (id, _, _, registered_token, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: key.clone(),
+            agent: "worker".into(),
+            owner: "owner-a".into(),
+            workspace: Some(tinytools::WorkspaceDescriptor::new("/workspace/a")),
+            cancellation: token.clone(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    assert!(inserted);
+    assert!(!registered_token.is_cancelled());
+
+    assert!(
+        jobs.cancel_key_owned_and_tombstone(&key, "owner-b", &completions)
+            .is_err()
+    );
+    assert!(!token.is_cancelled());
+    let late_completion = CompletionRecord::new(
+        "child",
+        "thread",
+        "worker",
+        CompletionStatus::Success,
+        CompletionResult::text("late output"),
+    );
+    assert!(matches!(
+        completions.record(late_completion.clone()).await.unwrap(),
+        RecordOutcome::Recorded { .. }
+    ));
+    let canceled = jobs
+        .cancel_key_owned_and_tombstone(&key, "owner-a", &completions)
+        .unwrap();
+    assert!(token.is_cancelled());
+    assert_eq!(canceled.status, SubAgentJobStatus::Cancelled);
+
+    jobs.mark_driver_result(
+        &id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "child",
+            "late output",
+        )),
+    );
+    let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
+    assert_eq!(retained.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(retained.output, None);
+    jobs.mark_driver_result(&id, Err("late failure".into()));
+    let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
+    assert_eq!(retained.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(retained.error, Some(TinyAgentsError::Cancelled.to_string()));
+    assert_eq!(
+        completions.record(late_completion).await.unwrap(),
+        RecordOutcome::Suppressed
+    );
+    assert!(completions.pending_for("thread").is_empty());
+}
+
+#[tokio::test]
+async fn live_job_metadata_retains_parent_thread_and_workspace() {
+    let jobs = SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
+    let (job_id, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        tinyagents_harness::cancel::CancellationToken::new(),
+        JobLink {
+            parent_thread_id: Some("thread-7".into()),
+            workspace: Some(workspace.clone()),
+            ..JobLink::default()
+        },
+    );
+    let snapshot = jobs
+        .tasks()
+        .snapshot(&TaskId::new(job_id.as_str()), "7")
+        .unwrap();
+    assert_eq!(
+        snapshot.metadata.parent_thread_id.as_deref(),
+        Some("thread-7")
+    );
+    assert_eq!(snapshot.metadata.workspace, Some(workspace));
+}
+
+#[tokio::test]
+async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
+    let thread_token = CancellationToken::new();
+    let other_token = CancellationToken::new();
+    let (thread_job, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        thread_token.clone(),
+        JobLink {
+            parent_thread_id: Some("thread-a".into()),
+            workspace: Some(workspace.clone()),
+            ..JobLink::default()
+        },
+    );
+    let (other_job, _) = jobs.create_with_cancellation(
+        "worker",
+        7,
+        other_token.clone(),
+        JobLink {
+            parent_thread_id: Some("thread-b".into()),
+            workspace: Some(workspace.clone()),
+            ..JobLink::default()
+        },
+    );
+
+    let scope = ParentJobScope::new(workspace, "thread-a");
+    assert_eq!(jobs.cancel_for_thread(&scope).unwrap(), 1);
+    assert!(thread_token.is_cancelled());
+    assert!(!other_token.is_cancelled());
+    assert!(jobs.get(thread_job.as_str()).is_some());
+    assert!(!jobs.get(thread_job.as_str()).unwrap().status.is_terminal());
+    assert_eq!(jobs.cancel_for_thread(&scope).unwrap(), 0);
+
+    assert_eq!(jobs.cancel_all().unwrap(), 1);
+    assert!(other_token.is_cancelled());
+    assert!(jobs.get(other_job.as_str()).is_some());
+}
+
+#[tokio::test]
+async fn thread_cancellation_is_scoped_to_workspace() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let workspace_a = tinytools::WorkspaceDescriptor::new("/workspace/a");
+    let workspace_b = tinytools::WorkspaceDescriptor::new("/workspace/b");
+    let token_a = CancellationToken::new();
+    let token_b = CancellationToken::new();
+    for (token, workspace) in [
+        (token_a.clone(), workspace_a.clone()),
+        (token_b.clone(), workspace_b),
+    ] {
+        jobs.create_with_cancellation(
+            "worker",
+            7,
+            token,
+            JobLink {
+                parent_thread_id: Some("same-thread".into()),
+                workspace: Some(workspace),
+                ..JobLink::default()
+            },
+        );
+    }
+
+    assert_eq!(
+        jobs.cancel_for_thread(&ParentJobScope::new(workspace_a, "same-thread"))
+            .unwrap(),
+        1
+    );
+    assert!(token_a.is_cancelled());
+    assert!(!token_b.is_cancelled());
+}
+
+#[tokio::test]
 async fn steering_is_reachable_while_live_and_released_when_settled() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);
@@ -231,4 +407,34 @@ async fn message_request_ids_are_bounded_per_job() {
             .unwrap()
     );
     assert_eq!(steering.pending(), 66);
+}
+
+#[tokio::test]
+async fn cancel_all_for_workspace_does_not_cross_workspace_boundaries() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let workspace_a = tinytools::WorkspaceDescriptor::new("/workspace/a");
+    let workspace_b = tinytools::WorkspaceDescriptor::new("/workspace/b");
+    let token_a = CancellationToken::new();
+    let token_b = CancellationToken::new();
+    for (token, workspace) in [
+        (token_a.clone(), workspace_a.clone()),
+        (token_b.clone(), workspace_b),
+    ] {
+        jobs.create_with_cancellation(
+            "worker",
+            7,
+            token,
+            JobLink {
+                workspace: Some(workspace),
+                ..JobLink::default()
+            },
+        );
+    }
+
+    assert_eq!(jobs.cancel_all_for_workspace(&workspace_a).unwrap(), 1);
+    assert!(token_a.is_cancelled());
+    assert!(!token_b.is_cancelled());
+    assert_eq!(jobs.cancel_all_for_workspace(&workspace_a).unwrap(), 0);
 }

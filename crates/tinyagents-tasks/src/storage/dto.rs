@@ -104,6 +104,8 @@ impl TaskDoc {
 pub(crate) struct CompletionDoc {
     pub(crate) task_id: String,
     pub(crate) parent_key: String,
+    #[serde(default)]
+    pub(crate) parent_epoch: u64,
     pub(crate) agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) label: Option<String>,
@@ -115,6 +117,8 @@ pub(crate) struct CompletionDoc {
     pub(crate) state: CompletionState,
     #[serde(default)]
     pub(crate) notify_mode: NotifyMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) claim: Option<crate::completions::CompletionClaim>,
 }
 
 impl CompletionDoc {
@@ -122,6 +126,7 @@ impl CompletionDoc {
         Self {
             task_id: record.task_id.clone(),
             parent_key: record.parent_key.clone(),
+            parent_epoch: record.parent_epoch,
             agent_id: record.agent_id.clone(),
             label: record.label.clone(),
             status: record.status,
@@ -130,6 +135,7 @@ impl CompletionDoc {
             attempts: record.attempts,
             state: record.state,
             notify_mode: record.notify_mode,
+            claim: record.claim.clone(),
         }
     }
 
@@ -139,6 +145,7 @@ impl CompletionDoc {
         CompletionRecord {
             task_id: self.task_id,
             parent_key: self.parent_key,
+            parent_epoch: self.parent_epoch,
             agent_id: self.agent_id,
             label: self.label,
             status: self.status,
@@ -148,6 +155,7 @@ impl CompletionDoc {
             attempts: self.attempts,
             state: self.state,
             notify_mode: self.notify_mode,
+            claim: self.claim,
         }
     }
 }
