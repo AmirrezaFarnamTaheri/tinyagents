@@ -57,6 +57,10 @@ pub use types::{
 };
 
 #[cfg(test)]
+#[path = "durable_lease_tests.rs"]
+mod durable_lease_tests;
+
+#[cfg(test)]
 #[path = "router_tests.rs"]
 mod router_tests;
 
