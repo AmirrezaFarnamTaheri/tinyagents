@@ -517,9 +517,11 @@ to hooks/resume. Resolver failure returns immediately without touching the
 current or fallback locator. A session-bound target may keep its own fixed
 locator only when no resolver is installed.
 
-Put the resolved identity in `SessionStateView` as
-`Option<&SessionIdentity>` so `before_resume` can observe it without
-re-resolving. Store it on `Session<C>` for the entire turn, clear it before
+Put the last established binding in `SessionStateView` as
+`Option<&SessionIdentity>` for diagnostics and hook decisions; it is not
+authority for the current turn. The current resolver result is produced only
+after `before_resume` and `apply_resume_preparation`, then checked before any
+lock or locator access. Store it on `Session<C>` for the duration of each operation, clear it before
 each resolution attempt, and reject a later identity whose `first_generation`
 or admitted lease destination differs from the established identity. This
 prevents one live `Session` from crossing tenant boundaries. The resolver is
@@ -651,7 +653,7 @@ Run `cargo test -p tinyagents-runtime identity_resolver` and then
 `port/drivers/rebound_tests.rs`, `port/workspace_tests.rs`, and
 `testkit/conformance.rs`.
 
-In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement `SessionStoreLease { stores: AgentStores }` with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `RebindableSessionStores::lease_for_agent` clones `self.current()` while holding the read lock and opens through that snapshot, retaining the snapshot's tenant. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
+In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores, _owner }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `RebindableSessionStores::lease_for_agent` clones `self.current()` while holding the read lock and opens through that snapshot, retaining the snapshot's tenant. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
 
 ### 5. Capture tool observations and route post-commit sinks in the owned finalizer
 
