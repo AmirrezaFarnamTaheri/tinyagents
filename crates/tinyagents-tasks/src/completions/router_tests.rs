@@ -916,7 +916,10 @@ async fn parents_with_pending_and_cancel_all_use_durable_parent_markers() {
     assert!(router.parents_with_pending().unwrap().is_empty());
     assert!(!router.admit_child("parent-a").unwrap());
     assert!(!router.admit_child("parent-b").unwrap());
-    assert!(router.admit_child("parent-c").unwrap());
+    assert!(
+        !router.admit_child("parent-c").unwrap(),
+        "the bulk close also closes a known open parent with only settled records"
+    );
 }
 
 #[test]
