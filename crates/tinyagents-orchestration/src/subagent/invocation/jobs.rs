@@ -245,9 +245,9 @@ impl SubAgentJobRegistry {
 
     fn prune_terminal_over_cap_locked(
         &self,
-        driver_jobs: &mut std::sync::MutexGuard<
-            '_,
-            std::collections::HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
         >,
         controls: &mut std::sync::MutexGuard<
             '_,
