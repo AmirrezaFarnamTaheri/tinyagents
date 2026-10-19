@@ -73,7 +73,7 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
 
     pub fn decide(&self, scope: &S, request_id: &str, resolution: PlanReviewResolution) -> bool {
         let mut state = self.state.lock();
-        if !state.entries.get(request_id).is_some_and(|entry| &entry.snapshot.scope == scope) { return false; }
+        if !state.entries.get(request_id).is_some_and(|entry| entry.snapshot.scope.eq(scope)) { return false; }
         let entry = state.entries.remove(request_id).expect("entry checked above");
         let key = (entry.snapshot.scope.clone(), entry.snapshot.thread_id.clone());
         if state.newest.get(&key).is_some_and(|id| id == request_id) { state.newest.remove(&key); }
@@ -84,7 +84,7 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
     /// path. Hosts use this when the review surface is withdrawn.
     pub fn cancel(&self, scope: &S, request_id: &str) -> bool {
         let mut state = self.state.lock();
-        if !state.entries.get(request_id).is_some_and(|entry| &entry.snapshot.scope == scope) { return false; }
+        if !state.entries.get(request_id).is_some_and(|entry| entry.snapshot.scope.eq(scope)) { return false; }
         let entry = state.entries.remove(request_id).expect("entry checked above");
         let key = (entry.snapshot.scope.clone(), entry.snapshot.thread_id.clone());
         if state.newest.get(&key).is_some_and(|id| id == request_id) { state.newest.remove(&key); }
@@ -92,7 +92,7 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
         true
     }
     pub fn decide_by_thread(&self, scope: &S, thread_id: &str, resolution: PlanReviewResolution) -> bool {
-        let id = self.state.lock().newest.get(&(scope.clone(), thread_id.to_owned())).cloned();
+        let id: Option<String> = self.state.lock().newest.get(&(scope.clone(), thread_id.to_owned())).map(String::clone);
         id.is_some_and(|id| self.decide(scope, &id, resolution))
     }
     pub fn parked_review_for_thread(&self, scope: &S, thread_id: &str) -> Option<ParkedReview<S>> {

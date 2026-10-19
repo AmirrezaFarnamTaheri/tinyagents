@@ -1,4 +1,6 @@
 use super::*;
+use std::{sync::Arc, time::Duration};
+use crate::plan_review::PlanReviewRequest;
 use std::sync::Mutex as StdMutex;
 
 #[derive(Default)] struct Events(StdMutex<Vec<(String, PlanReviewReason)>>);
@@ -11,7 +13,7 @@ fn store(ttl: Duration) -> (Arc<PlanReviewStore<u8>>, Arc<Events>) {
     (Arc::new(PlanReviewStore::with_ttl(ttl, events.clone())), events)
 }
 fn request(store: Arc<PlanReviewStore<u8>>, scope: u8, thread: &str) -> tokio::task::JoinHandle<PlanReviewResolution> {
-    tokio::spawn(async move { store.request_review(scope, thread.into(), None, super::super::PlanReviewRequest { summary: "plan".into(), steps: vec!["one".into()] }, None).await })
+    tokio::spawn(async move { store.request_review(scope, thread.into(), None, PlanReviewRequest { summary: "plan".into(), steps: vec!["one".into()] }, None).await })
 }
 
 #[tokio::test(start_paused = true)]

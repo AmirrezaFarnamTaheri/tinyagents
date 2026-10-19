@@ -50,7 +50,7 @@ fs = ["dep:base64", "dep:fs2", "dep:glob", "dep:libc", "dep:log", "dep:parking_l
 net = ["dep:futures-util", "dep:log", "dep:reqwest", "dep:sha2", "tokio/fs", "tokio/io-util"]
 exec = ["dep:rustix", "tokio/fs", "tokio/io-util", "tokio/process"]
 media = []
-plan-review = []
+plan-review = ["dep:parking_lot"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
