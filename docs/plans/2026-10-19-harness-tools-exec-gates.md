@@ -224,7 +224,6 @@ use async_trait::async_trait;
 pub struct PlanReviewRequest {
     pub summary: String,
     pub steps: Vec<String>,
-    pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +240,16 @@ pub trait PlanReviewPort: Send + Sync {
         request: PlanReviewRequest,
         context: Option<&dyn tinytools::ToolRunContext>,
     ) -> Result<PlanReviewResolution, String>;
+}
+
+pub struct RequestPlanReviewTool {
+    port: Option<std::sync::Arc<dyn PlanReviewPort>>,
+}
+
+impl RequestPlanReviewTool {
+    pub fn new(port: Option<std::sync::Arc<dyn PlanReviewPort>>) -> Self {
+        Self { port }
+    }
 }
 ```
 
