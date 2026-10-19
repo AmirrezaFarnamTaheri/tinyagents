@@ -137,6 +137,11 @@ impl SessionStoreLease {
 }
 ```
 
+Its constructor remains private to `port`; only
+`SessionStoreProvider::lease_for_agent` creates it, preventing a host from
+wrapping a live forwarding handle and accidentally calling that a pinned
+lease.
+
 Add `SessionStoreProvider::lease_for_agent(&self, agent_id: &str)` with a
 default implementation that opens `try_for_agent(agent_id)` once and wraps the
 returned handles. `RebindableSessionStores` overrides it by snapshotting the
@@ -147,10 +152,8 @@ lease by resolving its actor first and supplying the corresponding backend
 and `Scope`; TinyAgents stores those supplied values but performs no tenant
 lookup.
 
-For backend-specific leased opens, provide a named provider constructor or
-method that retains the caller-supplied backend and stable `Scope` for the
-lease lifetime. Rebind may update the provider's current backend for future
-opens, but must not mutate an already returned lease. `WorkspaceStores::open`
+Rebind may update the provider's current backend for future opens, but must
+not mutate an already returned lease. `WorkspaceStores::open`
 continues to cache its ordinary workspace-bound handles; it must not become a
 global mutable routing point.
 
@@ -416,8 +419,16 @@ source edits are part of this plan.
 `transcript.rs`, and new `transcript/adoption_tests.rs` declared from
 `transcript.rs` as `#[cfg(test)] #[path = "transcript/adoption_tests.rs"] mod adoption_tests;`.
 
-First add this failing test (using the crate's existing `TranscriptMessage`
-constructors):
+First add this failing runtime behavior test in
+`crates/tinyagents-runtime/src/session_tests.rs`: build a session with the
+existing in-memory transcript locator, append rows `[system, tool orphan,
+user next]`, resume it, and assert the driver's resumed history is
+`[system, user next]` while `read_session_transcript` still returns all three
+durable rows. This exercises a currently callable public path and fails on the
+wrong history contents; it is not a test that merely names a missing helper.
+Then add direct parity tests in the new session `adoption_tests.rs` for both
+`TranscriptMessage` and inference `Message` representations. The direct rows
+fixture is:
 
 ```rust
 #[test]
@@ -437,15 +448,12 @@ fn repair_removes_only_tool_rows_after_the_leading_system_prefix() {
 }
 ```
 
-Run `cargo test -p tinyagents-session repair_removes_only_tool_rows_after_the_leading_system_prefix`; it must fail because the helper is absent. Implement the borrowed fast path as
-`pub fn repair_orphaned_tool_head(rows: &[TranscriptMessage]) -> Cow<'_, [TranscriptMessage]>`, returning `Cow::Borrowed(rows)` for zero head rows and otherwise an owned vector of the system prefix chained with the untouched remainder after leading tool rows. Add a second test with a later orphan and assert it remains in the returned replay view, plus a no-orphan test asserting `matches!(..., Cow::Borrowed(_))`. Run the focused filter and then `cargo test -p tinyagents-session`.
+After the runtime red test fails, add the helper implementation to `adoption.rs`, call it on raw rows before codec decoding and on decoded `Message` history before dispatch, and keep `persisted` raw rows unchanged. Add a second test with a later orphan and assert it remains in the returned replay view, plus a no-orphan test asserting `matches!(..., Cow::Borrowed(_))`. Run `cargo test -p tinyagents-runtime orphaned_tool_head` for the red/green behavioral regression, then `cargo test -p tinyagents-session adoption_tests`, and `cargo test -p tinyagents-runtime`.
 
 ### 2. Adopt legacy transcripts into canonical identity without changing old files
 
-**Files:** `crates/tinyagents-session/src/transcript/session.rs` only if the
-existing constructors need an additive helper; otherwise
-`transcript/session_tests.rs`, `transcript/session_tests.rs`, and
-`transcript/transcript_tests.rs`.
+**Files:** `crates/tinyagents-session/src/transcript/session_tests.rs` and
+`crates/tinyagents-session/src/transcript/transcript_tests.rs`.
 
 Do not parse a legacy filename into a new canonical stem. Add a regression to
 `transcript/session_tests.rs` using `SessionRef::scoped("thread-legacy",
@@ -488,9 +496,9 @@ before every handle open. Do not fall back after resolver errors. Run
 
 ### 4. Add explicit pinned store leases without changing live rebind
 
-**Files:** `crates/tinyagents-session/src/port/{mod.rs,types.rs,drivers/rebound.rs,workspace.rs}`
-and sibling `rebound_tests.rs`, `workspace_tests.rs`, and
-`testkit/conformance.rs` as needed.
+**Files:** `crates/tinyagents-session/src/port/{mod.rs,types.rs,drivers/rebound.rs}`,
+`port/drivers/rebound_tests.rs`, `port/workspace_tests.rs`, and
+`testkit/conformance.rs`.
 
 In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: create provider over `MemoryStorage`, open `lease_for_agent`, write key `("prefs", "key")`, rebind to a fresh `MemoryStorage`, assert the lease still reads/writes the old backend, and assert `lease_for_agent` after rebind reads/writes the new backend. Run `cargo test -p tinyagents-session a_lease_keeps_its_backend_while_new_opens_follow_rebind`; it must fail because `lease_for_agent` is missing. Implement `SessionStoreLease` as an owning `AgentStores` wrapper; add the default provider method wrapping `try_for_agent`; override it in `RebindableSessionStores` by calling `self.current().try_for_agent(agent_id)` and wrapping the returned non-live stores. Add tenant test with two `Scope`s and one backend proving each lease sees only its own agent records. Retain and run the existing `retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes` test unchanged. Then run `cargo test -p tinyagents-session port::drivers::rebound` and `cargo test -p tinyagents-session`.
 
