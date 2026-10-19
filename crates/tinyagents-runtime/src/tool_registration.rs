@@ -6,12 +6,63 @@
 //! dropped on thread-less turns, and spawn/delegate tools never handed to a
 //! sub-agent run whatever the allowlist says.
 
-use std::collections::HashSet;
+use std::collections::{HashSet};
 use std::sync::Arc;
 
 use tinyagents_harness::runtime::AgentHarness;
+use tinyagents_harness::{context::RunContext, middleware::{PolicyDecision, ToolCallPolicy}};
 use tinyagents_harness::tool::ToolDispatch;
-use tinytools::Tool;
+use tinyinference_llm::tool::ToolCall;
+use tinytools::{Tool, ToolSpec};
+
+/// A deny-by-default host belt that may delegate allowed calls to host policy.
+pub struct HostOnlyToolPolicy<C: Send + Sync + 'static> {
+    allowed: HashSet<String>,
+    host: Option<Arc<dyn ToolCallPolicy<C>>>,
+}
+
+impl<C: Send + Sync + 'static> HostOnlyToolPolicy<C> {
+    pub fn new(
+        allowed: impl IntoIterator<Item = String>,
+        host: Option<Arc<dyn ToolCallPolicy<C>>>,
+    ) -> Self {
+        Self { allowed: allowed.into_iter().collect(), host }
+    }
+}
+
+#[async_trait::async_trait]
+impl<C: Send + Sync + 'static> ToolCallPolicy<C> for HostOnlyToolPolicy<C> {
+    fn name(&self) -> &str { "host_only" }
+
+    async fn check(&self, ctx: &RunContext<C>, call: &ToolCall) -> PolicyDecision {
+        if !self.allowed.contains(&call.name) {
+            return PolicyDecision::deny(format!(
+                "tool `{}` is not in this host-only belt", call.name
+            ));
+        }
+        match &self.host {
+            Some(host) => host.check(ctx, call).await,
+            None => PolicyDecision::Allow,
+        }
+    }
+}
+
+/// Keeps the first declaration for each name, preserving order and allocation.
+pub fn dedup_visible_tool_specs(specs: Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>> {
+    let mut names = HashSet::new();
+    specs.into_iter().filter(|spec| names.insert(spec.name.clone())).collect()
+}
+
+/// Removes synthesized declarations shadowed by durable declarations.
+pub fn drop_synthesized_name_collisions(
+    durable: &[Arc<ToolSpec>],
+    synthesized: Vec<Arc<ToolSpec>>,
+) -> Vec<Arc<ToolSpec>> {
+    let durable_names: HashSet<&str> = durable.iter().map(|spec| spec.name.as_str()).collect();
+    synthesized.into_iter()
+        .filter(|spec| !durable_names.contains(spec.name.as_str()))
+        .collect()
+}
 
 /// How one admitted tool is registered on the harness.
 pub enum ToolRegistration<State, C> {

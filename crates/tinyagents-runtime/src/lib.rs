@@ -34,7 +34,8 @@ pub use prefix::PrefixSnapshot;
 pub use session::Session;
 pub use tinyagents_session::transcript::TranscriptPartial;
 pub use tool_registration::{
-    RegistrationPlan, ToolAdmission, ToolRegistration, ToolSurfaceDiff, plan_registration,
+    HostOnlyToolPolicy, RegistrationPlan, ToolAdmission, ToolRegistration, ToolSurfaceDiff,
+    dedup_visible_tool_specs, drop_synthesized_name_collisions, plan_registration,
     register_admitted, tool_surface_diff,
 };
 pub use types::{
