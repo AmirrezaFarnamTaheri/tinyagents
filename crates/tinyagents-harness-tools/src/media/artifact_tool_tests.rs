@@ -142,6 +142,136 @@ impl Tool for MultiInner {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MetadataInner {
+    temporary: bool,
+}
+impl MetadataInner {
+    fn text(&self, retained: &'static str, temporary: &'static str) -> &'static str {
+        if self.temporary { temporary } else { retained }
+    }
+}
+#[async_trait]
+impl Tool for MetadataInner {
+    fn name(&self) -> &str {
+        self.text("retained_media", "temporary_media")
+    }
+    fn description(&self) -> &str {
+        self.text("retained description", "temporary description")
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object","properties":{"source":{"const":self.text("retained","temporary")}}})
+    }
+    fn policy(&self) -> ToolPolicy {
+        ToolPolicy::classified()
+            .with_side_effects(ToolSideEffects {
+                network: !self.temporary,
+                writes_files: self.temporary,
+                ..ToolSideEffects::default()
+            })
+            .with_access(ToolAccess {
+                workspace: WorkspaceAccess::Scoped,
+                trusted_roots: vec![self.text("/retained", "/temporary").into()],
+                approval_required: !self.temporary,
+                ..ToolAccess::default()
+            })
+    }
+    fn permission_level(&self) -> PermissionLevel {
+        if self.temporary {
+            PermissionLevel::Write
+        } else {
+            PermissionLevel::ReadOnly
+        }
+    }
+    fn permission_level_with_args(&self, args: &Value) -> PermissionLevel {
+        if args["danger"] == true {
+            PermissionLevel::Dangerous
+        } else {
+            self.permission_level()
+        }
+    }
+    fn scope(&self) -> ToolScope {
+        if self.temporary {
+            ToolScope::AgentOnly
+        } else {
+            ToolScope::CliRpcOnly
+        }
+    }
+    fn category(&self) -> ToolCategory {
+        if self.temporary {
+            ToolCategory::System
+        } else {
+            ToolCategory::Workflow
+        }
+    }
+    fn external_effect(&self) -> bool {
+        self.temporary
+    }
+    fn external_effect_with_args(&self, args: &Value) -> bool {
+        args["send"] == true
+    }
+    fn max_result_size_chars(&self) -> Option<usize> {
+        Some(if self.temporary { 22 } else { 11 })
+    }
+    fn supports_markdown(&self) -> bool {
+        !self.temporary
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success_with_markdown(
+            json!({"artifacts":[
+                {"type":"image","path":"blob:first"},
+                {"type":"video","path":"blob:second"}
+            ]}),
+            "blob:first then blob:second",
+        ))
+    }
+}
+
+async fn assert_retained_metadata(factory: bool) {
+    let retained = MetadataInner { temporary: false };
+    let filer = Arc::new(Filer::default());
+    let mut tool = MediaArtifactTool::new(retained, MediaArtifactKind::Image, filer.clone());
+    if factory {
+        tool = tool.with_per_call_inner(Arc::new(|_, _| MetadataInner { temporary: true }));
+    }
+    let assert_metadata = |tool: &MediaArtifactTool<MetadataInner>| {
+        assert_eq!(tool.name(), "retained_media");
+        assert_eq!(tool.description(), "retained description");
+        assert_eq!(
+            tool.parameters_schema(),
+            json!({"type":"object","properties":{"source":{"const":"retained"}}})
+        );
+        assert_eq!(tool.policy(), retained.policy());
+        assert_eq!(tool.scope(), ToolScope::CliRpcOnly);
+        assert_eq!(tool.category(), ToolCategory::Workflow);
+        assert_eq!(tool.permission_level(), PermissionLevel::ReadOnly);
+        assert_eq!(
+            tool.permission_level_with_args(&json!({"danger":true})),
+            PermissionLevel::Dangerous
+        );
+        assert!(!tool.external_effect());
+        assert!(tool.external_effect_with_args(&json!({"send":true})));
+        assert_eq!(tool.max_result_size_chars(), Some(11));
+        assert!(tool.supports_markdown());
+    };
+    assert_metadata(&tool);
+    let long_prompt = format!("{}", "x".repeat(70));
+    tool.execute(json!({"prompt":long_prompt})).await.unwrap();
+    assert_metadata(&tool);
+    let filed = filer.0.lock().unwrap();
+    assert_eq!(filed.len(), 2);
+    assert_eq!(filed[0].title, format!("{} (1/2)", "x".repeat(60)));
+    assert_eq!(filed[1].title, format!("{} (2/2)", "x".repeat(60)));
+    assert_eq!(filed[0].artifact_kind, MediaArtifactKind::Image);
+    assert_eq!(filed[1].artifact_kind, MediaArtifactKind::Image);
+}
+
+#[tokio::test]
+async fn retained_metadata_survives_execution_with_and_without_per_call_factory() {
+    assert_retained_metadata(false).await;
+    assert_retained_metadata(true).await;
+}
+
 struct ConcurrentInner {
     identity: &'static str,
     progress: MediaProgressFn,
@@ -149,13 +279,23 @@ struct ConcurrentInner {
 }
 #[async_trait]
 impl Tool for ConcurrentInner {
-    fn name(&self) -> &str { "concurrent" }
-    fn description(&self) -> &str { "per-call concurrent tool" }
-    fn parameters_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "concurrent"
+    }
+    fn description(&self) -> &str {
+        "per-call concurrent tool"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
         (self.progress)(&MediaJobProgress {
-            id: self.identity.into(), state: format!("{}-job", self.identity),
-            outputs: 2, output_indices: vec![0, 1], cost_usd: None, error: None,
+            id: self.identity.into(),
+            state: format!("{}-job", self.identity),
+            outputs: 2,
+            output_indices: vec![0, 1],
+            cost_usd: None,
+            error: None,
         });
         self.barrier.wait().await;
         tokio::time::sleep(Duration::from_secs(20)).await;
@@ -271,27 +411,41 @@ async fn wrapper_keeps_metadata_and_files_each_artifact() {
 async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_results() {
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let factory_barrier = Arc::clone(&barrier);
-    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, Arc::new(RoutingFiler))
-        .with_per_call_inner(Arc::new(move |progress, context| {
-            let identity = context
-                .and_then(|context| context.host_extension())
-                .and_then(|extension| extension.downcast_ref::<CallIdentity>())
-                .expect("factory receives each invocation context")
-                .0;
-            ConcurrentInner {
-                identity,
-                progress,
-                barrier: Arc::clone(&factory_barrier),
-            }
-        }))
-        .with_tool_call_id(Arc::new(|context| {
-            context
-                .and_then(|context| context.host_extension())
-                .and_then(|extension| extension.downcast_ref::<CallIdentity>())
-                .map(|identity| identity.0.to_owned())
-        }));
-    let first = Context { identity: CallIdentity("first"), progress: Mutex::new(Vec::new()) };
-    let second = Context { identity: CallIdentity("second"), progress: Mutex::new(Vec::new()) };
+    let tool = MediaArtifactTool::new(
+        ConcurrentInner {
+            identity: "unused",
+            progress: Arc::new(|_| {}),
+            barrier: Arc::clone(&barrier),
+        },
+        MediaArtifactKind::Image,
+        Arc::new(RoutingFiler),
+    )
+    .with_per_call_inner(Arc::new(move |progress, context| {
+        let identity = context
+            .and_then(|context| context.host_extension())
+            .and_then(|extension| extension.downcast_ref::<CallIdentity>())
+            .expect("factory receives each invocation context")
+            .0;
+        ConcurrentInner {
+            identity,
+            progress,
+            barrier: Arc::clone(&factory_barrier),
+        }
+    }))
+    .with_tool_call_id(Arc::new(|context| {
+        context
+            .and_then(|context| context.host_extension())
+            .and_then(|extension| extension.downcast_ref::<CallIdentity>())
+            .map(|identity| identity.0.to_owned())
+    }));
+    let first = Context {
+        identity: CallIdentity("first"),
+        progress: Mutex::new(Vec::new()),
+    };
+    let second = Context {
+        identity: CallIdentity("second"),
+        progress: Mutex::new(Vec::new()),
+    };
     let (left, right) = tokio::join!(
         tool.execute_with_context(
             json!({"prompt":"first"}),
@@ -314,7 +468,10 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
             format!("/files/{identity}.png")
         );
         assert_eq!(data["artifacts"][1]["artifact_id"], identity);
-        assert_eq!(data["artifacts"][1]["path"], format!("/files/{identity}.png"));
+        assert_eq!(
+            data["artifacts"][1]["path"],
+            format!("/files/{identity}.png")
+        );
     }
     assert_eq!(
         *first.progress.lock().unwrap(),
