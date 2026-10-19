@@ -4,7 +4,7 @@
 
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-use super::test::{hermetic, init_git_repo, test_tool};
+use super::tests::{hermetic, init_git_repo, test_tool};
 use super::*;
 use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate, WorkspaceContext};
 use tempfile::TempDir;

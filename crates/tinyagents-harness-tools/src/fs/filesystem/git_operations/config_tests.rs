@@ -24,7 +24,7 @@ use super::config::{
 // The fixtures stay in `test.rs` and are shared rather than
 // duplicated: both modules are children of `git_operations`, so `pub(super)`
 // there makes them reachable here.
-use super::test::{error_text, hermetic, init_git_repo, test_tool};
+use super::tests::{error_text, hermetic, init_git_repo, test_tool};
 use super::*;
 use tempfile::TempDir;
 
