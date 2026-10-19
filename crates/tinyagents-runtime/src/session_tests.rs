@@ -2,7 +2,7 @@ use super::*;
 use crate::test_store::{memory, read, seed};
 use crate::{DriverFailure, DriverOutcome, SessionBuilder, TranscriptCodec};
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tinyagents_session::transcript::{
     BackgroundAppend, BackgroundAppendOutcome, SessionRef, SessionTranscript, TranscriptMessage,
     TranscriptMeta, session_stem,
@@ -43,6 +43,7 @@ impl TranscriptCodec for RoleCodec {
             .messages
             .iter()
             .map(|row| match row.role.as_str() {
+                "system" => Message::system(&row.content),
                 "user" => Message::user(&row.content),
                 _ => Message::assistant(&row.content),
             })
@@ -52,21 +53,216 @@ impl TranscriptCodec for RoleCodec {
     fn reconcile(
         &self,
         prior: &[TranscriptMessage],
-        _: &[Message],
+        previous: &[Message],
         next: &[Message],
         _: &crate::TranscriptTurnOptions,
     ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
         let mut rows = prior.to_vec();
+        let prior_system_count = prior.iter().take_while(|row| row.role == "system").count();
+        let next_system_count = next
+            .iter()
+            .take_while(|message| matches!(message, Message::System(_)))
+            .count();
+        if prior_system_count == 0 && next_system_count > 0 {
+            rows.splice(
+                0..0,
+                next[..next_system_count]
+                    .iter()
+                    .map(|message| TranscriptMessage::new("system", message.text())),
+            );
+        }
         rows.extend(
-            next[prior.len().min(next.len())..]
+            next[next_system_count
+                .saturating_add(previous.len())
+                .min(next.len())..]
                 .iter()
                 .map(|message| match message {
+                    Message::System(_) => TranscriptMessage::new("system", message.text()),
                     Message::User(_) => TranscriptMessage::user(message.text()),
                     _ => TranscriptMessage::assistant(message.text()),
                 }),
         );
         Ok(rows)
     }
+}
+
+struct CapturingDriver(Arc<Mutex<Vec<Vec<Message>>>>);
+
+#[async_trait]
+impl SessionDriver for CapturingDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        self.0.lock().unwrap().push(request.history.clone());
+        let mut history = request.history;
+        history.push(Message::assistant("reply"));
+        Ok(DriverOutcome {
+            outcome: None,
+            history,
+            output: Some("reply".into()),
+            partial: None,
+            interrupted: false,
+        })
+    }
+}
+
+struct PrefixWhenUnfrozen(&'static str);
+
+#[async_trait]
+impl SessionHooks for PrefixWhenUnfrozen {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        state: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation {
+            prefix: (!state.prefix_is_frozen)
+                .then(|| PrefixSnapshot::new(vec![Message::system(self.0)])),
+            ..TurnPreparation::default()
+        })
+    }
+
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
+/// An atomic import may create a durable session before its first model turn.
+/// The resumed history must still receive the host's initial prefix, while a
+/// later process must reuse that committed prefix rather than its new prompt.
+#[tokio::test]
+async fn imported_history_gets_initial_prefix_before_the_first_turn() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("relay-import", "agent");
+    let prior = vec![
+        TranscriptMessage::user("legacy question"),
+        TranscriptMessage::assistant("legacy answer"),
+    ];
+    assert!(
+        locator
+            .adopt_messages_if_absent(&session_ref, meta(), &prior)
+            .unwrap()
+    );
+
+    let first_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut first = SessionBuilder::new(Arc::new(CapturingDriver(first_requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("configured initial prompt")))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    first
+        .turn(
+            SessionTurnRequest::new(Message::user("current question")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref.clone()),
+                thread_id: Some("relay-import".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let first_history = first_requests.lock().unwrap()[0].clone();
+    assert!(matches!(&first_history[0], Message::System(_)));
+    assert_eq!(first_history[0].text(), "configured initial prompt");
+    assert!(matches!(&first_history[1], Message::User(_)));
+    assert_eq!(first_history[1].text(), "legacy question");
+    assert!(matches!(&first_history[2], Message::Assistant(_)));
+    assert_eq!(first_history[2].text(), "legacy answer");
+    assert!(matches!(&first_history[3], Message::User(_)));
+    assert_eq!(first_history[3].text(), "current question");
+    let head = locator.head_generation(&session_ref);
+    let persisted = locator
+        .read_session_transcript(&head)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.messages[0].role, "system");
+    assert_eq!(persisted.messages[0].content, "configured initial prompt");
+
+    let second_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut second = SessionBuilder::new(Arc::new(CapturingDriver(second_requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("replacement prompt")))
+        .session(locator, session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    second
+        .turn(
+            SessionTurnRequest::new(Message::user("after restart")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref),
+                thread_id: Some("relay-import".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let second_history = second_requests.lock().unwrap()[0].clone();
+    assert!(matches!(&second_history[0], Message::System(_)));
+    assert_eq!(second_history[0].text(), "configured initial prompt");
+    assert!(matches!(&second_history[1], Message::User(_)));
+    assert_eq!(second_history[1].text(), "legacy question");
+    assert!(matches!(&second_history[2], Message::Assistant(_)));
+    assert_eq!(second_history[2].text(), "legacy answer");
+    assert!(
+        matches!(&second_history[3], Message::User(_)),
+        "resumed request history: {:?}",
+        second_history.iter().map(Message::text).collect::<Vec<_>>()
+    );
+    assert_eq!(second_history[3].text(), "current question");
+    assert!(matches!(second_history.last(), Some(Message::User(_))));
+    assert_eq!(second_history.last().unwrap().text(), "after restart");
+}
+
+#[tokio::test]
+async fn an_explicit_empty_frozen_prefix_stays_empty() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("empty-prefix", "agent");
+    let mut explicit_empty_prefix = meta();
+    explicit_empty_prefix.prefix_message_count = Some(0);
+    seed(
+        locator.as_ref(),
+        &session_stem(&session_ref),
+        &[TranscriptMessage::user("existing message")],
+        &explicit_empty_prefix,
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut session = SessionBuilder::new(Arc::new(CapturingDriver(requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("must remain unused")))
+        .session(locator, session_ref.clone(), explicit_empty_prefix)
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("next message")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref),
+                thread_id: Some("empty-prefix".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        requests.lock().unwrap()[0]
+            .iter()
+            .all(|message| !matches!(message, Message::System(_)))
+    );
 }
 
 /// Answers each turn with `reply`, but only after the test releases it.

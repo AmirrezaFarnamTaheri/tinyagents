@@ -867,6 +867,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             history: &self.history,
             raw_history: &self.persisted,
             prefix: &self.prefix,
+            prefix_is_frozen: self.persisted_prefix_len.is_some()
+                || !self.prefix.messages().is_empty(),
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
