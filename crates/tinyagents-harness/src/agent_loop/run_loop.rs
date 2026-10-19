@@ -48,7 +48,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // observations during a run that then failed still gets them back.
         if let Some(queue) = ctx.run_queue.clone() {
             run.collected
-                .extend(queue.drain(crate::run_queue::QueueLane::Collect).await);
+                .extend(
+                    queue
+                        .take_admitted(
+                            crate::run_queue::QueueLane::Collect,
+                            self.policy.queue_mode,
+                        )
+                        .await
+                        .into_iter()
+                        .map(|item| item.value.clone()),
+                );
         }
 
         let exit = match outcome {
