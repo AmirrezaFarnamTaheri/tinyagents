@@ -77,6 +77,9 @@ pub enum CompletionState {
     Delivered,
     /// The parent collected the child explicitly, so it is not pushed from then on.
     Tombstoned,
+    /// The parent thread was deleted; this lifecycle marker is retained so
+    /// late child completions stay suppressed across compaction and restart.
+    ParentDeleted,
     /// Too many failed attempts. The host applies its own give-up policy.
     GaveUp,
 }
@@ -88,9 +91,33 @@ impl CompletionState {
             Self::Pending => "pending",
             Self::Delivered => "delivered",
             Self::Tombstoned => "tombstoned",
+            Self::ParentDeleted => "parent_deleted",
             Self::GaveUp => "gave_up",
         }
     }
+}
+
+/// A visibility claim held by one delivery attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionClaim {
+    /// Unique token for the claim; reclaiming a record replaces it.
+    pub token: String,
+    /// A later router may reclaim the record after this instant.
+    pub visible_after: SystemTime,
+}
+
+/// Capability carried by the consumer that owns one specific delivery attempt.
+/// A task id alone never authorizes settling a completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionReceipt {
+    /// The completion this attempt owns.
+    pub task_id: String,
+    /// Parent thread/session whose admission tenure accepted this delivery.
+    pub parent_key: String,
+    /// Durable parent admission epoch carried through host turn admission.
+    pub parent_epoch: u64,
+    /// The opaque token for this attempt.
+    pub token: String,
 }
 
 /// A neutral reference to a host-owned artifact holding the full output.
@@ -141,6 +168,10 @@ pub struct CompletionRecord {
     /// restart. A tombstone written before the completion exists carries an
     /// empty key.
     pub parent_key: String,
+    /// Fencing epoch of the parent admission lease that accepted this record.
+    /// Older records remain readable as epoch zero.
+    #[serde(default)]
+    pub parent_epoch: u64,
     /// The child's agent id.
     pub agent_id: String,
     /// Optional human label.
@@ -162,6 +193,9 @@ pub struct CompletionRecord {
     /// How the parent wants to hear about it.
     #[serde(default)]
     pub notify_mode: NotifyMode,
+    /// Current visibility lease, if this record is claimed for delivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<CompletionClaim>,
 }
 
 impl CompletionRecord {
@@ -177,6 +211,7 @@ impl CompletionRecord {
         Self {
             task_id: task_id.into(),
             parent_key: parent_key.into(),
+            parent_epoch: 0,
             agent_id: agent_id.into(),
             label: None,
             status,
@@ -186,6 +221,7 @@ impl CompletionRecord {
             attempts: 0,
             state: CompletionState::Pending,
             notify_mode: NotifyMode::default(),
+            claim: None,
         }
     }
 
@@ -205,6 +241,16 @@ impl CompletionRecord {
     pub fn with_finished_at(mut self, finished_at: SystemTime) -> Self {
         self.finished_at = finished_at;
         self
+    }
+
+    /// Returns the receipt for this delivery attempt, if this record is claimed.
+    pub fn receipt(&self) -> Option<CompletionReceipt> {
+        self.claim.as_ref().map(|claim| CompletionReceipt {
+            task_id: self.task_id.clone(),
+            parent_key: self.parent_key.clone(),
+            parent_epoch: self.parent_epoch,
+            token: claim.token.clone(),
+        })
     }
 
     /// A tombstone for a task whose completion has not been recorded yet.

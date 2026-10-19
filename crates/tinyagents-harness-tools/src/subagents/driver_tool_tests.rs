@@ -232,6 +232,52 @@ fn selector_test_session() -> DurableSubagentSession {
 }
 
 #[tokio::test]
+async fn awaiting_user_queries_preserve_the_durable_task_key() {
+    let mut session = selector_test_session();
+    session.task_key = "analysis-follow-up".into();
+    session.current_task_id = Some("task-follow-up".into());
+    session.status = DurableSubagentStatus::AwaitingUser;
+    session.latest_history = Some(vec![Message::user("Which environment?")]);
+    let session_id = session.subagent_session_id.clone();
+    let store = Arc::new(SingleSessionStore(Arc::new(std::sync::Mutex::new(session))));
+    let parent = RunContext::new(RunConfig::new("parent"), ());
+    let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
+        .with_sessions(store, |_| "durable-parent".into());
+
+    let individual = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        CallId::new("await-one"),
+        json!({"action":"await","job_id":session_id}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let individual: Value = serde_json::from_str(&individual.output()).unwrap();
+    let individual_envelope = individual["awaiting_user_envelope"].as_str().unwrap();
+    let individual_envelope = SubagentAwaitingUser::parse(individual_envelope).unwrap();
+    assert_eq!(individual_envelope.task_key, "analysis-follow-up");
+
+    let collected = ToolDispatch::<(), ()>::execute(
+        &jobs,
+        &(),
+        CallId::new("await-all"),
+        json!({"action":"await"}),
+        tinytools::ToolCallOptions::default(),
+        &parent,
+    )
+    .await
+    .unwrap();
+    let collected: Value = serde_json::from_str(&collected.output()).unwrap();
+    let collected_envelope = collected["awaiting_user"][0]["awaiting_user_envelope"]
+        .as_str()
+        .unwrap();
+    let collected_envelope = SubagentAwaitingUser::parse(collected_envelope).unwrap();
+    assert_eq!(collected_envelope.task_key, "analysis-follow-up");
+}
+
+#[tokio::test]
 async fn model_can_correct_foreign_durable_close_and_continue_to_owned_close() {
     let session = Arc::new(std::sync::Mutex::new(selector_test_session()));
     let jobs = SubAgentJobsTool::new(SubAgentJobRegistry::new())
@@ -396,6 +442,7 @@ async fn fixed_query_alias_ignores_action_override_and_keeps_host_declaration() 
             key: SubagentTaskKey::from_context(&parent, "fixed-query", None),
             agent: "worker".into(),
             owner: parent.instance_id().to_string(),
+            workspace: None,
             cancellation: CancellationToken::new(),
             steering: None,
             run_queue: None,
@@ -448,6 +495,7 @@ async fn message_alias_routes_unique_contents_to_queue_lanes_or_default_steering
             key: SubagentTaskKey::from_context(&parent, "message-routing", None),
             agent: "worker".into(),
             owner: parent.instance_id().to_string(),
+            workspace: None,
             cancellation: CancellationToken::new(),
             steering: Some(steering),
             run_queue: Some(queue),
@@ -2556,6 +2604,7 @@ async fn cancelling_paused_driver_job_settles_before_wait_returns() {
             key: SubagentTaskKey::from_context(&parent, "paused-cancel", None),
             agent: "worker".into(),
             owner: parent.instance_id().to_string(),
+            workspace: None,
             cancellation: CancellationToken::new(),
             steering: None,
             run_queue: None,

@@ -422,6 +422,27 @@ async fn tool_policy_rejection_is_returned_to_the_model_and_never_executes() {
     );
 }
 
+#[tokio::test]
+async fn host_only_tool_policy_blocks_unknown_calls_in_the_turn_plan() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_call_response(call("c1", "danger", 1)),
+        text_response("understood"),
+    ]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool(executions.clone(), "danger"))];
+    let configure: Configure = Arc::new(|plan| {
+        plan.tool_policy = Some(Arc::new(crate::HostOnlyToolPolicy::new(
+            Vec::<String>::new(),
+            None,
+        )));
+    });
+    let mut session = session(&model, tools, &["danger"], configure);
+    let outcome = turn(&mut session, TurnControls::default()).await.unwrap();
+    assert_eq!(outcome.output.as_deref(), Some("understood"));
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    assert!(all_text(&model.requests()[1]).contains("host-only belt"));
+}
+
 struct Trace {
     name: &'static str,
     log: Arc<Mutex<Vec<String>>>,
@@ -812,6 +833,11 @@ async fn a_split_turn_is_driven_by_the_host_and_settled_by_its_tail() {
             let chat: Arc<dyn ChatModel<()>> = model.clone();
             let mut plan = TurnPlan::new(vec![("scripted".to_string(), chat)]);
             plan.tools = ToolSetBuilder::new().set(set.clone());
+            plan.context.push(Arc::new(Trace {
+                name: "rewrite",
+                log: Arc::new(Mutex::new(Vec::new())),
+                rewrite_result: true,
+            }));
             Ok(plan)
         }
     };
@@ -840,12 +866,55 @@ async fn a_split_turn_is_driven_by_the_host_and_settled_by_its_tail() {
     let report = tail.finish(Some(&run));
 
     assert_eq!(report.early_exit.unwrap().question, "Which file?");
+    assert_eq!(report.tool_outcomes.len(), 1);
+    assert_eq!(report.tool_outcomes[0].name, "ask_user");
+    assert_eq!(report.tool_outcomes[0].content, "[capped]");
     assert_eq!(
         slot.get().unwrap().model_calls,
         run.model_calls,
         "finish publishes the report to the slot"
     );
     assert_eq!(model.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn prepared_run_exposes_the_same_rewritten_tool_outcome() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_call_response(call("c1", "ask_user", 1)),
+        text_response("never requested"),
+    ]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(FakeTool::returning("ask_user", "question"))];
+    let snapshot = snapshot_of(&tools, &["ask_user"]);
+    let set: SharedToolSet = Arc::new(tools);
+    let planner = {
+        let model = model.clone();
+        move |_: &DriverRequest<()>| {
+            let chat: Arc<dyn ChatModel<()>> = model.clone();
+            let mut plan = TurnPlan::new(vec![("scripted".to_string(), chat)]);
+            plan.tools = ToolSetBuilder::new().set(set.clone());
+            plan.context.push(Arc::new(Trace {
+                name: "rewrite",
+                log: Arc::new(Mutex::new(Vec::new())),
+                rewrite_result: true,
+            }));
+            Ok(plan)
+        }
+    };
+    let driver = TurnDriver::new(Arc::new(planner), Arc::new(()));
+    let request = DriverRequest {
+        history: vec![Message::user("go")],
+        tools: snapshot,
+        run_context: RunContext::new(
+            tinyagents_harness::context::RunConfig::new("prepared-run"),
+            (),
+        ),
+        stream: false,
+        controls: TurnControls::default(),
+    };
+    let run = driver.prepare(request).await.unwrap().run().await;
+    assert_eq!(run.report.tool_outcomes.len(), 1);
+    assert_eq!(run.report.tool_outcomes[0].name, "ask_user");
+    assert_eq!(run.report.tool_outcomes[0].content, "[capped]");
 }
 
 /// The cap pause reports `(completed, cap)` to the host's recorder.

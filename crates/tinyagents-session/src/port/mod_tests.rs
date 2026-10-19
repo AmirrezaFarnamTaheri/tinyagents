@@ -2,6 +2,32 @@ use super::*;
 use crate::testkit::conformance::session_store_conformance;
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
+struct NonPinningProvider {
+    stores: InMemorySessionStores,
+    opens: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SessionStoreProvider for NonPinningProvider {
+    fn for_agent(&self, agent_id: &str) -> AgentStores {
+        self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.stores.for_agent(agent_id)
+    }
+}
+
+#[test]
+fn providers_without_a_pin_contract_fail_closed() {
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = NonPinningProvider {
+        stores: InMemorySessionStores::new(),
+        opens: opens.clone(),
+    };
+    assert!(matches!(
+        provider.lease_for_agent("agent"),
+        Err(SessionStoreLeaseError::Unsupported)
+    ));
+    assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 /// A provider that shares one in-memory transcript locator between every
 /// agent (with in-memory turn-state, key-value and journal stores), the way a
 /// single-user host shares one store.

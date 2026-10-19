@@ -138,6 +138,12 @@ impl DriverTranscriptLocator {
         if self.session_exists(session) {
             return Ok(None);
         }
+        // Legacy roots predate delegated session lineage. A child has no
+        // independent root identity to adopt, and treating its absent
+        // `agent_id` as a wildcard would copy the parent's history into it.
+        if session.is_subagent() {
+            return Ok(None);
+        }
         let stem = session_stem(session);
         let candidates = self.adoption_candidates(session, thread_id, &stem)?;
 

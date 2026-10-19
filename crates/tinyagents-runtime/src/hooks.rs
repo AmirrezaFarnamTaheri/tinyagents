@@ -1,10 +1,21 @@
 use async_trait::async_trait;
 use tinyagents_harness::terminal::TerminalOutcome;
 
+use crate::types::PostCommitObservation;
 use crate::{
     CommitReceipt, ResumePreparation, RuntimeError, SessionStateView, SessionTerminal,
     SessionTurnOutcome, SessionTurnRequest, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
+
+/// Receives captured execution facts after a successful durable commit.
+#[async_trait]
+pub trait PostCommitSink<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
+    /// Observes a committed turn. Errors cannot roll back the durable append.
+    async fn after_commit(
+        &self,
+        observation: &PostCommitObservation<C>,
+    ) -> Result<(), RuntimeError>;
+}
 
 /// Host observation/preparation around a session turn.
 ///

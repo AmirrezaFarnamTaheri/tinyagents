@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use crate::subagent::{AppliedResult, IncompleteKind};
 
-use super::types::{DriverJobRegistration, JobControl, JobMeta};
+use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
@@ -132,6 +132,10 @@ impl SubAgentJobRegistry {
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
         }
+        let metadata = JobMeta {
+            parent_thread_id: link.parent_thread_id.clone(),
+            workspace: link.workspace.clone(),
+        };
         let task_id = TaskId::new(id.as_str());
         let job = SubAgentJob {
             id: id.clone(),
@@ -158,7 +162,7 @@ impl SubAgentJobRegistry {
         if let Err(error) = self.tasks.register_cooperative(
             task_id.clone(),
             owner,
-            JobMeta,
+            metadata,
             watcher,
             execution.cancellation.clone(),
         ) {
@@ -198,6 +202,7 @@ impl SubAgentJobRegistry {
             key,
             agent,
             owner,
+            workspace,
             cancellation,
             steering,
             run_queue,
@@ -266,7 +271,11 @@ impl SubAgentJobRegistry {
             id.clone(),
             &agent,
             owner,
-            JobLink::default(),
+            JobLink {
+                parent_thread_id: key.thread_id.clone(),
+                workspace,
+                ..JobLink::default()
+            },
             JobExecutionControls {
                 cancellation,
                 steering: steering.clone(),
@@ -500,6 +509,28 @@ impl SubAgentJobRegistry {
         self.cancel_owned(id.as_str(), owner)
     }
 
+    /// Cancels a driver-backed job and immediately tombstones its public
+    /// completion record. The router reservation suppresses both an already
+    /// pending result and a late result arriving after this call. A foreign
+    /// owner is rejected before the router is touched.
+    pub fn cancel_key_owned_and_tombstone(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: impl ToString,
+        completions: &tinyagents_tasks::CompletionRouter,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
+        let owner = owner.to_string();
+        let id = self
+            .driver_job_for_key(key, &owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(key.task_id.clone()))?;
+        self.cancel_owned_with_change(
+            id.as_str(),
+            owner,
+            Some((completions, key.task_id.as_str())),
+        )
+        .map(|(job, _)| job)
+    }
+
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
@@ -562,13 +593,57 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
+        self.cancel_owned_with_change(job_id, owner, None)
+            .map(|(job, _)| job)
+    }
+
+    fn cancel_owned_with_change(
+        &self,
+        job_id: &str,
+        owner: impl ToString,
+        completion_tombstone: Option<(&tinyagents_tasks::CompletionRouter, &str)>,
+    ) -> Result<(SubAgentJob, bool), SubAgentJobError> {
+        let owner = owner.to_string();
         let id = SubAgentJobId(job_id.to_owned());
+        let task_id = TaskId::new(job_id);
+        match self.tasks.snapshot(&task_id, &owner) {
+            Ok(_) => {}
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+            }
+            Err(error) => return Err(registry_failure(error)),
+        }
         let mut controls = self.controls();
         let control = controls
             .get_mut(&id)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-        let task_id = TaskId::new(job_id);
-        let mut snapshot = match self.tasks.cancel_cooperative(&task_id, &owner.to_string()) {
+        if control.status.borrow().status.is_terminal()
+            && (completion_tombstone.is_none() || !control.cancellation_requested)
+        {
+            return Err(SubAgentJobError::Terminal {
+                job_id: job_id.to_owned(),
+                status: control.status.borrow().status,
+            });
+        }
+        if let Some((completions, task_id)) = completion_tombstone {
+            completions
+                .tombstone(task_id)
+                .map_err(|error| SubAgentJobError::Registry(error.to_string()))?;
+        }
+        if control.cancellation_requested {
+            if completion_tombstone.is_some() && !control.status.borrow().status.is_terminal() {
+                let task_id = TaskId::new(job_id);
+                let _ = self.tasks.release_cancellation_trusted(&task_id);
+                control.status.send_modify(|job| {
+                    job.status = SubAgentJobStatus::Cancelled;
+                    job.error = Some(TinyAgentsError::Cancelled.to_string());
+                });
+                self.steering.deregister(&task_id);
+                return Ok((control.status.borrow().clone(), true));
+            }
+            return Ok((control.status.borrow().clone(), false));
+        }
+        let mut snapshot = match self.tasks.cancel_cooperative(&task_id, &owner) {
             Ok(snapshot) => snapshot.status,
             Err(DetachedTaskRegistryError::AlreadyDone) => {
                 return Err(SubAgentJobError::Terminal {
@@ -583,18 +658,70 @@ impl SubAgentJobRegistry {
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
-        if control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
+        if completion_tombstone.is_some()
+            || control.status.borrow().status == SubAgentJobStatus::AwaitingInput
+        {
             let _ = self.tasks.release_cancellation_trusted(&task_id);
             control.status.send_modify(|job| {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
             self.steering.deregister(&task_id);
-            return Ok(control.status.borrow().clone());
+            return Ok((control.status.borrow().clone(), true));
         }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
-        Ok(snapshot)
+        Ok((snapshot, true))
+    }
+
+    /// Requests cancellation for jobs belonging to the exact parent workspace
+    /// and thread. Jobs with incomplete metadata never match this scoped call.
+    pub fn cancel_for_thread(&self, scope: &ParentJobScope) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|metadata| {
+            metadata.parent_thread_id.as_deref() == Some(scope.thread_id.as_str())
+                && metadata.workspace.as_ref() == Some(&scope.workspace)
+        })
+    }
+
+    /// Requests cancellation for every live job in one exact workspace.
+    /// Jobs with incomplete workspace metadata never match this scoped call.
+    pub fn cancel_all_for_workspace(
+        &self,
+        workspace: &tinytools::WorkspaceDescriptor,
+    ) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|metadata| metadata.workspace.as_ref() == Some(workspace))
+    }
+
+    /// Requests cancellation for every live job while retaining each public
+    /// job record for the normal settlement path. This is trusted process-wide
+    /// supervision; tenant controls should use [`Self::cancel_all_for_workspace`].
+    pub fn cancel_all(&self) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|_| true)
+    }
+
+    fn cancel_matching(
+        &self,
+        matches: impl Fn(&JobMeta) -> bool,
+    ) -> Result<usize, SubAgentJobError> {
+        let ids = self.controls().keys().cloned().collect::<Vec<_>>();
+        let mut requested = 0;
+        for id in ids {
+            let task_id = TaskId::new(id.as_str());
+            let snapshot = match self.tasks.snapshot_trusted(&task_id) {
+                Ok(snapshot) if !snapshot.status.status.is_terminal() => snapshot,
+                Ok(_) | Err(DetachedTaskRegistryError::Unknown) => continue,
+                Err(error) => return Err(registry_failure(error)),
+            };
+            if !matches(&snapshot.metadata) {
+                continue;
+            }
+            match self.cancel_owned_with_change(id.as_str(), snapshot.owner_id, None) {
+                Ok((_, changed)) => requested += usize::from(changed),
+                Err(SubAgentJobError::Terminal { .. } | SubAgentJobError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(requested)
     }
 
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
@@ -679,6 +806,47 @@ impl SubAgentJobRegistry {
     /// Model-visible tools must use the run-scoped dispatch path instead.
     pub fn list(&self) -> Vec<SubAgentJob> {
         Self::sorted(self.tasks.snapshots(None))
+    }
+
+    /// Returns live jobs for one exact owner and parent workspace/thread.
+    /// Incomplete parent metadata never matches this scoped roster query.
+    pub fn list_for_parent_scope(
+        &self,
+        owner: &str,
+        scope: &ParentJobScope,
+    ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+        let snapshots = self
+            .tasks
+            .snapshots(Some(owner))
+            .map_err(registry_failure)?;
+        let driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut jobs: Vec<SubAgentJob> = snapshots
+            .into_iter()
+            .filter(|snapshot| {
+                snapshot.metadata.workspace.as_ref() == Some(&scope.workspace)
+                    && snapshot.metadata.parent_thread_id.as_deref()
+                        == Some(scope.thread_id.as_str())
+            })
+            .map(|snapshot| {
+                let mut job = snapshot.status;
+                if !job.extensions.contains_key("task_id")
+                    && let Some(key) = driver_jobs
+                        .iter()
+                        .find_map(|(key, id)| (id == &job.id).then_some(key))
+                {
+                    job.extensions.insert(
+                        "task_id".into(),
+                        serde_json::Value::String(key.task_id.clone()),
+                    );
+                }
+                job
+            })
+            .collect();
+        jobs.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        Ok(jobs)
     }
 
     /// Jobs in stable id order, independent of the detached registry's own

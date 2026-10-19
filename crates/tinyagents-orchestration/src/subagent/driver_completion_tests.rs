@@ -619,8 +619,16 @@ async fn a_replayed_terminal_result_is_not_recorded_again() {
         .run(request("t1"), CancellationToken::new())
         .await
         .unwrap();
-    assert_eq!(router.pull("p", 10).unwrap().len(), 1);
-    router.mark_delivered(&["t1"]).unwrap();
+    let claimed = router.pull("p", 10).unwrap();
+    assert_eq!(claimed.len(), 1);
+    router
+        .mark_delivered(
+            &claimed
+                .iter()
+                .filter_map(|record| record.receipt())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
     let replay = driver
         .run(request("t1"), CancellationToken::new())
         .await
@@ -719,7 +727,10 @@ fn the_overflow_artifact_is_the_one_a_completion_names() {
         RunContext::new(RunConfig::new("c"), String::new()),
     )
     .with_notify_mode(NotifyMode::Off);
-    let origin = completion::CompletionOrigin::new(&origin_task, &prepared).unwrap();
+    let router = router();
+    let origin = completion::CompletionOrigin::new(&origin_task, &prepared, &router)
+        .unwrap()
+        .unwrap();
     let mut outcome = SubagentOutcome::completed("t1", "preview");
     for id in ["pre-existing", "overflow"] {
         outcome.artifacts.push(ArtifactReference {
@@ -730,4 +741,269 @@ fn the_overflow_artifact_is_the_one_a_completion_names() {
     let record = origin.record_for_outcome(&outcome, 9).unwrap();
     assert_eq!(record.result.artifact.unwrap().id, "overflow");
     assert_eq!(record.parent_key, "p");
+}
+
+struct RevocableTurnFence {
+    state: tokio::sync::watch::Sender<bool>,
+    receiver: tokio::sync::watch::Receiver<bool>,
+}
+
+impl RevocableTurnFence {
+    fn new() -> Self {
+        let (state, receiver) = tokio::sync::watch::channel(true);
+        Self { state, receiver }
+    }
+
+    fn revoke(&self) {
+        self.state.send_replace(false);
+    }
+}
+
+impl tinyagents_tasks::DeliveryFence for RevocableTurnFence {
+    fn admitted(&self) -> bool {
+        *self.receiver.borrow()
+    }
+
+    fn lost(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        let mut receiver = self.receiver.clone();
+        Box::pin(async move {
+            loop {
+                if !*receiver.borrow() || receiver.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+    }
+}
+
+struct WaitingExecutor {
+    started: Arc<tokio::sync::Notify>,
+    observed_cancellation: Arc<Mutex<Option<CancellationToken>>>,
+}
+
+struct BarrierExecutor {
+    started: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl SubagentExecutor<String> for BarrierExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(SubagentOutcome::completed(
+            execution.prepared.task_id,
+            "finished after parent reopened",
+        ))
+    }
+}
+
+#[async_trait]
+impl SubagentExecutor<String> for WaitingExecutor {
+    async fn execute(
+        &self,
+        execution: SubagentExecution<String>,
+    ) -> Result<SubagentOutcome, SubagentError> {
+        *self.observed_cancellation.lock().unwrap() = Some(execution.cancellation);
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn generic_child_driver_cancels_dispatch_and_skips_persistence_when_turn_fence_is_lost() {
+    let fence = Arc::new(RevocableTurnFence::new());
+    let started = Arc::new(tokio::sync::Notify::new());
+    let observed_cancellation = Arc::new(Mutex::new(None));
+    let persistence = Arc::new(Memory::default());
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: None,
+            parent: None,
+        })),
+        executor: Some(Arc::new(WaitingExecutor {
+            started: started.clone(),
+            observed_cancellation: observed_cancellation.clone(),
+        })),
+        persistence: Some(persistence.clone()),
+    })
+    .unwrap();
+    let request = request_in_scope("parent-a", "root-a", "thread-a").with_turn_fence(fence.clone());
+    let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
+    started.notified().await;
+
+    fence.revoke();
+    assert!(matches!(turn.await.unwrap(), Err(SubagentError::Cancelled)));
+    assert!(
+        observed_cancellation
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled),
+        "loss cancels the executor's in-flight turn token"
+    );
+    assert!(
+        persistence.terminals.lock().unwrap().is_empty(),
+        "a stale turn must not persist a terminal outcome after losing its fence"
+    );
+}
+
+struct HeldArtifactStore {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ArtifactStore for HeldArtifactStore {
+    async fn store(&self, _: &str, _: &str) -> Result<ArtifactReference, String> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(ArtifactReference {
+            id: "stored-artifact".into(),
+            ..ArtifactReference::default()
+        })
+    }
+}
+
+struct ArtifactPlanner(Arc<HeldArtifactStore>);
+
+#[async_trait]
+impl SubagentPlanner<String> for ArtifactPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<String>,
+    ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        )
+        .with_notify_mode(NotifyMode::Followup)
+        .with_completion_parent("parent-a")
+        .with_result_policy(
+            ResultPolicy::new()
+                .with_max_bytes(1)
+                .with_overflow(ResultOverflow::Artifact)
+                .with_artifact_store(self.0.clone()),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn losing_turn_fence_during_artifact_storage_skips_terminal_and_completion_writes() {
+    let fence = Arc::new(RevocableTurnFence::new());
+    let artifacts = Arc::new(HeldArtifactStore {
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let persistence = Arc::new(Memory::default());
+    let router = router();
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(ArtifactPlanner(artifacts.clone()))),
+        executor: Some(Arc::new(Executor(Arc::new(|task| {
+            Ok(SubagentOutcome::completed(task, "oversized child output"))
+        })))),
+        persistence: Some(persistence.clone()),
+    })
+    .unwrap()
+    .with_completion_router(router.clone());
+    let request = request_in_scope("parent-a", "root-a", "thread-a").with_turn_fence(fence.clone());
+    let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
+    artifacts.started.notified().await;
+
+    fence.revoke();
+    artifacts.release.notify_one();
+
+    assert!(matches!(turn.await.unwrap(), Err(SubagentError::Cancelled)));
+    assert!(
+        persistence.terminals.lock().unwrap().is_empty(),
+        "a result policy await after executor completion must not reopen terminal persistence"
+    );
+    assert!(
+        router.pending_for("parent-a").is_empty(),
+        "lease loss must not dispatch a completion"
+    );
+}
+
+#[tokio::test]
+async fn a_running_child_completion_keeps_its_spawned_parent_generation() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router_a = Arc::new(CompletionRouter::new(store.clone()));
+    let router_b = Arc::new(CompletionRouter::new(Arc::new(store.as_ref().clone())));
+    let spawned_generation = router_a
+        .admit_child_generation("parent-a")
+        .unwrap()
+        .unwrap();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: Some(NotifyMode::Followup),
+            parent: Some("parent-a"),
+        })),
+        executor: Some(Arc::new(BarrierExecutor {
+            started: started.clone(),
+            release: release.clone(),
+        })),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap()
+    .with_completion_router(router_a.clone());
+    let run = tokio::spawn(async move {
+        driver
+            .run(
+                request_in_scope("parent-a-run", "root-a", "thread-a"),
+                CancellationToken::new(),
+            )
+            .await
+    });
+
+    started.notified().await;
+    router_b.cancel_parent("parent-a").unwrap();
+    router_b.resume_parent("parent-a");
+    assert!(
+        router_b
+            .admit_child_generation("parent-a")
+            .unwrap()
+            .unwrap()
+            > spawned_generation
+    );
+    release.notify_one();
+
+    assert!(run.await.unwrap().is_ok());
+    let fresh_driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: Some(NotifyMode::Followup),
+            parent: Some("parent-a"),
+        })),
+        executor: Some(Arc::new(Executor(Arc::new(|task| {
+            Ok(SubagentOutcome::completed(task, "fresh-generation child"))
+        })))),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap()
+    .with_completion_router(router_b.clone());
+    assert!(
+        fresh_driver
+            .run(
+                request_in_scope("parent-b-run", "root-b", "thread-a"),
+                CancellationToken::new(),
+            )
+            .await
+            .is_ok()
+    );
+
+    let pending = router_b.pending_for("parent-a");
+    assert!(
+        pending.len() == 1,
+        "the old generation remains suppressed while a fresh child is deliverable"
+    );
+    assert_eq!(pending[0].result.text, "fresh-generation child");
+    assert!(pending[0].parent_epoch > spawned_generation);
 }

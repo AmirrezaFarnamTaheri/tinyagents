@@ -20,15 +20,21 @@ mod store_registry;
 mod types;
 
 pub use completions::{
-    CompletionArtifact, CompletionFormatter, CompletionRecord, CompletionResult, CompletionRouter,
+    ClaimResolution, CompletionAdmission, CompletionArtifact, CompletionClaim, CompletionClaimMode,
+    CompletionFormatter, CompletionReceipt, CompletionRecord, CompletionResult, CompletionRouter,
     CompletionState, CompletionStatus, CompletionStore, CompletionStoreReplaceOutcome,
     DEFAULT_MAX_ATTEMPTS, DriverCompletionStore, InMemoryCompletionStore,
-    NeutralCompletionFormatter, NotifyMode, RecordOutcome, TombstoneOutcome,
+    NeutralCompletionFormatter, NotifyMode, ParentGateClaim, ParentLifecycle, PendingClaimRequest,
+    RecordOutcome, ResolveClaimRequest, TaskClaimRequest, TombstoneOutcome,
 };
 pub use completions::{
     CompletionDelivery, CompletionDeliveryConfig, CompletionRouterPool, CompletionRouterPoolError,
-    CompletionRouterReplaceOutcome, DeliveryFence, DeliveryOutcome, DeliveryTarget, ParentBusyGate,
-    ParentBusyLease, ThreadDeliveryLeases, open_driver_completion_store_or_memory,
+    CompletionRouterReplaceOutcome, CompletionStoreFallback, DeliveryFence, DeliveryOutcome,
+    DeliveryTarget, DurableThreadDeliveryLease, DurableThreadDeliveryLeases, ParentBusyGate,
+    ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases, open_driver_completion_store,
+    open_driver_completion_store_or_memory,
+    open_driver_completion_store_or_memory_with_coordination_domain,
+    open_driver_completion_store_with_coordination_domain,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{

@@ -528,6 +528,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                                 .unwrap_or_default();
                             let envelope = SubagentAwaitingUser {
                                 task_id: session.current_task_id.clone().unwrap_or_default(),
+                                task_key: session.task_key.clone(),
                                 agent_id: session.agent_id.clone(),
                                 worker_thread_id: session.worker_thread_id.clone(),
                                 question,
@@ -683,6 +684,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ToolDispatch<State, Ctx> for SubAgent
                         .unwrap_or_default();
                     let envelope = SubagentAwaitingUser {
                         task_id: session.current_task_id.clone().unwrap_or_default(),
+                        task_key: session.task_key.clone(),
                         agent_id: session.agent_id.clone(),
                         worker_thread_id: session.worker_thread_id.clone(),
                         question,
