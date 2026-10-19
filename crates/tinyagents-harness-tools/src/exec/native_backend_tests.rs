@@ -145,6 +145,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
         shell_quote(&shell_pidfile),
         shell_quote(&pidfile),
     );
+    eprintln!("timeout fixture: {command}");
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let outcome = backend
         .execute(
@@ -195,6 +196,7 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
         shell_quote(&shell_pidfile),
         shell_quote(&pidfile),
     );
+    eprintln!("cancellation fixture: {command}");
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = ProcessCleanup::default();
     let turn_cleanup = cleanup.clone();
