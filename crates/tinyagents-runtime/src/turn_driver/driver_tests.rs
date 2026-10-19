@@ -422,6 +422,26 @@ async fn tool_policy_rejection_is_returned_to_the_model_and_never_executes() {
     );
 }
 
+#[tokio::test]
+async fn host_only_tool_policy_blocks_unknown_calls_in_the_turn_plan() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_call_response(call("c1", "danger", 1)),
+        text_response("understood"),
+    ]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(CountingTool(executions.clone(), "danger"))];
+    let configure: Configure = Arc::new(|plan| {
+        plan.tool_policy = Some(Arc::new(crate::HostOnlyToolPolicy::new(
+            Vec::<String>::new(), None,
+        )));
+    });
+    let mut session = session(&model, tools, &["danger"], configure);
+    let outcome = turn(&mut session, TurnControls::default()).await.unwrap();
+    assert_eq!(outcome.output.as_deref(), Some("understood"));
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    assert!(all_text(&model.requests()[1]).contains("host-only belt"));
+}
+
 struct Trace {
     name: &'static str,
     log: Arc<Mutex<Vec<String>>>,

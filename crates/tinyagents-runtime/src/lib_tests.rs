@@ -4600,3 +4600,91 @@ async fn child_identity_resolution_preserves_parent_lineage() {
     assert!(child.is_subagent());
     assert!(session_stem(&child).starts_with(&format!("{}__", session_stem(&parent))));
 }
+
+struct ReplaceTargetHook(Arc<dyn TranscriptLocator>);
+
+#[async_trait]
+impl SessionHooks for ReplaceTargetHook {
+    async fn before_resume(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        Ok(ResumePreparation {
+            transcript: Some(TranscriptTarget::for_session(
+                self.0.clone(), SessionRef::scoped("thread-identity", "agent-resolved"), meta(),
+            )),
+        })
+    }
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> { Ok(()) }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> { Ok(()) }
+}
+
+#[tokio::test]
+async fn hook_cannot_replace_resolved_identity_locator_before_any_read() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let (wrong, wrong_history) = locator(None);
+    let driver = Arc::new(Driver::new(vec![]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let result = session.turn(
+        SessionTurnRequest::new(Message::user("next")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            ..TurnOptions::default()
+        },
+    ).await;
+    assert!(matches!(result, Err(RuntimeError::InvalidSessionState(_))));
+    assert!(driver.requests.lock().unwrap().is_empty());
+    assert!(wrong.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*wrong_history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn resolver_rejects_a_later_agent_change_before_another_driver_call() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let agent_id = Arc::new(Mutex::new("agent-one".to_owned()));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: agent_id.clone(),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("one"), Message::assistant("done"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    session.turn(SessionTurnRequest::new(Message::user("one")), options()).await.unwrap();
+    *agent_id.lock().unwrap() = "agent-two".into();
+    assert!(matches!(
+        session.turn(SessionTurnRequest::new(Message::user("two")), options()).await,
+        Err(RuntimeError::InvalidSessionState(_)),
+    ));
+    assert_eq!(driver.requests.lock().unwrap().len(), 1);
+}
