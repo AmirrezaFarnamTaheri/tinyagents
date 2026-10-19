@@ -298,7 +298,6 @@ async fn scoped_mutations_recheck_reused_task_owner_after_a_paused_read() {
         let pending = {
             let scoped = Arc::clone(&scoped);
             let id = old.subagent_session_id.clone();
-            let old_key = old_key.clone();
             tokio::spawn(async move {
                 match mutation {
                     "close" => scoped.close(&id).await,
