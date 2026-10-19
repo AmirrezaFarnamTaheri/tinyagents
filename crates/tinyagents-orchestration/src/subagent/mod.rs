@@ -28,6 +28,7 @@ mod sessions;
 mod step;
 mod summarization;
 mod types;
+mod turn_storage;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
 pub use awaiting_user::SubagentAwaitingUser;
@@ -90,6 +91,7 @@ pub use types::{
     SubagentRequestParts, SubagentResume, SubagentRunResult, SubagentTaskKey,
     SubagentTerminalPersistenceDisposition,
 };
+pub use turn_storage::FencedSessionBackend;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
