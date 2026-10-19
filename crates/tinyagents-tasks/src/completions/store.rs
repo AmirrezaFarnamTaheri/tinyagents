@@ -259,6 +259,33 @@ impl InMemoryCompletionStore {
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, CompletionRecord>>> {
         self.inner.lock().map_err(|_| store_err("lock", "poisoned"))
     }
+
+    fn with_current_gate<T>(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+        operation: impl FnOnce(&mut HashMap<String, CompletionRecord>) -> Result<T>,
+    ) -> Result<T> {
+        let gates = self
+            .parent_gates
+            .lock()
+            .map_err(|_| store_err("parent gate", "lock poisoned"))?;
+        let now = SystemTime::now();
+        if !gates
+            .get(parent_key)
+            .is_some_and(|gate| gate.claim == *claim && gate.expires_at > now)
+        {
+            return Err(store_err("parent gate", "claim is stale or expired"));
+        }
+        let mut records = self.lock()?;
+        if !gates
+            .get(parent_key)
+            .is_some_and(|gate| gate.claim == *claim && gate.expires_at > SystemTime::now())
+        {
+            return Err(store_err("parent gate", "claim expired before mutation"));
+        }
+        operation(&mut records)
+    }
 }
 
 impl CompletionStore for InMemoryCompletionStore {
@@ -373,67 +400,82 @@ impl CompletionStore for InMemoryCompletionStore {
     fn put_fenced(
         &self,
         record: &CompletionRecord,
-        _parent_key: &str,
-        _gate: &ParentGateClaim,
+        parent_key: &str,
+        gate: &ParentGateClaim,
     ) -> Result<()> {
-        self.put(record)
+        self.with_current_gate(parent_key, gate, |records| {
+            let mut record = record.clone();
+            if record.parent_epoch == 0 && !record.parent_key.is_empty() {
+                let marker_id = format!("\u{1}parent-cancelled:{}", record.parent_key);
+                if let Some(marker) = records
+                    .get(&marker_id)
+                    .filter(|m| m.state == CompletionState::Delivered)
+                {
+                    record.parent_epoch = marker.parent_epoch;
+                }
+            }
+            records.insert(record.task_id.clone(), record);
+            Ok(())
+        })
     }
 
-    fn insert_if_absent(&self, record: &CompletionRecord, _gate: &ParentGateClaim) -> Result<bool> {
-        let mut records = self.lock()?;
-        if records.contains_key(&record.task_id) {
-            return Ok(false);
-        }
-        records.insert(record.task_id.clone(), record.clone());
-        Ok(true)
+    fn insert_if_absent(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<bool> {
+        self.with_current_gate(&record.parent_key, gate, |records| {
+            if records.contains_key(&record.task_id) {
+                return Ok(false);
+            }
+            records.insert(record.task_id.clone(), record.clone());
+            Ok(true)
+        })
     }
 
     fn claim_pending(
         &self,
         parent_key: &str,
         parent_epoch: u64,
-        _gate: &ParentGateClaim,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Vec<CompletionRecord>> {
-        let now = SystemTime::now();
-        let mut records = self.lock()?;
-        let mut candidates: Vec<_> = records
-            .values()
-            .filter(|record| {
-                record.parent_key == parent_key
-                    && record.parent_epoch == parent_epoch
-                    && record.state == CompletionState::Pending
-                    && mode.accepts(record.notify_mode)
-                    && record
-                        .claim
-                        .as_ref()
-                        .is_none_or(|claim| claim.visible_after <= now)
-            })
-            .cloned()
-            .collect();
-        candidates.sort_by(|a, b| {
-            a.finished_at
-                .cmp(&b.finished_at)
-                .then_with(|| a.task_id.cmp(&b.task_id))
-        });
-        candidates.truncate(max);
-        let mut claimed = Vec::with_capacity(candidates.len());
-        for candidate in candidates {
-            let Some(record) = records.get_mut(&candidate.task_id) else {
-                continue;
-            };
-            record.attempts = record.attempts.saturating_add(1);
-            record.updated_at = now;
-            record.claim = Some(CompletionClaim {
-                token: format!("{token}:{}", record.task_id),
-                visible_after,
+        self.with_current_gate(parent_key, gate, |records| {
+            let now = SystemTime::now();
+            let mut candidates: Vec<_> = records
+                .values()
+                .filter(|record| {
+                    record.parent_key == parent_key
+                        && record.parent_epoch == parent_epoch
+                        && record.state == CompletionState::Pending
+                        && mode.accepts(record.notify_mode)
+                        && record
+                            .claim
+                            .as_ref()
+                            .is_none_or(|claim| claim.visible_after <= now)
+                })
+                .cloned()
+                .collect();
+            candidates.sort_by(|a, b| {
+                a.finished_at
+                    .cmp(&b.finished_at)
+                    .then_with(|| a.task_id.cmp(&b.task_id))
             });
-            claimed.push(record.clone());
-        }
-        Ok(claimed)
+            candidates.truncate(max);
+            let mut claimed = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let Some(record) = records.get_mut(&candidate.task_id) else {
+                    continue;
+                };
+                record.attempts = record.attempts.saturating_add(1);
+                record.updated_at = now;
+                record.claim = Some(CompletionClaim {
+                    token: format!("{token}:{}", record.task_id),
+                    visible_after,
+                });
+                claimed.push(record.clone());
+            }
+            Ok(claimed)
+        })
     }
 
     fn claim_task(
@@ -441,34 +483,35 @@ impl CompletionStore for InMemoryCompletionStore {
         task_id: &str,
         parent_key: &str,
         parent_epoch: u64,
-        _gate: &ParentGateClaim,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> Result<Option<CompletionRecord>> {
-        let now = SystemTime::now();
-        let mut records = self.lock()?;
-        let Some(record) = records.get_mut(task_id) else {
-            return Ok(None);
-        };
-        if record.parent_key != parent_key
-            || record.parent_epoch != parent_epoch
-            || record.state != CompletionState::Pending
-            || !mode.accepts(record.notify_mode)
-            || record
-                .claim
-                .as_ref()
-                .is_some_and(|claim| claim.visible_after > now)
-        {
-            return Ok(None);
-        }
-        record.attempts = record.attempts.saturating_add(1);
-        record.updated_at = now;
-        record.claim = Some(CompletionClaim {
-            token: format!("{token}:{task_id}"),
-            visible_after,
-        });
-        Ok(Some(record.clone()))
+        self.with_current_gate(parent_key, gate, |records| {
+            let now = SystemTime::now();
+            let Some(record) = records.get_mut(task_id) else {
+                return Ok(None);
+            };
+            if record.parent_key != parent_key
+                || record.parent_epoch != parent_epoch
+                || record.state != CompletionState::Pending
+                || !mode.accepts(record.notify_mode)
+                || record
+                    .claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.visible_after > now)
+            {
+                return Ok(None);
+            }
+            record.attempts = record.attempts.saturating_add(1);
+            record.updated_at = now;
+            record.claim = Some(CompletionClaim {
+                token: format!("{token}:{task_id}"),
+                visible_after,
+            });
+            Ok(Some(record.clone()))
+        })
     }
 
     fn resolve_claim(
@@ -476,33 +519,34 @@ impl CompletionStore for InMemoryCompletionStore {
         task_id: &str,
         parent_key: &str,
         parent_epoch: u64,
-        _gate: &ParentGateClaim,
+        gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
-        let mut records = self.lock()?;
-        let Some(record) = records.get_mut(task_id) else {
-            return Ok(None);
-        };
-        if record.parent_key != parent_key
-            || record.parent_epoch != parent_epoch
-            || record.state != CompletionState::Pending
-            || record.claim.as_ref().is_none_or(|claim| {
-                claim.token != token || claim.visible_after <= SystemTime::now()
-            })
-        {
-            return Ok(None);
-        }
-        record.updated_at = SystemTime::now();
-        record.claim = None;
-        match resolution {
-            ClaimResolution::Delivered => record.state = CompletionState::Delivered,
-            ClaimResolution::Failed { max_attempts } if record.attempts >= max_attempts => {
-                record.state = CompletionState::GaveUp;
+        self.with_current_gate(parent_key, gate, |records| {
+            let Some(record) = records.get_mut(task_id) else {
+                return Ok(None);
+            };
+            if record.parent_key != parent_key
+                || record.parent_epoch != parent_epoch
+                || record.state != CompletionState::Pending
+                || record.claim.as_ref().is_none_or(|claim| {
+                    claim.token != token || claim.visible_after <= SystemTime::now()
+                })
+            {
+                return Ok(None);
             }
-            ClaimResolution::Failed { .. } | ClaimResolution::Release => {}
-        }
-        Ok(Some(record.clone()))
+            record.updated_at = SystemTime::now();
+            record.claim = None;
+            match resolution {
+                ClaimResolution::Delivered => record.state = CompletionState::Delivered,
+                ClaimResolution::Failed { max_attempts } if record.attempts >= max_attempts => {
+                    record.state = CompletionState::GaveUp;
+                }
+                ClaimResolution::Failed { .. } | ClaimResolution::Release => {}
+            }
+            Ok(Some(record.clone()))
+        })
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {

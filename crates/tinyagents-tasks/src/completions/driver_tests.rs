@@ -59,24 +59,18 @@ fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
         .unwrap();
     assert!(current.epoch > stale.epoch);
 
-    assert!(
-        store
-            .insert_if_absent(&record("late", "parent"), &current)
-            .unwrap()
-    );
-    assert!(
-        store
-            .insert_if_absent(&record("late", "other-parent"), &stale)
-            .is_err()
-    );
+    assert!(store
+        .insert_if_absent(&record("late", "parent"), &current)
+        .unwrap());
+    assert!(store
+        .insert_if_absent(&record("late", "other-parent"), &stale)
+        .is_err());
     let preserved = store.get("late").unwrap();
     assert_eq!(preserved.parent_key, "parent");
 
-    assert!(
-        store
-            .insert_if_absent(&record("stale-create", "parent"), &stale)
-            .is_err()
-    );
+    assert!(store
+        .insert_if_absent(&record("stale-create", "parent"), &stale)
+        .is_err());
     assert!(store.get("stale-create").is_none());
 }
 
@@ -104,7 +98,9 @@ fn in_memory_store_rejects_mutations_from_a_released_parent_gate() {
         store.get("same-task").unwrap().result,
         CompletionResult::text("current owner")
     );
-    assert!(store.insert_if_absent(&record("stale-create", "parent"), &stale).is_err());
+    assert!(store
+        .insert_if_absent(&record("stale-create", "parent"), &stale)
+        .is_err());
     assert!(store.get("stale-create").is_none());
 }
 
@@ -206,11 +202,9 @@ async fn queued_completion_generation_is_rejected_after_cross_router_close_and_r
 
     lifecycle_router.cancel_parent("parent").unwrap();
     lifecycle_router.resume_parent("parent");
-    assert!(
-        !delivery_router
-            .parent_generation_admitted("parent", stale_receipt.parent_epoch)
-            .unwrap()
-    );
+    assert!(!delivery_router
+        .parent_generation_admitted("parent", stale_receipt.parent_epoch)
+        .unwrap());
     assert_eq!(
         delivery_router
             .mark_delivered(std::slice::from_ref(&stale_receipt))
@@ -370,11 +364,9 @@ fn conditional_driver_create_preserves_an_existing_claim() {
         .unwrap();
 
     let other_parent_gate = parent_gate(&store, "other-parent");
-    assert!(
-        !store
-            .insert_if_absent(&record("claim-owner", "other-parent"), &other_parent_gate,)
-            .unwrap()
-    );
+    assert!(!store
+        .insert_if_absent(&record("claim-owner", "other-parent"), &other_parent_gate,)
+        .unwrap());
     let persisted = store.get("claim-owner").unwrap();
     assert_eq!(persisted.parent_key, claimed.parent_key);
     assert_eq!(persisted.attempts, claimed.attempts);
@@ -407,11 +399,9 @@ fn conditional_driver_create_does_not_replace_a_tombstone() {
     put_record(&store, &tombstone);
     let gate = parent_gate(&store, "parent");
 
-    assert!(
-        !store
-            .insert_if_absent(&record("deleted", "parent"), &gate)
-            .unwrap()
-    );
+    assert!(!store
+        .insert_if_absent(&record("deleted", "parent"), &gate)
+        .unwrap());
     let persisted = store.get("deleted").unwrap();
     assert_eq!(persisted.task_id, tombstone.task_id);
     assert_eq!(persisted.state, CompletionState::Tombstoned);
@@ -479,19 +469,17 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     );
     let second_token = second_claim[0].claim.as_ref().unwrap().token.clone();
 
-    assert!(
-        first
-            .resolve_claim(
-                "lease-task",
-                "parent",
-                first_claim.parent_epoch,
-                &second_gate,
-                &first_token,
-                ClaimResolution::Delivered,
-            )
-            .unwrap()
-            .is_none()
-    );
+    assert!(first
+        .resolve_claim(
+            "lease-task",
+            "parent",
+            first_claim.parent_epoch,
+            &second_gate,
+            &first_token,
+            ClaimResolution::Delivered,
+        )
+        .unwrap()
+        .is_none());
     let settled = second
         .resolve_claim(
             "lease-task",
