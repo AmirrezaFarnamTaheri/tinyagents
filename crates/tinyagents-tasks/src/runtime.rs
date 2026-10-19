@@ -147,6 +147,31 @@ where
             status,
             cancellation,
             None,
+            true,
+        )
+    }
+
+    /// Registers a cooperative task without the automatic soft-cap sweep.
+    ///
+    /// Use this only when an adapter coordinates terminal pruning with
+    /// sidecar state and protects entries that still have active waiters. The
+    /// adapter must enforce its own finite retention policy before registering.
+    pub fn register_cooperative_managed(
+        &self,
+        task_id: TaskId,
+        owner_id: impl Into<String>,
+        metadata: Metadata,
+        status: watch::Receiver<Status>,
+        cancellation: CancellationToken,
+    ) -> Result<()> {
+        self.register_entry(
+            task_id,
+            owner_id.into(),
+            metadata,
+            status,
+            cancellation,
+            None,
+            false,
         )
     }
 
@@ -158,8 +183,9 @@ where
         status: watch::Receiver<Status>,
         cancellation: CancellationToken,
         abort: Option<AbortHandle>,
+        sweep_at_cap: bool,
     ) -> Result<()> {
-        if self.len().map_err(Self::tinyagents_error)? >= self.soft_cap {
+        if sweep_at_cap && self.len().map_err(Self::tinyagents_error)? >= self.soft_cap {
             self.sweep_terminal().map_err(Self::tinyagents_error)?;
         }
         let mut guard = self.lock().map_err(Self::tinyagents_error)?;
@@ -539,6 +565,33 @@ where
             self.steering.deregister(task_id);
         }
         Ok(removed.len())
+    }
+
+    /// Removes one terminal entry for trusted adapter-side lifecycle cleanup.
+    ///
+    /// Returns the terminal snapshot when this call removed the entry, and
+    /// `None` when it is still live or has already been removed. Ownership is
+    /// intentionally not checked; callers must establish trust before using
+    /// this process-local supervision API. Steering is deregistered with the
+    /// runtime entry, as it is for every other removal path.
+    pub fn prune_terminal_trusted(
+        &self,
+        task_id: &TaskId,
+    ) -> std::result::Result<Option<Status>, DetachedTaskRegistryError> {
+        let status = {
+            let mut guard = self.lock()?;
+            let Some(entry) = guard.get(task_id) else {
+                return Ok(None);
+            };
+            let status = entry.status.borrow().clone();
+            if !(self.is_terminal)(&status) {
+                return Ok(None);
+            }
+            guard.remove(task_id);
+            status
+        };
+        self.steering.deregister(task_id);
+        Ok(Some(status))
     }
 
     fn ensure_live_owned(
