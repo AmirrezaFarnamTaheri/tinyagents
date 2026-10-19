@@ -55,10 +55,10 @@ pub async fn complete_once(
         ));
     }
 
-    if !request
+    if request
         .model
         .as_deref()
-        .is_some_and(|model| !model.trim().is_empty())
+        .is_none_or(|model| model.trim().is_empty())
     {
         return Err("complete_once: request.model is required".to_owned());
     }
