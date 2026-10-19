@@ -80,6 +80,34 @@ fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
     assert!(store.get("stale-create").is_none());
 }
 
+#[test]
+fn in_memory_store_rejects_mutations_from_a_released_parent_gate() {
+    let store = InMemoryCompletionStore::new();
+    let stale = store
+        .acquire_parent_gate("parent", "router-a", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    assert!(store.release_parent_gate("parent", &stale).unwrap());
+    let current = store
+        .acquire_parent_gate("parent", "router-b", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+
+    let mut accepted = record("same-task", "parent");
+    accepted.result = CompletionResult::text("current owner");
+    store.put_fenced(&accepted, "parent", &current).unwrap();
+
+    let mut stale_update = accepted.clone();
+    stale_update.result = CompletionResult::text("stale owner");
+    assert!(store.put_fenced(&stale_update, "parent", &stale).is_err());
+    assert_eq!(
+        store.get("same-task").unwrap().result,
+        CompletionResult::text("current owner")
+    );
+    assert!(store.insert_if_absent(&record("stale-create", "parent"), &stale).is_err());
+    assert!(store.get("stale-create").is_none());
+}
+
 #[tokio::test]
 async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
     let store = DriverCompletionStore::new(
