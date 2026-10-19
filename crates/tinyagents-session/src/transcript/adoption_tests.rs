@@ -1,7 +1,7 @@
 use super::*;
 use crate::transcript::{TranscriptMessage, repair_orphaned_tool_head};
 use std::borrow::Cow;
-use tinyinference_llm::message::Message;
+use tinyagents_harness::tinyinference_llm::message::Message;
 
 #[test]
 fn repair_removes_only_the_leading_tool_run_after_system_prefix() {
