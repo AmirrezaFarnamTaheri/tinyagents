@@ -12,6 +12,9 @@ use crate::observability::{
     PhysicalDispatchMetadata, PhysicalDispatchObserver, PhysicalDispatchOutcome,
     PhysicalDispatchTerminal,
 };
+use crate::context::RunConfig;
+use crate::error::TinyAgentsError;
+use crate::runtime::AgentHarness;
 use async_trait::async_trait;
 use futures::{StreamExt, poll};
 use std::collections::VecDeque;
@@ -329,6 +332,38 @@ async fn chat_model_trait_consumer_observes_admission_refusal() {
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn agent_turn_preserves_typed_admission_refusal_from_chat_model() {
+    let counts = Arc::new(Counts::default());
+    let admission =
+        ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::CallLimit))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("controlled", Arc::new(controlled));
+
+    let error = harness
+        .invoke(
+            &(),
+            (),
+            RunConfig::new("dispatch-turn"),
+            vec![tinyinference_llm::message::Message::user("hello")],
+        )
+        .await
+        .expect_err("host admission refusal reaches the turn caller");
+
+    assert!(matches!(
+        error,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
