@@ -60,11 +60,30 @@ pub async fn output_or_kill_with_progress(
     deadline: Duration,
     progress: Option<ExecProgress>,
 ) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    output_or_kill_with_progress_mode(cmd, deadline, progress, true).await
+}
+
+/// Like [`output_or_kill_with_progress`] without applying task-local ambient
+/// variables to the child process.
+pub async fn output_or_kill_with_progress_isolated(
+    cmd: &mut tokio::process::Command,
+    deadline: Duration,
+    progress: Option<ExecProgress>,
+) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
+    output_or_kill_with_progress_mode(cmd, deadline, progress, false).await
+}
+
+async fn output_or_kill_with_progress_mode(
+    cmd: &mut tokio::process::Command,
+    deadline: Duration,
+    progress: Option<ExecProgress>,
+    apply_task_environment: bool,
+) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
     let cleanup = ProcessCleanup::default();
     match cleanup
         .scope(tokio::time::timeout(
             deadline,
-            output_unbounded_with_progress(cmd, progress),
+            output_unbounded_with_progress_mode(cmd, progress, apply_task_environment),
         ))
         .await
     {
@@ -90,7 +109,24 @@ pub async fn output_unbounded_with_progress(
     cmd: &mut tokio::process::Command,
     progress: Option<ExecProgress>,
 ) -> std::io::Result<std::process::Output> {
-    output_with_input_and_progress(cmd, None, progress).await
+    output_unbounded_with_progress_mode(cmd, progress, true).await
+}
+
+/// Like [`output_unbounded_with_progress`] without applying task-local ambient
+/// variables to the child process.
+pub async fn output_unbounded_with_progress_isolated(
+    cmd: &mut tokio::process::Command,
+    progress: Option<ExecProgress>,
+) -> std::io::Result<std::process::Output> {
+    output_unbounded_with_progress_mode(cmd, progress, false).await
+}
+
+async fn output_unbounded_with_progress_mode(
+    cmd: &mut tokio::process::Command,
+    progress: Option<ExecProgress>,
+    apply_task_environment: bool,
+) -> std::io::Result<std::process::Output> {
+    output_with_input_and_progress_mode(cmd, None, progress, apply_task_environment).await
 }
 
 /// Capture a command, optionally supplying stdin, in the current cleanup scope.
@@ -108,6 +144,15 @@ pub async fn output_with_input_and_progress(
     input: Option<Vec<u8>>,
     progress: Option<ExecProgress>,
 ) -> std::io::Result<std::process::Output> {
+    output_with_input_and_progress_mode(cmd, input, progress, true).await
+}
+
+async fn output_with_input_and_progress_mode(
+    cmd: &mut tokio::process::Command,
+    input: Option<Vec<u8>>,
+    progress: Option<ExecProgress>,
+    apply_task_environment: bool,
+) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     cmd.stdin(if input.is_some() {
         Stdio::piped()
@@ -117,7 +162,9 @@ pub async fn output_with_input_and_progress(
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
     .kill_on_drop(true);
-    CommandEnvironment::apply(cmd);
+    if apply_task_environment {
+        CommandEnvironment::apply(cmd);
+    }
     own_process_group(cmd.as_std_mut());
     let mut child = cmd.spawn()?;
     let stdin = child.stdin.take();
