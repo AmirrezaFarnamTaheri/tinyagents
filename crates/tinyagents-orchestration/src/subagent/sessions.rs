@@ -201,6 +201,24 @@ pub trait SubagentSessionStore: Send + Sync {
     ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError>;
     /// Closes a session so it cannot be reused.
     async fn close(&self, id: &str) -> Result<bool, SubagentError>;
+    /// Closes only the current task lifecycle. A stale owner cannot close a
+    /// replacement that reused the same durable session id.
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+    ) -> Result<bool, SubagentError> {
+        let Some(current) = self.get(id).await? else {
+            return Ok(false);
+        };
+        if current.current_task_id.as_deref() != Some(task_id)
+            || current.lifecycle_key.as_ref() != Some(lifecycle_key)
+        {
+            return Ok(false);
+        }
+        self.close(id).await
+    }
     /// Records the latest result and reusable state after a completed turn.
     async fn mark_finished(
         &self,
@@ -505,6 +523,30 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
 
     async fn close(&self, id: &str) -> Result<bool, SubagentError> {
         self.mutate(id, |session| {
+            session.status = DurableSubagentStatus::Closed;
+            session.reusable = false;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+    ) -> Result<bool, SubagentError> {
+        let id = id.to_owned();
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        self.mutate(&id, move |session| {
+            if session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+            {
+                return false;
+            }
             session.status = DurableSubagentStatus::Closed;
             session.reusable = false;
             session.updated_at = chrono::Utc::now().to_rfc3339();
