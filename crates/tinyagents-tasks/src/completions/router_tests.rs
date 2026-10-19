@@ -351,15 +351,15 @@ fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
         .unwrap()
         .unwrap();
     let claimed = store
-        .claim_pending(
-            "p",
-            0,
-            &gate,
-            CompletionClaimMode::Followup,
-            1,
-            "owner",
-            now + std::time::Duration::from_secs(30),
-        )
+        .claim_pending(PendingClaimRequest {
+            parent_key: "p".into(),
+            parent_epoch: 0,
+            gate,
+            mode: CompletionClaimMode::Followup,
+            max: 1,
+            token: "owner".into(),
+            visible_after: now + std::time::Duration::from_secs(30),
+        })
         .unwrap();
     assert_eq!(ids(&claimed), ["z-older"]);
 }
