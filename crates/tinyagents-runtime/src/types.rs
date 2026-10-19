@@ -279,6 +279,23 @@ pub struct CommitReceipt<C = ()> {
     pub transcript: Option<TranscriptCommitReceipt>,
 }
 
+/// Separate facts captured at execution time for post-commit host adapters.
+#[derive(Clone, Debug)]
+pub struct PostCommitObservation<C: Clone + Send + Sync + 'static = ()> {
+    /// The durable commit and its session result.
+    pub receipt: CommitReceipt<C>,
+    /// The original request input before host hooks can replace it.
+    pub input: Message,
+    /// Provider usage captured for the committed turn.
+    pub usage: Option<tinyagents_session::transcript::TurnUsage>,
+    /// Tool results captured at the harness execution boundary.
+    pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
+    /// Host-selected conversation identity.
+    pub thread_id: Option<String>,
+    /// Resolved agent identity, when one was supplied by the host.
+    pub agent_id: Option<String>,
+}
+
 impl<C: Clone> TurnOptions<C> {
     pub(crate) fn transcript_options(&self) -> TranscriptTurnOptions<C> {
         TranscriptTurnOptions {

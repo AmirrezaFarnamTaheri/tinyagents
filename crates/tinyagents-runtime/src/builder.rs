@@ -13,6 +13,7 @@ pub struct SessionBuilder<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
+    post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
     prefix: PrefixSnapshot,
     tools: ToolSnapshot,
     retain_recorded_tools: bool,
@@ -34,6 +35,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             driver,
             codec: None,
             hooks: Arc::new(NoopSessionHooks),
+            post_commit_sinks: Vec::new(),
             prefix: PrefixSnapshot::default(),
             tools: ToolSnapshot::default(),
             retain_recorded_tools: false,
@@ -50,6 +52,12 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
     /// Installs optional host preparation/observation hooks.
     pub fn hooks(mut self, hooks: Arc<dyn SessionHooks<C>>) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    /// Adds a host observer for successful durable commits.
+    pub fn post_commit_sink(mut self, sink: Arc<dyn crate::hooks::PostCommitSink<C>>) -> Self {
+        self.post_commit_sinks.push(sink);
         self
     }
 
@@ -157,6 +165,7 @@ impl<C: Clone + Send + Sync + 'static> SessionBuilder<C> {
             self.driver,
             self.codec,
             self.hooks,
+            self.post_commit_sinks,
             self.prefix,
             self.tools,
             target,
