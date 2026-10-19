@@ -3,7 +3,7 @@
 use tinytools::ToolRunContext;
 
 use super::{
-    ExecBackend, ExecBackendOutcome, ExecBackendCapability, ExecOutput, ExecProgress,
+    ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress,
     ExecRequest, ShellFlavor,
     timeout::{output_or_kill_with_progress, output_unbounded_with_progress},
 };
