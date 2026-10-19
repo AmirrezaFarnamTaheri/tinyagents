@@ -72,8 +72,13 @@ pub trait CompletionStore: Send + Sync {
     /// Upserts a record only through the supplied current parent tenure.
     /// Shared durable stores must fence the write atomically; the default
     /// fails closed rather than accepting an unguarded write.
-    fn put_fenced(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<()> {
-        let _ = (record, gate);
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> Result<()> {
+        let _ = (record, parent_key, gate);
         Err(store_err(
             "fenced write",
             "store does not support epoch-fenced writes",
@@ -337,7 +342,12 @@ impl CompletionStore for InMemoryCompletionStore {
         Ok(())
     }
 
-    fn put_fenced(&self, record: &CompletionRecord, _gate: &ParentGateClaim) -> Result<()> {
+    fn put_fenced(
+        &self,
+        record: &CompletionRecord,
+        _parent_key: &str,
+        _gate: &ParentGateClaim,
+    ) -> Result<()> {
         self.put(record)
     }
 
