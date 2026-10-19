@@ -941,7 +941,7 @@ async fn cancel_all_closes_an_attached_parent_before_its_first_completion() {
     assert_eq!(router.cancel_all_parents().unwrap(), 0);
     assert!(matches!(
         router.record(record("late-child", "idle-parent")).await.unwrap(),
-        RecordOutcome::Dropped { .. }
+        RecordOutcome::Suppressed
     ));
     assert_eq!(queue.status().await.total, 0);
     assert!(!router.admit_child("idle-parent").unwrap());
