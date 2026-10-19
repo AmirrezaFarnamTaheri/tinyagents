@@ -11,6 +11,7 @@
 
 mod admission;
 mod awaiting_user;
+mod child_turn;
 mod completion;
 mod detached;
 mod document_persistence;
@@ -27,16 +28,23 @@ mod role;
 mod sessions;
 mod step;
 mod summarization;
+mod turn_storage;
 mod types;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
 pub use awaiting_user::SubagentAwaitingUser;
+pub use child_turn::{
+    ChildTurnAccounting, ChildTurnCapSummary, ChildTurnControl, ChildTurnError, ChildTurnFailure,
+    ChildTurnHost, ChildTurnResult, ChildTurnRun, drive_child_turn,
+};
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,
     DetachedCompletionTarget, DetachedSubagentOwners, DetachedSubagentStatus, FinishedOutcome,
-    SpawnedSubagent, SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError,
-    WaitOutcome, cancel_detached_or_durable, cancel_detached_or_durable_with_owners,
-    list_subagent_records, orphaned_subagent_reason, record_agent_id, record_cancelled,
+    ParentRosterEntry, SpawnedSubagent, SubagentIdentity, SubagentResumeRef, SubagentSnapshot,
+    WaitAllItem, WaitError, WaitOutcome, cancel_detached_or_durable,
+    cancel_detached_or_durable_with_owners, format_parent_roster_for_owner,
+    format_roster_for_owner, list_subagent_records, orphaned_subagent_reason,
+    parent_roster_for_owner, pause_record_prefix, record_agent_id, record_cancelled,
     record_detached_completion, record_parent_session, record_spawned, record_status,
     record_subagent_session_id, record_to_wait_outcome, resolve_detached_or_durable,
     resolve_detached_or_durable_with_owners, resume_ref_for_task, resume_ref_from_record,
@@ -52,10 +60,10 @@ pub use file_persistence::FileSubagentPersistence;
 pub use invocation::{
     ChildDataPolicy, DELEGATION_EXECUTE_PROMPT, DELEGATION_MODE_FIELD, DELEGATION_PLAN_PROMPT,
     DELEGATION_REVIEW_PROMPT, DelegationEnvelope, DelegationRequest, DelegationTool,
-    DriverJobRegistration, InlineJobGuard, MultiTargetDelegationTool, ReviewApprovalPolicy,
-    SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError, SubAgentJobId,
-    SubAgentJobRegistry, SubAgentJobStatus, SubAgentMode, SubAgentSession, SubAgentTool,
-    parse_approval, review_stage_output,
+    DriverJobRegistration, InlineJobGuard, MultiTargetDelegationTool, ParentJobScope,
+    ReviewApprovalPolicy, SUBAGENT_MODE_FIELD, SubAgent, SubAgentJob, SubAgentJobError,
+    SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus, SubAgentMode, SubAgentSession,
+    SubAgentTool, parse_approval, review_stage_output,
 };
 pub use persistence::SubagentPersistence;
 pub use planner::SubagentPlanner;
@@ -70,15 +78,16 @@ pub use role::{
 };
 pub use sessions::{
     DriverSubagentSessionStore, DurableSubagentSession, DurableSubagentSessionSummary,
-    DurableSubagentStatus, ReuseDecision, SubagentSessionSelector, SubagentSessionStore,
-    SubagentSessionUpsert, find_reusable_session, normalize_task_key, reuse_decision,
-    task_title_from_prompt,
+    DurableSubagentStatus, ReuseDecision, ScopedSubagentSessionStore, SubagentSessionSelector,
+    SubagentSessionStore, SubagentSessionUpsert, find_reusable_session, normalize_task_key,
+    reuse_decision, task_title_from_prompt,
 };
 pub use step::{
     AgentStepConfig, AgentStepError, AgentStepIdentity, AgentStepResult, StepContext, StepSuccess,
     StepWorkError, run_agent_step,
 };
 pub use summarization::{CapSummary, CapSummaryModel, summarize_at_cap};
+pub use turn_storage::FencedSessionBackend;
 #[allow(deprecated)]
 pub use types::SubagentStatus;
 pub use types::{

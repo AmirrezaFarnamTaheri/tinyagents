@@ -13,6 +13,7 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
 thiserror = "2"
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0" }
 tinyagents-hooks = { path = "../tinyagents-hooks", version = "2.2.0" }

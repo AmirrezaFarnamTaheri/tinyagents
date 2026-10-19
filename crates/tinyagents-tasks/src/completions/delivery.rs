@@ -1,12 +1,12 @@
 //! Host-driven delivery timing around durable completion claims.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{CompletionRecord, CompletionRouter};
+use super::{CompletionReceipt, CompletionRecord, CompletionRouter};
 
 /// Timing and batch bounds for one delivery drain.
 #[derive(Clone, Copy, Debug)]
@@ -47,8 +47,10 @@ pub enum DeliveryOutcome {
     Delivered { count: usize },
     /// Delivery failed and the records remain retryable or gave up.
     Failed { count: usize, gave_up: usize },
+    /// Another drain already owns the tenant-scoped thread delivery lease.
+    LeaseHeld,
     /// The parent remained busy beyond the configured polling window.
-    Busy,
+    ParentBusy,
     /// The host's ownership fence stopped this drain.
     Fenced,
 }
@@ -60,6 +62,8 @@ pub struct DeliveryTarget<'a> {
     pub router: &'a CompletionRouter,
     /// Stable key recorded on child completions.
     pub parent_key: &'a str,
+    /// Tenant/profile namespace for thread-level coordination.
+    pub tenant_key: &'a str,
     /// Thread key used for one-delivery-at-a-time coordination.
     pub thread_key: &'a str,
 }
@@ -105,6 +109,33 @@ impl CompletionDelivery {
         .await
     }
 
+    /// Delivers one batch with a call-specific initial delay. The override
+    /// applies only to this drain; recovery and later calls keep their own
+    /// configured delays.
+    pub async fn deliver_once_with_initial_delay<B, F, D, Fut, E, U>(
+        &self,
+        target: DeliveryTarget<'_>,
+        initial_delay: Duration,
+        is_busy: B,
+        admitted: F,
+        deliver: D,
+        write_undelivered: U,
+    ) -> DeliveryOutcome
+    where
+        B: FnMut() -> bool,
+        F: DeliveryFence,
+        D: FnMut(&[CompletionRecord]) -> Fut,
+        Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
+    {
+        let mut config = self.config;
+        config.debounce = initial_delay;
+        Self::new(config, self.thread_leases.clone())
+            .deliver_once(target, is_busy, admitted, deliver, write_undelivered)
+            .await
+    }
+
     /// Error-aware form of [`Self::deliver_once`]. The callback receives the
     /// final delivery error for records that give up, synchronously under the
     /// thread lease after the durable give-up transition.
@@ -124,8 +155,11 @@ impl CompletionDelivery {
         E: std::fmt::Display,
         U: FnMut(&[CompletionRecord], &str),
     {
-        let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
-            return DeliveryOutcome::Busy;
+        let Some(_lease) = self
+            .thread_leases
+            .try_acquire(TenantThreadKey::new(target.tenant_key, target.thread_key))
+        else {
+            return DeliveryOutcome::LeaseHeld;
         };
         self.drain(
             target,
@@ -181,8 +215,11 @@ impl CompletionDelivery {
         E: std::fmt::Display,
         U: FnMut(&[CompletionRecord], &str),
     {
-        let Some(_lease) = self.thread_leases.try_acquire(target.thread_key) else {
-            return DeliveryOutcome::Busy;
+        let Some(_lease) = self
+            .thread_leases
+            .try_acquire(TenantThreadKey::new(target.tenant_key, target.thread_key))
+        else {
+            return DeliveryOutcome::LeaseHeld;
         };
         self.drain(
             target,
@@ -230,7 +267,7 @@ impl CompletionDelivery {
             return DeliveryOutcome::Fenced;
         }
         if is_busy() {
-            return DeliveryOutcome::Busy;
+            return DeliveryOutcome::ParentBusy;
         }
 
         let mut batch = match target
@@ -263,8 +300,9 @@ impl CompletionDelivery {
             }
             match delivery_result {
                 Ok(()) => {
-                    let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    match target.router.mark_delivered(&ids) {
+                    let receipts: Vec<_> =
+                        batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    match target.router.mark_delivered(&receipts) {
                         Ok(_) => {
                             claim.clear();
                             delivered_total += batch.len();
@@ -308,8 +346,9 @@ impl CompletionDelivery {
                 }
                 Err(error) => {
                     tracing::warn!(parent_key = target.parent_key, error = %error, "completion delivery turn failed");
-                    let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    let gave_up = match target.router.mark_failed(&ids) {
+                    let receipts: Vec<_> =
+                        batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    let gave_up = match target.router.mark_failed(&receipts) {
                         Ok(records) => records,
                         Err(error) => {
                             tracing::warn!(parent_key = target.parent_key, error = %error, "completion failure update failed");
@@ -377,54 +416,100 @@ async fn sleep_if_admitted<F: DeliveryFence>(duration: Duration, admitted: &F) -
 
 struct BatchClaim<'a> {
     router: &'a CompletionRouter,
-    ids: Vec<String>,
+    receipts: Vec<CompletionReceipt>,
 }
 impl<'a> BatchClaim<'a> {
     fn new(router: &'a CompletionRouter, records: &[CompletionRecord]) -> Self {
         Self {
             router,
-            ids: records
+            receipts: records
                 .iter()
-                .map(|record| record.task_id.clone())
+                .filter_map(CompletionRecord::receipt)
                 .collect(),
         }
     }
     fn replace(&mut self, records: &[CompletionRecord]) {
-        self.ids = records
+        self.receipts = records
             .iter()
-            .map(|record| record.task_id.clone())
+            .filter_map(CompletionRecord::receipt)
             .collect();
     }
     fn clear(&mut self) {
-        self.ids.clear();
+        self.receipts.clear();
     }
 }
 impl Drop for BatchClaim<'_> {
     fn drop(&mut self) {
-        self.router.release(&self.ids);
+        self.router.release(&self.receipts);
     }
+}
+
+/// Tenant-scoped identity used by parent and thread delivery gates.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TenantThreadKey {
+    tenant: String,
+    key: String,
+}
+
+impl TenantThreadKey {
+    /// Names a thread or session within a tenant/profile.
+    pub fn new(tenant: impl Into<String>, key: impl Into<String>) -> Self {
+        Self {
+            tenant: tenant.into(),
+            key: key.into(),
+        }
+    }
+
+    /// Tenant/profile component.
+    pub fn tenant(&self) -> &str {
+        &self.tenant
+    }
+
+    /// Thread or session component.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+impl From<String> for TenantThreadKey {
+    fn from(key: String) -> Self {
+        Self::new("", key)
+    }
+}
+
+impl From<&str> for TenantThreadKey {
+    fn from(key: &str) -> Self {
+        Self::new("", key)
+    }
+}
+
+#[derive(Default)]
+struct ParentBusyState {
+    leases: HashSet<(TenantThreadKey, u64)>,
+    /// Maps an active session id to the corresponding stable thread id.
+    session_threads: HashMap<TenantThreadKey, TenantThreadKey>,
 }
 
 /// Parent turn activity gate. Dropping a lease clears only the guard it owns.
 #[derive(Clone, Default)]
-pub struct ParentBusyGate(Arc<Mutex<HashSet<(String, u64)>>>);
+pub struct ParentBusyGate(Arc<Mutex<ParentBusyState>>);
 
 /// RAII guard marking one parent turn busy.
 pub struct ParentBusyLease {
     gate: ParentBusyGate,
-    key: String,
+    key: TenantThreadKey,
     id: u64,
 }
 
 impl ParentBusyGate {
     /// Marks one user turn busy. Overlapping leases keep the parent busy until
     /// every guard is dropped; `None` indicates a poisoned lock.
-    pub fn enter(&self, parent_key: impl Into<String>) -> Option<ParentBusyLease> {
+    pub fn enter(&self, parent_key: impl Into<TenantThreadKey>) -> Option<ParentBusyLease> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let key = parent_key.into();
         let mut entries = self.0.lock().ok()?;
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        entries.insert((key.clone(), id));
+        entries.leases.insert((key.clone(), id));
         Some(ParentBusyLease {
             gate: self.clone(),
             key,
@@ -434,48 +519,112 @@ impl ParentBusyGate {
 
     /// Whether a parent has an active busy lease.
     pub fn is_busy(&self, parent_key: &str) -> bool {
+        self.is_busy_scoped(&TenantThreadKey::from(parent_key))
+    }
+
+    /// Maps a session alias to its stable thread key for busy lookups.
+    pub fn alias_session_to_thread(
+        &self,
+        session: TenantThreadKey,
+        thread: TenantThreadKey,
+    ) -> bool {
+        if session.tenant != thread.tenant {
+            return false;
+        }
         self.0
             .lock()
-            .is_ok_and(|entries| entries.iter().any(|(key, _)| key == parent_key))
+            .is_ok_and(|mut state| state.session_threads.insert(session, thread).is_none())
+    }
+
+    /// Whether a tenant-scoped thread or one of its session aliases is busy.
+    pub fn is_busy_scoped(&self, key: &TenantThreadKey) -> bool {
+        self.0.lock().is_ok_and(|state| {
+            state.leases.iter().any(|(busy, _)| {
+                busy == key
+                    || state.session_threads.get(busy) == Some(key)
+                    || state.session_threads.get(key) == Some(busy)
+            })
+        })
+    }
+
+    /// Clears active leases for a parent and removes its session aliases.
+    pub fn clear(&self, parent_key: &TenantThreadKey) -> usize {
+        let Ok(mut state) = self.0.lock() else {
+            return 0;
+        };
+        let mut related = HashSet::from([parent_key.clone()]);
+        for (session, thread) in &state.session_threads {
+            if session == parent_key || thread == parent_key {
+                related.insert(session.clone());
+                related.insert(thread.clone());
+            }
+        }
+        state
+            .session_threads
+            .retain(|session, thread| !related.contains(session) && !related.contains(thread));
+        let before = state.leases.len();
+        state.leases.retain(|(key, _)| !related.contains(key));
+        before - state.leases.len()
     }
 }
 
 impl Drop for ParentBusyLease {
     fn drop(&mut self) {
         if let Ok(mut entries) = self.gate.0.lock() {
-            entries.remove(&(self.key.clone(), self.id));
+            entries.leases.remove(&(self.key.clone(), self.id));
         }
     }
 }
 
 /// At-most-one live delivery turn per thread, released automatically on drop.
 #[derive(Clone, Default)]
-pub struct ThreadDeliveryLeases(Arc<Mutex<HashSet<String>>>);
+pub struct ThreadDeliveryLeases(Arc<Mutex<HashMap<TenantThreadKey, u64>>>);
 
 /// RAII exclusive delivery lease for one thread.
 pub struct ThreadDeliveryLease {
     leases: ThreadDeliveryLeases,
-    key: String,
+    key: TenantThreadKey,
+    id: u64,
 }
 
 impl ThreadDeliveryLeases {
     /// Acquires the per-thread delivery slot, if currently free.
-    pub fn try_acquire(&self, thread_key: impl Into<String>) -> Option<ThreadDeliveryLease> {
+    pub fn try_acquire(
+        &self,
+        thread_key: impl Into<TenantThreadKey>,
+    ) -> Option<ThreadDeliveryLease> {
         let key = thread_key.into();
         let mut leases = self.0.lock().ok()?;
-        if !leases.insert(key.clone()) {
+        if leases.contains_key(&key) {
             return None;
         }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        leases.insert(key.clone(), id);
         Some(ThreadDeliveryLease {
             leases: self.clone(),
             key,
+            id,
+        })
+    }
+
+    /// Releases every process-local delivery lease and returns the count.
+    /// Existing guards become inert and cannot remove a subsequently acquired
+    /// lease for the same thread when they are dropped.
+    pub fn release_all(&self) -> usize {
+        self.0.lock().map_or(0, |mut leases| {
+            let count = leases.len();
+            leases.clear();
+            count
         })
     }
 }
 
 impl Drop for ThreadDeliveryLease {
     fn drop(&mut self) {
-        if let Ok(mut leases) = self.leases.0.lock() {
+        if let Ok(mut leases) = self.leases.0.lock()
+            && leases.get(&self.key) == Some(&self.id)
+        {
             leases.remove(&self.key);
         }
     }

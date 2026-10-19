@@ -742,6 +742,32 @@ pub async fn session_store_conformance(provider: &dyn SessionStoreProvider) {
     );
 }
 
+/// Runs the explicit pinned-lease contract against a provider that supports it.
+///
+/// This checks that a lease opens usable stores without depending on any
+/// provider-specific storage implementation. Providers that cannot guarantee
+/// pinned handles are covered by the fail-closed `Unsupported` contract test.
+pub async fn session_store_lease_conformance(provider: &dyn SessionStoreProvider) {
+    let lease = provider
+        .lease_for_agent("contract-lease-agent")
+        .expect("provider supports pinned session-store leases");
+    lease
+        .stores()
+        .kv
+        .put("contract", "lease", serde_json::json!("pinned"))
+        .await
+        .expect("leased key-value store writes");
+    assert_eq!(
+        lease
+            .stores()
+            .kv
+            .get("contract", "lease")
+            .await
+            .expect("leased key-value store reads"),
+        Some(serde_json::json!("pinned"))
+    );
+}
+
 /// Checks that `provider` keeps agents apart: whatever one agent writes,
 /// another agent's stores cannot see.
 ///

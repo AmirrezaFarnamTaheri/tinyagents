@@ -1,5 +1,9 @@
 use super::*;
 use crate::legacy::OnceOutcome;
+use crate::port::SessionStoreProvider;
+use crate::testkit::conformance::{
+    session_store_conformance, session_store_isolation_conformance, session_store_lease_conformance,
+};
 use crate::transcript::{
     SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn, session_stem, write_transcript,
 };
@@ -102,6 +106,70 @@ fn a_workspace_with_no_legacy_files_opens_empty() {
     let dir = tempfile::tempdir().unwrap();
     let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert!(opened.transcripts().latest_for_agent("agent").is_none());
+}
+
+#[tokio::test]
+async fn workspace_provider_passes_full_session_store_conformance() {
+    let dir = tempfile::tempdir().unwrap();
+    let opened = WorkspaceStores::open(dir.path(), "conformance-agent").unwrap();
+    let provider = opened.provider();
+    session_store_conformance(provider.as_ref()).await;
+    session_store_isolation_conformance(provider.as_ref()).await;
+    session_store_lease_conformance(provider.as_ref()).await;
+}
+
+#[tokio::test]
+async fn a_workspace_provider_lease_keeps_the_opened_store_alive() {
+    let dir = tempfile::tempdir().unwrap();
+    let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    let lease = opened.provider().lease_for_agent("agent").unwrap();
+    lease
+        .stores()
+        .kv
+        .put("lease-test", "key", serde_json::json!("retained"))
+        .await
+        .unwrap();
+    drop(opened);
+    assert_eq!(
+        lease.stores().kv.get("lease-test", "key").await.unwrap(),
+        Some(serde_json::json!("retained"))
+    );
+    lease
+        .stores()
+        .kv
+        .put(
+            "lease-test",
+            "after-drop",
+            serde_json::json!("written through lease"),
+        )
+        .await
+        .unwrap();
+
+    let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
+    assert_eq!(
+        reopened
+            .provider()
+            .lease_for_agent("agent")
+            .unwrap()
+            .stores()
+            .kv
+            .get("lease-test", "key")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("retained"))
+    );
+    assert_eq!(
+        reopened
+            .provider()
+            .lease_for_agent("agent")
+            .unwrap()
+            .stores()
+            .kv
+            .get("lease-test", "after-drop")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("written through lease"))
+    );
 }
 
 #[test]

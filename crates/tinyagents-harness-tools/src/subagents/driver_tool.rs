@@ -266,6 +266,7 @@ impl<State, Ctx: Send + 'static, H: Send + 'static> DriverSubAgentTool<State, Ct
                     key: request.task_key().clone(),
                     agent: request.target().unwrap_or(&self.name).to_owned(),
                     owner: owner.clone(),
+                    workspace: request.run_context().workspace.clone(),
                     cancellation: request.run_context().cancellation.clone(),
                     steering: request.run_context().steering.clone(),
                     run_queue: request.run_context().run_queue.clone(),

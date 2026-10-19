@@ -2088,6 +2088,7 @@ dependencies = [
  "tinytools-agent",
  "tinytools-std",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
  "wait-timeout",
@@ -2193,6 +2194,7 @@ dependencies = [
  "tinyagents-graph",
  "tinyagents-harness",
  "tinyagents-registry",
+ "tinyagents-runtime",
  "tinyagents-session",
  "tinyagents-tasks",
  "tinyinference-llm",
@@ -2228,6 +2230,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror",
  "tinyagents-harness",
@@ -2271,6 +2274,7 @@ dependencies = [
 name = "tinyagents-tasks"
 version = "2.2.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "tempfile",
@@ -2280,6 +2284,7 @@ dependencies = [
  "tinystoragedrivers-sqlite",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

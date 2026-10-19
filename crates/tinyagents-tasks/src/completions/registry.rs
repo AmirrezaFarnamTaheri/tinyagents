@@ -4,9 +4,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use tinystoragedrivers_core::DocumentStore;
+use tinyagents_harness::error::Result as HarnessResult;
+use tinystoragedrivers_core::{Scope, StorageBackend};
 
-use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
+use super::lifecycle::ParentLifecycle;
+use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 
 /// Outcome of replacing one cached router only if it is still current.
 pub enum CompletionRouterReplaceOutcome {
@@ -23,12 +25,19 @@ pub enum CompletionRouterReplaceOutcome {
 pub enum CompletionRouterPoolError {
     /// The pool mutex was poisoned by a panic in another task.
     Lock(String),
+    /// A router could not release its active durable claims. Earlier routers
+    /// in the same call may already have released theirs; retry is safe.
+    Release(String),
 }
 
 impl std::fmt::Display for CompletionRouterPoolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lock(detail) => write!(f, "completion router pool lock poisoned: {detail}"),
+            Self::Release(detail) => write!(
+                f,
+                "completion router pool could not release claims: {detail}"
+            ),
         }
     }
 }
@@ -37,9 +46,23 @@ impl std::error::Error for CompletionRouterPoolError {}
 
 type OpenFn<K> = dyn Fn(&K) -> Arc<CompletionRouter> + Send + Sync;
 
+/// Whether a failed durable completion-store open may use process-local
+/// storage. Shared-backend callers must use
+/// [`CompletionStoreFallback::FailClosed`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionStoreFallback {
+    /// Return the backend or declaration error; never make cross-process work
+    /// appear durable when it is only held in process memory.
+    FailClosed,
+    /// Explicitly permit ephemeral local behavior if durable storage cannot be
+    /// opened. The caller owns deciding that the scope is local-only.
+    LocalMemory,
+}
+
 /// Process-local cache of one durable completion router per scope key.
 pub struct CompletionRouterPool<K: Eq + Hash + Clone + Send + Sync> {
     routers: Mutex<HashMap<K, Arc<CompletionRouter>>>,
+    lifecycles: Mutex<HashMap<(K, String), Arc<ParentLifecycle>>>,
     open: Arc<OpenFn<K>>,
 }
 
@@ -48,6 +71,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     pub fn new(open: impl Fn(&K) -> Arc<CompletionRouter> + Send + Sync + 'static) -> Self {
         Self {
             routers: Mutex::new(HashMap::new()),
+            lifecycles: Mutex::new(HashMap::new()),
             open: Arc::new(open),
         }
     }
@@ -59,6 +83,28 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
             return Ok(Arc::clone(router));
         }
         let router = (self.open)(key);
+        let store = router.store();
+        let domain = if store.is_process_local() {
+            "process-local-memory".to_owned()
+        } else if let Some(identity) = store.coordination_identity() {
+            format!("coordination:{identity}")
+        } else {
+            format!("store:{:p}", Arc::as_ptr(&store))
+        };
+        let lifecycle = {
+            let mut lifecycles = self
+                .lifecycles
+                .lock()
+                .map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))?;
+            Arc::clone(
+                lifecycles
+                    .entry((key.clone(), domain))
+                    .or_insert_with(ParentLifecycle::new),
+            )
+        };
+        router
+            .attach_parent_lifecycle(lifecycle)
+            .map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))?;
         routers.insert(key.clone(), Arc::clone(&router));
         Ok(router)
     }
@@ -82,10 +128,26 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     }
 
     /// Drops cached routers so their stores can be reopened after a lifecycle
-    /// boundary. Durable records remain in the backing store.
+    /// boundary. Durable records remain in the backing store, and the
+    /// pool-scoped parent lifecycle authority remains available to the new
+    /// router and to queue admissions retained from the old one.
     pub fn clear(&self) -> Result<(), CompletionRouterPoolError> {
         self.lock()?.clear();
         Ok(())
+    }
+
+    /// Releases all active claims held by cached routers without clearing the
+    /// pool. Each router is snapshotted before store I/O, so the pool mutex is
+    /// not held while a backend is accessed. On failure, earlier routers may
+    /// already have released claims; calling this again is safe.
+    pub fn release_all(&self) -> Result<usize, CompletionRouterPoolError> {
+        let routers: Vec<_> = self.lock()?.values().map(Arc::clone).collect();
+        routers.into_iter().try_fold(0usize, |released, router| {
+            router
+                .release_all()
+                .map(|count| released + count)
+                .map_err(|error| CompletionRouterPoolError::Release(error.to_string()))
+        })
     }
 
     /// Atomically replaces `expected` only while it remains the cached router.
@@ -141,21 +203,82 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
     }
 }
 
-/// Opens a durable completion store over `docs`, falling back to memory when
-/// the bridge cannot start or the collection cannot be declared.
+/// Opens a durable completion store over the tenant-scoped backend.
+///
+/// This convenience constructor uses the identity of the supplied backend
+/// `Arc`. If independent handles may point to the same database, use
+/// [`open_driver_completion_store_with_coordination_domain`] with one
+/// trusted domain shared by all processes opening that database and scope.
+/// Shared-store setup fails closed.
+pub fn open_driver_completion_store(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    let store = DriverCompletionStore::new(backend, scope)
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    store.declare_collections()?;
+    Ok(Arc::new(store))
+}
+
+/// Opens a durable completion store with a host-configured shared-backend
+/// coordination domain.
+///
+/// The opaque domain is trusted host configuration, never caller or model
+/// input. Processes sharing a database and scope must use the same domain;
+/// different databases must use different domains.
+pub fn open_driver_completion_store_with_coordination_domain(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    coordination_domain: impl Into<String>,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    let store =
+        DriverCompletionStore::new_with_coordination_domain(backend, scope, coordination_domain)
+            .map_err(|error| {
+                tinyagents_harness::error::TinyAgentsError::Storage(error.to_string())
+            })?;
+    store.declare_collections()?;
+    Ok(Arc::new(store))
+}
+
+/// Opens a driver-backed store, optionally falling back to explicit local
+/// memory behavior when the caller has established that the scope is local.
+///
+/// Shared/durable scopes must pass [`CompletionStoreFallback::FailClosed`].
+/// The local-memory option is an explicit policy choice, never an automatic
+/// response to a shared-backend failure.
 pub fn open_driver_completion_store_or_memory(
-    docs: Arc<dyn DocumentStore>,
-) -> Arc<dyn CompletionStore> {
-    let store = match DriverCompletionStore::new(docs) {
-        Ok(store) => store,
-        Err(error) => {
-            tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-            return Arc::new(InMemoryCompletionStore::new());
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    fallback: CompletionStoreFallback,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    match open_driver_completion_store(backend, scope) {
+        Ok(store) => Ok(store),
+        Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
+            tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");
+            Ok(Arc::new(super::InMemoryCompletionStore::new()))
         }
-    };
-    if let Err(error) = store.declare_collections() {
-        tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-        return Arc::new(InMemoryCompletionStore::new());
+        Err(error) => Err(error),
     }
-    Arc::new(store)
+}
+
+/// Opens a durable store in an explicit coordination domain, with optional
+/// local-only memory fallback.
+///
+/// Use `FailClosed` for shared/durable scopes. `LocalMemory` is an explicit
+/// host policy for a scope that does not require cross-process delivery.
+pub fn open_driver_completion_store_or_memory_with_coordination_domain(
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+    coordination_domain: impl Into<String>,
+    fallback: CompletionStoreFallback,
+) -> HarnessResult<Arc<dyn CompletionStore>> {
+    match open_driver_completion_store_with_coordination_domain(backend, scope, coordination_domain)
+    {
+        Ok(store) => Ok(store),
+        Err(error) if fallback == CompletionStoreFallback::LocalMemory => {
+            tracing::warn!(error = %error, "durable completion store unavailable; using explicitly permitted local memory");
+            Ok(Arc::new(super::InMemoryCompletionStore::new()))
+        }
+        Err(error) => Err(error),
+    }
 }

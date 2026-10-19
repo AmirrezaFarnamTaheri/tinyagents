@@ -58,6 +58,20 @@ fn contents(locator: &dyn TranscriptLocator, session: &SessionRef) -> Vec<String
         .collect()
 }
 
+fn snapshot(locator: &DriverTranscriptLocator, stem: &str) -> serde_json::Value {
+    let transcript = locator
+        .open_stem(stem, meta(THREAD))
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    serde_json::json!({
+        "meta": transcript.meta,
+        "messages": transcript.messages,
+        "tools": transcript.tools,
+    })
+}
+
 #[test]
 fn legacy_roots_are_folded_oldest_first_once() {
     let locator = locator();
@@ -118,6 +132,38 @@ fn legacy_roots_are_folded_oldest_first_once() {
         .unwrap();
     assert_eq!(untouched.messages.len(), 1);
     assert!(untouched.meta.session_id.is_none());
+}
+
+#[test]
+fn legacy_root_adoption_does_not_replace_a_child_session() {
+    let locator = locator();
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 5),
+        &["root history"],
+    );
+    let legacy_before = snapshot(&locator, "1700000100_planner");
+    let root = SessionRef::scoped(THREAD, "planner");
+    let child = SessionRef::child_of(&root, "delegate:worker");
+
+    assert!(
+        locator
+            .adopt_legacy(&child, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
+    assert!(locator.read_session_transcript(&child).is_none());
+    assert_eq!(snapshot(&locator, "1700000100_planner"), legacy_before);
+    assert!(
+        locator
+            .adopt_legacy(&root, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(contents(&locator, &root), vec!["root history"]);
+    assert!(locator.read_session_transcript(&child).is_none());
+    assert_eq!(snapshot(&locator, "1700000100_planner"), legacy_before);
 }
 
 #[test]
