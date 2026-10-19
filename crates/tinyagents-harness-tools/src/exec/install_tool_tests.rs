@@ -2,7 +2,7 @@ use super::*;
 use crate::exec::{
     ExecBackendCapability, ExecDenied, ExecOutput, ExecPermit, ExecProgress, ShellFlavor,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -24,11 +24,13 @@ struct Gate(Arc<State>);
 
 #[async_trait]
 impl ExecGate for Gate {
-    async fn prepare_authorization(&self, _: &Value) -> anyhow::Result<Option<Value>> {
-        Ok(None)
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>> {
+        Ok(Some(json!({"prepared_package":args.get("package")})))
     }
-    fn external_effect_with_args(&self, _: &Value) -> bool {
-        true
+    fn external_effect_with_args(&self, args: &Value) -> bool {
+        args.get("gate_effect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
     }
     async fn authorize(
         &self,
@@ -94,6 +96,18 @@ fn package_validation_rejects_shell_injection_and_oversized_input() {
     for package in ["ripgrep", "@scope/cli", "lib:feature", "a+b-c_1.0"] {
         assert!(valid_package(package));
     }
+}
+
+#[tokio::test]
+async fn install_delegates_authorization_preparation_and_argument_effect_to_gate() {
+    let (tool, _) = tool(false);
+    let args = json!({"package":"ripgrep","gate_effect":false});
+    assert_eq!(
+        tool.prepare_authorization(&args).await.unwrap(),
+        Some(json!({"prepared_package":"ripgrep"}))
+    );
+    assert!(!tool.external_effect_with_args(&args));
+    assert!(tool.external_effect_with_args(&json!({"package":"ripgrep","gate_effect":true})));
 }
 
 #[test]
