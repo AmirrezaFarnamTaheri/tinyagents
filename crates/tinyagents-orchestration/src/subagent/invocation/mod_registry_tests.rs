@@ -314,14 +314,19 @@ async fn dropping_terminal_waiters_releases_retention_pins() {
     for id in &ids {
         jobs.mark_driver_result(
             id,
-            Ok(crate::subagent::SubagentOutcome::completed("pinned", "done")),
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "pinned", "done",
+            )),
         );
     }
     assert_eq!(jobs.tasks().len().unwrap(), ids.len());
 
     drop(waiters);
     let retained = jobs.tasks().len().unwrap();
-    assert!(retained <= 128, "terminal tasks retained after waiter drops: {retained}");
+    assert!(
+        retained <= 128,
+        "terminal tasks retained after waiter drops: {retained}"
+    );
     assert_eq!(jobs.controls.lock().unwrap().len(), retained);
     assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
 }
@@ -334,12 +339,11 @@ async fn direct_cancellation_keeps_terminal_retention_bounded() {
         .collect();
     for id in &ids {
         let mut awaiting = crate::subagent::SubagentOutcome::completed("cancel", "paused");
-        awaiting.status = crate::subagent::SubagentOutcomeKind::AwaitingInput(
-            crate::subagent::SubagentPause {
+        awaiting.status =
+            crate::subagent::SubagentOutcomeKind::AwaitingInput(crate::subagent::SubagentPause {
                 reason: "clarification".into(),
                 resume: crate::subagent::SubagentResume::default(),
-            },
-        );
+            });
         jobs.mark_driver_result(id, Ok(awaiting));
     }
     for id in &ids {
