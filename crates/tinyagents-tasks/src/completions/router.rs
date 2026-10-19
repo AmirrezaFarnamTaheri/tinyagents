@@ -9,7 +9,7 @@ use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
 use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore};
-use super::types::{CompletionRecord, CompletionState, NotifyMode};
+use super::types::{CompletionReceipt, CompletionRecord, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
 const CLAIM_VISIBILITY: Duration = Duration::from_secs(30);
@@ -26,6 +26,8 @@ pub enum RecordOutcome {
     Recorded {
         /// The lane the completion was pushed onto, if any.
         lane: Option<QueueLane>,
+        /// The receipt authorizing settlement of a live push.
+        receipt: Option<CompletionReceipt>,
     },
     /// A record for this task id already exists; nothing changed.
     Duplicate,
@@ -67,7 +69,7 @@ struct RouterState {
     /// pending is claimable again.
     leased: HashSet<String>,
     /// Durable claim tokens owned by this router, used to reject stale settles.
-    claim_tokens: HashMap<String, String>,
+    active_receipts: HashMap<String, CompletionReceipt>,
     /// Live parents and their steering queues.
     parents: HashMap<String, RunQueueHandle>,
 }
@@ -93,7 +95,7 @@ impl CompletionRouter {
             state: Mutex::new(RouterState {
                 store,
                 leased: HashSet::new(),
-                claim_tokens: HashMap::new(),
+                active_receipts: HashMap::new(),
                 parents: HashMap::new(),
             }),
         }
@@ -191,10 +193,10 @@ impl CompletionRouter {
     fn release_parent_locked(&self, state: &mut RouterState, parent_key: &str) {
         for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
-            if let Some(token) = state.claim_tokens.remove(&record.task_id) {
+            if let Some(receipt) = state.active_receipts.remove(&record.task_id) {
                 let _ = state
                     .store
-                    .resolve_claim(&record.task_id, &token, ClaimResolution::Release);
+                    .resolve_claim(&record.task_id, &receipt.token, ClaimResolution::Release);
             }
         }
     }
@@ -202,16 +204,18 @@ impl CompletionRouter {
     /// Releases the lease on `task_ids` without counting a failure, so they can
     /// be claimed again. Use it when a claim or push was abandoned (a dropped
     /// delivery future, a cleared queue). Attempts already counted stay counted.
-    pub fn release<S: AsRef<str>>(&self, task_ids: &[S]) {
+    pub fn release(&self, receipts: &[CompletionReceipt]) {
         if let Ok(mut state) = self.lock() {
-            for id in task_ids {
-                let id = id.as_ref();
-                state.leased.remove(id);
-                if let Some(token) = state.claim_tokens.remove(id) {
-                    let _ = state
-                        .store
-                        .resolve_claim(id, &token, ClaimResolution::Release);
+            for receipt in receipts {
+                if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
+                    state.leased.remove(&receipt.task_id);
+                    state.active_receipts.remove(&receipt.task_id);
                 }
+                let _ = state.store.resolve_claim(
+                    &receipt.task_id,
+                    &receipt.token,
+                    ClaimResolution::Release,
+                );
             }
         }
     }
@@ -307,17 +311,28 @@ impl CompletionRouter {
                     .map(|queue| (lane, queue.clone()))
             }) {
                 Some((lane, queue)) => {
-                    record.attempts = 1;
-                    record.updated_at = SystemTime::now();
-                    state.store.put(&record)?;
+                    let token = uuid::Uuid::new_v4().to_string();
+                    let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
+                    let Some(claimed) = state.store.claim_task(
+                        &record.task_id,
+                        &record.parent_key,
+                        CompletionClaimMode::Followup,
+                        &token,
+                        visible_after,
+                    )? else {
+                        return Ok(RecordOutcome::Recorded { lane: None, receipt: None });
+                    };
+                    record = claimed;
+                    let receipt = record.receipt().expect("claimed record has a receipt");
                     state.leased.insert(record.task_id.clone());
-                    Some((lane, queue))
+                    state.active_receipts.insert(record.task_id.clone(), receipt.clone());
+                    Some((lane, queue, receipt))
                 }
                 None => None,
             }
         };
         let Some((lane, queue)) = push else {
-            return Ok(RecordOutcome::Recorded { lane: None });
+            return Ok(RecordOutcome::Recorded { lane: None, receipt: None });
         };
         let message = self.formatter.to_message(std::slice::from_ref(&record));
         queue.push(lane, message).await;
@@ -327,7 +342,7 @@ impl CompletionRouter {
             lane = lane.as_str(),
             "{LOG_PREFIX} pushed to live parent"
         );
-        Ok(RecordOutcome::Recorded { lane: Some(lane) })
+        Ok(RecordOutcome::Recorded { lane: Some(lane), receipt: Some(push_receipt) })
     }
 
     /// [`Self::record`], retried up to `attempts` times with a short backoff
