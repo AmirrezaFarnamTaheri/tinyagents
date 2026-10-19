@@ -126,22 +126,8 @@ there are no leading orphans, the helper returns the original slice through
 
 Keep authority resolution at the host boundary and keep generic rebind behavior
 intact. Add an explicit lease wrapper in `port/types.rs`:
-
-```rust
-#[derive(Clone)]
-pub struct SessionStoreLease {
-    stores: AgentStores,
-}
-
-impl SessionStoreLease {
-    pub fn stores(&self) -> &AgentStores { &self.stores }
-}
-```
-
-Its constructor remains private to `port`; only
-`SessionStoreProvider::lease_for_agent` creates it, preventing a host from
-wrapping a live forwarding handle and accidentally calling that a pinned
-lease.
+Its constructor remains private; only a provider implementation that can
+attest to pinned lifetime may create it.
 
 Add this error and lease contract in `port/types.rs`:
 
@@ -176,7 +162,18 @@ Add `SessionStoreProvider::lease_for_agent(&self, agent_id: &str)` returning
 `Result<SessionStoreLease, SessionStoreLeaseError>`. Its default returns
 `Err(SessionStoreLeaseError::Unsupported)`; it must never wrap
 `try_for_agent`, because that may return forwarding handles and does not prove
-pinned lifetime. `RebindableSessionStores` is the first supported provider: its
+pinned lifetime. Add the method body to the trait:
+
+```rust
+fn lease_for_agent(
+    &self,
+    _agent_id: &str,
+) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    Err(SessionStoreLeaseError::Unsupported)
+}
+```
+
+`RebindableSessionStores` is the first supported provider: its
 override holds the same `current` read lock used by `current()`, clones the
 current `Arc<DriverSessionStores>`, opens the agent through that snapshot, and
 stores the resulting non-forwarding `AgentStores` in the lease. If agent open
@@ -467,6 +464,17 @@ checks pass. `Session::turn` must call it after `apply_resume_preparation`;
 public `Session::resume` calls it before the first locator access. This order
 is intentional: hooks may prepare a lazy target but cannot grant authority to
 change its destination.
+
+Extract the current public `Session::resume` body verbatim into private
+`async fn resume_bound(&mut self, options: &TurnOptions<C>) ->
+Result<SessionResume, RuntimeError>`. The public wrapper first calls
+`self.resolve_and_bind(options)?` and then awaits `self.resume_bound(options)`.
+In `turn_inner`, retain the existing `before_resume` and preparation calls,
+then call `apply_resume_preparation(preparation)?`,
+`self.resolve_and_bind(options)?`, acquire `lock_turn(options)`, and await
+`self.resume_bound(options)`. Do not call the public wrapper from `turn_inner`,
+because that would resolve twice. The old body remains line-for-line aside
+from its visibility/name and follows the single guard.
 
 The request has logical naming inputs only; there is no caller-provided
 agent/tenant scope field. The resolver uses `options.run_context.data` to
