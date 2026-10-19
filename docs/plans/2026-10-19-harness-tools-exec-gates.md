@@ -271,7 +271,12 @@ pub struct PlanReviewRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanReviewResolution {
+    /// Interactive review surface returned approval.
     Approve,
+    /// Host policy approved a non-interactive turn without a review surface.
+    NonInteractiveApprove,
+    /// The host established that this thread is outside plan mode.
+    NotApplicable,
     Reject,
     Revise { feedback: String },
 }
@@ -297,28 +302,57 @@ impl RequestPlanReviewTool {
 ```
 
 `RequestPlanReviewTool` stores `Option<Arc<dyn PlanReviewPort>>`; its
-constructor accepts that option. A missing port returns a stable error result
-before any auto-approval decision, making the fail-closed test meaningful.
+constructor accepts that option. The adapter returns `NonInteractiveApprove`
+only for the existing non-interactive policy, and `NotApplicable` only for the
+existing outside-plan-mode success path. Interactive approval, rejection, and
+revision map to separate variants. A missing port returns a stable error
+before any resolution, making the fail-closed test meaningful.
 The tool keeps `request_plan_review`, `PermissionLevel::None`, no external
 effect, and an unbounded timeout because the port's review deadline is
 authoritative. It trims summary and nonempty string steps exactly as the source
 does. The port reads the provider-assigned call id from the generic
 `ToolExecutionContext` exposed through `ToolRunContext::host_extension()`;
-the request itself contains no OpenHuman identifier type. Preserve the
-approve/reject/revise result wording and make the port's
-missing/expired/error result fail closed; never turn port errors into approval.
+the request itself contains no OpenHuman identifier type. Preserve exact
+source result text: interactive approval is `approved: the user approved the
+plan — proceed and execute it now.`, non-interactive approval is
+`approved: non-interactive turn (no review surface) — proceed with the plan.`,
+and outside-plan success is `not applicable: this thread is not in plan mode,
+so there is no plan to review. Do not call \`request_plan_review\` again
+this turn.` Preserve the existing reject and revise strings verbatim from
+`plan_review/tool.rs`. Tests assert all five outcomes and exact strings;
+missing port, port error, and expired review remain errors and can never map
+to an approval variant.
 
 ### Media artifact filing port
 
-The generic wrapper is feature-gated as `media`; this feature may add only the
-optional `tinyinference-video` dependency needed for its existing
-`ProgressFn` callback type. It must not enable `tinyagents-harness/multimodal`
-or pull `flate2`, `tar`, `zip`, or reqwest through that feature. Keep
-`MediaArtifactTool<T>` generic over `T: tinytools::Tool` and pass the
-`ToolRunContext` to the per-call inner-tool factory so the host adapter can
-read its own approval/chat extension. The factory remains
-`Arc<dyn Fn(ProgressFn, Option<&dyn ToolRunContext>) -> T + Send + Sync>`;
-it must not mention `ApprovalChatContext`. The generic wrapper keeps the inner
+The generic wrapper is feature-gated as `media` and introduces no
+`tinyinference-video`, `tinyinference-image`, multimodal, or provider transport
+dependency. The media progress callback is a transport-free generic seam:
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaJobProgress {
+    pub id: String,
+    pub state: String,
+    pub outputs: usize,
+    pub output_indices: Vec<usize>,
+    pub cost_usd: Option<f64>,
+    pub error: Option<String>,
+}
+pub type MediaProgressFn = std::sync::Arc<dyn Fn(&MediaJobProgress) + Send + Sync>;
+```
+
+Keep `MediaArtifactTool<T>` generic over `T: tinytools::Tool` and pass the
+`ToolRunContext` to a per-call inner-tool factory so host code can read its
+own approval/chat extension. The factory accepts
+`(MediaProgressFn, Option<&dyn ToolRunContext>)`; it does not mention
+`ApprovalChatContext` or provider types. The OpenHuman adapter converts the
+provider callback/status into this value, preserving all fields and progress
+heartbeat behavior. Before settling the exact generic fields, compare against
+both `VideoJobStatus` and the old wrapper's progress tests; do not discard any
+observable status. The wrapper keeps the inner tool's name, description,
+schema, policy, permissions, scope, category, result content, and progress
+behavior. The generic wrapper keeps the inner
 tool's name, description, schema, policy, permissions, scope, category, result
 content, and progress behavior. It parses
 each JSON result's `artifacts` array and invokes the injected `ArtifactFiling`
@@ -347,11 +381,16 @@ pub struct FiledArtifact {
 
 #[async_trait]
 pub trait ArtifactFiling: Send + Sync {
-    async fn file(&self, generated: GeneratedArtifact) -> Result<FiledArtifact, String>;
+    async fn file(&self, generated: GeneratedArtifact,
+        context: Option<&dyn tinytools::ToolRunContext>) -> Result<FiledArtifact, String>;
 }
 ```
 
-The wrapper replaces only the entry's `path`, adds `artifact_id` on success,
+The wrapper passes each invocation's original `ToolRunContext` through every
+`ArtifactFiling::file` call. This per-call argument is required because the
+host adapter derives approval/chat routing from that call's extension; do not
+capture one ambient chat context in the shared wrapper or factory. The wrapper
+replaces only the entry's `path`, adds `artifact_id` on success,
 or adds `artifact_error` on a per-entry failure; it keeps processing later
 entries and leaves unrecognized shapes untouched. It rewrites matching source
 paths in `markdown_formatted`. Keep the `n > 1` title suffix and 60-character
@@ -417,7 +456,7 @@ families:
 | `rustix` (`fs`, `process` as target permits) | `exec` |
 | Tokio `fs`, `io-util` capabilities | `fs`, `net`, and `exec` where used |
 | Tokio `process` capability | `exec` |
-| `tinyinference-video` | `media` only, for `ProgressFn` |
+| no provider/media dependency | `media` (generic progress callback only) |
 | no added dependency | `plan-review` |
 | `tempfile`, Tokio `test-util` | dev-dependencies only |
 
@@ -443,7 +482,7 @@ The exact source-root map is:
 | --- | --- |
 | `vendor/tinytools/crates/tinytools-std/src/filesystem/**` | `crates/tinyagents-harness-tools/src/fs/filesystem/**` |
 | `vendor/tinytools/crates/tinytools-std/src/file_state/{agent_context.rs,mod.rs,ops.rs,types.rs}` | `crates/tinyagents-harness-tools/src/fs/file_state/{agent_context.rs,mod.rs,ops.rs,types.rs}` |
-| `vendor/tinytools/crates/tinytools-std/src/file_state/test/{agent_context.rs,ops.rs}` | Combine all assertions into `crates/tinyagents-harness-tools/src/fs/file_state_tests.rs`; do not copy the old `test/mod.rs` aggregator |
+| `vendor/tinytools/crates/tinytools-std/src/file_state/test/{agent_context.rs,ops.rs}` | Combine all assertions into `crates/tinyagents-harness-tools/src/fs/file_state/file_state_tests.rs`; do not copy the old `test/mod.rs` aggregator |
 | `vendor/tinytools/crates/tinytools-std/src/network/**` | `crates/tinyagents-harness-tools/src/net/network/**` |
 | `vendor/tinytools/crates/tinytools-std/src/detect_tools/**` | `crates/tinyagents-harness-tools/src/exec/detect_tools/**` |
 | `vendor/tinytools/crates/tinytools-std/src/timeout/**` | `crates/tinyagents-harness-tools/src/exec/timeout/**` |
@@ -612,10 +651,12 @@ fields, preserved resolution-to-result mapping, missing-port fail-closed
 behavior, and that feedback is not silently discarded.
 
 Port `MediaArtifactTool<T>` to `media::MediaArtifactTool<T>` with an injected
-`Arc<dyn ArtifactFiling>`. Add optional `tinyinference-video` under the new
-`media` feature solely for `ProgressFn`; update the per-call inner factory to
+`Arc<dyn ArtifactFiling>`. Add the transport-free `MediaJobProgress` and
+`MediaProgressFn` contract above; do not add tinyinference-video/image or
+reqwest solely to name a callback type. Update the per-call inner factory to
 accept `Option<&dyn ToolRunContext>` instead of `ApprovalChatContext`, letting
-the host-specific factory downcast its own context in the adapter. Remove OpenHuman `Production`, artifact store,
+the host-specific factory downcast its own context in the adapter. Pass that
+same context to each `ArtifactFiling::file` call. Remove OpenHuman `Production`, artifact store,
 TinyArtifacts, TinyStorageDrivers, file-root, blob-store, approval-chat, and
 product reference-allowlist dependencies. Keep the generic output walk,
 per-entry continuation, ID/error insertion, path rewrite, title cap/suffix,
