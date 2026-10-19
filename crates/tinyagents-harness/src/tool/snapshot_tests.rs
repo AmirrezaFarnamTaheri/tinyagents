@@ -37,3 +37,32 @@ fn snapshot_json_round_trip_preserves_exact_flag_semantics() {
     assert_eq!(restored.to_json(), snapshot.to_json());
     assert!(!restored.is_exact());
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HostAlpha(u8);
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HostBeta(&'static str);
+
+#[test]
+fn typed_extensions_survive_snapshot_copies_without_changing_json() {
+    let original_json = serde_json::json!([]);
+    let snapshot = ToolSnapshot::from_json(&original_json).unwrap()
+        .with_extension(HostAlpha(7))
+        .with_extension(HostBeta("host-owned"));
+    assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
+    assert_eq!(snapshot.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
+    assert_eq!(snapshot.to_json(), original_json);
+
+    let clone = snapshot.clone();
+    let narrowed = snapshot.retaining(|_| true);
+    let (retained, count) = snapshot.with_retained(&ToolSnapshot::default()).unwrap();
+    assert_eq!(count, 0);
+    for copy in [&clone, &narrowed, &retained] {
+        assert_eq!(copy.extension::<HostAlpha>(), Some(&HostAlpha(7)));
+        assert_eq!(copy.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
+        assert_eq!(copy.to_json(), original_json);
+    }
+    let replaced = clone.with_extension(HostAlpha(8));
+    assert_eq!(replaced.extension::<HostAlpha>(), Some(&HostAlpha(8)));
+    assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
+}
