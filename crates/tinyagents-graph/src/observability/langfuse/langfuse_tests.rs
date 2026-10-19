@@ -2,7 +2,7 @@
 //! failure-level promotion, health telemetry, and trace-id alignment.
 
 use super::*;
-use crate::observability::GraphObservation;
+use crate::observability::{GraphHealthSummary, GraphObservation};
 use crate::stream::GraphEvent;
 use tinyagents_harness::ids::{CheckpointId, EventId, GraphId, NodeId, RunId, ThreadId};
 
@@ -162,85 +162,126 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
     observations
 }
 
-fn fixed_iso_to_ms(value: &str) -> u64 {
-    assert!(
-        value.starts_with("2024-01-01T00:00:"),
-        "unexpected baseline timestamp: {value}"
-    );
-    let seconds = value[17..19].parse::<u64>().unwrap();
-    let millis = value[20..23].parse::<u64>().unwrap();
-    BASE + seconds * 1_000 + millis
+fn graph_span_metadata(
+    observation: &GraphObservation,
+    node: Option<&str>,
+    step: Option<usize>,
+) -> std::collections::BTreeMap<String, Value> {
+    let mut metadata = json!({
+        "run_id": observation.run_id.as_str(),
+        "root_run_id": observation.root_run_id.as_str(),
+        "parent_run_id": observation.parent_run_id.as_ref().map(|id| id.as_str()),
+        "graph_id": observation.graph_id.as_str(),
+        "checkpoint_id": observation.checkpoint_id.as_ref().map(|id| id.as_str()),
+        "namespace": if observation.namespace.is_empty() { Value::Null } else { json!(observation.namespace) },
+        "step": observation.step,
+        "offset": observation.offset,
+        "event": observation.event,
+    });
+    if let Some(node) = node {
+        metadata["langgraph_node"] = json!(node);
+    }
+    if let Some(step) = step {
+        metadata["langgraph_step"] = json!(step);
+    }
+    let cleaned = clean_nulls(metadata);
+    cleaned.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
-/// Converts the actual graph export into the generic model, retaining the
-/// exact Langfuse ids, metadata, event order, timings, and trace config.
-fn spans_from_graph_batch(
-    batch: &Value,
-) -> (
-    LangfuseTraceConfig,
-    Vec<tinyagents_harness::observability::spans::Span>,
-) {
+/// Maps the typed observations independently of the legacy output. This is a
+/// test-only host adapter used to prove that the generic model expresses the
+/// same deterministic three-step trace before comparing serialized payloads.
+fn generic_three_step_trace(
+    observations: &[GraphObservation],
+) -> (LangfuseTraceConfig, Vec<tinyagents_harness::observability::spans::Span>) {
     use tinyagents_harness::observability::spans::{Span, SpanState};
 
-    let events = batch["batch"].as_array().unwrap();
-    let trace = &events[0]["body"];
-    let config = LangfuseTraceConfig {
-        trace_id: trace["id"].as_str().map(str::to_string),
-        name: trace["name"].as_str().map(str::to_string),
-        user_id: trace["userId"].as_str().map(str::to_string),
-        session_id: trace["sessionId"].as_str().map(str::to_string),
-        environment: trace["environment"].as_str().map(str::to_string),
-        release: trace["release"].as_str().map(str::to_string),
-        version: trace["version"].as_str().map(str::to_string),
-        tags: trace["tags"]
-            .as_array()
-            .map(|tags| {
-                tags.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        metadata: trace["metadata"].clone(),
+    let first = &observations[0];
+    let run_id = first.run_id.as_str();
+    let root_run_id = first.root_run_id.as_str();
+    let run_span_id = format!("{root_run_id}:run:{root_run_id}");
+    let health = GraphHealthSummary::from_observations(observations);
+    let trace = LangfuseTraceConfig {
+        trace_id: Some(root_run_id.to_string()),
+        name: Some(first.graph_id.as_str().to_string()),
+        user_id: Some("user-1".to_string()),
+        session_id: first.thread_id.as_ref().map(|thread| thread.as_str().to_string()),
+        metadata: json!({
+            "graph_id": first.graph_id.as_str(),
+            "root_run_id": root_run_id,
+            "health": health,
+        }),
+        ..Default::default()
     };
-    let spans = events[1..]
-        .iter()
-        .map(|event| {
-            let body = &event["body"];
-            let mut span = Span::new(
-                body["id"].as_str().unwrap(),
-                body["metadata"]["run_id"].as_str().unwrap_or("run-1"),
-                body["name"].as_str().unwrap(),
-                fixed_iso_to_ms(body["startTime"].as_str().unwrap()),
-            )
-            .with_root_run_id(body["metadata"]["root_run_id"].as_str().unwrap_or("root-1"))
-            .with_event_id(event["id"].as_str().unwrap());
-            if let Some(parent) = body["parentObservationId"].as_str() {
-                span = span.with_parent(parent);
-            }
-            if let Some(end) = body["endTime"].as_str() {
-                span.end_ms = Some(fixed_iso_to_ms(end));
-            }
-            span.kind = event["type"].as_str().unwrap().to_string();
-            span.status = if body["level"] == "ERROR" {
-                SpanState::Error
-            } else {
-                SpanState::Unset
-            };
-            span.status_message = body["statusMessage"].as_str().map(str::to_string);
-            span.input = body.get("input").cloned();
-            span.output = body.get("output").cloned();
-            span.usage = body.get("usageDetails").cloned();
-            if let Some(metadata) = body["metadata"].as_object() {
-                span.metadata = metadata
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect();
-            }
-            span
-        })
-        .collect();
-    (config, spans)
+    let terminal = observations.last().unwrap();
+    let mut spans = vec![Span::new(
+        &run_span_id,
+        run_id,
+        first.graph_id.as_str(),
+        first.ts_ms,
+    )
+    .with_root_run_id(root_run_id)
+    .finish(terminal.ts_ms, SpanState::Ok)];
+    spans[0].metadata = [
+        ("root_run_id".to_string(), json!(root_run_id)),
+        ("graph_id".to_string(), json!(first.graph_id.as_str())),
+    ]
+    .into_iter()
+    .collect();
+
+    for index in 0..3 {
+        let base = 1 + index * 4;
+        let step_start = &observations[base];
+        let node_start = &observations[base + 1];
+        let node_end = &observations[base + 2];
+        let step_end = &observations[base + 3];
+        let step = index + 1;
+        let node = match &node_end.event {
+            GraphEvent::NodeCompleted { node, .. } => node.as_str(),
+            _ => unreachable!(),
+        };
+
+        let mut node_span = Span::new(
+            format!("{root_run_id}:node:{node}:{step}"),
+            run_id,
+            node,
+            node_start.ts_ms,
+        )
+        .with_root_run_id(root_run_id)
+        .with_parent(format!("{root_run_id}:step:{step}"))
+        .with_event_id(node_end.event_id.as_str())
+        .finish(node_end.ts_ms, SpanState::Ok);
+        node_span.metadata = graph_span_metadata(node_end, Some(node), Some(step));
+        spans.push(node_span);
+
+        let mut step_span = Span::new(
+            format!("{root_run_id}:step:{step}"),
+            run_id,
+            format!("step {step}"),
+            step_start.ts_ms,
+        )
+        .with_root_run_id(root_run_id)
+        .with_parent(&run_span_id)
+        .with_event_id(step_end.event_id.as_str())
+        .finish(step_end.ts_ms, SpanState::Ok);
+        step_span.metadata = graph_span_metadata(step_start, None, Some(step));
+        spans.push(step_span);
+    }
+
+    let run_end = terminal;
+    let mut completed = Span::new(
+        run_end.event_id.as_str(),
+        run_id,
+        run_end.event.kind(),
+        run_end.ts_ms,
+    )
+    .with_root_run_id(root_run_id)
+    .with_parent(&run_span_id)
+    .with_event_id(run_end.event_id.as_str());
+    completed.kind = "event-create".to_string();
+    completed.metadata = graph_span_metadata(run_end, None, None);
+    spans.push(completed);
+    (trace, spans)
 }
 
 fn exporter() -> GraphLangfuseExporter {
@@ -421,15 +462,11 @@ fn node_spans_carry_langgraph_agent_graph_view_keys() {
 fn generic_span_export_matches_graph_export_for_three_step_run() {
     use tinyagents_harness::observability::spans::SpanExporter;
 
-    let trace = LangfuseTraceConfig {
-        user_id: Some("user-1".to_string()),
-        ..Default::default()
-    };
     let observations = sample_three_step_run();
+    let (trace, spans) = generic_three_step_trace(&observations);
     let legacy = exporter()
         .build_ingestion_batch(trace.clone(), &observations)
         .unwrap();
-    let (trace, spans) = spans_from_graph_batch(&legacy);
     let generic = SpanExporter::new(exporter().client().clone())
         .build_ingestion_batch(trace.clone(), &spans)
         .unwrap();
