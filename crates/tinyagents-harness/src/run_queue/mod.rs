@@ -269,7 +269,10 @@ impl<T> RunQueue<T> {
             }
             None => None,
         };
-        AdmissionDecision::Accepted(AdmittedQueueItem { value, _permit: permit })
+        AdmissionDecision::Accepted(AdmittedQueueItem {
+            value,
+            _permit: permit,
+        })
     }
 
     fn requeue_front_now(&self, lane: QueueLane, items: Vec<Queued<T>>) {

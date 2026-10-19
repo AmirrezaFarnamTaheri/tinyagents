@@ -1362,7 +1362,8 @@ struct BlockingTryList {
     entered: Arc<std::sync::Barrier>,
     resume: Arc<std::sync::Barrier>,
     pause_list: std::sync::atomic::AtomicBool,
-    gate_wait: Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>,
+    gate_wait:
+        Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>,
 }
 
 impl CompletionStore for BlockingTryList {
@@ -1379,7 +1380,9 @@ impl CompletionStore for BlockingTryList {
             .take();
         if let Some((entered, resume)) = wait {
             entered.send(()).expect("test observer remains connected");
-            resume.recv().expect("test releases blocked gate acquisition");
+            resume
+                .recv()
+                .expect("test releases blocked gate acquisition");
         }
         self.inner.acquire_parent_gate(parent_key, holder, ttl)
     }
@@ -1421,7 +1424,10 @@ impl CompletionStore for BlockingTryList {
         parent_key: Option<&str>,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         let records = self.inner.list(parent_key);
-        if self.pause_list.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .pause_list
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
             self.entered.wait();
             self.resume.wait();
         }
@@ -1567,6 +1573,57 @@ fn a_record_racing_store_migration_is_not_lost() {
     record_task.join().unwrap().unwrap();
     assert!(destination.get("before").is_some());
     assert!(destination.get("during").is_some());
+}
+
+#[tokio::test]
+async fn store_migration_copies_parent_state_after_acquiring_source_gates() {
+    let source = Arc::new(BlockingTryList {
+        inner: Arc::new(InMemoryCompletionStore::new()),
+        entered: Arc::new(std::sync::Barrier::new(2)),
+        resume: Arc::new(std::sync::Barrier::new(2)),
+        pause_list: std::sync::atomic::AtomicBool::new(true),
+        gate_wait: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = Arc::new(CompletionRouter::new(source_port.clone()));
+    let q = queue();
+    router.attach_parent("p", q.clone());
+    router.record(record("pending", "p")).await.unwrap();
+    let queued = q
+        .take_admitted(
+            QueueLane::Followup,
+            tinyagents_harness::run_queue::QueueMode::OneAtATime,
+        )
+        .await;
+    assert_eq!(queued.len(), 1);
+
+    let (gate_entered_tx, gate_entered_rx) = std::sync::mpsc::channel();
+    let (gate_resume_tx, gate_resume_rx) = std::sync::mpsc::channel();
+    *source
+        .gate_wait
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some((gate_entered_tx, gate_resume_rx));
+    let destination: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    let migration_router = Arc::clone(&router);
+    let migration_source = Arc::clone(&source_port);
+    let migration = std::thread::spawn(move || {
+        migration_router
+            .replace_store_if_current(&migration_source, destination)
+            .unwrap()
+    });
+
+    source.entered.wait();
+    source.resume.wait();
+    gate_entered_rx.recv().unwrap();
+    drop(queued);
+
+    let cancellation_router = CompletionRouter::new(source.inner.clone());
+    cancellation_router.cancel_parent("p").unwrap();
+    gate_resume_tx.send(()).unwrap();
+    migration.join().unwrap();
+
+    assert_eq!(router.admit_child_generation("p").unwrap(), None);
 }
 
 #[tokio::test]

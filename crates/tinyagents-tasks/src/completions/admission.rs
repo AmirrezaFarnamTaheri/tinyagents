@@ -61,12 +61,8 @@ impl CompletionAdmission {
         let identity = store
             .coordination_identity()
             .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(store)));
-        serde_json::to_string(&(
-            identity,
-            self.parent_key.as_str(),
-            self.parent_epoch,
-        ))
-        .expect("serializing a completion admission batch key cannot fail")
+        serde_json::to_string(&(identity, self.parent_key.as_str(), self.parent_epoch))
+            .expect("serializing a completion admission batch key cannot fail")
     }
 }
 
@@ -79,8 +75,8 @@ impl QueueAdmission for CompletionAdmission {
         &self,
         expected_key: Option<&str>,
     ) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
-        let store = CompletionRouter::admission_store_snapshot(&self.store)
-            .ok_or(QueueAdmissionError)?;
+        let store =
+            CompletionRouter::admission_store_snapshot(&self.store).ok_or(QueueAdmissionError)?;
         if expected_key.is_some_and(|expected| self.key_for(&store) != expected) {
             return Err(QueueAdmissionError);
         }
@@ -102,8 +98,7 @@ impl QueueAdmission for CompletionAdmission {
             .store
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slot.migrating
-            || expected_key.is_some_and(|expected| self.key_for(&slot.store) != expected)
+        slot.migrating || expected_key.is_some_and(|expected| self.key_for(&slot.store) != expected)
     }
 
     fn batch_key(&self) -> Option<String> {
