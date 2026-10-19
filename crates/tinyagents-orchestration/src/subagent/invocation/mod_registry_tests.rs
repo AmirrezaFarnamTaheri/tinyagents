@@ -259,6 +259,36 @@ async fn settled_driver_jobs_have_bounded_retention_across_all_registry_maps() {
 }
 
 #[tokio::test]
+async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
+    let jobs = SubAgentJobRegistry::new();
+    let total = 256;
+    let ids: Vec<_> = (0..total)
+        .map(|index| register_driver_job(&jobs, format!("prestarted-{index}" )).1)
+        .collect();
+    for id in &ids {
+        jobs.mark_running(id);
+    }
+    for id in &ids {
+        jobs.mark_driver_result(
+            id,
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "prestarted",
+                "done",
+            )),
+        );
+    }
+
+    let retained = jobs.tasks().len().unwrap();
+    assert!(
+        retained <= super::super::types::SUBAGENT_JOB_SOFT_CAP,
+        "terminal tasks retained after a settlement batch: {retained}"
+    );
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+    assert_eq!(jobs.list().len(), retained);
+}
+
+#[tokio::test]
 async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
     let jobs = SubAgentJobRegistry::new();
     let (active_key, active_id) = register_driver_job(&jobs, "active");
