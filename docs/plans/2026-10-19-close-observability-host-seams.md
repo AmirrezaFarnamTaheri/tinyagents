@@ -120,7 +120,7 @@ pub fn verification_prompt(copy: &CloseCopy, request: &str, records: &str, reply
 }
 
 // Scan only the template. Inserted values are copied verbatim and never rescanned.
-fn interpolate_once(template: &str, fields: &[(&str, &str)]) -> String {
+pub(crate) fn interpolate_once(template: &str, fields: &[(&str, &str)]) -> String {
     let mut output = String::with_capacity(template.len());
     let mut remaining = template;
     while let Some((index, key, value)) = fields.iter()
@@ -151,6 +151,8 @@ pub fn repair_with_copy(copy: &CloseCopy, instruction: &str, violation: CloseVio
 }
 
 // turn_stop.rs
+use crate::close::interpolate_once;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopCopy {
     pub opening_template: &'static str,
@@ -258,7 +260,7 @@ Complete `CloseCopy` with these additional literal fields; each initializer valu
 | `repair_no_reply`, `repair_quoted_instruction`, `repair_unverified` | three arms of `turn_checkpoint.rs::close_repair_instruction` | `the_repair_re_ask_names_the_violation_and_repeats_the_instruction` |
 | `verification_prompt_template` | full format string in `turn_checkpoint.rs::close_verification_prompt` | verification-prompt and deliberation/toolset rejection tests |
 
-Move the named source constants and `final_answer_body!()` into `close.rs` unchanged before initializing `ENGLISH_CLOSE_COPY`; this makes every referenced initializer expression defined and preserves exact bytes. `CloseCopy` also carries the host instruction-needle sources and `MIN_QUOTED_WORDS = 10`; the harness already implements normalization, span selection, and matching. Its tests use whole-output equality for checkpoint and close prompt paths. These are source inputs required by #64; they are not left for the implementer to rediscover.
+Place `interpolate_once` in `close.rs` as `pub(crate) fn` so both copy modules share one implementation; `turn_stop.rs` imports it with `use crate::close::interpolate_once;`. Move the named source constants and `final_answer_body!()` into `close.rs` unchanged before initializing `ENGLISH_CLOSE_COPY`; this makes every referenced initializer expression defined and preserves exact bytes. `CloseCopy` also carries the host instruction-needle sources and `MIN_QUOTED_WORDS = 10`; the harness already implements normalization, span selection, and matching. Its tests use whole-output equality for checkpoint and close prompt paths. These are source inputs required by #64; they are not left for the implementer to rediscover.
 
 Keep existing APIs source-compatible. Existing `deterministic_checkpoint` and `deterministic_final_summary` remain; add the exact functions above. Existing `CloseViolation` has `NoReply`, `QuotedInstruction`, and `Unverified`; map OpenHuman's `QuotedHarnessText` variant to `QuotedInstruction` at its host boundary. The host passes the copy-aware close renderers explicitly.
 
