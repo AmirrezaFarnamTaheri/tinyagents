@@ -322,10 +322,11 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         }
         // Known as soon as the planner has named the spawn's notify mode, so a
         // cancel from here on is recorded too.
-        let completion_origin = self
-            .completions
-            .as_ref()
-            .and_then(|_| CompletionOrigin::new(&task_key, &prepared));
+        let completion_origin = if let Some(router) = &self.completions {
+            CompletionOrigin::new(&task_key, &prepared, router)?
+        } else {
+            None
+        };
         if cancellation.is_cancelled() {
             let result = self
                 .persist_cancelled(
