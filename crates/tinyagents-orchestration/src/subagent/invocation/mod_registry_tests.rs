@@ -280,7 +280,7 @@ async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
 
     let retained = jobs.tasks().len().unwrap();
     assert!(
-        retained <= super::super::types::SUBAGENT_JOB_SOFT_CAP,
+        retained <= 128,
         "terminal tasks retained after a settlement batch: {retained}"
     );
     assert_eq!(jobs.controls.lock().unwrap().len(), retained);
