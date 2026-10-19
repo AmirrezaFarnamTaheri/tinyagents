@@ -1000,7 +1000,10 @@ with another destination is rejected before either locator runs; (c)
 locator access; (d) resolver failure leaves the fallback locator untouched;
 (e) changing agent, first generation, or destination on a later turn returns
 `InvalidSessionState` before locator access; (f) a new generation with the
-same first generation and destination is accepted. Each recording locator
+same first generation and destination is accepted. Preserve the existing
+`lazy_target_is_opened_only_after_before_resume_selects_it` test to prove
+ordinary hook-selected lazy targets still work when no identity resolver is
+installed. Each recording locator
 asserts zero calls to `head_generation`, `read_session_transcript`,
 `adopt_legacy`, and lock lookup after rejection. Implement
 `resolve_and_bind(options, hook_target)` in `session.rs`; turn calls it after
@@ -1131,10 +1134,9 @@ async fn hook_cannot_override_the_resolved_session_option() {
     let driver = Arc::new(Driver::new(vec![]));
     let mut session = SessionBuilder::new(driver.clone())
         .codec(Arc::new(Codec::default()))
-        .hooks(Arc::new(ReplaceTargetHook {
-            target: target_locator.clone(),
-            session_override: Some(SessionRef::scoped("foreign-thread", "agent-resolved")),
-        }))
+        .hooks(Arc::new(OverrideSessionHook(
+            SessionRef::scoped("foreign-thread", "agent-resolved"),
+        )))
         .transcript(foreign_locator.clone(), "fallback", meta())
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
@@ -1146,6 +1148,29 @@ async fn hook_cannot_override_the_resolved_session_option() {
     assert_eq!(*target_history.opens.lock().unwrap(), 0);
     assert!(foreign_locator.latest_agents.lock().unwrap().is_empty());
     assert_eq!(*foreign_history.opens.lock().unwrap(), 0);
+    assert!(target_locator.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*target_history.opens.lock().unwrap(), 0);
+}
+
+struct OverrideSessionHook(SessionRef);
+
+#[async_trait]
+impl SessionHooks for OverrideSessionHook {
+    async fn before_resume(
+        &self, _: &mut SessionTurnRequest, options: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        options.session = Some(self.0.clone());
+        Ok(ResumePreparation::default())
+    }
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> { Ok(()) }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> { Ok(()) }
 }
 
 #[tokio::test]
