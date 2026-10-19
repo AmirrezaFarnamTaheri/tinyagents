@@ -70,7 +70,7 @@ async fn timeout_rejects_and_reports_expired() {
 
 #[tokio::test]
 async fn approve_resolves_the_parked_turn() {
-    let (store, _events) = store(Duration::from_secs(60));
+    let (store, events) = store(Duration::from_secs(60));
     let task = request(store.clone(), 1, "approve");
     events.requested.notified().await;
     assert!(store.decide_by_thread(&1, "approve", PlanReviewResolution::Approve));
