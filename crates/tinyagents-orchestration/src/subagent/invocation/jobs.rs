@@ -606,6 +606,45 @@ impl SubAgentJobRegistry {
         Ok(snapshot)
     }
 
+    /// Requests cancellation for every live job whose durable metadata names
+    /// `parent_thread_id`. Jobs remain queryable until their executors settle.
+    pub fn cancel_for_thread(&self, parent_thread_id: &str) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|metadata| {
+            metadata.parent_thread_id.as_deref() == Some(parent_thread_id)
+        })
+    }
+
+    /// Requests cancellation for every live job while retaining each public
+    /// job record for the normal settlement path.
+    pub fn cancel_all(&self) -> Result<usize, SubAgentJobError> {
+        self.cancel_matching(|_| true)
+    }
+
+    fn cancel_matching(
+        &self,
+        matches: impl Fn(&JobMeta) -> bool,
+    ) -> Result<usize, SubAgentJobError> {
+        let ids = self.controls().keys().cloned().collect::<Vec<_>>();
+        let mut requested = 0;
+        for id in ids {
+            let task_id = TaskId::new(id.as_str());
+            let snapshot = match self.tasks.snapshot_trusted(&task_id) {
+                Ok(snapshot) if !snapshot.status.status.is_terminal() => snapshot,
+                Ok(_) | Err(DetachedTaskRegistryError::Unknown) => continue,
+                Err(error) => return Err(registry_failure(error)),
+            };
+            if !matches(&snapshot.metadata) {
+                continue;
+            }
+            match self.cancel_owned(id.as_str(), snapshot.owner_id) {
+                Ok(_) => requested += 1,
+                Err(SubAgentJobError::Terminal { .. } | SubAgentJobError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(requested)
+    }
+
     /// Returns a snapshot for `job_id` when it belongs to `owner`.
     pub fn get_owned(&self, job_id: &str, owner: impl ToString) -> Option<SubAgentJob> {
         self.try_get_owned(job_id, owner).ok().flatten()
