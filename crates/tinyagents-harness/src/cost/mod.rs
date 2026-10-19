@@ -17,6 +17,8 @@ mod types;
 use std::ops::{Add, AddAssign};
 
 pub use gateway_charge::GatewayChargeModel;
+pub(crate) use gateway_charge::has_authoritative_billing_source;
+pub(crate) use gateway_charge::provider_cost_usd;
 pub use model_budget::ModelBudget;
 use tinyinference_llm::usage::Usage;
 pub use turn_cost::{
