@@ -684,8 +684,8 @@ new_tool_outcome_sink();`, append
 `Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&tool_outcomes)))` to
 the per-turn `TurnPlan.context`, and set
 `DriverOutcome.tool_outcomes = drain_tool_outcomes(&tool_outcomes)` after the
-harness run has settled. Add the field with `#[serde?]` nowhere (the outcome
-is an in-memory runtime value); initialize it to `Vec::new()` in every
+harness run has settled. The outcome is an in-memory runtime value; initialize
+the field to `Vec::new()` in every
 existing literal for custom drivers.
 
 Change the owned finalizer to accept the separate observation and sinks, not
