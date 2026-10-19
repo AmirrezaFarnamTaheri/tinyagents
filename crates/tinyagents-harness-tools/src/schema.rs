@@ -4,9 +4,8 @@ use serde_json::Value;
 
 /// Parse an embedded schema and identify the source location on malformed JSON.
 pub fn parse_embedded(site: &str, source: &str) -> Value {
-    serde_json::from_str(source).unwrap_or_else(|error| {
-        panic!("embedded tool schema at {site} is not valid JSON: {error}")
-    })
+    serde_json::from_str(source)
+        .unwrap_or_else(|error| panic!("embedded tool schema at {site} is not valid JSON: {error}"))
 }
 
 /// Parse an embedded JSON schema once and return a clone at each call site.

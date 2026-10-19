@@ -105,9 +105,7 @@ async fn guarded_remote_get(source: &str) -> std::result::Result<reqwest::Respon
         .map_err(|error| error.to_string())
 }
 
-fn guarded_remote_client(
-    validated: &crate::url_guard::ValidatedUrl,
-) -> reqwest::Result<Client> {
+fn guarded_remote_client(validated: &crate::url_guard::ValidatedUrl) -> reqwest::Result<Client> {
     Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())

@@ -1,5 +1,7 @@
 use super::*;
-use crate::net::network::test_support::{AutonomyLevel, DEFAULT_LIMITS, TestNetGate, pinned_to_local};
+use crate::net::network::test_support::{
+    AutonomyLevel, DEFAULT_LIMITS, TestNetGate, pinned_to_local,
+};
 
 fn test_tool(allowed_domains: Vec<&str>) -> HttpRequestTool {
     let security = TestNetGate::supervised();

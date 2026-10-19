@@ -1,0 +1,55 @@
+use super::*;
+use std::sync::Mutex;
+
+struct Inner;
+#[async_trait]
+impl Tool for Inner {
+    fn name(&self) -> &str {
+        "inner"
+    }
+    fn description(&self) -> &str {
+        "stable"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        Ok(ToolResult::success_json(
+            json!({"artifacts":[{"type":"image","path":"blob:key","bytes":4}]}),
+        ))
+    }
+}
+#[derive(Default)]
+struct Filer(Mutex<Vec<GeneratedArtifact>>);
+#[async_trait]
+impl ArtifactFiling for Filer {
+    async fn file(
+        &self,
+        g: GeneratedArtifact,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Result<super::super::FiledArtifact, String> {
+        self.0.lock().unwrap().push(g);
+        Ok(super::super::FiledArtifact {
+            id: "id1".into(),
+            path: "/files/image.png".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn wrapper_keeps_metadata_and_files_each_artifact() {
+    let filer = Arc::new(Filer::default());
+    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Video, filer.clone());
+    assert_eq!(tool.name(), "inner");
+    assert_eq!(tool.description(), "stable");
+    let result = tool.execute(json!({"prompt":" a title "})).await.unwrap();
+    let ToolContent::Json { data } = &result.content[0] else {
+        panic!("expected JSON content")
+    };
+    assert_eq!(data["artifacts"][0]["path"], "/files/image.png");
+    assert_eq!(data["artifacts"][0]["artifact_id"], "id1");
+    let filed = filer.0.lock().unwrap();
+    assert_eq!(filed[0].artifact_kind, MediaArtifactKind::Video);
+    assert_eq!(filed[0].title, "a title");
+    assert_eq!(filed[0].path, PathBuf::from("blob:key"));
+}

@@ -2,12 +2,11 @@ use std::{ffi::OsString, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolTimeout, ToolRunContext};
+use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext, ToolTimeout};
 
 use super::{
-    ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend,
-    ExecBackendOutcome, ExecDenied, ExecGate, ExecOperation, ExecRequest,
-    ShellFlavor,
+    ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
+    ExecDenied, ExecGate, ExecOperation, ExecRequest, ShellFlavor,
     progress::{HEARTBEAT_INTERVAL, with_exec_progress},
     shell_description::{command_param_description, shell_description},
     shell_support::{exec_result, python_environment},
@@ -33,7 +32,10 @@ impl ExecTool {
         };
         Ok(ExecOperation::Shell {
             command: command.to_owned(),
-            category: args.get("category").and_then(Value::as_str).map(ToOwned::to_owned),
+            category: args
+                .get("category")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         })
     }
 }
@@ -97,7 +99,8 @@ impl Tool for ExecTool {
     }
 
     async fn execute(&self, args: Value) -> anyhow::Result<ToolResult> {
-        self.execute_with_context(args, ToolCallOptions::default(), None).await
+        self.execute_with_context(args, ToolCallOptions::default(), None)
+            .await
     }
 
     async fn execute_with_context(

@@ -14,12 +14,12 @@ pub mod thread_locks;
 mod time;
 mod time_parse;
 
-#[cfg(feature = "goals")]
-pub mod goals;
 #[cfg(feature = "exec")]
 pub mod exec;
 #[cfg(feature = "fs")]
 pub mod fs;
+#[cfg(feature = "goals")]
+pub mod goals;
 #[cfg(feature = "media")]
 pub mod media;
 #[cfg(feature = "net")]

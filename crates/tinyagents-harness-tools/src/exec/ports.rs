@@ -1,4 +1,6 @@
-use std::{any::Any, collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    any::Any, collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -9,8 +11,14 @@ use super::ExecProgress;
 /// A concrete operation presented to the host's execution policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecOperation {
-    Shell { command: String, category: Option<String> },
-    Install { package: String, manager: String },
+    Shell {
+        command: String,
+        category: Option<String>,
+    },
+    Install {
+        package: String,
+        manager: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -95,8 +103,13 @@ pub struct ExecOutput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecBackendOutcome {
-    Refused { kind: ExecRefusalKind, reason: String },
-    LaunchFailed { error: String },
+    Refused {
+        kind: ExecRefusalKind,
+        reason: String,
+    },
+    LaunchFailed {
+        error: String,
+    },
     Completed(ExecOutput),
 }
 

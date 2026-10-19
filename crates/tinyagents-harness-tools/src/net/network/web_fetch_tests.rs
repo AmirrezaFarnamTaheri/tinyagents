@@ -219,7 +219,10 @@ async fn html_is_converted_through_the_host_extractor_only_when_it_is_html() {
 #[tokio::test]
 async fn execute_blocks_when_rate_limited() {
     let tool = fetch(
-        TestNetGate::with(crate::net::network::test_support::AutonomyLevel::Supervised, 0),
+        TestNetGate::with(
+            crate::net::network::test_support::AutonomyLevel::Supervised,
+            0,
+        ),
         vec!["example.com".into()],
         None,
         None,

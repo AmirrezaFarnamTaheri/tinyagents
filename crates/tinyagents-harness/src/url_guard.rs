@@ -219,14 +219,18 @@ async fn resolve_host_ips(host: String, port: u16) -> anyhow::Result<Vec<IpAddr>
         (host.as_str(), port)
             .to_socket_addrs()
             .map_err(|e| {
-                tracing::debug!("[url_guard] DNS resolution failed host={host} port={port} error={e}");
+                tracing::debug!(
+                    "[url_guard] DNS resolution failed host={host} port={port} error={e}"
+                );
                 anyhow::anyhow!("DNS resolution failed for '{host}': {e}")
             })
             .map(|iter| iter.map(|addr| addr.ip()).collect())
     })
     .await
     .map_err(|e| {
-        tracing::debug!("[url_guard] DNS resolution task failed host={log_host} port={port} error={e}");
+        tracing::debug!(
+            "[url_guard] DNS resolution task failed host={log_host} port={port} error={e}"
+        );
         anyhow::anyhow!("DNS resolution task failed for '{log_host}': {e}")
     })?
 }

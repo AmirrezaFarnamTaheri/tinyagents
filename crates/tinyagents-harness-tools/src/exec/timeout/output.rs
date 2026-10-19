@@ -5,9 +5,9 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use super::ProcessCleanup;
 use super::command_environment::CommandEnvironment;
 use super::group_exit;
-use super::ProcessCleanup;
 use super::process_cleanup::Reaped;
 use crate::exec::ExecProgress;
 
@@ -62,7 +62,10 @@ pub async fn output_or_kill_with_progress(
 ) -> Result<std::io::Result<std::process::Output>, tokio::time::error::Elapsed> {
     let cleanup = ProcessCleanup::default();
     match cleanup
-        .scope(tokio::time::timeout(deadline, output_unbounded_with_progress(cmd, progress)))
+        .scope(tokio::time::timeout(
+            deadline,
+            output_unbounded_with_progress(cmd, progress),
+        ))
         .await
     {
         Ok(result) => Ok(result),

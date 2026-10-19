@@ -3,8 +3,7 @@
 use tinytools::ToolRunContext;
 
 use super::{
-    ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress,
-    ExecRequest, ShellFlavor,
+    ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress, ExecRequest, ShellFlavor,
     timeout::{output_or_kill_with_progress, output_unbounded_with_progress},
 };
 
@@ -19,12 +18,16 @@ pub struct NativeExecBackend {
 
 impl NativeExecBackend {
     #[must_use]
-    pub fn new(flavor: ShellFlavor) -> Self { Self { flavor } }
+    pub fn new(flavor: ShellFlavor) -> Self {
+        Self { flavor }
+    }
 }
 
 #[async_trait::async_trait]
 impl ExecBackend for NativeExecBackend {
-    fn shell_flavor(&self) -> ShellFlavor { self.flavor }
+    fn shell_flavor(&self) -> ShellFlavor {
+        self.flavor
+    }
 
     async fn execute(
         &self,
@@ -34,7 +37,10 @@ impl ExecBackend for NativeExecBackend {
     ) -> ExecBackendOutcome {
         use std::process::Stdio;
         if request.backend_selection != "native"
-            || request.backend_capability.downcast_ref::<NativeExecCapability>().is_none()
+            || request
+                .backend_capability
+                .downcast_ref::<NativeExecCapability>()
+                .is_none()
         {
             return ExecBackendOutcome::Refused {
                 kind: super::ExecRefusalKind::Preflight,
@@ -48,32 +54,46 @@ impl ExecBackend for NativeExecBackend {
             };
         }
         let mut command = tokio::process::Command::new(&request.program);
-        command.args(&request.args)
+        command
+            .args(&request.args)
             .current_dir(&request.action_dir)
             .env_clear()
             .envs(request.environment)
             .stdin(Stdio::null());
         let run = async {
             match request.timeout {
-                Some(timeout) => match output_or_kill_with_progress(&mut command, timeout, progress).await {
-                    Ok(Ok(output)) => Ok(ExecOutput {
-                        stdout: output.stdout, stderr: output.stderr,
+                Some(timeout) => {
+                    match output_or_kill_with_progress(&mut command, timeout, progress).await {
+                        Ok(Ok(output)) => Ok(ExecOutput {
+                            stdout: output.stdout,
+                            stderr: output.stderr,
+                            exit_code: output.status.code(),
+                            timed_out: false,
+                        }),
+                        Ok(Err(error)) => Err(error),
+                        Err(_) => Ok(ExecOutput {
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                            exit_code: None,
+                            timed_out: true,
+                        }),
+                    }
+                }
+                None => output_unbounded_with_progress(&mut command, progress)
+                    .await
+                    .map(|output| ExecOutput {
+                        stdout: output.stdout,
+                        stderr: output.stderr,
                         exit_code: output.status.code(),
                         timed_out: false,
                     }),
-                    Ok(Err(error)) => Err(error),
-                    Err(_) => Ok(ExecOutput { stdout: Vec::new(), stderr: Vec::new(), exit_code: None, timed_out: true }),
-                },
-                None => output_unbounded_with_progress(&mut command, progress).await.map(|output| ExecOutput {
-                    stdout: output.stdout, stderr: output.stderr,
-                    exit_code: output.status.code(),
-                    timed_out: false,
-                }),
             }
         };
         match run.await {
             Ok(output) => ExecBackendOutcome::Completed(output),
-            Err(error) => ExecBackendOutcome::LaunchFailed { error: error.to_string() },
+            Err(error) => ExecBackendOutcome::LaunchFailed {
+                error: error.to_string(),
+            },
         }
     }
 }

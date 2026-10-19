@@ -3,13 +3,23 @@ use crate::exec::ExecOutput;
 use std::ffi::OsString;
 
 fn output(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<i32>, timed_out: bool) -> ExecOutput {
-    ExecOutput { stdout, stderr, exit_code, timed_out }
+    ExecOutput {
+        stdout,
+        stderr,
+        exit_code,
+        timed_out,
+    }
 }
 
 #[test]
 fn explicit_timeout_preserves_captured_streams() {
     let result = exec_result(
-        output(b"partial stdout".to_vec(), b"partial stderr".to_vec(), None, true),
+        output(
+            b"partial stdout".to_vec(),
+            b"partial stderr".to_vec(),
+            None,
+            true,
+        ),
         Some(Duration::from_secs(17)),
     );
     assert!(result.is_error);
@@ -21,14 +31,20 @@ fn explicit_timeout_preserves_captured_streams() {
 
 #[test]
 fn successful_stderr_is_preserved() {
-    let result = exec_result(output(b"out".to_vec(), b"warning".to_vec(), Some(0), false), None);
+    let result = exec_result(
+        output(b"out".to_vec(), b"warning".to_vec(), Some(0), false),
+        None,
+    );
     assert!(!result.is_error);
     assert_eq!(result.text(), "out\n[stderr]\nwarning");
 }
 
 #[test]
 fn command_failure_preserves_exit_and_both_streams() {
-    let result = exec_result(output(b"out".to_vec(), b"err".to_vec(), Some(7), false), None);
+    let result = exec_result(
+        output(b"out".to_vec(), b"err".to_vec(), Some(7), false),
+        None,
+    );
     assert!(result.is_error);
     let text = result.text();
     assert!(text.contains("exit code 7"));
@@ -63,16 +79,28 @@ fn python_utf8_defaults_keep_explicit_values() {
         (OsString::from("PYTHONUTF8"), OsString::from("0")),
         (OsString::from("KEEP"), OsString::from("value")),
     ]));
-    assert_eq!(env.get(std::ffi::OsStr::new("PYTHONUTF8")), Some(&OsString::from("0")));
-    assert_eq!(env.get(std::ffi::OsStr::new("PYTHONIOENCODING")), Some(&OsString::from("utf-8")));
-    assert_eq!(env.get(std::ffi::OsStr::new("KEEP")), Some(&OsString::from("value")));
+    assert_eq!(
+        env.get(std::ffi::OsStr::new("PYTHONUTF8")),
+        Some(&OsString::from("0"))
+    );
+    assert_eq!(
+        env.get(std::ffi::OsStr::new("PYTHONIOENCODING")),
+        Some(&OsString::from("utf-8"))
+    );
+    assert_eq!(
+        env.get(std::ffi::OsStr::new("KEEP")),
+        Some(&OsString::from("value"))
+    );
 }
 
 #[test]
 fn python_utf8_lookup_fills_only_missing_defaults() {
     let env = python_utf8_env(|name| (name == "PYTHONUTF8").then(|| OsString::from("0")));
-    assert_eq!(env, vec![
-        ("PYTHONUTF8", OsString::from("0")),
-        ("PYTHONIOENCODING", OsString::from("utf-8")),
-    ]);
+    assert_eq!(
+        env,
+        vec![
+            ("PYTHONUTF8", OsString::from("0")),
+            ("PYTHONIOENCODING", OsString::from("utf-8")),
+        ]
+    );
 }

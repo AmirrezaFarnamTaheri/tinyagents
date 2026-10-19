@@ -11,7 +11,9 @@ const OUTPUT_TRUNCATED: &str = "\n... [output truncated at 1MB]";
 const STDERR_TRUNCATED: &str = "\n... [stderr truncated at 1MB]";
 
 pub(super) fn tool_timeout_message(secs: u64) -> String {
-    format!("Command timed out after {secs}s and was killed: the exec tool's timeout_secs limit fired.")
+    format!(
+        "Command timed out after {secs}s and was killed: the exec tool's timeout_secs limit fired."
+    )
 }
 
 pub(super) const PYTHON_UTF8_DEFAULTS: &[(&str, &str)] =
@@ -79,7 +81,9 @@ pub(super) fn exec_result(output: ExecOutput, explicit_timeout: Option<Duration>
 pub(super) fn python_environment(
     mut environment: BTreeMap<OsString, OsString>,
 ) -> BTreeMap<OsString, OsString> {
-    for (name, value) in python_utf8_env(|name| environment.get(std::ffi::OsStr::new(name)).cloned()) {
+    for (name, value) in
+        python_utf8_env(|name| environment.get(std::ffi::OsStr::new(name)).cloned())
+    {
         environment.insert(name.into(), value);
     }
     environment
