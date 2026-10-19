@@ -307,6 +307,45 @@ async fn cross_router_cancellation_rejects_a_queued_completion_at_turn_consumpti
 }
 
 #[tokio::test]
+async fn router_live_push_closed_before_agent_turn_never_reaches_provider() {
+    use tinyagents_harness::context::{RunConfig, RunContext};
+    use tinyagents_harness::run_queue::RunQueue;
+    use tinyagents_harness::runtime::AgentHarness;
+    use tinyagents_harness::testkit::ScriptedModel;
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelResponse;
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ) as Arc<dyn CompletionStore>
+    };
+    let producer = CompletionRouter::new(open());
+    let canceller = CompletionRouter::new(open());
+    let queue = Arc::new(RunQueue::new());
+    producer.attach_parent("parent", queue.clone());
+    producer.record(record("queued-child", "parent")).await.unwrap();
+    canceller.cancel_parent("parent").unwrap();
+
+    let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("done")]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    let context = RunContext::new(RunConfig::new("parent-turn"), ()).with_run_queue(queue);
+    harness
+        .invoke_in_context(&(), context, vec![Message::user("start")])
+        .await
+        .expect("the canceled queued completion is discarded before another provider turn");
+
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "a completion rejected by the durable lifecycle gate must never start a provider call"
+    );
+}
+
+#[tokio::test]
 async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit() {
     use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
     use tinyinference_llm::message::Message;
