@@ -189,6 +189,32 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
 }
 
 #[tokio::test]
+async fn generated_artifact_uses_canonical_harness_call_id_when_context_has_one() {
+    use tinyagents_harness::{
+        context::{RunConfig, RunContext},
+        ids::CallId,
+        tool::ToolExecutionContext,
+    };
+    let context = ToolExecutionContext::from_run_context(
+        &RunContext::new(RunConfig::new("media-test"), ()),
+        CallId::new("provider-call-42"),
+    );
+    let filer = Arc::new(Filer::default());
+    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, filer.clone());
+    tool.execute_with_context(
+        json!({"prompt":"call id"}),
+        ToolCallOptions::default(),
+        Some(&context),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        filer.0.lock().unwrap()[0].tool_call_id.as_deref(),
+        Some("provider-call-42")
+    );
+}
+
+#[tokio::test]
 async fn per_call_inner_preserves_stable_metadata_and_files_multiple_entries_independently() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let factory_calls = Arc::clone(&calls);
