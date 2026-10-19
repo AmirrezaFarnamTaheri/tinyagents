@@ -101,19 +101,20 @@ const SEARCH_COMMANDS: &[&str] = &[
     "grep", "egrep", "fgrep", "rg", "find", "test", "[", "diff", "cmp", "which",
 ];
 
-/// Whether an error is an exploration miss rather than a failure: exit code 1
-/// or 2 with nothing on stderr, from a search command or from a compound
-/// command (`;`, `&&`, `|`) whose last step is usually such a probe. Those are
+/// Whether an error is an exploration miss rather than a failure: exit code 1,
+/// 2 or 141 (a pipe closed early, as `grep … | head` does) with nothing on
+/// stderr, from a search command or from a compound
+/// command (`;`, `&&`, `|`, or several lines) whose last step is usually such a probe. Those are
 /// not worth a line in the block; a failure that explains itself on stderr (a
 /// traceback), a 127 or a non-search command still is.
 fn is_search_miss(call: &CallRecord, output: &str) -> bool {
     let Some(command) = call.command.as_deref() else {
         return false;
     };
-    if !matches!(exit_code(output), Some(1 | 2)) || stderr_line(output).is_some() {
+    if !matches!(exit_code(output), Some(1 | 2 | 141)) || stderr_line(output).is_some() {
         return false;
     }
-    let compound = command.contains(';') || command.contains("&&") || command.contains('|');
+    let compound = command.trim().contains(['\n', ';', '|']) || command.contains("&&");
     let first = command.split_whitespace().next().map(executable_name);
     compound || first.is_some_and(|word| SEARCH_COMMANDS.contains(&word.as_str()))
 }

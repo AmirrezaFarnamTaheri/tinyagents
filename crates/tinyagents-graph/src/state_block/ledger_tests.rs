@@ -170,3 +170,21 @@ fn search_misses_are_not_failures() {
     record_result(&mut ledger, shell("python3 x.py"), true, SHELL_127);
     assert_eq!(ledger.failures.len(), 3);
 }
+
+#[test]
+fn a_closed_pipe_and_a_multi_line_script_are_probes_too() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("grep -rn x /usr/lib | head -5"),
+        true,
+        "Command failed (exit code 141)",
+    );
+    record_result(
+        &mut ledger,
+        shell("mkdir -p /tmp/a\nls /tmp/a/missing"),
+        true,
+        "Command failed (exit code 2)",
+    );
+    assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
+}
