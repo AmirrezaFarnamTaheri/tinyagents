@@ -91,6 +91,38 @@ fn only_final_statuses_are_completions() {
 }
 
 #[tokio::test]
+async fn pause_notices_use_independent_ids_and_leave_terminal_task_id_free() {
+    let router = router();
+    let target = target(&router);
+    let first = target.pause_record_for("task:1", "question one");
+    let second = target.pause_record_for("task:1", "question two");
+    let prefix = pause_record_prefix("task:1");
+    assert!(first.task_id.starts_with(&prefix));
+    assert!(second.task_id.starts_with(&prefix));
+    assert_ne!(first.task_id, second.task_id);
+    assert_eq!(first.status, CompletionStatus::Incomplete);
+    assert_eq!(first.parent_key, "p");
+    assert_eq!(first.result.text, "question one");
+
+    assert!(target.record_pause("task:1", "question one").await);
+    assert!(record_detached_completion(
+        &target,
+        "task:1",
+        &DetachedSubagentStatus::Completed {
+            output: "done".into(),
+            iterations: 1,
+        },
+    )
+    .await);
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 2);
+    assert!(pending.iter().any(|record| record.task_id == "task:1"));
+    assert!(pending
+        .iter()
+        .any(|record| record.task_id.starts_with(&prefix)));
+}
+
+#[tokio::test]
 async fn the_watcher_mirrors_the_status_and_records_the_completion() {
     let router = router();
     let store = spawned_store("t1");

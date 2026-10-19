@@ -32,7 +32,8 @@ mod status_map;
 mod types;
 
 pub use completion::{
-    DetachedCompletionTarget, record_detached_completion, spawn_status_watcher_with_completions,
+    DetachedCompletionTarget, pause_record_prefix, record_detached_completion,
+    spawn_status_watcher_with_completions,
 };
 pub use ledger::{
     DETACHED_LEDGER_TIMEOUT_MS, list_subagent_records, orphaned_subagent_reason, record_agent_id,
