@@ -133,7 +133,8 @@ fn successful_repeats_are_reported_without_a_failure_claim() {
         })
         .collect::<Vec<_>>();
     let groups = group_stop_results(&results, str::to_owned);
-    let output = render_stop_summary_with_copy("the same step repeated", &groups, &ENGLISH_STOP_COPY);
+    let output =
+        render_stop_summary_with_copy("the same step repeated", &groups, &ENGLISH_STOP_COPY);
     assert_eq!(
         output,
         "I stopped this turn early because the same step repeated.\n\n**What happened**\n- `list_items` succeeded 3 times\n\nTell me how you'd like to proceed, or ask me to try again."
