@@ -1326,7 +1326,7 @@ async fn same_admission_can_resume_the_current_generation_twice() {
 ```
 
 Run the direct test filter and the runtime suite.
-Run `run_tinyagents_test -p tinyagents-runtime direct_resume_resolves_and_uses-the-admitted-lease`
+Run `run_tinyagents_test -p tinyagents-runtime direct_resume_resolves_and_uses_the_admitted_lease`
 and `run_tinyagents_test -p tinyagents-runtime identity`, then the runtime crate suite.
 
 ### 4. Add explicit pinned store leases without changing live rebind
