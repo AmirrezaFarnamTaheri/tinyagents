@@ -1,10 +1,12 @@
 //! Host-configured plan-to-build handoff tool.
 
-use std::sync::Arc;
+use std::{hash::Hash, sync::Arc};
 
 use async_trait::async_trait;
 use serde_json::json;
 use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
+use crate::{plan_review::PlanReviewStore, run_mode::RunModeStore};
+use tinyagents_harness::middleware::library::RunMode;
 
 
 /// Stable marker emitted for a plan-to-build handoff.
@@ -12,16 +14,18 @@ pub const PLAN_EXIT_MARKER: &str = "[plan_exit]";
 
 /// Host-owned state operations required for a generic plan exit.
 pub trait PlanExitHost: Send + Sync {
-    fn review_is_parked(&self, context: &dyn ToolRunContext) -> bool;
-    fn switch_to_build(&self, context: &dyn ToolRunContext);
+    type Scope: Clone + Eq + Hash + Send + Sync + 'static;
+    fn scope_and_thread(&self, context: &dyn ToolRunContext) -> (Self::Scope, String);
 }
 
 /// Tool that returns a plan and switches its host-selected run mode to Build.
-pub struct PlanExitTool {
-    host: Arc<dyn PlanExitHost>,
+pub struct PlanExitTool<S> {
+    host: Arc<dyn PlanExitHost<Scope = S>>,
+    run_modes: Arc<dyn RunModeStore<S>>,
+    reviews: Option<Arc<PlanReviewStore<S>>>,
 }
 
-impl PlanExitTool {
+impl<S: Clone + Eq + Hash + Send + Sync + 'static> PlanExitTool<S> {
     /// Stable tool name advertised to the model and host registries.
     pub const NAME: &'static str = "plan_exit";
 
@@ -30,13 +34,13 @@ impl PlanExitTool {
 
     /// Creates a tool whose parked-review check and mode transition are
     /// delegated to the host's generic stores.
-    pub fn new(host: Arc<dyn PlanExitHost>) -> Self {
-        Self { host }
+    pub fn new(host: Arc<dyn PlanExitHost<Scope = S>>, run_modes: Arc<dyn RunModeStore<S>>, reviews: Option<Arc<PlanReviewStore<S>>>) -> Self {
+        Self { host, run_modes, reviews }
     }
 }
 
 #[async_trait]
-impl Tool for PlanExitTool {
+impl<S: Clone + Eq + Hash + Send + Sync + 'static> Tool for PlanExitTool<S> {
     fn name(&self) -> &str {
         Self::NAME
     }
@@ -80,10 +84,11 @@ impl Tool for PlanExitTool {
         }
 
         if let Some(context) = context {
-            if self.host.review_is_parked(context) {
+            let (scope, thread_id) = self.host.scope_and_thread(context);
+            if self.reviews.as_ref().is_some_and(|reviews| reviews.has_parked_review(&scope, &thread_id)) {
                 return Ok(ToolResult::error("A plan review is still pending for this thread"));
             }
-            self.host.switch_to_build(context);
+            self.run_modes.set_mode(&scope, &thread_id, RunMode::Build);
         }
 
         Ok(ToolResult::success(format!("{PLAN_EXIT_MARKER}\n{plan}")))
