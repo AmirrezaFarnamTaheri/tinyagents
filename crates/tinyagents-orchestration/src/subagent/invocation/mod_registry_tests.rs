@@ -289,7 +289,26 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
     );
     assert_eq!(
         jobs.driver_job_for_key(&awaiting_key, "owner"),
-        Some(awaiting_id)
+        Some(awaiting_id.clone())
+    );
+
+    let (resumed_id, _, _, _, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: awaiting_key,
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: true,
+        })
+        .unwrap();
+    assert!(!inserted);
+    assert_eq!(resumed_id, awaiting_id);
+    assert_eq!(
+        jobs.get(resumed_id.as_str()).unwrap().status,
+        SubAgentJobStatus::Running
     );
 }
 
