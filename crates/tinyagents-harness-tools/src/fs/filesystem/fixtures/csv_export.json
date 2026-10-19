@@ -1,0 +1,30 @@
+{
+  "description": "Export structured data (JSON array of objects) as a CSV file to the workspace. Returns the file path. Use when the user wants raw tabular data from a tool result that's too large to include inline.",
+  "exposure": "Direct",
+  "name": "csv_export",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "columns": {
+        "description": "Optional ordered list of column names to include. If omitted, all keys from the first object are used as headers.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "data": {
+        "description": "JSON string containing an array of objects to export. Each object becomes a row; keys become column headers.",
+        "type": "string"
+      },
+      "filename": {
+        "description": "Output filename (without path). Will be written to workspace/exports/. Example: 'github-issues-2026-04-16.csv'",
+        "type": "string"
+      }
+    },
+    "required": [
+      "data",
+      "filename"
+    ],
+    "type": "object"
+  }
+}

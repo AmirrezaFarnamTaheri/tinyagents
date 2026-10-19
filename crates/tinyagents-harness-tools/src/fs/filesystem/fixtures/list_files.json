@@ -1,0 +1,16 @@
+{
+  "description": "List entries in a workspace directory (non-recursive). Each line is `<kind>\t<name>` where kind is `dir`, `file`, or `link`.",
+  "exposure": "Direct",
+  "name": "list",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "path": {
+        "default": ".",
+        "description": "Directory path relative to the workspace (default `.`).",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}

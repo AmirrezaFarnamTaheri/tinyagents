@@ -1,0 +1,22 @@
+{
+  "description": "Read image file metadata (format, dimensions, size) and optionally return base64-encoded data.",
+  "exposure": "Direct",
+  "name": "image_info",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "include_base64": {
+        "description": "Include base64-encoded image data in output (default: false)",
+        "type": "boolean"
+      },
+      "path": {
+        "description": "Path to the image file (absolute or relative to workspace)",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  }
+}

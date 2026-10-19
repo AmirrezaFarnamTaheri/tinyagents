@@ -1,0 +1,21 @@
+{
+  "description": "Get a read-only overview of the workspace: git status (modified/untracked files), recent commits, and top-level directory structure. Useful for understanding the current project state before planning tasks.",
+  "exposure": "Direct",
+  "name": "read_workspace_state",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "include_tree": {
+        "default": true,
+        "description": "Include top-level directory tree (default: true).",
+        "type": "boolean"
+      },
+      "recent_commits": {
+        "default": 5,
+        "description": "Number of recent commits to show (default: 5).",
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  }
+}

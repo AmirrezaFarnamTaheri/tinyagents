@@ -1,0 +1,32 @@
+{
+  "description": "Make HTTP requests to external APIs. Supports GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS methods. Security constraints: allowlist-only domains, no local/private hosts, configurable timeout and response size limits.",
+  "exposure": "Direct",
+  "name": "http_request",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "body": {
+        "description": "Optional request body (for POST, PUT, PATCH requests)",
+        "type": "string"
+      },
+      "headers": {
+        "default": {},
+        "description": "Optional HTTP headers as key-value pairs (e.g., {\"Authorization\": \"Bearer token\", \"Content-Type\": \"application/json\"})",
+        "type": "object"
+      },
+      "method": {
+        "default": "GET",
+        "description": "HTTP method (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)",
+        "type": "string"
+      },
+      "url": {
+        "description": "HTTP or HTTPS URL to request",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  }
+}
