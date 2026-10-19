@@ -1579,6 +1579,44 @@ outcomes and must not persist the raw argument/result. Verify with
 `run_tinyagents_test -p tinyagents-runtime post_commit` and then
 `run_tinyagents_test -p tinyagents-runtime`.
 
+The value test body in `turn_driver/driver_tests.rs` is:
+
+```rust
+#[test]
+fn tool_call_outcome_equality_covers_every_observed_field() {
+    use tinyagents_harness::turn_outcome::ToolCallOutcome;
+
+    let original = ToolCallOutcome {
+        call_id: "call-1".into(),
+        name: "read_file".into(),
+        arguments: serde_json::json!({"path": "notes.txt"}),
+        success: false,
+        content: "denied".into(),
+        duration_ms: 17,
+    };
+    assert_eq!(original, original.clone());
+
+    let mut changed = original.clone();
+    changed.call_id.push_str("-changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.name.push_str("_changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.arguments["path"] = serde_json::json!("other.txt");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.success = true;
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.content.push_str(" changed");
+    assert_ne!(original, changed);
+    let mut changed = original.clone();
+    changed.duration_ms += 1;
+    assert_ne!(original, changed);
+}
+```
+
 In `a_split_turn_is_driven_by_the_host_and_settled_by_its_tail`, add this
 planner context middleware after its tool builder setup:
 
