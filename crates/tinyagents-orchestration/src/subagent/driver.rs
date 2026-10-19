@@ -245,11 +245,9 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
 
         let (entry, is_leader) = self.in_flight.claim(task_key.clone());
         if !is_leader {
-            return match await_with_turn_fence(
-                turn_fence.as_ref(),
-                None,
-                async { Ok(entry.wait_or_cancel(&cancellation).await) },
-            )
+            return match await_with_turn_fence(turn_fence.as_ref(), None, async {
+                Ok(entry.wait_or_cancel(&cancellation).await)
+            })
             .await?
             {
                 None => Ok(SubagentRunResult::new(
