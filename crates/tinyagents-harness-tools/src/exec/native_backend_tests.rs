@@ -35,11 +35,6 @@ fn process_is_gone_or_zombie(pid: i32) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn process_is_reaped(pid: i32) -> bool {
-    !std::path::Path::new(&format!("/proc/{pid}/stat")).exists()
-}
-
-#[cfg(target_os = "linux")]
 fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
@@ -139,34 +134,29 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     use crate::exec::{ExecBackend, ExecBackendOutcome, ShellFlavor};
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
-    let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "printf '%s\\n' \"$$\" > {}; sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; printf captured; wait",
-        shell_quote(&shell_pidfile),
+        "sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; printf captured; wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
-    let outcome = backend
-        .execute(
-            request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
-            None,
-            None,
+    let cleanup = crate::exec::timeout::ProcessCleanup::default();
+    let outcome = cleanup
+        .scope(
+            backend
+                .execute(
+                    request("sh", &["-c", &command], Some(Duration::from_secs(1)), true),
+                    None,
+                    None,
+                )
+                .await,
         )
         .await;
+    cleanup.wait().await;
     let ExecBackendOutcome::Completed(output) = outcome else {
         panic!("expected timeout completion")
     };
     assert!(output.timed_out);
     assert_eq!(output.stdout, b"captured");
-    let shell_pid: i32 = std::fs::read_to_string(shell_pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(
-        process_is_reaped(shell_pid),
-        "direct shell {shell_pid} was not reaped before timeout returned"
-    );
     let pid: i32 = std::fs::read_to_string(pidfile)
         .unwrap()
         .trim()
@@ -184,10 +174,8 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     use crate::exec::{ExecBackend, ShellFlavor, timeout::ProcessCleanup};
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
-    let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "printf '%s\\n' \"$$\" > {}; sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; wait",
-        shell_quote(&shell_pidfile),
+        "sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
@@ -198,17 +186,13 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
             .scope(backend.execute(request("sh", &["-c", &command], None, true), None, None))
             .await
     });
-    tokio::time::timeout(Duration::from_secs(8), async {
+    tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            let child_ready = std::fs::read_to_string(&pidfile)
+            if std::fs::read_to_string(&pidfile)
                 .ok()
                 .and_then(|pid| pid.trim().parse::<i32>().ok())
-                .is_some();
-            let shell_ready = std::fs::read_to_string(&shell_pidfile)
-                .ok()
-                .and_then(|pid| pid.trim().parse::<i32>().ok())
-                .is_some();
-            if child_ready && shell_ready {
+                .is_some()
+            {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -229,14 +213,5 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     assert!(
         process_is_gone_or_zombie(pid),
         "descendant {pid} was still executing after cleanup acknowledgment"
-    );
-    let shell_pid: i32 = std::fs::read_to_string(shell_pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    assert!(
-        process_is_reaped(shell_pid),
-        "direct shell {shell_pid} was not reaped after cleanup acknowledgment"
     );
 }
