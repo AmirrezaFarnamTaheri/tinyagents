@@ -48,6 +48,7 @@ tempfile = "3"
 tinyagents-definition = { path = "../tinyagents-definition", version = "2.2.0" }
 tinyagents-graph = { path = "../tinyagents-graph", version = "2.2.0" }
 tinyagents-registry = { path = "../tinyagents-registry", version = "2.2.0" }
+tinyagents-runtime = { path = "../tinyagents-runtime", version = "2.2.0" }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [lints]

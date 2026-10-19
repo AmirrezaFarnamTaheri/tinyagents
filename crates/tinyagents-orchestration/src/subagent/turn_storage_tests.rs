@@ -2,11 +2,17 @@ use super::*;
 
 use serde_json::json;
 use tinyagents_harness::store::SchemaAdmission;
+use tinyagents_runtime::{
+    DriverOutcome, DriverRequest, RuntimeError, SessionBuilder, SessionDriver, SessionTurnRequest,
+    TranscriptCodec, TranscriptTurnOptions, TurnOptions,
+};
 use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+use tinyagents_session::transcript::SessionTranscript;
 use tinyagents_session::transcript::{
     SessionRef, TranscriptHistory, TranscriptMessage, TranscriptMeta, TranscriptTurn,
 };
 use tinyagents_tasks::DurableThreadDeliveryLeases;
+use tinyinference_llm::message::Message;
 use tinystoragedrivers_core::{Filter, MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn meta(thread_id: &str) -> TranscriptMeta {
@@ -196,5 +202,180 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
         .map(|message| message.content.as_str())
         .collect();
     assert_eq!(persisted, ["owner A", "owner B"]);
+    assert!(lease_b.release().await.unwrap());
+}
+
+struct GateDriver {
+    started: Arc<tokio::sync::Notify>,
+    release: Option<Arc<tokio::sync::Notify>>,
+}
+
+#[async_trait::async_trait]
+impl SessionDriver for GateDriver {
+    async fn execute(
+        &self,
+        request: DriverRequest,
+    ) -> Result<DriverOutcome, tinyagents_runtime::DriverFailure> {
+        self.started.notify_one();
+        if let Some(release) = &self.release {
+            release.notified().await;
+        }
+        let mut history = request.history;
+        history.push(Message::assistant("turn complete"));
+        Ok(DriverOutcome {
+            history,
+            output: Some("turn complete".into()),
+            partial: None,
+            interrupted: false,
+            outcome: None,
+        })
+    }
+}
+
+struct MessageCodec;
+
+impl TranscriptCodec for MessageCodec {
+    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        Ok(transcript
+            .messages
+            .iter()
+            .map(|row| match row.role.as_str() {
+                "user" => Message::user(&row.content),
+                _ => Message::assistant(&row.content),
+            })
+            .collect())
+    }
+
+    fn reconcile(
+        &self,
+        prior: &[tinyagents_session::transcript::TranscriptMessage],
+        _: &[Message],
+        next: &[Message],
+        _: &TranscriptTurnOptions,
+    ) -> Result<Vec<tinyagents_session::transcript::TranscriptMessage>, RuntimeError> {
+        let mut rows = prior.to_vec();
+        rows.extend(
+            next[prior.len().min(next.len())..]
+                .iter()
+                .map(|message| match message {
+                    Message::User(_) => {
+                        tinyagents_session::transcript::TranscriptMessage::user(message.text())
+                    }
+                    _ => {
+                        tinyagents_session::transcript::TranscriptMessage::assistant(message.text())
+                    }
+                }),
+        );
+        Ok(rows)
+    }
+}
+
+#[tokio::test]
+async fn session_runtime_turn_commit_is_fenced_after_thread_lease_takeover() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let tenant = Scope::tenant("runtime-writer-test").unwrap();
+    let bootstrap = backend.for_scope(&tenant).unwrap();
+    DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
+        .await
+        .unwrap();
+    let provider = DriverSessionStores::new(Arc::clone(&backend), tenant.clone()).unwrap();
+    let leases_a = DurableThreadDeliveryLeases::new(
+        backend.as_ref(),
+        Scope::cluster(),
+        "runtime-writer-domain",
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    let leases_b = DurableThreadDeliveryLeases::new(
+        backend.as_ref(),
+        Scope::cluster(),
+        "runtime-writer-domain",
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    let lease_a = leases_a
+        .try_acquire(&tenant, "thread-runtime")
+        .await
+        .unwrap()
+        .unwrap();
+    let actor_a = provider
+        .bind_actor_with_schema_admission(
+            Arc::new(
+                FencedSessionBackend::new(Arc::clone(&backend), tenant.clone(), lease_a.fence())
+                    .unwrap(),
+            ),
+            SchemaAdmission::ValidateOnly,
+        )
+        .unwrap()
+        .unwrap();
+    let started_a = Arc::new(tokio::sync::Notify::new());
+    let release_a = Arc::new(tokio::sync::Notify::new());
+    let session_ref = SessionRef::scoped("thread-runtime", "planner");
+    let mut session_a = SessionBuilder::new(Arc::new(GateDriver {
+        started: Arc::clone(&started_a),
+        release: Some(Arc::clone(&release_a)),
+    }))
+    .codec(Arc::new(MessageCodec))
+    .session(
+        actor_a.try_for_agent("planner").unwrap().transcripts,
+        session_ref.clone(),
+        meta("thread-runtime"),
+    )
+    .build()
+    .unwrap();
+    let turn_a = tokio::spawn(async move {
+        session_a
+            .turn(
+                SessionTurnRequest::new(Message::user("A request")),
+                TurnOptions::default(),
+            )
+            .await
+    });
+    started_a.notified().await;
+
+    let epoch_a = lease_a.epoch();
+    assert!(lease_a.release().await.unwrap());
+    let lease_b = leases_b
+        .try_acquire(&tenant, "thread-runtime")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(lease_b.epoch() > epoch_a);
+    let actor_b = provider
+        .bind_actor_with_schema_admission(
+            Arc::new(
+                FencedSessionBackend::new(Arc::clone(&backend), tenant, lease_b.fence()).unwrap(),
+            ),
+            SchemaAdmission::ValidateOnly,
+        )
+        .unwrap()
+        .unwrap();
+    let started_b = Arc::new(tokio::sync::Notify::new());
+    let mut session_b = SessionBuilder::new(Arc::new(GateDriver {
+        started: started_b,
+        release: None,
+    }))
+    .codec(Arc::new(MessageCodec))
+    .session(
+        actor_b.try_for_agent("planner").unwrap().transcripts,
+        session_ref,
+        meta("thread-runtime"),
+    )
+    .build()
+    .unwrap();
+    session_b
+        .turn(
+            SessionTurnRequest::new(Message::user("B request")),
+            TurnOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    release_a.notify_one();
+    let stale = turn_a.await.unwrap();
+    assert!(
+        matches!(stale, Err(RuntimeError::Persistence(_))),
+        "old runtime turn must fail at its fenced transcript commit: {stale:?}"
+    );
     assert!(lease_b.release().await.unwrap());
 }
