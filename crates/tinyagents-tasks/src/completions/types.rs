@@ -160,6 +160,10 @@ pub struct CompletionRecord {
     /// restart. A tombstone written before the completion exists carries an
     /// empty key.
     pub parent_key: String,
+    /// Fencing epoch of the parent admission lease that accepted this record.
+    /// Older records remain readable as epoch zero.
+    #[serde(default)]
+    pub parent_epoch: u64,
     /// The child's agent id.
     pub agent_id: String,
     /// Optional human label.
@@ -199,6 +203,7 @@ impl CompletionRecord {
         Self {
             task_id: task_id.into(),
             parent_key: parent_key.into(),
+            parent_epoch: 0,
             agent_id: agent_id.into(),
             label: None,
             status,
