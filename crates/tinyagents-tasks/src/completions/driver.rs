@@ -158,6 +158,26 @@ impl DriverCompletionStore {
             .await
             .map(|_| ())
     }
+
+    async fn fenced_docs(
+        &self,
+        parent_key: &str,
+        claim: &ParentGateClaim,
+    ) -> Result<Arc<dyn DocumentStore>> {
+        let lease = Leases::new(&self.docs)
+            .current(PARENT_GATE_OWNER, parent_key)
+            .await
+            .map_err(map_error)?
+            .filter(|lease| lease.holder == claim.holder && lease.epoch == claim.epoch)
+            .ok_or_else(|| {
+                TinyAgentsError::Storage("completion store: parent admission lease was lost".into())
+            })?;
+        let fenced = self
+            .backend
+            .for_scope_fenced(&self.scope, &lease.fence(&self.scope))
+            .map_err(map_error)?;
+        Ok(Arc::clone(fenced.documents()))
+    }
 }
 
 impl CompletionStore for DriverCompletionStore {
@@ -264,15 +284,20 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
-    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+        gate: &ParentGateClaim,
+    ) -> Result<bool> {
         let this = self.clone();
         let record = record.clone();
+        let gate = gate.clone();
         self.run(async move {
             this.declare().await?;
+            let docs = this.fenced_docs(&record.parent_key, &gate).await?;
             let id = task_id_key(&record.task_id).map_err(map_error)?;
             let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
-            match this
-                .docs
+            match docs
                 .put_with(
                     COMPLETIONS,
                     &id,
@@ -294,6 +319,7 @@ impl CompletionStore for DriverCompletionStore {
     fn claim_pending(
         &self,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
@@ -301,11 +327,12 @@ impl CompletionStore for DriverCompletionStore {
     ) -> Result<Vec<CompletionRecord>> {
         let this = self.clone();
         let parent_key = parent_key.to_owned();
+        let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
             this.declare().await?;
-            let rows = this
-                .docs
+            let docs = this.fenced_docs(&parent_key, &gate).await?;
+            let rows = docs
                 .query_all(
                     COMPLETIONS,
                     &Query::filter(Filter::eq("parent_key", parent_key.as_str())),
@@ -339,8 +366,7 @@ impl CompletionStore for DriverCompletionStore {
                     visible_after,
                 });
                 let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
-                match this
-                    .docs
+                match docs
                     .put_with(
                         COMPLETIONS,
                         &row.id,
@@ -363,6 +389,7 @@ impl CompletionStore for DriverCompletionStore {
         &self,
         task_id: &str,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
@@ -370,11 +397,13 @@ impl CompletionStore for DriverCompletionStore {
         let this = self.clone();
         let task_id = task_id.to_owned();
         let parent_key = parent_key.to_owned();
+        let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
             this.declare().await?;
+            let docs = this.fenced_docs(&parent_key, &gate).await?;
             let id = task_id_key(&task_id).map_err(map_error)?;
-            let Some(row) = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
+            let Some(row) = docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
                 return Ok(None);
             };
             let mut record = decode_strict(row.clone())?;
@@ -396,8 +425,7 @@ impl CompletionStore for DriverCompletionStore {
                 visible_after,
             });
             let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
-            match this
-                .docs
+            match docs
                 .put_with(
                     COMPLETIONS,
                     &id,
