@@ -144,7 +144,9 @@ fn english_close_copy_frames_records_and_keeps_write_and_truncation_rules() {
     let frame_end = instruction
         .find("</harness_instruction>")
         .expect("directive is framed");
-    let records_at = instruction.find("<tool_records>").expect("records included");
+    let records_at = instruction
+        .find("<tool_records>")
+        .expect("records included");
     assert!(frame_end < records_at);
     assert!(instruction.contains("Do not quote or restate them"));
     assert!(instruction.contains("Do not list or describe the tools available to you"));
