@@ -99,6 +99,7 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
         observed: Arc::clone(&observed),
         resume: Arc::clone(&resume),
         gate_attempts: std::sync::atomic::AtomicUsize::new(0),
+        marker_reads: std::sync::atomic::AtomicUsize::new(0),
         cancel_waiting: Arc::clone(&cancel_waiting),
     });
     let router = Arc::new(CompletionRouter::new(store.clone()));
@@ -108,15 +109,9 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
 
     let recording = {
         let router = Arc::clone(&router);
-        tokio::spawn(async move {
-            let result = router.record(record("late", "p")).await;
-            eprintln!("record finished: {result:?}");
-            result
-        })
+        tokio::spawn(async move { router.record(record("late", "p")).await })
     };
-    eprintln!("test waiting for stale marker read");
     observed.wait();
-    eprintln!("test saw stale marker read");
     let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let cancellation = std::thread::spawn(move || {
@@ -125,11 +120,8 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
         done_tx.send(result).unwrap();
     });
     started_rx.recv().unwrap();
-    eprintln!("test waiting for cancellation gate attempt");
     cancel_waiting.wait();
-    eprintln!("test saw cancellation gate attempt");
     resume.wait();
-    eprintln!("test resumed stale writer");
     let outcome = recording.await.unwrap().unwrap();
     assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
     assert_eq!(done_rx.recv().unwrap().unwrap(), 1);
@@ -149,6 +141,7 @@ struct BlockingParentMarkerRead {
     observed: Arc<std::sync::Barrier>,
     resume: Arc<std::sync::Barrier>,
     gate_attempts: std::sync::atomic::AtomicUsize,
+    marker_reads: std::sync::atomic::AtomicUsize,
     cancel_waiting: Arc<std::sync::Barrier>,
 }
 
@@ -160,7 +153,6 @@ impl CompletionStore for BlockingParentMarkerRead {
         ttl: std::time::Duration,
     ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
         use std::sync::atomic::Ordering::SeqCst;
-        eprintln!("gate call {}", self.gate_attempts.load(SeqCst));
         if self.gate_attempts.fetch_add(1, SeqCst) == 1 {
             self.cancel_waiting.wait();
         }
@@ -186,10 +178,14 @@ impl CompletionStore for BlockingParentMarkerRead {
 
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let record = self.inner.get(task_id);
-        if task_id == self.marker_id {
+        if task_id == self.marker_id
+            && self
+                .marker_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+        {
             self.observed.wait();
             self.resume.wait();
-            eprintln!("stale marker read returned");
         }
         record
     }
