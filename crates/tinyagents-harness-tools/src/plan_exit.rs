@@ -15,9 +15,16 @@ pub const PLAN_EXIT_MARKER: &str = "[plan_exit]";
 /// leave plan mode. Hosts can keep tenant lookup and approval checks here.
 pub type PlanExitModeLookup = dyn Fn(&dyn ToolRunContext) -> Option<RunModeHandle> + Send + Sync;
 
+/// Host-owned state operations required for a generic plan exit.
+pub trait PlanExitHost: Send + Sync {
+    fn review_is_parked(&self, context: &dyn ToolRunContext) -> bool;
+    fn switch_to_build(&self, context: &dyn ToolRunContext);
+}
+
 /// Tool that returns a plan and switches its host-selected run mode to Build.
 pub struct PlanExitTool {
     lookup: Arc<PlanExitModeLookup>,
+    host: Option<Arc<dyn PlanExitHost>>,
 }
 
 impl PlanExitTool {
@@ -29,7 +36,13 @@ impl PlanExitTool {
 
     /// Creates a tool using the host's run-mode lookup and policy checks.
     pub fn new(lookup: Arc<PlanExitModeLookup>) -> Self {
-        Self { lookup }
+        Self { lookup, host: None }
+    }
+
+    /// Creates a tool whose parked-review check and mode transition are
+    /// delegated to the host's generic stores.
+    pub fn with_host(lookup: Arc<PlanExitModeLookup>, host: Arc<dyn PlanExitHost>) -> Self {
+        Self { lookup, host: Some(host) }
     }
 }
 
@@ -77,10 +90,15 @@ impl Tool for PlanExitTool {
             return Ok(ToolResult::error("`plan` must not be empty"));
         }
 
-        if let Some(context) = context
-            && let Some(mode) = (self.lookup)(context)
-        {
-            mode.set(RunMode::Build);
+        if let Some(context) = context {
+            if self.host.as_ref().is_some_and(|host| host.review_is_parked(context)) {
+                return Ok(ToolResult::error("A plan review is still pending for this thread"));
+            }
+            if let Some(host) = &self.host {
+                host.switch_to_build(context);
+            } else if let Some(mode) = (self.lookup)(context) {
+                mode.set(RunMode::Build);
+            }
         }
 
         Ok(ToolResult::success(format!("{PLAN_EXIT_MARKER}\n{plan}")))
