@@ -906,6 +906,18 @@ then implement the smallest API/code change and rerun it. Keep existing
 assertions and run the named crate's full tests after each API family. No host
 source edits are part of this plan.
 
+Run every focused Rust test with this helper from the plan. It explicitly
+enters the nested TinyAgents workspace and uses the super-worktree's
+cancel-aware wrapper:
+
+```sh
+run_tinyagents_test() {
+  cd -- "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/vendor/tinyagents" && \
+    CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 \
+    "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/scripts/ci-cancel-aware.sh" cargo test "$@"
+}
+```
+
 ### 1. Repair only the historical leading orphan-tool head
 
 **Files:** `crates/tinyagents-session/src/transcript/adoption.rs`,
