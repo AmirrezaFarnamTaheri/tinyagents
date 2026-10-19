@@ -88,6 +88,7 @@ impl SessionDriver for GatedDriver {
             output: Some("Sunny.".into()),
             partial: None,
             interrupted: false,
+            tool_outcomes: Vec::new(),
         })
     }
 }

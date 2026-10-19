@@ -85,6 +85,7 @@ impl SessionDriver for CancelAwareDriver {
                 output: None,
                 partial: None,
                 interrupted: true,
+                tool_outcomes: Vec::new(),
             }),
         })
     }
@@ -115,6 +116,7 @@ fn outcome(history: Vec<Message>) -> DriverOutcome {
         output: Some("ok".into()),
         partial: None,
         interrupted: false,
+        tool_outcomes: Vec::new(),
     }
 }
 
@@ -636,6 +638,7 @@ async fn persistence_failure_rolls_back_and_a_partial_never_falls_back_to_two_wr
         output: None,
         partial: Some(crate::TranscriptPartial::new("display only")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -804,6 +807,7 @@ async fn history_commits_partial_model_history_and_display_only_partial_together
         output: None,
         partial: Some(crate::TranscriptPartial::new("display partial")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -902,6 +906,7 @@ async fn partial_usage_error_leaves_the_session_and_target_entirely_uncommitted(
         output: None,
         partial: Some(crate::TranscriptPartial::new("display partial")),
         interrupted: true,
+        tool_outcomes: Vec::new(),
     };
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![Err(DriverFailure {
         outcome: None,
@@ -2527,6 +2532,7 @@ fn session_outcome(history: Vec<Message>, output: &str) -> DriverOutcome {
         output: Some(output.into()),
         partial: None,
         interrupted: false,
+        tool_outcomes: Vec::new(),
     }
 }
 
