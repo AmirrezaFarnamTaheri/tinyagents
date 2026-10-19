@@ -108,7 +108,11 @@ async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
 
     let recording = {
         let router = Arc::clone(&router);
-        tokio::spawn(async move { router.record(record("late", "p")).await })
+        tokio::spawn(async move {
+            let result = router.record(record("late", "p")).await;
+            eprintln!("record finished: {result:?}");
+            result
+        })
     };
     eprintln!("test waiting for stale marker read");
     observed.wait();
@@ -185,6 +189,7 @@ impl CompletionStore for BlockingParentMarkerRead {
         if task_id == self.marker_id {
             self.observed.wait();
             self.resume.wait();
+            eprintln!("stale marker read returned");
         }
         record
     }

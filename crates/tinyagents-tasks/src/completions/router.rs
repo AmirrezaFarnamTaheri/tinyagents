@@ -116,6 +116,7 @@ impl ParentGateGuard {
     }
 
     fn renew(&self) -> Result<bool> {
+        eprintln!("renew parent gate {}", self.parent_key);
         self.store
             .renew_parent_gate(&self.parent_key, &self.claim, PARENT_GATE_TTL)
     }
@@ -123,6 +124,7 @@ impl ParentGateGuard {
 
 impl Drop for ParentGateGuard {
     fn drop(&mut self) {
+        eprintln!("release parent gate {}", self.parent_key);
         if let Err(error) = self
             .store
             .release_parent_gate(&self.parent_key, &self.claim)
