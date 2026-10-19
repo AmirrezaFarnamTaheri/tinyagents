@@ -283,16 +283,13 @@ pub trait SubagentSessionStore: Send + Sync {
         id: &str,
         task_id: &str,
         lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
     ) -> Result<bool, SubagentError> {
-        let Some(current) = self.get(id).await? else {
-            return Ok(false);
-        };
-        if current.current_task_id.as_deref() != Some(task_id)
-            || current.lifecycle_key.as_ref() != Some(lifecycle_key)
-        {
-            return Ok(false);
-        }
-        self.close(id).await
+        let _ = (id, task_id, lifecycle_key, parent_session, parent_thread_id);
+        Err(SubagentError::Persistence(
+            "session store does not support atomic lifecycle close".into(),
+        ))
     }
     /// Records the latest result and reusable state after a completed turn.
     async fn mark_finished(
@@ -302,6 +299,30 @@ pub trait SubagentSessionStore: Send + Sync {
         status: DurableSubagentStatus,
         history: Vec<Message>,
     ) -> Result<bool, SubagentError>;
+    /// Owner- and lifecycle-checked completion for an owner-bound session.
+    async fn mark_finished_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let _ = (
+            id,
+            task_id,
+            lifecycle_key,
+            parent_session,
+            parent_thread_id,
+            status,
+            history,
+        );
+        Err(SubagentError::Persistence(
+            "session store does not support atomic owner-checked completion".into(),
+        ))
+    }
     /// Records a failed turn while preserving the durable session for listing.
     async fn mark_failed(
         &self,
@@ -309,6 +330,28 @@ pub trait SubagentSessionStore: Send + Sync {
         task_id: &str,
         error: String,
     ) -> Result<bool, SubagentError>;
+    /// Owner- and lifecycle-checked failure for an owner-bound session.
+    async fn mark_failed_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let _ = (
+            id,
+            task_id,
+            lifecycle_key,
+            parent_session,
+            parent_thread_id,
+            error,
+        );
+        Err(SubagentError::Persistence(
+            "session store does not support atomic owner-checked failure".into(),
+        ))
+    }
 }
 
 /// Owner-bound view of a session store for one exact parent session/thread.
@@ -403,7 +446,13 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
             return Ok(false);
         };
         self.inner
-            .close_if_current(id, task_id, lifecycle_key)
+            .close_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
             .await
     }
 
@@ -413,16 +462,14 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         task_id: &str,
         lifecycle_key: &SubagentTaskKey,
     ) -> Result<bool, SubagentError> {
-        let Some(session) = self.get(id).await? else {
-            return Ok(false);
-        };
-        if session.current_task_id.as_deref() != Some(task_id)
-            || session.lifecycle_key.as_ref() != Some(lifecycle_key)
-        {
-            return Ok(false);
-        }
         self.inner
-            .close_if_current(id, task_id, lifecycle_key)
+            .close_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+            )
             .await
     }
 
@@ -433,10 +480,23 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         status: DurableSubagentStatus,
         history: Vec<Message>,
     ) -> Result<bool, SubagentError> {
-        if self.get(id).await?.is_none() {
+        let Some(session) = self.get(id).await? else {
             return Ok(false);
-        }
-        self.inner.mark_finished(id, task_id, status, history).await
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        self.inner
+            .mark_finished_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                status,
+                history,
+            )
+            .await
     }
 
     async fn mark_failed(
@@ -445,10 +505,22 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         task_id: &str,
         error: String,
     ) -> Result<bool, SubagentError> {
-        if self.get(id).await?.is_none() {
+        let Some(session) = self.get(id).await? else {
             return Ok(false);
-        }
-        self.inner.mark_failed(id, task_id, error).await
+        };
+        let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
+            return Ok(false);
+        };
+        self.inner
+            .mark_failed_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                &self.parent_session,
+                self.parent_thread_id.as_deref(),
+                error,
+            )
+            .await
     }
 }
 
@@ -748,18 +820,58 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         .await
     }
 
+    async fn mark_finished_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
+        self.mutate(id, move |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
+            {
+                return false;
+            }
+            session.status = status;
+            session.reusable = status.reusable();
+            session.latest_history = Some(history.clone());
+            session.latest_error = None;
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
     async fn close_if_current(
         &self,
         id: &str,
         task_id: &str,
         lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
     ) -> Result<bool, SubagentError> {
         let id = id.to_owned();
         let task_id = task_id.to_owned();
         let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
         self.mutate(&id, move |session| {
             if session.current_task_id.as_deref() != Some(task_id.as_str())
                 || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
             {
                 return false;
             }
@@ -805,6 +917,38 @@ impl SubagentSessionStore for DriverSubagentSessionStore {
         self.mutate(id, |session| {
             if session.status == DurableSubagentStatus::Closed
                 || session.current_task_id.as_deref() != Some(task_id)
+            {
+                return false;
+            }
+            session.status = DurableSubagentStatus::Failed;
+            session.reusable = false;
+            session.latest_error = Some(error.clone());
+            session.updated_at = chrono::Utc::now().to_rfc3339();
+            session.last_used_at = session.updated_at.clone();
+            true
+        })
+        .await
+    }
+
+    async fn mark_failed_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        let task_id = task_id.to_owned();
+        let lifecycle_key = lifecycle_key.clone();
+        let parent_session = parent_session.to_owned();
+        let parent_thread_id = parent_thread_id.map(str::to_owned);
+        self.mutate(id, move |session| {
+            if session.status == DurableSubagentStatus::Closed
+                || session.current_task_id.as_deref() != Some(task_id.as_str())
+                || session.lifecycle_key.as_ref() != Some(&lifecycle_key)
+                || session.parent_session != parent_session
+                || session.parent_thread_id != parent_thread_id
             {
                 return false;
             }

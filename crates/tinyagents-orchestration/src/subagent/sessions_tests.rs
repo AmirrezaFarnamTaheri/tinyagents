@@ -50,7 +50,13 @@ async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
 
     assert!(
         !store
-            .close_if_current(&second.subagent_session_id, "task-a", &first_key)
+            .close_if_current(
+                &second.subagent_session_id,
+                "task-a",
+                &first_key,
+                "parent-session",
+                Some("thread"),
+            )
             .await
             .unwrap()
     );
@@ -65,7 +71,13 @@ async fn stale_session_owner_cannot_close_a_reused_lifecycle() {
     );
     assert!(
         store
-            .close_if_current(&second.subagent_session_id, "task-b", &second_key)
+            .close_if_current(
+                &second.subagent_session_id,
+                "task-b",
+                &second_key,
+                "parent-session",
+                Some("thread"),
+            )
             .await
             .unwrap()
     );
