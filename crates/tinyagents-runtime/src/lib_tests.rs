@@ -4688,3 +4688,49 @@ async fn resolver_rejects_a_later_agent_change_before_another_driver_call() {
     ));
     assert_eq!(driver.requests.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn same_admission_can_resume_the_current_generation_twice() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider,
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::user("one"), Message::assistant("done")])),
+        Ok(outcome(vec![Message::user("two"), Message::assistant("done")])),
+    ]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    session.turn(SessionTurnRequest::new(Message::user("one")), options()).await.unwrap();
+    session.turn(SessionTurnRequest::new(Message::user("two")), options()).await.unwrap();
+    assert_eq!(driver.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn resolver_error_does_not_touch_builder_fallback_locator() {
+    let (fallback, history) = locator(None);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .transcript(fallback.clone(), "fallback", meta())
+        .identity_resolver("thread-identity", meta(), Arc::new(FailingIdentityResolver))
+        .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::LatestForAgent,
+        ..TurnOptions::default()
+    };
+    assert!(matches!(session.resume(&options).await, Err(RuntimeError::Driver(_))));
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+}
