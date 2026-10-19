@@ -221,7 +221,7 @@ impl ParentGateGuard {
     }
 
     pub(super) fn local_guard(&self) -> &ParentLifecycleGuard {
-        &self._local
+        self._local.as_ref().expect("router gates retain local lifecycle")
     }
 }
 
@@ -399,15 +399,13 @@ impl CompletionRouter {
             .collect::<Vec<_>>();
         parents.sort();
         parents.dedup();
+        let _local_gates = parents
+            .iter()
+            .map(|parent| state.lifecycle.acquire(parent))
+            .collect::<Result<Vec<_>>>()?;
         let _source_gates = parents
             .iter()
-            .map(|parent| {
-                ParentGateGuard::acquire(
-                    Arc::clone(&state.store),
-                    Arc::clone(&state.lifecycle),
-                    parent,
-                )
-            })
+            .map(|parent| ParentGateGuard::acquire_native(Arc::clone(&state.store), parent))
             .collect::<Result<Vec<_>>>()?;
         let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
@@ -431,11 +429,7 @@ impl CompletionRouter {
             } else {
                 record.parent_key.clone()
             };
-            let gate = ParentGateGuard::acquire(
-                Arc::clone(&replacement),
-                Arc::clone(&state.lifecycle),
-                &parent_key,
-            )?;
+            let gate = ParentGateGuard::acquire_native(Arc::clone(&replacement), &parent_key)?;
             replacement.put_fenced(&record, &parent_key, gate.claim())?;
         }
         state.store = Arc::clone(&replacement);
