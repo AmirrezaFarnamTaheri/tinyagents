@@ -69,7 +69,7 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
         backend.as_ref(),
         lease_scope.clone(),
         "test-cluster",
-        Duration::from_secs(30),
+        Duration::from_millis(30),
     )
     .unwrap();
     let first = factory
