@@ -901,7 +901,8 @@ fn admission_rejects_a_stale_batch_key_when_store_changes_during_acquire() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((entered_tx, resume_rx));
     let acquiring = Arc::clone(&admission);
-    let acquire = std::thread::spawn(move || acquiring.acquire_for(Some(&old_key)));
+    let expected_key = old_key.clone();
+    let acquire = std::thread::spawn(move || acquiring.acquire_for(Some(&expected_key)));
     entered_rx.recv().unwrap();
 
     let migration_router = Arc::clone(&router);
