@@ -9,6 +9,7 @@
 //! observe completed responses while preserving the legacy entry points and
 //! configuration structs.
 
+use futures::StreamExt;
 use tinyinference_llm::message::Message;
 use tinyinference_llm::model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem, ToolChoice,
@@ -258,22 +259,49 @@ impl ChatModel<()> for CloseSourceModel<'_> {
         let call = self.trace.map(|trace| {
             crate::observability::SupplementalCallGuard::start(trace, self.model, &mut request)
         });
+        let correlation = request.correlation.clone();
         let stream = model.stream(state, request).await?;
-        let mut call = call;
-        Ok(stream.map_items(move |item| {
-            match &item {
-                ModelStreamItem::Completed(response) => {
-                    if let Some(call) = &mut call {
-                        call.complete(response);
+        let mut metadata = stream.metadata().clone();
+        if metadata.correlation.is_none() {
+            metadata.correlation = correlation;
+        }
+        let traced = futures::stream::unfold(
+            (stream, call, false),
+            |(mut stream, mut call, terminal)| async move {
+                if terminal {
+                    return None;
+                }
+                match stream.next().await {
+                    Some(item) => {
+                        let terminal = matches!(
+                            &item,
+                            ModelStreamItem::Completed(_)
+                                | ModelStreamItem::Failed(_)
+                                | ModelStreamItem::ProviderFailed(_)
+                        );
+                        match &item {
+                            ModelStreamItem::Completed(response) => {
+                                if let Some(call) = &mut call {
+                                    call.complete(response);
+                                }
+                            }
+                            ModelStreamItem::Failed(_) | ModelStreamItem::ProviderFailed(_) => {
+                                call.take();
+                            }
+                            _ => {}
+                        }
+                        Some((item, (stream, call, terminal)))
+                    }
+                    None => {
+                        // EOF is terminal even when the consumer retains the
+                        // stream after observing `None`.
+                        call.take();
+                        None
                     }
                 }
-                ModelStreamItem::Failed(_) | ModelStreamItem::ProviderFailed(_) => {
-                    call.take();
-                }
-                _ => {}
-            }
-            item
-        }))
+            },
+        );
+        Ok(ModelStream::new(Box::pin(traced)).with_metadata(metadata))
     }
 }
 
