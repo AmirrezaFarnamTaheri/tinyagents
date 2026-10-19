@@ -73,7 +73,13 @@ fn goal_line(goal: &ThreadGoal) -> String {
             Some(remaining) => format!("active, ~{remaining} tokens of budget left"),
             None => "active".to_string(),
         },
-        ThreadGoalStatus::Paused => "paused".to_string(),
+        ThreadGoalStatus::Paused => {
+            return format!(
+                "Goal (paused): {}\n  If the user's message continues it, call goal_resume. If it starts a \
+                 different task, call goal_set. Otherwise leave it paused.",
+                one_line(&goal.objective, MAX_OBJECTIVE_CHARS)
+            );
+        }
         ThreadGoalStatus::BudgetLimited => "budget exhausted: summarise and stop".to_string(),
         ThreadGoalStatus::Complete => "complete".to_string(),
     };

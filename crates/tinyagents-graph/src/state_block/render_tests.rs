@@ -126,3 +126,29 @@ fn the_goal_comes_first_with_its_status() {
         "a goal alone is enough for a block: {alone}"
     );
 }
+
+#[test]
+fn a_paused_goal_asks_the_model_to_decide() {
+    let store: std::sync::Arc<dyn tinyagents_harness::store::Store> =
+        std::sync::Arc::new(tinyagents_harness::store::InMemoryStore::default());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let mut goal = runtime
+        .block_on(crate::goals::store::set(
+            &store,
+            "t",
+            "Migrate the auth schema",
+            None,
+        ))
+        .unwrap();
+    goal.status = ThreadGoalStatus::Paused;
+    let block = render(Some(&goal), &[], &RunLedger::default()).unwrap();
+    assert!(
+        block.ends_with(
+            "\nGoal (paused): Migrate the auth schema\n  If the user's message continues it, call \
+             goal_resume. If it starts a different task, call goal_set. Otherwise leave it paused."
+        ),
+        "{block}"
+    );
+}

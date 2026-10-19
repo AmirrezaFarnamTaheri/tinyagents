@@ -2,10 +2,13 @@
 //! [`Tool`]s.
 //!
 //! Ownership is **asymmetric**: a model may read the goal (`goal_get`), create
-//! or replace it (`goal_set`), and mark it done (`goal_complete`). Pause /
-//! resume / clear are host-driven controls — constructible as tools for a host
-//! that wants to expose them, but not part of the default model-facing set
-//! returned by [`goal_tools`].
+//! or replace it (`goal_set`), mark it done (`goal_complete`) and resume a
+//! paused one when the user's message continues it (`goal_resume`). Pause and
+//! clear are host-driven controls — constructible as tools for a host that
+//! wants to expose them, but not part of the default model-facing set returned
+//! by [`goal_tools`]. Resume is the model's because only the model reads the
+//! new message against the paused objective: a host that resumes on every turn
+//! revives the goal for unrelated messages too.
 //!
 //! Every control answers with the JSON `{ "goal": <ThreadGoal|null>, "text":
 //! <rendered block> }`: `goal` is the structured camelCase goal a UI can draw
@@ -48,7 +51,8 @@ pub enum GoalToolKind {
     Complete,
     /// Pause the current thread goal (host control).
     Pause,
-    /// Resume a paused thread goal (host control).
+    /// Resume a paused thread goal: model-facing, for a message that
+    /// continues it.
     Resume,
     /// Delete the current thread goal (host control).
     Clear,
@@ -56,7 +60,7 @@ pub enum GoalToolKind {
 
 impl GoalToolKind {
     /// The default model-facing controls (asymmetric ownership).
-    pub const MODEL_FACING: [Self; 3] = [Self::Get, Self::Set, Self::Complete];
+    pub const MODEL_FACING: [Self; 4] = [Self::Get, Self::Set, Self::Complete, Self::Resume];
 
     /// Every control, including the host-driven pause/resume/clear.
     pub const ALL: [Self; 6] = [
@@ -101,7 +105,11 @@ impl GoalToolKind {
                  continuation."
             }
             Self::Pause => "Pause this thread's active goal (host control).",
-            Self::Resume => "Resume this thread's paused goal (host control).",
+            Self::Resume => {
+                "Resume this thread's paused goal. Call it when the user's message continues \
+                 that goal. If the message starts a different task, call goal_set instead; for \
+                 anything else (a question, small talk) leave the goal paused."
+            }
             Self::Clear => "Delete this thread's goal (host control).",
         }
     }

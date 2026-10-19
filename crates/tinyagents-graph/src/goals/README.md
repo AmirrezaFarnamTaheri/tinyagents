@@ -13,7 +13,8 @@ concrete work items.
 
 - `ThreadGoalStatus { Active, Paused, BudgetLimited, Complete }` — `is_active` /
   `is_terminal` predicates. Ownership is asymmetric: a model creates/replaces a
-  goal and marks it `Complete`; `Paused` / `BudgetLimited` are system-driven.
+  goal, marks it `Complete` and resumes a paused one; `Paused` / `BudgetLimited`
+  are entered only by the system.
 - `ThreadGoal { thread_id, goal_id, objective, status, token_budget, tokens_used,
   time_used_seconds, created_at_ms, updated_at_ms, continuation_suppressed }`
   (serde `camelCase`) with `budget_remaining` / `over_budget`.
@@ -57,8 +58,9 @@ lost updates. Funnel goal mutations through one process, or wait for a future
 
 `GoalTool` dispatches on `GoalToolKind`. The default model-facing set
 (`goal_tools` / `register_goal_tools`) is `goal_get`, `goal_set`,
-`goal_complete`; `goal_pause` / `goal_resume` / `goal_clear` are constructible
-host controls. The target thread comes from `ToolExecutionContext::thread_id`
+`goal_complete`, `goal_resume`; `goal_pause` / `goal_clear` are constructible
+host controls. Resume is model-facing because only the model can tell whether
+a new message continues a paused goal. The target thread comes from `ToolExecutionContext::thread_id`
 (never a tool argument), so a model can't address another thread's goal; the
 bare `Tool::call` entry point (no context) errors.
 

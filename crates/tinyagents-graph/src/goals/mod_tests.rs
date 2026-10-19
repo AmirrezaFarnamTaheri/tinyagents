@@ -284,7 +284,10 @@ mod tool_tests {
     fn goal_tools_builds_the_model_facing_set() {
         let tools = goal_tools(store());
         let names: Vec<&str> = tools.iter().map(|t| Tool::name(t.as_ref())).collect();
-        assert_eq!(names, vec!["goal_get", "goal_set", "goal_complete"]);
+        assert_eq!(
+            names,
+            vec!["goal_get", "goal_set", "goal_complete", "goal_resume"]
+        );
     }
 
     #[tokio::test]

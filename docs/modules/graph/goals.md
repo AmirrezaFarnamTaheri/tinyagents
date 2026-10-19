@@ -15,7 +15,8 @@ surface; this spec captures the design contract.
 - `ThreadGoalStatus`: `Active` → the graph may work it and auto-continue;
   `Paused` (host control); `BudgetLimited` (accounting reached the token cap);
   `Complete` (model-confirmed success). Ownership is asymmetric: a model
-  creates/replaces and completes a goal; pause/budget-limit are system-driven.
+  creates/replaces, completes and resumes a goal; pause/budget-limit are
+  system-driven.
 - Optional `token_budget`; `account_usage` folds usage and flips an active goal
   to `BudgetLimited` at the cap.
 
@@ -30,9 +31,10 @@ limitation (a future `Store::compare_and_swap` is the clean fix).
 
 ## Tools
 
-`GoalTool` / `GoalToolKind` expose `goal_get`, `goal_set`, `goal_complete` as
-the default model-facing set (`goal_tools` / `register_goal_tools`);
-`goal_pause` / `goal_resume` / `goal_clear` are host controls. The target thread
+`GoalTool` / `GoalToolKind` expose `goal_get`, `goal_set`, `goal_complete`,
+`goal_resume` as the default model-facing set (`goal_tools` /
+`register_goal_tools`); `goal_pause` / `goal_clear` are host controls. A model
+resumes a paused goal when the user's message continues it. The target thread
 comes from `ToolExecutionContext::thread_id` — never a tool argument — so a
 model can't address another thread's goal.
 
