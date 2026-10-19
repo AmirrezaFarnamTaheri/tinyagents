@@ -2083,6 +2083,7 @@ dependencies = [
  "tinyinference-embeddings",
  "tinyinference-image",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinyinference-video",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",

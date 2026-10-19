@@ -293,6 +293,16 @@ pub struct PrebuiltModelResolver<State: Send + Sync> {
     routes: std::collections::HashMap<String, Arc<dyn ChatModel<State>>>,
 }
 
+impl<State: Send + Sync> Clone for PrebuiltModelResolver<State> {
+    fn clone(&self) -> Self {
+        Self {
+            primary: Arc::clone(&self.primary),
+            lead: Arc::clone(&self.lead),
+            routes: self.routes.clone(),
+        }
+    }
+}
+
 impl<State: Send + Sync> PrebuiltModelResolver<State> {
     /// Creates a resolver using `primary` as both the lead model and fallback.
     pub fn new<I>(primary: Arc<dyn ChatModel<State>>, routes: I) -> Self

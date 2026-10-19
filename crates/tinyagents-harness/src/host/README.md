@@ -50,6 +50,7 @@ embedding, not as a way to fake "unconfigured."
 | `ContextComposer`, `StaticContextComposer`, `TurnContextRequest` | `context_composer` | Builds a turn's system prompt and preamble (required). |
 | `SecurityGate`, `AllowAllSecurityGate`, `GateDecision`, `ScreenOutcome`, `ToolCallRequest`, `ContentOrigin` | `security_gate` | Authorizes tool calls, screens untrusted text (required). |
 | `ModelResolver<State>`, `FixedModelResolver`, `PrebuiltModelResolver`, `ModelResolveRequest` | `model_resolver` | Chooses the model for a turn (required). |
+| `ModelFactory<State>`, `ModelBuildGate`, `ModelBuildRequest`, `BuildOpts`, `ModelPurpose`, `TurnModelSet` | `model_factory` | Builds role-keyed primary, workload, and summarization models with host policy checks. |
 | `AgentMemory`, `InMemoryAgentMemory`, `MemoryId`, `MemoryItem`, `NewMemory`, `RecallRequest` | `agent_memory` | Durable user memory (optional). |
 | `BudgetGate`, `UnlimitedBudgetGate`, `Permit`, `CallEstimate`, `ContextState`, `CompressionHint` | `budget_gate` | Admission, spend accounting, compression advice (optional). |
 | `ProgressSink`, `NoopProgressSink`, `RecordingProgressSink`, `ProgressEvent` | `progress_sink` | Coarse turn progress for a UI (optional). |
@@ -67,6 +68,7 @@ embedding, not as a way to fake "unconfigured."
 | `context_composer.rs` | `ContextComposer` trait, `TurnContextRequest`, `StaticContextComposer`. |
 | `experience_store.rs` | `ExperienceStore` trait, `Experience`, `InMemoryExperienceStore`. |
 | `learning_sink.rs` | `LearningSink` trait, `TurnSummary`, `NoopLearningSink`. |
+| `model_factory.rs` | Role-keyed model factory/gate contracts, turn model assembly, route/error-slot wrapping, and Claude subprocess route construction. |
 | `model_resolver.rs` | `ModelResolver<State>` trait, `ModelResolveRequest`, `FixedModelResolver`, and `PrebuiltModelResolver` for lead/pin/hint routes. |
 | `progress_sink.rs` | `ProgressEvent`, `ProgressSink` trait, `NoopProgressSink`, `RecordingProgressSink`. |
 | `security_gate.rs` | `SecurityGate` trait, `ToolCallRequest`, `GateDecision`, `ScreenOutcome`, `ContentOrigin`. |
@@ -112,6 +114,14 @@ composed transcript, and a security-authorized tool set, which is what keeps
 the loop reusable for both hosted and unhosted (explicit-model) callers.
 
 ModelResolveRequest carries model_hint separately from model_pin. Hints are
-host-interpreted routing vocabulary; pins are concrete model identifiers.
-Definition hints reach every hosted provider resolution, unless an exact model
-override is present. Missing hints in older serialized requests remain None.
+host-interpreted routing vocabulary. A construction-time model pin may be a
+requested alias; `ResolvedModelRoute` records the concrete provider and model
+the host selected.
+
+`ModelBuildRequest` is a construction-time request. Hosts gate each request
+before factory construction, then can use `TurnModelSet::map_models` to apply a
+per-turn wrapper to every built model before obtaining an owned resolver,
+ordered registrations, or summarizer. Models and resolvers obtained before
+mapping retain the earlier model instances. Definition hints reach every
+hosted provider resolution, unless an exact model override is present. Missing
+hints in older serialized requests remain None.

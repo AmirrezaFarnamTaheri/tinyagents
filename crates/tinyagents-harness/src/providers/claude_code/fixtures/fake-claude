@@ -1,0 +1,5 @@
+#!/bin/sh
+cat >/dev/null
+cat .fake-claude-stdout
+cat .fake-claude-stderr >&2
+exit "$(cat .fake-claude-exit)"
