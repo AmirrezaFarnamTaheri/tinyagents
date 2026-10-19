@@ -564,18 +564,6 @@ impl CompletionRouter {
             .map(str::to_owned)
     }
 
-    fn parent_cancelled(state: &RouterState, parent_key: &str) -> bool {
-        state
-            .store
-            .get(&Self::parent_marker_id(parent_key))
-            .is_some_and(|m| {
-                matches!(
-                    m.state,
-                    CompletionState::Tombstoned | CompletionState::ParentDeleted
-                )
-            })
-    }
-
     /// Opens a parent on first sight, or reports whether its durable lifecycle
     /// marker currently admits child completions. Closed parents are never
     /// reopened implicitly.
