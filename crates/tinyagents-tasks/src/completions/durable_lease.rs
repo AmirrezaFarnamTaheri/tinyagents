@@ -104,16 +104,16 @@ impl DurableThreadDeliveryLeases {
         };
         let epoch = lease.epoch;
         let (admission, receiver) = watch::channel(true);
-        let renewer = spawn_renewer(
-            self.leases.clone(),
-            self.ttl,
-            self.renewal_interval,
-            owner.to_owned(),
-            key.clone(),
-            holder.clone(),
-            lease.epoch,
-            admission.clone(),
-        );
+        let renewer = spawn_renewer(LeaseRenewalContext {
+            leases: self.leases.clone(),
+            ttl: self.ttl,
+            interval: self.renewal_interval,
+            owner: owner.to_owned(),
+            key: key.clone(),
+            holder: holder.clone(),
+            epoch: lease.epoch,
+            admission: admission.clone(),
+        });
         Ok(Some(DurableThreadDeliveryLease {
             leases: self.leases.clone(),
             lease_scope: self.lease_scope.clone(),
@@ -255,8 +255,7 @@ impl Drop for DurableThreadDeliveryLease {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_renewer(
+struct LeaseRenewalContext {
     leases: Leases,
     ttl: Duration,
     interval: Duration,
@@ -265,7 +264,19 @@ fn spawn_renewer(
     holder: String,
     epoch: u64,
     admission: watch::Sender<bool>,
-) -> JoinHandle<()> {
+}
+
+fn spawn_renewer(context: LeaseRenewalContext) -> JoinHandle<()> {
+    let LeaseRenewalContext {
+        leases,
+        ttl,
+        interval,
+        owner,
+        key,
+        holder,
+        epoch,
+        admission,
+    } = context;
     tokio::spawn(async move {
         let Ok(ttl_ms) = duration_ms(ttl) else {
             let _ = admission.send(false);

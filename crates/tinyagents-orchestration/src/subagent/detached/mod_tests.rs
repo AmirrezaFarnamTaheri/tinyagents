@@ -680,3 +680,81 @@ async fn host_roster_formatter_receives_sorted_owner_scoped_snapshot() {
     .unwrap();
     assert_eq!(rendered, "host roster: 2 workers");
 }
+
+#[test]
+fn actual_job_roster_merges_owner_filtered_live_jobs_and_waiting_sessions() {
+    let jobs = crate::subagent::SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/a");
+    let scope = crate::subagent::ParentJobScope::new(workspace.clone(), "thread-a");
+    let task_key = |task: &str, thread: &str| crate::subagent::SubagentTaskKey {
+        root_run_id: "root".into(),
+        parent_run_id: "parent".into(),
+        thread_id: Some(thread.into()),
+        task_id: task.into(),
+    };
+    for (task, owner, thread, job_workspace) in [
+        ("task-a", "owner-a", "thread-a", workspace.clone()),
+        ("task-foreign", "owner-b", "thread-a", workspace.clone()),
+        (
+            "task-other-thread",
+            "owner-a",
+            "thread-b",
+            workspace.clone(),
+        ),
+    ] {
+        jobs.register_driver_job(crate::subagent::DriverJobRegistration {
+            key: task_key(task, thread),
+            agent: "worker".into(),
+            owner: owner.into(),
+            workspace: Some(job_workspace),
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    }
+
+    let session = crate::subagent::DurableSubagentSessionSummary {
+        subagent_session_id: "session-a".into(),
+        parent_thread_id: Some("thread-a".into()),
+        worker_thread_id: Some("worker-thread".into()),
+        agent_id: "worker".into(),
+        display_name: Some("Worker A".into()),
+        model: Some("model".into()),
+        sandbox_mode: "none".into(),
+        action_root: None,
+        task_key: "research".into(),
+        task_title: "research".into(),
+        current_task_id: Some("task-a".into()),
+        status: crate::subagent::DurableSubagentStatus::AwaitingUser,
+        reusable: true,
+        latest_error: None,
+        created_at: "created".into(),
+        updated_at: "updated".into(),
+        last_used_at: "used".into(),
+    };
+    let wrong_thread = crate::subagent::DurableSubagentSessionSummary {
+        parent_thread_id: Some("thread-b".into()),
+        current_task_id: Some("task-hidden".into()),
+        ..session.clone()
+    };
+    let formatted = format_parent_roster_for_owner(
+        &jobs,
+        "owner-a",
+        &scope,
+        &[wrong_thread, session],
+        |entries| {
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].task_id, "task-a");
+            assert!(entries[0].live_job.is_some());
+            assert_eq!(
+                entries[0].session.as_ref().unwrap().status,
+                crate::subagent::DurableSubagentStatus::AwaitingUser
+            );
+            "host wording: worker is waiting for user input".to_owned()
+        },
+    )
+    .unwrap();
+    assert_eq!(formatted, "host wording: worker is waiting for user input");
+}
