@@ -1271,6 +1271,36 @@ The runtime calls legacy adoption only through the existing
 `ResumeMode::Session` path. Do not add a constructor that maps arbitrary old
 raw filenames to `SessionRef`.
 
+Add this separate child case in `port/drivers/transcripts_adoption_tests.rs`.
+Legacy root adoption must remain attached to the root `SessionRef`; asking a
+delegated child to resume must not copy the parent's legacy root into the
+child transcript:
+
+```rust
+#[test]
+fn legacy_root_adoption_does_not_replace_a_child_session() {
+    let locator = locator();
+    write_root(
+        &locator,
+        "1700000100_planner",
+        &legacy("planner", "2026-01-01", 1, 5),
+        &["root history"],
+    );
+    let root = SessionRef::scoped(THREAD, "planner");
+    let child = SessionRef::child_of(&root, "delegate:worker");
+
+    assert!(locator.adopt_legacy(&child, THREAD, &meta(THREAD)).unwrap().is_none());
+    assert!(locator.read_session_transcript(&child).unwrap().read_session().unwrap().is_none());
+    assert!(locator.adopt_legacy(&root, THREAD, &meta(THREAD)).unwrap().is_some());
+    assert_eq!(contents(&locator, &root), vec!["root history"]);
+    assert!(locator.read_session_transcript(&child).unwrap().read_session().unwrap().is_none());
+}
+```
+
+Implement this as a child guard in the driver-backed `adopt` before candidate
+discovery: if `session.is_subagent()`, return `Ok(None)`. Keep root adoption's
+existing integration test and this child no-cross-adoption test separate.
+
 ### 3. Resolve identity before resume and bind the admitted lease
 
 **Files:** new `crates/tinyagents-runtime/src/identity.rs`,
