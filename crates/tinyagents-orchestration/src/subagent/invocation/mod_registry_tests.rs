@@ -333,6 +333,7 @@ async fn waiter_keeps_terminal_snapshot_when_pruning_races_its_observation() {
         jobs.mark_driver_result(&pressure_id, Err("finished".into()));
     }
 
+    assert_eq!(jobs.driver_job_for_key(&key, "owner"), Some(id.clone()));
     let observed = waiter.await.unwrap().unwrap();
     assert_eq!(observed.id, id);
     assert_eq!(observed.status, SubAgentJobStatus::Completed);
