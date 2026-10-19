@@ -349,13 +349,10 @@ async fn losing_turn_fence_during_cap_summary_skips_transcript_commit() {
         ..FakeHost::default()
     };
 
-    let (outcome, ()) = tokio::join!(
-        drive_child_turn(&mut host, control),
-        async {
-            started_rx.await.unwrap();
-            fence.revoke();
-        }
-    );
+    let (outcome, ()) = tokio::join!(drive_child_turn(&mut host, control), async {
+        started_rx.await.unwrap();
+        fence.revoke();
+    });
 
     assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
     assert!(cancellation.is_cancelled());
@@ -384,13 +381,10 @@ async fn losing_turn_fence_during_transcript_commit_skips_deferred_terminal_work
         ..FakeHost::default()
     };
 
-    let (outcome, ()) = tokio::join!(
-        drive_child_turn(&mut host, control),
-        async {
-            started_rx.await.unwrap();
-            fence.revoke();
-        }
-    );
+    let (outcome, ()) = tokio::join!(drive_child_turn(&mut host, control), async {
+        started_rx.await.unwrap();
+        fence.revoke();
+    });
 
     assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
     assert!(cancellation.is_cancelled());
