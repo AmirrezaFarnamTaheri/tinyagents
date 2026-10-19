@@ -320,7 +320,18 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .codec
             .as_ref()
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
-        let mut decoded = codec.decode_history(&transcript)?;
+        let replay_rows =
+            tinyagents_session::transcript::repair_orphaned_tool_head(&transcript.messages);
+        let mut decoded = match replay_rows {
+            std::borrow::Cow::Borrowed(_) => codec.decode_history(&transcript)?,
+            std::borrow::Cow::Owned(messages) => {
+                let mut replay_transcript = transcript.clone();
+                replay_transcript.messages = messages;
+                codec.decode_history(&replay_transcript)?
+            }
+        };
+        decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
+            .into_owned();
         // A compacted head can start with a System summary immediately after
         // the original frozen prompt. Its role does not make it prefix
         // material. Determine how many *stored* rows to strip independently
