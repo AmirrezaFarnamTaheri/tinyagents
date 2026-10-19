@@ -255,6 +255,7 @@ impl Drop for DurableThreadDeliveryLease {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_renewer(
     leases: Leases,
     ttl: Duration,
