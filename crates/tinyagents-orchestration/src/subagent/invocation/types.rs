@@ -366,6 +366,26 @@ impl Clone for JobMeta {
     }
 }
 
+/// Exact workspace and parent-thread identity used for scoped job control.
+/// Thread ids are only unique within a workspace, so both values are required.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParentJobScope {
+    /// Workspace owning the parent conversation.
+    pub workspace: tinytools::WorkspaceDescriptor,
+    /// Stable parent thread id within that workspace.
+    pub thread_id: String,
+}
+
+impl ParentJobScope {
+    /// Creates an exact scope. Missing identity cannot act as a wildcard.
+    pub fn new(workspace: tinytools::WorkspaceDescriptor, thread_id: impl Into<String>) -> Self {
+        Self {
+            workspace,
+            thread_id: thread_id.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     pub(super) static PANIC_ON_JOB_META_CLONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

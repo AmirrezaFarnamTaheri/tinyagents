@@ -15,7 +15,7 @@ use tokio::sync::watch;
 
 use crate::subagent::{AppliedResult, IncompleteKind};
 
-use super::types::{DriverJobRegistration, JobControl, JobMeta};
+use super::types::{DriverJobRegistration, JobControl, JobMeta, ParentJobScope};
 use super::{
     JobLink, SubAgentJob, SubAgentJobError, SubAgentJobId, SubAgentJobRegistry, SubAgentJobStatus,
 };
@@ -618,11 +618,12 @@ impl SubAgentJobRegistry {
         Ok((snapshot, true))
     }
 
-    /// Requests cancellation for every live job whose durable metadata names
-    /// `parent_thread_id`. Jobs remain queryable until their executors settle.
-    pub fn cancel_for_thread(&self, parent_thread_id: &str) -> Result<usize, SubAgentJobError> {
+    /// Requests cancellation for jobs belonging to the exact parent workspace
+    /// and thread. Jobs with incomplete metadata never match this scoped call.
+    pub fn cancel_for_thread(&self, scope: &ParentJobScope) -> Result<usize, SubAgentJobError> {
         self.cancel_matching(|metadata| {
-            metadata.parent_thread_id.as_deref() == Some(parent_thread_id)
+            metadata.parent_thread_id.as_deref() == Some(scope.thread_id.as_str())
+                && metadata.workspace.as_ref() == Some(&scope.workspace)
         })
     }
 

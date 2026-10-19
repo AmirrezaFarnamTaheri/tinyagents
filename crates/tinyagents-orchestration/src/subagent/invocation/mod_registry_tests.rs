@@ -8,6 +8,7 @@ use tinyagents_harness::ids::TaskId;
 #[tokio::test]
 async fn jobs_are_registered_in_the_shared_detached_registry() {
     let jobs = SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
     let (job_id, _steering) = jobs.create("worker", 7);
     let task_id = TaskId::new(job_id.as_str());
 
@@ -55,6 +56,7 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
         thread_token.clone(),
         JobLink {
             parent_thread_id: Some("thread-a".into()),
+            workspace: Some(workspace.clone()),
             ..JobLink::default()
         },
     );
@@ -64,16 +66,18 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
         other_token.clone(),
         JobLink {
             parent_thread_id: Some("thread-b".into()),
+            workspace: Some(workspace.clone()),
             ..JobLink::default()
         },
     );
 
-    assert_eq!(jobs.cancel_for_thread("thread-a").unwrap(), 1);
+    let scope = ParentJobScope::new(workspace, "thread-a");
+    assert_eq!(jobs.cancel_for_thread(&scope).unwrap(), 1);
     assert!(thread_token.is_cancelled());
     assert!(!other_token.is_cancelled());
     assert!(jobs.get(thread_job.as_str()).is_some());
     assert!(!jobs.get(thread_job.as_str()).unwrap().status.is_terminal());
-    assert_eq!(jobs.cancel_for_thread("thread-a").unwrap(), 0);
+    assert_eq!(jobs.cancel_for_thread(&scope).unwrap(), 0);
 
     assert_eq!(jobs.cancel_all().unwrap(), 1);
     assert!(other_token.is_cancelled());
