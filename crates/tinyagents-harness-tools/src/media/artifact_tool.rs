@@ -24,6 +24,15 @@ pub type MediaInnerFactory<T> =
 pub type ToolCallIdExtractor =
     Arc<dyn for<'a> Fn(Option<&'a dyn ToolRunContext>) -> Option<String> + Send + Sync>;
 
+fn canonical_tool_call_id(context: Option<&dyn ToolRunContext>) -> Option<String> {
+    context
+        .and_then(ToolRunContext::host_extension)
+        .and_then(|extension| {
+            extension.downcast_ref::<tinyagents_harness::tool::ToolExecutionContext>()
+        })
+        .map(|context| context.call_id.to_string())
+}
+
 fn progress_label(kind: &MediaArtifactKind) -> &'static str {
     match kind {
         MediaArtifactKind::Image => "Generating image",
@@ -268,7 +277,11 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
         if result.is_error {
             return Ok(result);
         }
-        let call_id = self.call_id.as_ref().and_then(|extract| extract(context));
+        let call_id = self
+            .call_id
+            .as_ref()
+            .and_then(|extract| extract(context))
+            .or_else(|| canonical_tool_call_id(context));
         Ok(self
             .file_entries(result, &args, context, call_id.as_deref())
             .await)
