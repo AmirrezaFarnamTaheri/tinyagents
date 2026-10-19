@@ -77,13 +77,11 @@ impl DetachedCompletionTarget {
         agent_id: impl Into<String>,
     ) -> Result<Self, TinyAgentsError> {
         let parent_key = parent_key.into();
-        let parent_epoch = router
-            .admit_child_generation(&parent_key)?
-            .ok_or_else(|| {
-                TinyAgentsError::Graph(format!(
-                    "detached child parent lifecycle is closed: {parent_key:?}"
-                ))
-            })?;
+        let parent_epoch = router.admit_child_generation(&parent_key)?.ok_or_else(|| {
+            TinyAgentsError::Graph(format!(
+                "detached child parent lifecycle is closed: {parent_key:?}"
+            ))
+        })?;
         Ok(Self {
             router,
             parent_key,

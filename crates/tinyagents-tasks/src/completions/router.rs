@@ -187,9 +187,7 @@ impl CompletionRouter {
         }
     }
 
-    pub(super) fn admission_store_handle(
-        &self,
-    ) -> Arc<RwLock<Arc<dyn CompletionStore>>> {
+    pub(super) fn admission_store_handle(&self) -> Arc<RwLock<Arc<dyn CompletionStore>>> {
         Arc::clone(&self.admission_store)
     }
 

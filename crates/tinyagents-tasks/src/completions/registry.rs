@@ -33,7 +33,10 @@ impl std::fmt::Display for CompletionRouterPoolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lock(detail) => write!(f, "completion router pool lock poisoned: {detail}"),
-            Self::Release(detail) => write!(f, "completion router pool could not release claims: {detail}"),
+            Self::Release(detail) => write!(
+                f,
+                "completion router pool could not release claims: {detail}"
+            ),
         }
     }
 }

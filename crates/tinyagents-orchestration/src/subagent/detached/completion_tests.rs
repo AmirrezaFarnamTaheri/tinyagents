@@ -105,21 +105,25 @@ async fn pause_notices_use_independent_ids_and_leave_terminal_task_id_free() {
     assert_eq!(first.result.text, "question one");
 
     assert!(target.record_pause("task:1", "question one").await);
-    assert!(record_detached_completion(
-        &target,
-        "task:1",
-        &DetachedSubagentStatus::Completed {
-            output: "done".into(),
-            iterations: 1,
-        },
-    )
-    .await);
+    assert!(
+        record_detached_completion(
+            &target,
+            "task:1",
+            &DetachedSubagentStatus::Completed {
+                output: "done".into(),
+                iterations: 1,
+            },
+        )
+        .await
+    );
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 2);
     assert!(pending.iter().any(|record| record.task_id == "task:1"));
-    assert!(pending
-        .iter()
-        .any(|record| record.task_id.starts_with(&prefix)));
+    assert!(
+        pending
+            .iter()
+            .any(|record| record.task_id.starts_with(&prefix))
+    );
 }
 
 #[tokio::test]
@@ -233,7 +237,11 @@ async fn a_resumed_child_is_recorded_when_it_finally_finishes() {
     settle(&router, "p").await;
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 2);
-    assert!(pending.iter().any(|record| record.result.text == "answered"));
+    assert!(
+        pending
+            .iter()
+            .any(|record| record.result.text == "answered")
+    );
 }
 
 #[tokio::test]
@@ -247,12 +255,7 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
     assert!(old_target.record_pause("late-pause", "old question").await);
     let old_store = spawned_store("old-child");
     let (old_tx, old_rx) = watch::channel(DetachedSubagentStatus::Running);
-    spawn_status_watcher_with_completions(
-        old_store,
-        "old-child".into(),
-        old_rx,
-        old_target,
-    );
+    spawn_status_watcher_with_completions(old_store, "old-child".into(), old_rx, old_target);
     old_tx
         .send(DetachedSubagentStatus::Completed {
             output: "old answer".into(),
@@ -267,12 +270,7 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
     let new_epoch = new_target.parent_epoch;
     let new_store = spawned_store("new-child");
     let (new_tx, new_rx) = watch::channel(DetachedSubagentStatus::Running);
-    spawn_status_watcher_with_completions(
-        new_store,
-        "new-child".into(),
-        new_rx,
-        new_target,
-    );
+    spawn_status_watcher_with_completions(new_store, "new-child".into(), new_rx, new_target);
     new_tx
         .send(DetachedSubagentStatus::AwaitingUser {
             question: "new question".into(),
@@ -280,17 +278,20 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
         .unwrap();
     let mut saw_pause = false;
     for _ in 0..100 {
-        if router
-            .pending_for("p")
-            .iter()
-            .any(|record| record.task_id.starts_with(&pause_record_prefix("new-child")))
-        {
+        if router.pending_for("p").iter().any(|record| {
+            record
+                .task_id
+                .starts_with(&pause_record_prefix("new-child"))
+        }) {
             saw_pause = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(saw_pause, "watcher must persist the pause before it resumes");
+    assert!(
+        saw_pause,
+        "watcher must persist the pause before it resumes"
+    );
     new_tx
         .send(DetachedSubagentStatus::Completed {
             output: "new answer".into(),
@@ -309,7 +310,15 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
     }
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 2);
-    assert!(pending.iter().all(|record| record.parent_epoch == new_epoch));
-    assert!(pending.iter().any(|record| record.result.text == "new question"));
+    assert!(
+        pending
+            .iter()
+            .all(|record| record.parent_epoch == new_epoch)
+    );
+    assert!(
+        pending
+            .iter()
+            .any(|record| record.result.text == "new question")
+    );
     assert!(pending.iter().any(|record| record.task_id == "new-child"));
 }

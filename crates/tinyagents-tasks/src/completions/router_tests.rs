@@ -780,7 +780,10 @@ async fn queued_admission_after_store_replacement_observes_new_cancellation_mark
             tinyagents_harness::run_queue::QueueMode::All,
         )
         .await;
-    assert!(admitted.is_empty(), "queued pre-migration capability must not bypass cancellation on replacement store");
+    assert!(
+        admitted.is_empty(),
+        "queued pre-migration capability must not bypass cancellation on replacement store"
+    );
 }
 
 #[tokio::test]
@@ -1615,14 +1618,27 @@ async fn record_resilient_uses_local_memory_only_when_explicitly_allowed() {
         fail_from: std::sync::atomic::AtomicUsize::new(0),
     });
     let router = CompletionRouter::new(store.clone());
-    assert!(router
-        .record_resilient(record("shared", "p"), 1, CompletionStoreFallback::FailClosed)
-        .await
-        .is_err());
-    assert!(Arc::ptr_eq(&router.store(), &(store.clone() as Arc<dyn CompletionStore>)));
+    assert!(
+        router
+            .record_resilient(
+                record("shared", "p"),
+                1,
+                CompletionStoreFallback::FailClosed
+            )
+            .await
+            .is_err()
+    );
+    assert!(Arc::ptr_eq(
+        &router.store(),
+        &(store.clone() as Arc<dyn CompletionStore>)
+    ));
 
     let outcome = router
-        .record_resilient(record("local", "p"), 1, CompletionStoreFallback::LocalMemory)
+        .record_resilient(
+            record("local", "p"),
+            1,
+            CompletionStoreFallback::LocalMemory,
+        )
         .await
         .unwrap();
     assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
@@ -1640,7 +1656,12 @@ async fn release_all_counts_only_the_claim_receipts_it_still_owns() {
     let current = second.claim_pending("p", 1).unwrap()[0].receipt().unwrap();
 
     assert_eq!(first.release_all().unwrap(), 0);
-    assert_eq!(second.mark_delivered(std::slice::from_ref(&current)).unwrap(), 1);
+    assert_eq!(
+        second
+            .mark_delivered(std::slice::from_ref(&current))
+            .unwrap(),
+        1
+    );
 
     second.record(record("next", "p")).await.unwrap();
     assert_eq!(second.claim_pending("p", 1).unwrap().len(), 1);

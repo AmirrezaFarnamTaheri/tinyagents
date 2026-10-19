@@ -111,15 +111,18 @@ fn driver_stores_can_share_an_explicit_backend_domain_without_coalescing_other_d
         "shared-backend",
     )
     .unwrap();
-    let unrelated = DriverCompletionStore::new_with_coordination_domain(
-        second_backend,
-        scope,
-        "other-backend",
-    )
-    .unwrap();
+    let unrelated =
+        DriverCompletionStore::new_with_coordination_domain(second_backend, scope, "other-backend")
+            .unwrap();
 
-    assert_eq!(first.coordination_identity(), second.coordination_identity());
-    assert_ne!(first.coordination_identity(), unrelated.coordination_identity());
+    assert_eq!(
+        first.coordination_identity(),
+        second.coordination_identity()
+    );
+    assert_ne!(
+        first.coordination_identity(),
+        unrelated.coordination_identity()
+    );
 }
 
 #[test]
