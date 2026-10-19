@@ -520,7 +520,18 @@ cargo check -p tinyagents-harness-tools --no-default-features --features fs,net,
 
 The final command proves a disabled-tools build remains lean and does not
 accidentally rely on a new module's imports. Add or update crate docs showing
-the three features and their public module paths.
+the three features and their public module paths. Validate actual dependency
+resolution per feature with `cargo tree -e features -p tinyagents-harness-tools
+--no-default-features --features media` and the equivalent `--features net`.
+The `media` graph must not introduce `tinyinference-video`,
+`tinyinference-image`, or any media-only dependency edge; do not assert that
+`reqwest` is absent from the full graph if another mandatory dependency already
+brings it in. Compare against `--no-default-features` to attribute any graph
+difference correctly. The `net` graph must show its intended `reqwest` edge.
+Also assert the `media`-only graph has no new `flate2`, `tar`, or `zip` edge
+relative to the no-default baseline. Use a checked-in CI assertion or a
+reviewable shell check over Cargo's resolved feature tree so this is a real
+feature-boundary proof rather than a prose claim.
 
 ### 3. Establish `ExecGate`, backend, result, and progress contract
 
@@ -605,11 +616,19 @@ authorized environment. There is no `sh -c`, `cmd /C`, or concatenated argv
 path for installs. Keep source error/output/truncation wording.
 
 The native backend configures child process groups, streams stdout and stderr
-into the bounded progress meter and captured output, applies explicit timeout,
-kills the process group and reaps on timeout, cancellation, and dropped future,
-and returns a completed `ExecOutput`. On Windows use the existing
-platform-supported process cleanup path; do not claim process-tree cleanup
-where the platform does not provide it. Tests use a temporary executable
+into the bounded progress meter and captured output, and invokes the existing
+`output_or_kill` / `output_unbounded` cleanup primitives. Strengthen
+`output_or_kill` so it establishes a `ProcessCleanup` scope for the timed
+operation, and on `Elapsed` awaits that scope's `wait()` before returning the
+same `Elapsed` result. `output_unbounded` continues to signal its owned waiter
+when its future is dropped; it does not wait in `Drop`. For cancellation of a
+whole tool call, require the owner to run the call inside a retained
+`ProcessCleanup` scope; after dropping the call future the owner awaits
+`wait()` before acknowledging cancellation. Wire and document this in the
+native backend and the OpenHuman #213 turn adapter. Keep the scope handle alive
+until its wait has completed. On Windows use the existing platform-supported
+cleanup path; do not claim descendant termination where the platform does not
+provide it. Tests use a temporary executable
 script/process and assert: only the expected argv reaches it; malformed
 package inputs never launch; denied calls have a zero backend count; timeout
 terminates a spawned child and descendant and waits for the child; cancel/drop
@@ -656,7 +675,11 @@ Port `MediaArtifactTool<T>` to `media::MediaArtifactTool<T>` with an injected
 reqwest solely to name a callback type. Update the per-call inner factory to
 accept `Option<&dyn ToolRunContext>` instead of `ApprovalChatContext`, letting
 the host-specific factory downcast its own context in the adapter. Pass that
-same context to each `ArtifactFiling::file` call. Remove OpenHuman `Production`, artifact store,
+same context to each `ArtifactFiling::file` call. Add a concurrent routing
+test using one shared wrapper and two simultaneous invocations with distinct
+fake `ToolRunContext` host extensions; the fake filer must observe each
+invocation's own extension for every generated artifact, with the corresponding
+IDs and paths rewritten only in that invocation's result. Remove OpenHuman `Production`, artifact store,
 TinyArtifacts, TinyStorageDrivers, file-root, blob-store, approval-chat, and
 product reference-allowlist dependencies. Keep the generic output walk,
 per-entry continuation, ID/error insertion, path rewrite, title cap/suffix,
