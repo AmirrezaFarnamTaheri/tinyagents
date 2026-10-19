@@ -473,10 +473,9 @@ families:
 | `tempfile`, Tokio `test-util` | dev-dependencies only |
 
 The URL guard itself uses no optional dependency; replace its `log` calls with
-`tracing`, because `tinyagents-harness` already depends on tracing. Keep
-`tinyinference-video` optional and do not forward `media` to the harness's
-`multimodal` feature. Make dependencies optional at the narrowest family
-feature that uses them. Preserve target-specific Unix/Windows dependencies.
+`tracing`, because `tinyagents-harness` already depends on tracing. Do not add
+a provider dependency or forward `media` to the harness's `multimodal` feature.
+Make dependencies optional at the narrowest family feature that uses them. Preserve target-specific Unix/Windows dependencies.
 Do not make a new feature activate an unrelated old default.
 
 Move all `tinytools-std` files except `sanitize` with their fixtures and tests,
