@@ -436,7 +436,12 @@ async fn mark_failed_on_a_settled_record_is_ignored() {
     router.record(record("t1", "p")).await.unwrap();
     let batch = router.claim_pending("p", 1).unwrap();
     router.mark_delivered(&receipts(&batch)).unwrap();
-    assert!(router.mark_failed(&receipts(&batch)).unwrap().is_empty());
+    let mut stale_and_unknown = receipts(&batch);
+    stale_and_unknown.push(CompletionReceipt {
+        task_id: "unknown".into(),
+        token: "no-claim".into(),
+    });
+    assert!(router.mark_failed(&stale_and_unknown).unwrap().is_empty());
 }
 
 #[tokio::test]
