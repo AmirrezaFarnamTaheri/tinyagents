@@ -173,6 +173,24 @@ async fn scoped_session_close_notifies_only_after_current_owner_cas_wins() {
             lifecycle_key,
         )]
     );
+
+    let second_key = key("close-direct");
+    let mut second_upsert = upsert("close-direct", second_key.clone());
+    second_upsert.force_fresh = true;
+    let (second, _) = driver.upsert_running(second_upsert).await.unwrap();
+    assert!(
+        scoped
+            .close_if_current(
+                &second.subagent_session_id,
+                "close-direct",
+                &second_key,
+                "parent-session",
+                Some("thread"),
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(callbacks.lock().unwrap().len(), 2);
 }
 
 #[test]
