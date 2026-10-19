@@ -83,6 +83,7 @@ tracing = ["tinytools-agent/tracing"]
 
 [dev-dependencies]
 png = "0.17"
+toml = "0.8"
 tinystoragedrivers-sqlite = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 

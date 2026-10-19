@@ -2088,6 +2088,7 @@ dependencies = [
  "tinytools-agent",
  "tinytools-std",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
  "wait-timeout",
