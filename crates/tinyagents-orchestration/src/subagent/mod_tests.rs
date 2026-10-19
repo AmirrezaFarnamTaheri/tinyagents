@@ -1485,6 +1485,14 @@ fn absent_host_capabilities_fail_closed() {
     assert_eq!(error, SubagentError::MissingCapability("planner"));
 }
 
+#[test]
+fn awaiting_user_subagent_session_remains_reusable_for_same_task_key() {
+    assert!(
+        DurableSubagentStatus::AwaitingUser.reusable(),
+        "a paused child awaiting a reply must be resumed, not replaced"
+    );
+}
+
 fn admission_policy(
     parent: Option<usize>,
     total: Option<usize>,
