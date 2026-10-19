@@ -132,8 +132,9 @@ cache.
 
 - **Store:** `DriverConversationStore` (`new`, `new_validate_only`,
   `in_memory`, `collection_specs`, `append_collection_specs`,
-  `prepare_schema`, `prepare_append_schema`) implementing
-  `ConversationPersistence`, plus `ConversationPurgeStats`.
+  `prepare_schema`, `prepare_append_schema`, `purge_threads_with`,
+  `purge_threads_with_async`) implementing `ConversationPersistence`, plus
+  `ConversationPurgeStats`.
 - **Schema:** `conversations_storage_schema()` (owner `conversations`, scope
   class Tenant) for the host's `Registry::compose`.
 - **Types:** `ConversationThread`, `ThreadMessage`,
