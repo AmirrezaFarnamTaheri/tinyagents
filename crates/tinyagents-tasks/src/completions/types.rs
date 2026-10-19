@@ -77,6 +77,9 @@ pub enum CompletionState {
     Delivered,
     /// The parent collected the child explicitly, so it is not pushed from then on.
     Tombstoned,
+    /// The parent thread was deleted; this lifecycle marker is retained so
+    /// late child completions stay suppressed across compaction and restart.
+    ParentDeleted,
     /// Too many failed attempts. The host applies its own give-up policy.
     GaveUp,
 }
@@ -88,6 +91,7 @@ impl CompletionState {
             Self::Pending => "pending",
             Self::Delivered => "delivered",
             Self::Tombstoned => "tombstoned",
+            Self::ParentDeleted => "parent_deleted",
             Self::GaveUp => "gave_up",
         }
     }

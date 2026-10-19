@@ -1097,9 +1097,9 @@ impl CompletionStore for FailingSecondPut {
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let claimed = self
-            .inner
-            .claim_pending(parent_key, gate, mode, max, token, visible_after)?;
+        let claimed =
+            self.inner
+                .claim_pending(parent_key, gate, mode, max, token, visible_after)?;
         if (0..claimed.len()).any(|_| self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst))
         {
             for record in &claimed {

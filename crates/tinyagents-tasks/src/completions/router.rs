@@ -276,10 +276,9 @@ impl CompletionRouter {
                     state.leased.remove(&receipt.task_id);
                     state.active_receipts.remove(&receipt.task_id);
                 }
-                let Ok(gate) = ParentGateGuard::acquire(
-                    Arc::clone(&state.store),
-                    &receipt.parent_key,
-                ) else {
+                let Ok(gate) =
+                    ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)
+                else {
                     continue;
                 };
                 let _ = state.store.resolve_claim(
@@ -338,18 +337,21 @@ impl CompletionRouter {
         let (push, gate) = {
             let mut state = self.lock()?;
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &record.parent_key)?;
-            if Self::parent_cancelled(&state, &record.parent_key) {
+            let Some(parent_epoch) =
+                Self::admit_child_locked(&state, &record.parent_key, gate.claim())?
+            else {
                 tracing::debug!(
                     task_id = %record.task_id,
                     parent_key = %record.parent_key,
-                    "{LOG_PREFIX} dropped: parent cancelled"
+                    "{LOG_PREFIX} dropped: parent is closed"
                 );
                 return Ok(RecordOutcome::Suppressed);
-            }
+            };
             if let Some(existing) = state.store.get(&record.task_id) {
                 return Ok(Self::classify_existing(&existing, &record));
             }
             record.state = CompletionState::Pending;
+            record.parent_epoch = parent_epoch;
             record.attempts = 0;
             record.updated_at = SystemTime::now();
             if !state.store.insert_if_absent(&record, gate.claim())? {
@@ -505,9 +507,20 @@ impl CompletionRouter {
     /// retracted (the host clears that queue when it stops the parent). The flag is stored durably, so it holds across a restart
     /// (until [`Self::compact`] drops it after its retention window). Returns how many pending records were withdrawn.
     pub fn cancel_parent(&self, parent_key: &str) -> Result<usize> {
+        self.close_parent(parent_key, CompletionState::Tombstoned)
+    }
+
+    /// Permanently closes a deleted parent thread. The durable marker is
+    /// retained through completion compaction so late children remain dropped
+    /// after a restart.
+    pub fn delete_parent(&self, parent_key: &str) -> Result<usize> {
+        self.close_parent(parent_key, CompletionState::ParentDeleted)
+    }
+
+    fn close_parent(&self, parent_key: &str, marker_state: CompletionState) -> Result<usize> {
         let mut state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        Self::set_parent_marker(&state, parent_key, CompletionState::Tombstoned, gate.claim())?;
+        Self::set_parent_marker(&state, parent_key, marker_state, gate.claim())?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
         for mut record in state.store.list(Some(parent_key)) {
@@ -543,14 +556,53 @@ impl CompletionRouter {
     }
 
     fn parent_from_marker_id(task_id: &str) -> Option<String> {
-        task_id.strip_prefix("\u{1}parent-cancelled:").map(str::to_owned)
+        task_id
+            .strip_prefix("\u{1}parent-cancelled:")
+            .map(str::to_owned)
     }
 
     fn parent_cancelled(state: &RouterState, parent_key: &str) -> bool {
         state
             .store
             .get(&Self::parent_marker_id(parent_key))
-            .is_some_and(|m| m.state == CompletionState::Tombstoned)
+            .is_some_and(|m| {
+                matches!(
+                    m.state,
+                    CompletionState::Tombstoned | CompletionState::ParentDeleted
+                )
+            })
+    }
+
+    /// Opens a parent on first sight, or reports whether its durable lifecycle
+    /// marker currently admits child completions. Closed parents are never
+    /// reopened implicitly.
+    pub fn admit_child(&self, parent_key: &str) -> Result<bool> {
+        let state = self.lock()?;
+        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+        Ok(Self::admit_child_locked(&state, parent_key, gate.claim())?.is_some())
+    }
+
+    fn admit_child_locked(
+        router: &RouterState,
+        parent_key: &str,
+        gate: &ParentGateClaim,
+    ) -> Result<Option<u64>> {
+        let marker_id = Self::parent_marker_id(parent_key);
+        match router.store.try_get(&marker_id)? {
+            Some(marker) if marker.state == CompletionState::Delivered => {
+                Ok(Some(marker.parent_epoch))
+            }
+            Some(_) => Ok(None),
+            None => {
+                Self::set_parent_marker(router, parent_key, CompletionState::Delivered, gate)?;
+                let marker = router.store.try_get(&marker_id)?.ok_or_else(|| {
+                    TinyAgentsError::Graph(
+                        "completion router: parent marker disappeared after admission".into(),
+                    )
+                })?;
+                Ok(Some(marker.parent_epoch))
+            }
+        }
     }
 
     fn set_parent_marker(
@@ -562,6 +614,10 @@ impl CompletionRouter {
         let mut marker = CompletionRecord::tombstone_stub(&Self::parent_marker_id(parent_key));
         marker.parent_key = parent_key.to_owned();
         marker.state = state;
+        marker.parent_epoch = router
+            .store
+            .try_get(&marker.task_id)?
+            .map_or(1, |current| current.parent_epoch.saturating_add(1));
         router.store.put_fenced(&marker, parent_key, gate)
     }
 
@@ -612,10 +668,14 @@ impl CompletionRouter {
         }
         let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
-        let mut candidates =
-            state
-                .store
-                .claim_pending(parent_key, _gate.claim(), mode, max, &token, visible_after)?;
+        let mut candidates = state.store.claim_pending(
+            parent_key,
+            _gate.claim(),
+            mode,
+            max,
+            &token,
+            visible_after,
+        )?;
         sort_oldest_first(&mut candidates);
         for record in &candidates {
             state.leased.insert(record.task_id.clone());

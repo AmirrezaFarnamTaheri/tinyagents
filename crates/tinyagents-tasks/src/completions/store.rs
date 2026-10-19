@@ -87,11 +87,7 @@ pub trait CompletionStore: Send + Sync {
 
     /// Creates a record only if its key is absent. Shared stores must make the
     /// absence check and write atomic; unsupported stores fail closed.
-    fn insert_if_absent(
-        &self,
-        record: &CompletionRecord,
-        gate: &ParentGateClaim,
-    ) -> Result<bool> {
+    fn insert_if_absent(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<bool> {
         let _ = (record, gate);
         Err(store_err(
             "conditional create",
@@ -353,11 +349,7 @@ impl CompletionStore for InMemoryCompletionStore {
         self.put(record)
     }
 
-    fn insert_if_absent(
-        &self,
-        record: &CompletionRecord,
-        _gate: &ParentGateClaim,
-    ) -> Result<bool> {
+    fn insert_if_absent(&self, record: &CompletionRecord, _gate: &ParentGateClaim) -> Result<bool> {
         let mut records = self.lock()?;
         if records.contains_key(&record.task_id) {
             return Ok(false);
@@ -491,7 +483,9 @@ impl CompletionStore for InMemoryCompletionStore {
         let now = SystemTime::now();
         let mut guard = self.lock()?;
         let before = guard.len();
-        guard.retain(|_, r| !expired(r, now, retain));
+        guard.retain(|task_id, r| {
+            task_id.starts_with("\u{1}parent-cancelled:") || !expired(r, now, retain)
+        });
         Ok(before - guard.len())
     }
 }

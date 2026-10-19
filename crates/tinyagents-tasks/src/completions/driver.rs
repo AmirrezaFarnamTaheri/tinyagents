@@ -29,8 +29,8 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
     Blocking, Capability, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec,
-    Leases, Precondition, Query, Scope, StorageBackend, StorageError, UPDATED_FIELD,
-    Versioned, WriteOptions,
+    Leases, Precondition, Query, Scope, StorageBackend, StorageError, UPDATED_FIELD, Versioned,
+    WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -290,9 +290,9 @@ impl CompletionStore for DriverCompletionStore {
             let docs = this.fenced_docs(&parent_key, &gate).await?;
             let id = task_id_key(&record.task_id).map_err(map_error)?;
             let current = docs.get(COMPLETIONS, &id).await.map_err(map_error)?;
-            let precondition = current
-                .as_ref()
-                .map_or(Precondition::Absent, |row| Precondition::Version(row.version));
+            let precondition = current.as_ref().map_or(Precondition::Absent, |row| {
+                Precondition::Version(row.version)
+            });
             docs.put_with(
                 COMPLETIONS,
                 &id,
@@ -306,11 +306,7 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
-    fn insert_if_absent(
-        &self,
-        record: &CompletionRecord,
-        gate: &ParentGateClaim,
-    ) -> Result<bool> {
+    fn insert_if_absent(&self, record: &CompletionRecord, gate: &ParentGateClaim) -> Result<bool> {
         let this = self.clone();
         let record = record.clone();
         let gate = gate.clone();
@@ -580,6 +576,11 @@ impl CompletionStore for DriverCompletionStore {
                 .map_err(map_error)?;
             let mut dropped = 0;
             for row in rows {
+                let is_parent_marker = decode_strict(row.clone())
+                    .is_ok_and(|record| record.task_id.starts_with("\u{1}parent-cancelled:"));
+                if is_parent_marker {
+                    continue;
+                }
                 // Only the version we saw: a record refreshed since is live again.
                 match this
                     .docs

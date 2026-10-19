@@ -23,13 +23,12 @@ fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
         .collect()
 }
 
-fn parent_gate(store: &dyn CompletionStore, parent_key: &str) -> crate::completions::ParentGateClaim {
+fn parent_gate(
+    store: &dyn CompletionStore,
+    parent_key: &str,
+) -> crate::completions::ParentGateClaim {
     store
-        .acquire_parent_gate(
-            parent_key,
-            "driver-test-owner",
-            Duration::from_secs(30),
-        )
+        .acquire_parent_gate(parent_key, "driver-test-owner", Duration::from_secs(30))
         .unwrap()
         .unwrap()
 }
@@ -47,33 +46,37 @@ fn put_record(store: &dyn CompletionStore, record: &CompletionRecord) {
 #[test]
 fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let store = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
-        .unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap();
     let stale = store
         .acquire_parent_gate("parent", "router-a", Duration::from_secs(30))
         .unwrap()
         .unwrap();
-    assert!(store
-        .release_parent_gate("parent", &stale)
-        .unwrap());
+    assert!(store.release_parent_gate("parent", &stale).unwrap());
     let current = store
         .acquire_parent_gate("parent", "router-b", Duration::from_secs(30))
         .unwrap()
         .unwrap();
     assert!(current.epoch > stale.epoch);
 
-    assert!(store
-        .insert_if_absent(&record("late", "parent"), &current)
-        .unwrap());
-    assert!(store
-        .insert_if_absent(&record("late", "other-parent"), &stale)
-        .is_err());
+    assert!(
+        store
+            .insert_if_absent(&record("late", "parent"), &current)
+            .unwrap()
+    );
+    assert!(
+        store
+            .insert_if_absent(&record("late", "other-parent"), &stale)
+            .is_err()
+    );
     let preserved = store.get("late").unwrap();
     assert_eq!(preserved.parent_key, "parent");
 
-    assert!(store
-        .insert_if_absent(&record("stale-create", "parent"), &stale)
-        .is_err());
+    assert!(
+        store
+            .insert_if_absent(&record("stale-create", "parent"), &stale)
+            .is_err()
+    );
     assert!(store.get("stale-create").is_none());
 }
 
@@ -90,9 +93,7 @@ async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
         .unwrap();
     let stale_docs = store.fenced_docs("parent", &stale).await.unwrap();
 
-    assert!(store
-        .release_parent_gate("parent", &stale)
-        .unwrap());
+    assert!(store.release_parent_gate("parent", &stale).unwrap());
     let current = store
         .acquire_parent_gate("parent", "router-b", Duration::from_secs(30))
         .unwrap()
@@ -101,11 +102,7 @@ async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
     assert!(store.insert_if_absent(&pending, &current).unwrap());
 
     let id = task_id_key(&pending.task_id).unwrap();
-    let row = stale_docs
-        .get(COMPLETIONS, &id)
-        .await
-        .unwrap()
-        .unwrap();
+    let row = stale_docs.get(COMPLETIONS, &id).await.unwrap().unwrap();
     let mut claimed = decode_strict(row.clone()).unwrap();
     claimed.attempts = 1;
     claimed.claim = Some(crate::completions::CompletionClaim {
@@ -128,14 +125,44 @@ async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
     assert!(persisted.claim.is_none());
 }
 
+#[tokio::test]
+async fn closed_parent_markers_survive_compaction_and_a_router_restart() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ) as Arc<dyn CompletionStore>
+    };
+    let first = CompletionRouter::new(open());
+    first.cancel_parent("cancelled-thread").unwrap();
+    first.delete_parent("deleted-thread").unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    assert_eq!(first.compact(Duration::ZERO).unwrap(), 0);
+
+    let restarted = CompletionRouter::new(open());
+    assert_eq!(
+        restarted
+            .record(record("after-delete", "deleted-thread"))
+            .await
+            .unwrap(),
+        RecordOutcome::Suppressed
+    );
+    assert_eq!(
+        restarted
+            .record(record("after-stop", "cancelled-thread"))
+            .await
+            .unwrap(),
+        RecordOutcome::Suppressed
+    );
+    assert!(restarted.pending_for("deleted-thread").is_empty());
+}
+
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
-    let store = DriverCompletionStore::new(
-        Arc::new(storage),
-        Scope::new("local").unwrap(),
-    )
-    .unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     CompletionRouter::new(Arc::new(store))
 }
 
@@ -215,7 +242,8 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
     use crate::completions::CompletionClaimMode;
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let now = SystemTime::now();
     put_record(&store, &record("z-older", "p").with_finished_at(now));
     put_record(
@@ -248,7 +276,8 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     use crate::completions::{ClaimResolution, CompletionClaimMode};
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let original = record("claim-owner", "parent");
     let gate = parent_gate(&store, "parent");
     assert!(store.insert_if_absent(&original, &gate).unwrap());
@@ -265,12 +294,11 @@ fn conditional_driver_create_preserves_an_existing_claim() {
         .unwrap();
 
     let other_parent_gate = parent_gate(&store, "other-parent");
-    assert!(!store
-        .insert_if_absent(
-            &record("claim-owner", "other-parent"),
-            &other_parent_gate,
-        )
-        .unwrap());
+    assert!(
+        !store
+            .insert_if_absent(&record("claim-owner", "other-parent"), &other_parent_gate,)
+            .unwrap()
+    );
     let persisted = store.get("claim-owner").unwrap();
     assert_eq!(persisted.parent_key, claimed.parent_key);
     assert_eq!(persisted.attempts, claimed.attempts);
@@ -296,7 +324,8 @@ fn conditional_driver_create_preserves_an_existing_claim() {
 #[test]
 fn conditional_driver_create_does_not_replace_a_tombstone() {
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let tombstone = CompletionRecord::tombstone_stub("deleted");
     put_record(&store, &tombstone);
     let gate = parent_gate(&store, "parent");
@@ -318,7 +347,8 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
 
     let storage = MemoryStorage::new();
     let backend: Arc<dyn StorageBackend> = Arc::new(storage);
-    let first = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap();
+    let first =
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap();
     let second = DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap();
     let record = record("lease-task", "parent");
     put_record(&first, &record);
@@ -444,7 +474,8 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
 #[tokio::test]
 async fn the_store_keeps_the_latest_record_per_task() {
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     let mut first = record("t1", "p");
     put_record(&store, &first);
     first.state = CompletionState::Delivered;
@@ -467,7 +498,8 @@ async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_t
     use tinystoragedrivers_core::Precondition;
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap())
+        .unwrap();
     put_record(&store, &record("corrupt", "p"));
     store
         .docs
@@ -526,7 +558,8 @@ fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>)
         Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
     };
     let storage = MemoryStorage::with_clock(clock);
-    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     (store, now)
 }
 
@@ -593,8 +626,14 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
     use tinystoragedrivers_core::Precondition;
     let storage = MemoryStorage::new();
-    let docs = Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
-    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
+    let docs = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap())
+        .unwrap();
     put_record(&store, &record("good", "p"));
     docs.put(
         "tasks.completions",
@@ -613,7 +652,8 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
 async fn scopes_keep_completions_apart() {
     let storage = MemoryStorage::new();
     let backend: Arc<dyn StorageBackend> = Arc::new(storage);
-    let alice = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("alice").unwrap()).unwrap();
+    let alice =
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("alice").unwrap()).unwrap();
     let bob = DriverCompletionStore::new(backend, Scope::new("bob").unwrap()).unwrap();
     put_record(&alice, &record("t", "p"));
     assert!(bob.get("t").is_none());
@@ -622,7 +662,9 @@ async fn scopes_keep_completions_apart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sync_trait_works_from_a_multi_thread_runtime() {
-    let store = DriverCompletionStore::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap()).unwrap();
+    let store =
+        DriverCompletionStore::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap())
+            .unwrap();
     put_record(&store, &record("mt", "p"));
     assert!(store.get("mt").is_some());
 }
@@ -630,8 +672,14 @@ async fn the_sync_trait_works_from_a_multi_thread_runtime() {
 #[tokio::test]
 async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
     let storage = MemoryStorage::new();
-    let docs = Arc::clone(storage.for_scope(&Scope::new("local").unwrap()).unwrap().documents());
-    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
+    let docs = Arc::clone(
+        storage
+            .for_scope(&Scope::new("local").unwrap())
+            .unwrap()
+            .documents(),
+    );
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap())
+        .unwrap();
     put_record(&store, &record("c/1", "p"));
     let row = docs
         .get("tasks.completions", "c%2F1")
