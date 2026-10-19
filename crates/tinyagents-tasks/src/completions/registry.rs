@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use tinystoragedrivers_core::DocumentStore;
+use tinyagents_harness::error::Result;
+use tinystoragedrivers_core::{Scope, StorageBackend};
 
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
 
@@ -141,21 +142,16 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
     }
 }
 
-/// Opens a durable completion store over `docs`, falling back to memory when
-/// the bridge cannot start or the collection cannot be declared.
+/// Opens a durable completion store over the tenant-scoped backend.
+///
+/// Shared-store setup fails closed; callers that intentionally want local
+/// storage can construct [`InMemoryCompletionStore`] explicitly.
 pub fn open_driver_completion_store_or_memory(
-    docs: Arc<dyn DocumentStore>,
-) -> Arc<dyn CompletionStore> {
-    let store = match DriverCompletionStore::new(docs) {
-        Ok(store) => store,
-        Err(error) => {
-            tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-            return Arc::new(InMemoryCompletionStore::new());
-        }
-    };
-    if let Err(error) = store.declare_collections() {
-        tracing::warn!(error = %error, "durable completion store unavailable; using memory");
-        return Arc::new(InMemoryCompletionStore::new());
-    }
-    Arc::new(store)
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
+) -> Result<Arc<dyn CompletionStore>> {
+    let store = DriverCompletionStore::new(backend, scope)
+        .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
+    store.declare_collections()?;
+    Ok(Arc::new(store))
 }
