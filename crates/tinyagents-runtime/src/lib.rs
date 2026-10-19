@@ -17,6 +17,7 @@ mod permanent_tool;
 mod prefix;
 mod session;
 mod summary;
+pub use summary::turn_summary;
 mod tool_registration;
 pub mod transcript;
 pub mod turn_driver;
