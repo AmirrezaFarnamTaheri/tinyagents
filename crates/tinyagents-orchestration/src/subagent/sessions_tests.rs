@@ -151,3 +151,226 @@ fn durable_session_decodes_legacy_transcript_message_history() {
     assert_eq!(assistant.tool_calls.len(), 1);
     assert_eq!(assistant.tool_calls[0].name, "lookup");
 }
+
+#[derive(Clone)]
+struct PauseAfterSessionRead {
+    inner: Arc<DriverSubagentSessionStore>,
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    pause_once: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl SubagentSessionStore for PauseAfterSessionRead {
+    async fn list_for_parent(
+        &self,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<Vec<DurableSubagentSession>, SubagentError> {
+        self.inner
+            .list_for_parent(parent_session, parent_thread_id)
+            .await
+    }
+
+    async fn get(&self, id: &str) -> Result<Option<DurableSubagentSession>, SubagentError> {
+        let session = self.inner.get(id).await?;
+        if self
+            .pause_once
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        Ok(session)
+    }
+
+    async fn upsert_running(
+        &self,
+        upsert: SubagentSessionUpsert,
+    ) -> Result<(DurableSubagentSession, ReuseDecision), SubagentError> {
+        self.inner.upsert_running(upsert).await
+    }
+
+    async fn close(&self, id: &str) -> Result<bool, SubagentError> {
+        self.inner.close(id).await
+    }
+
+    async fn close_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+    ) -> Result<bool, SubagentError> {
+        self.inner
+            .close_if_current(id, task_id, lifecycle_key, parent_session, parent_thread_id)
+            .await
+    }
+
+    async fn mark_finished(
+        &self,
+        id: &str,
+        task_id: &str,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        self.inner.mark_finished(id, task_id, status, history).await
+    }
+
+    async fn mark_finished_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        status: DurableSubagentStatus,
+        history: Vec<Message>,
+    ) -> Result<bool, SubagentError> {
+        self.inner
+            .mark_finished_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                parent_session,
+                parent_thread_id,
+                status,
+                history,
+            )
+            .await
+    }
+
+    async fn mark_failed(
+        &self,
+        id: &str,
+        task_id: &str,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        self.inner.mark_failed(id, task_id, error).await
+    }
+
+    async fn mark_failed_if_current(
+        &self,
+        id: &str,
+        task_id: &str,
+        lifecycle_key: &SubagentTaskKey,
+        parent_session: &str,
+        parent_thread_id: Option<&str>,
+        error: String,
+    ) -> Result<bool, SubagentError> {
+        self.inner
+            .mark_failed_if_current(
+                id,
+                task_id,
+                lifecycle_key,
+                parent_session,
+                parent_thread_id,
+                error,
+            )
+            .await
+    }
+}
+
+#[tokio::test]
+async fn scoped_mutations_recheck_reused_task_owner_after_a_paused_read() {
+    for mutation in ["close", "finish", "fail"] {
+        let backend = MemoryStorage::new();
+        let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+        let driver = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
+        let old_key = key("same-task");
+        let (old, _) = driver
+            .upsert_running(upsert("same-task", old_key.clone()))
+            .await
+            .unwrap();
+        let barrier = PauseAfterSessionRead {
+            inner: Arc::clone(&driver),
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            pause_once: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        };
+        let scoped = Arc::new(ScopedSubagentSessionStore::new(
+            Arc::new(barrier.clone()),
+            "parent-session",
+            Some("thread".into()),
+        ));
+        let waiting_for_read = barrier.entered.notified();
+        let pending = {
+            let scoped = Arc::clone(&scoped);
+            let id = old.subagent_session_id.clone();
+            let old_key = old_key.clone();
+            tokio::spawn(async move {
+                match mutation {
+                    "close" => scoped.close(&id).await,
+                    "finish" => {
+                        scoped
+                            .mark_finished(
+                                &id,
+                                "same-task",
+                                DurableSubagentStatus::Idle,
+                                vec![Message::user("stale")],
+                            )
+                            .await
+                    }
+                    "fail" => scoped.mark_failed(&id, "same-task", "stale".into()).await,
+                    _ => unreachable!(),
+                }
+            })
+        };
+        waiting_for_read.await;
+
+        let new_key = SubagentTaskKey {
+            root_run_id: "replacement-root".into(),
+            parent_run_id: "replacement-parent".into(),
+            thread_id: Some("thread".into()),
+            task_id: "same-task".into(),
+        };
+        let (replacement, _) = driver
+            .upsert_running(upsert("same-task", new_key.clone()))
+            .await
+            .unwrap();
+        assert_eq!(replacement.subagent_session_id, old.subagent_session_id);
+        barrier.release.notify_one();
+        assert!(
+            !pending.await.unwrap().unwrap(),
+            "stale {mutation} must be rejected"
+        );
+
+        assert!(match mutation {
+            "close" => driver
+                .close_if_current(
+                    &replacement.subagent_session_id,
+                    "same-task",
+                    &new_key,
+                    "parent-session",
+                    Some("thread"),
+                )
+                .await
+                .unwrap(),
+            "finish" => driver
+                .mark_finished_if_current(
+                    &replacement.subagent_session_id,
+                    "same-task",
+                    &new_key,
+                    "parent-session",
+                    Some("thread"),
+                    DurableSubagentStatus::Idle,
+                    vec![Message::user("current")],
+                )
+                .await
+                .unwrap(),
+            "fail" => driver
+                .mark_failed_if_current(
+                    &replacement.subagent_session_id,
+                    "same-task",
+                    &new_key,
+                    "parent-session",
+                    Some("thread"),
+                    "current failure".into(),
+                )
+                .await
+                .unwrap(),
+            _ => unreachable!(),
+        });
+    }
+}
