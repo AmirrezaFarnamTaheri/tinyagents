@@ -727,7 +727,10 @@ fn the_overflow_artifact_is_the_one_a_completion_names() {
         RunContext::new(RunConfig::new("c"), String::new()),
     )
     .with_notify_mode(NotifyMode::Off);
-    let origin = completion::CompletionOrigin::new(&origin_task, &prepared).unwrap();
+    let router = router();
+    let origin = completion::CompletionOrigin::new(&origin_task, &prepared, &router)
+        .unwrap()
+        .unwrap();
     let mut outcome = SubagentOutcome::completed("t1", "preview");
     for id in ["pre-existing", "overflow"] {
         outcome.artifacts.push(ArtifactReference {
