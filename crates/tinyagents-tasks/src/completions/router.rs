@@ -119,6 +119,10 @@ impl ParentGateGuard {
         self.store
             .renew_parent_gate(&self.parent_key, &self.claim, PARENT_GATE_TTL)
     }
+
+    fn claim(&self) -> &ParentGateClaim {
+        &self.claim
+    }
 }
 
 impl Drop for ParentGateGuard {
@@ -328,7 +332,7 @@ impl CompletionRouter {
             record.state = CompletionState::Pending;
             record.attempts = 0;
             record.updated_at = SystemTime::now();
-            if !state.store.insert_if_absent(&record)? {
+            if !state.store.insert_if_absent(&record, gate.claim())? {
                 let existing = state.store.try_get(&record.task_id)?.ok_or_else(|| {
                     TinyAgentsError::Graph(format!(
                         "completion store: conditional create conflicted but `{}` was not readable",
@@ -365,6 +369,7 @@ impl CompletionRouter {
                     let Some(claimed) = state.store.claim_task(
                         &record.task_id,
                         &record.parent_key,
+                        gate.claim(),
                         CompletionClaimMode::Followup,
                         &token,
                         visible_after,
@@ -578,7 +583,7 @@ impl CompletionRouter {
         let mut candidates =
             state
                 .store
-                .claim_pending(parent_key, mode, max, &token, visible_after)?;
+                .claim_pending(parent_key, _gate.claim(), mode, max, &token, visible_after)?;
         sort_oldest_first(&mut candidates);
         for record in &candidates {
             state.leased.insert(record.task_id.clone());
