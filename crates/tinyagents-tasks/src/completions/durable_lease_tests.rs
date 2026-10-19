@@ -53,6 +53,6 @@ async fn releasing_a_turn_lease_cancels_its_admission_and_successor_gets_new_epo
         .unwrap()
         .unwrap();
     assert!(successor.epoch() > first_epoch);
-    assert_eq!(successor.fence().collection(), "leases");
+    assert_eq!(successor.fence().collection(), "tsd.leases");
     successor.release().await.unwrap();
 }
