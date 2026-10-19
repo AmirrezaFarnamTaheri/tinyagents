@@ -87,14 +87,26 @@ pub async fn output_or_kill_captured_isolated(
 ) -> CapturedCommandResult {
     let cleanup = ProcessCleanup::default();
     let captured = Arc::new(Mutex::new(None));
-    match cleanup.scope(tokio::time::timeout(
-        deadline,
-        output_with_input_and_progress_mode(cmd, None, progress, false, Some(Arc::clone(&captured))),
-    )).await {
+    match cleanup
+        .scope(tokio::time::timeout(
+            deadline,
+            output_with_input_and_progress_mode(
+                cmd,
+                None,
+                progress,
+                false,
+                Some(Arc::clone(&captured)),
+            ),
+        ))
+        .await
+    {
         Ok(result) => CapturedCommandResult::Completed(result),
         Err(_) => {
             cleanup.wait().await;
-            let output=captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let output = captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("the process waiter stores its output before acknowledging cleanup");
             CapturedCommandResult::TimedOut(output)
         }
@@ -214,7 +226,9 @@ async fn output_with_input_and_progress_mode(
             collect_command_output(child, cancellation, progress)
         );
         if let (Some(captured), Ok(output)) = (captured, output.as_ref()) {
-            *captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::process::Output {
+            *captured
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::process::Output {
                 status: output.status,
                 stdout: output.stdout.clone(),
                 stderr: output.stderr.clone(),

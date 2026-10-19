@@ -98,7 +98,7 @@ async fn native_backend_timeout_kills_the_process_group_before_returning() {
         .execute(
             request(
                 "sh",
-                &["-c", "sleep 10"],
+                &["-c", "printf partial; sleep 10"],
                 Some(Duration::from_millis(40)),
                 true,
             ),
@@ -110,4 +110,5 @@ async fn native_backend_timeout_kills_the_process_group_before_returning() {
         panic!("expected timeout result")
     };
     assert!(output.timed_out);
+    assert_eq!(output.stdout, b"partial");
 }

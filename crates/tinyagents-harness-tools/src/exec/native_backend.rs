@@ -67,7 +67,9 @@ impl ExecBackend for NativeExecBackend {
         let run = async {
             match request.timeout {
                 Some(timeout) => {
-                    match output_or_kill_with_progress_isolated(&mut command, timeout, progress).await {
+                    match output_or_kill_with_progress_isolated(&mut command, timeout, progress)
+                        .await
+                    {
                         Ok(Ok(output)) => Ok(ExecOutput {
                             stdout: output.stdout,
                             stderr: output.stderr,
