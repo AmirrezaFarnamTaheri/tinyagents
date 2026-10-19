@@ -2,6 +2,19 @@
 //! snapshots, `clear`, and lane independence.
 
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Debug)]
+struct MutableAdmission(AtomicBool);
+
+impl QueueAdmission for MutableAdmission {
+    fn validate(&self) -> Result<(), QueueAdmissionError> {
+        self.0
+            .load(Ordering::SeqCst)
+            .then_some(())
+            .ok_or(QueueAdmissionError)
+    }
+}
 
 #[tokio::test]
 async fn new_queue_is_empty() {
@@ -78,6 +91,37 @@ async fn take_one_at_a_time_pops_only_the_oldest_item() {
             .take(QueueLane::Steer, QueueMode::OneAtATime)
             .await
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn take_discards_items_whose_retained_admission_was_revoked() {
+    let queue = RunQueue::new();
+    let admission = Arc::new(MutableAdmission(AtomicBool::new(true)));
+    queue
+        .push_guarded(QueueLane::Followup, "child result", admission.clone())
+        .await;
+    queue.push(QueueLane::Followup, "ordinary follow-up").await;
+    admission.0.store(false, Ordering::SeqCst);
+
+    assert_eq!(
+        queue.take(QueueLane::Followup, QueueMode::All).await,
+        vec!["ordinary follow-up"]
+    );
+}
+
+#[tokio::test]
+async fn one_at_a_time_skips_a_revoked_oldest_item_without_blocking_the_lane() {
+    let queue = RunQueue::new();
+    let admission = Arc::new(MutableAdmission(AtomicBool::new(false)));
+    queue
+        .push_guarded(QueueLane::Steer, "revoked", admission)
+        .await;
+    queue.push(QueueLane::Steer, "current").await;
+
+    assert_eq!(
+        queue.take(QueueLane::Steer, QueueMode::OneAtATime).await,
+        vec!["current"]
     );
 }
 
