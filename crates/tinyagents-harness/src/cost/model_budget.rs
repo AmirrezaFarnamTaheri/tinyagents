@@ -116,7 +116,12 @@ impl ControlledChatModel {
         request: ModelRequest,
     ) -> Result<ModelResponse, ControlledDispatchError> {
         let permit = match &self.options.admission {
-            Some(admission) => Some(admission.acquire().await.map_err(Into::into)?),
+            Some(admission) => Some(
+                admission
+                    .acquire()
+                    .await
+                    .map_err(ControlledDispatchError::from)?,
+            ),
             None => None,
         };
         let dispatch_outcome = Arc::new(std::sync::Mutex::new(None));
@@ -163,7 +168,12 @@ impl ControlledChatModel {
         request: ModelRequest,
     ) -> Result<ModelStream, ControlledDispatchError> {
         let permit = match &self.options.admission {
-            Some(admission) => Some(admission.acquire().await.map_err(Into::into)?),
+            Some(admission) => Some(
+                admission
+                    .acquire()
+                    .await
+                    .map_err(ControlledDispatchError::from)?,
+            ),
             None => None,
         };
         let dispatch_outcome = Arc::new(std::sync::Mutex::new(None));
@@ -231,7 +241,7 @@ fn guard_dispatch_stream(
     stream: ModelStream,
     permit: Option<Arc<dyn super::dispatch_admission::PhysicalDispatchPermit>>,
 ) -> ModelStream {
-    use futures::StreamExt;
+    use futures::Stream;
 
     let metadata = stream.metadata().clone();
     let mut stream = Box::pin(stream);
