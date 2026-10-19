@@ -998,10 +998,13 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
         RecordOutcome::Suppressed
     );
     router.resume_parent("p");
+    let generation = router.admit_child_generation("p").unwrap().unwrap();
     drop(router);
     let router = open_router(&path);
+    let mut later = record("later", "p");
+    later.parent_epoch = generation;
     assert!(matches!(
-        router.record(record("later", "p")).await.unwrap(),
+        router.record(later).await.unwrap(),
         RecordOutcome::Recorded { .. }
     ));
 }
