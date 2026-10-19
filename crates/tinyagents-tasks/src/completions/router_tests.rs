@@ -858,11 +858,13 @@ async fn queue_admission_does_not_deadlock_with_store_migration_waiting_for_pare
         .await
         .expect("queue admission must not deadlock with the migrator")
         .unwrap();
-    assert!(deferred.is_empty());
-    assert_eq!(q.status().await.followups, 1);
-
+    let item_was_deferred = deferred.is_empty();
+    let queued_after_take = q.status().await.followups;
+    drop(deferred);
     resume_tx.send(()).unwrap();
     migration.join().unwrap();
+    assert!(item_was_deferred);
+    assert_eq!(queued_after_take, 1);
     let delivered = q.take_admitted(QueueLane::Followup, QueueMode::All).await;
     assert_eq!(delivered.len(), 1);
     assert!(format!("{:?}", delivered[0].value).contains("queued"));
