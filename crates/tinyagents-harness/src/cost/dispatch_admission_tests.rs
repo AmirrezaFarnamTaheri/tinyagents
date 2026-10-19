@@ -459,6 +459,37 @@ async fn admitted_agent_turn_still_completes_normally() {
 }
 
 #[tokio::test]
+async fn streaming_agent_turn_preserves_typed_admission_refusal() {
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::Deadline))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("controlled", Arc::new(controlled));
+
+    let error = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("streaming-dispatch-turn"),
+            vec![tinyinference_llm::message::Message::user("hello")],
+        )
+        .await
+        .expect_err("stream admission refusal reaches the turn caller");
+
+    assert!(matches!(
+        error,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::Deadline
+    ));
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn money_refusal_does_not_commit_admission() {
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
