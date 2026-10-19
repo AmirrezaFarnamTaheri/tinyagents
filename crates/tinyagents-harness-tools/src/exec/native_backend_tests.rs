@@ -35,6 +35,11 @@ fn process_is_gone_or_zombie(pid: i32) -> bool {
 }
 
 #[cfg(target_os = "linux")]
+fn process_is_reaped(pid: i32) -> bool {
+    !std::path::Path::new(&format!("/proc/{pid}/stat")).exists()
+}
+
+#[cfg(target_os = "linux")]
 fn shell_quote(path: &std::path::Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
@@ -134,9 +139,11 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     use crate::exec::{ExecBackend, ExecBackendOutcome, ShellFlavor};
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
+    let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "sleep 30 & child=$!; echo $child > {}; printf captured; wait",
-        shell_quote(&pidfile)
+        "echo $$ > {}; sleep 30 & child=$!; echo $child > {}; printf captured; wait",
+        shell_quote(&shell_pidfile),
+        shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let outcome = backend
@@ -156,6 +163,15 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     };
     assert!(output.timed_out);
     assert_eq!(output.stdout, b"captured");
+    let shell_pid: i32 = std::fs::read_to_string(shell_pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        process_is_reaped(shell_pid),
+        "direct shell {shell_pid} was not reaped before timeout returned"
+    );
     let pid: i32 = std::fs::read_to_string(pidfile)
         .unwrap()
         .trim()
@@ -173,9 +189,11 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     use crate::exec::{ExecBackend, ShellFlavor, timeout::ProcessCleanup};
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
+    let shell_pidfile = dir.path().join("shell.pid");
     let command = format!(
-        "sleep 30 & child=$!; echo $child > {}; wait",
-        shell_quote(&pidfile)
+        "echo $$ > {}; sleep 30 & child=$!; echo $child > {}; wait",
+        shell_quote(&shell_pidfile),
+        shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = ProcessCleanup::default();
@@ -187,11 +205,15 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     });
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            if std::fs::read_to_string(&pidfile)
+            let child_ready = std::fs::read_to_string(&pidfile)
                 .ok()
                 .and_then(|pid| pid.trim().parse::<i32>().ok())
-                .is_some()
-            {
+                .is_some();
+            let shell_ready = std::fs::read_to_string(&shell_pidfile)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok())
+                .is_some();
+            if child_ready && shell_ready {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -212,5 +234,14 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     assert!(
         process_is_gone_or_zombie(pid),
         "descendant {pid} was still executing after cleanup acknowledgment"
+    );
+    let shell_pid: i32 = std::fs::read_to_string(shell_pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        process_is_reaped(shell_pid),
+        "direct shell {shell_pid} was not reaped after cleanup acknowledgment"
     );
 }
