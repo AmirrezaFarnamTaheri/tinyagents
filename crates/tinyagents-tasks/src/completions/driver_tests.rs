@@ -326,7 +326,9 @@ async fn router_live_push_closed_before_agent_turn_never_reaches_provider() {
     let canceller = CompletionRouter::new(open());
     let queue = Arc::new(RunQueue::new());
     producer.attach_parent("parent", queue.clone());
-    producer.record(record("queued-child", "parent")).await.unwrap();
+    let queued = producer.record(record("queued-child", "parent")).await.unwrap();
+    assert!(matches!(queued, RecordOutcome::Recorded { lane: Some(_), .. }));
+    assert_eq!(queue.status().await.followups, 1);
     canceller.cancel_parent("parent").unwrap();
 
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("done")]));
@@ -343,6 +345,43 @@ async fn router_live_push_closed_before_agent_turn_never_reaches_provider() {
         1,
         "a completion rejected by the durable lifecycle gate must never start a provider call"
     );
+}
+
+#[tokio::test]
+async fn router_live_push_reaches_provider_when_parent_remains_open() {
+    use tinyagents_harness::context::{RunConfig, RunContext};
+    use tinyagents_harness::run_queue::RunQueue;
+    use tinyagents_harness::runtime::AgentHarness;
+    use tinyagents_harness::testkit::ScriptedModel;
+    use tinyinference_llm::message::Message;
+    use tinyinference_llm::model::ModelResponse;
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let store = Arc::new(
+        DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap(),
+    );
+    let producer = CompletionRouter::new(store);
+    let queue = Arc::new(RunQueue::new());
+    producer.attach_parent("parent", queue.clone());
+    let outcome = producer.record(record("live-child", "parent")).await.unwrap();
+    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(_), .. }));
+    assert_eq!(queue.status().await.followups, 1);
+
+    let model = Arc::new(ScriptedModel::new(vec![
+        ModelResponse::assistant("first response"),
+        ModelResponse::assistant("completion handled"),
+    ]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    let context = RunContext::new(RunConfig::new("parent-turn"), ()).with_run_queue(queue);
+    harness
+        .invoke_in_context(&(), context, vec![Message::user("start")])
+        .await
+        .expect("an open parent receives the live completion on its next turn");
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages.iter().any(|message| message.text().contains("live-child")));
 }
 
 #[tokio::test]

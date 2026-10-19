@@ -890,6 +890,35 @@ async fn pending_for_lists_only_undelivered_records_of_the_parent() {
     assert_eq!(ids(&router.pending_for("p")), ["t2"]);
 }
 
+#[tokio::test]
+async fn parents_with_pending_and_cancel_all_use_durable_parent_markers() {
+    let router = router();
+    router
+        .record(record("pending-a", "parent-a").with_notify_mode(NotifyMode::Off))
+        .await
+        .unwrap();
+    router
+        .record(record("pending-b", "parent-b").with_notify_mode(NotifyMode::Off))
+        .await
+        .unwrap();
+    router
+        .record(record("settled", "parent-c").with_notify_mode(NotifyMode::Off))
+        .await
+        .unwrap();
+    let settled = router.claim_pending("parent-c", 1).unwrap();
+    router.mark_delivered(&receipts(&settled)).unwrap();
+
+    assert_eq!(
+        router.parents_with_pending(),
+        vec!["parent-a", "parent-b"]
+    );
+    assert_eq!(router.cancel_all_parents().unwrap(), 2);
+    assert!(router.parents_with_pending().is_empty());
+    assert!(!router.admit_child("parent-a").unwrap());
+    assert!(!router.admit_child("parent-b").unwrap());
+    assert!(router.admit_child("parent-c").unwrap());
+}
+
 #[test]
 fn neutral_formatter_escapes_child_text() {
     let hostile = CompletionRecord::new(

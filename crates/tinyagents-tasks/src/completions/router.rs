@@ -699,6 +699,34 @@ impl CompletionRouter {
         pending
     }
 
+    /// Parent keys with at least one pending completion in this store's scope.
+    /// Tenant isolation is provided by the scoped completion store.
+    pub fn parents_with_pending(&self) -> Vec<String> {
+        let Ok(state) = self.lock() else {
+            return Vec::new();
+        };
+        state
+            .store
+            .list(None)
+            .into_iter()
+            .filter(|record| record.state == CompletionState::Pending)
+            .map(|record| record.parent_key)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// Closes every parent with pending completions and returns the number of
+    /// records withdrawn. Each marker uses the same durable fenced path as
+    /// [`Self::cancel_parent`].
+    pub fn cancel_all_parents(&self) -> Result<usize> {
+        self.parents_with_pending()
+            .into_iter()
+            .try_fold(0usize, |total, parent| {
+                self.cancel_parent(&parent).map(|withdrawn| total + withdrawn)
+            })
+    }
+
     /// Claims up to `max` `Followup`/`Collect` completions for the idle-time
     /// batch, oldest first, counting an attempt on each. A claimed record is
     /// leased until [`Self::mark_delivered`] or [`Self::mark_failed`].
