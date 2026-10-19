@@ -373,8 +373,14 @@ async fn pool_release_all_releases_claims_from_every_cached_router() {
 
     let restarted_first = CompletionRouter::new(first_store);
     let restarted_second = CompletionRouter::new(second_store);
-    assert_eq!(restarted_first.claim_pending("parent-a", 1).unwrap().len(), 1);
-    assert_eq!(restarted_second.claim_pending("parent-b", 1).unwrap().len(), 1);
+    assert_eq!(
+        restarted_first.claim_pending("parent-a", 1).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        restarted_second.claim_pending("parent-b", 1).unwrap().len(),
+        1
+    );
 }
 
 #[test]
