@@ -367,6 +367,98 @@ async fn agent_turn_preserves_typed_admission_refusal_from_chat_model() {
 }
 
 #[tokio::test]
+async fn concurrent_agent_turns_keep_typed_admission_refusals_call_local() {
+    let counts = Arc::new(Counts::default());
+    let (first_gate, first_release) = Gate::new();
+    let (second_gate, second_release) = Gate::new();
+    let admission = ScriptedAdmission::new([
+        Step::Gated(first_gate.clone()),
+        Step::Gated(second_gate.clone()),
+    ]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("controlled", Arc::new(controlled));
+    let harness = Arc::new(harness);
+    let invoke = |harness: Arc<AgentHarness<()>>| async move {
+        harness
+            .invoke(
+                &(),
+                (),
+                RunConfig::new("concurrent-dispatch-turn"),
+                vec![tinyinference_llm::message::Message::user("hello")],
+            )
+            .await
+    };
+    let mut first = tokio::spawn(invoke(harness.clone()));
+    tokio::select! {
+        _ = first_gate.wait_until_entered() => {}
+        result = &mut first => panic!("first turn skipped admission: {result:?}"),
+    }
+    let mut second = tokio::spawn(invoke(harness));
+    tokio::select! {
+        _ = second_gate.wait_until_entered() => {}
+        result = &mut second => panic!("second turn skipped admission: {result:?}"),
+    }
+
+    first_release
+        .send(Err(DispatchRefusalReason::CallLimit))
+        .expect("first turn waits at its own gate");
+    second_release
+        .send(Err(DispatchRefusalReason::Cancelled))
+        .expect("second turn waits at its own gate");
+
+    let first_error = first
+        .await
+        .expect("first turn task")
+        .expect_err("first refused");
+    let second_error = second
+        .await
+        .expect("second turn task")
+        .expect_err("second refused");
+    assert!(matches!(
+        first_error,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+    assert!(matches!(
+        second_error,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::Cancelled
+    ));
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn admitted_agent_turn_still_completes_normally() {
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("controlled", Arc::new(controlled));
+
+    harness
+        .invoke(
+            &(),
+            (),
+            RunConfig::new("normal-dispatch-turn"),
+            vec![tinyinference_llm::message::Message::user("hello")],
+        )
+        .await
+        .expect("admitted turn succeeds");
+
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn money_refusal_does_not_commit_admission() {
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
