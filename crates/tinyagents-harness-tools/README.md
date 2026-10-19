@@ -54,6 +54,9 @@ host. The gate authorizes the parsed request before the backend can spawn a
 process; the permit carries the backend selection, capability, working
 directory, and environment chosen for that call. `NativeExecBackend::new`
 selects a shell flavor, but does not choose whether native execution is safe.
+An embedding host wires the pair with
+`ExecTool::new(Arc<dyn ExecGate>, Arc<dyn ExecBackend>)` and supplies the same
+host-owned gate/backend ports to `InstallTool`.
 Hosts own approval, security policy, sandbox selection, and audit policy and
 may instead provide a sandbox or remote backend. Keep those decisions in the
 host adapter.
