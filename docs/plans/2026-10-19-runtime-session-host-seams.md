@@ -43,8 +43,9 @@ first-wins deduplicator this migration needs.
 
 ## Proposed public seams
 
-These signatures are the intended API shape. Error and lifetime details should
-follow each crate's existing conventions; avoid adding new dependency edges.
+The signatures below are concrete API contracts. Implement them as written,
+using the named module's existing error types and without adding dependency
+edges beyond the existing crate chain.
 
 ### Transcript identity and repair (`tinyagents-session`)
 
@@ -60,24 +61,55 @@ with respect to the old files. `TranscriptTarget::for_session` and
 only add a `TranscriptMeta` constructor if it removes a real duplicate without
 changing the wire schema.
 
-Add the shared helper to the exact existing module
-`crates/tinyagents-session/src/transcript/adoption.rs` and export it from
-`transcript.rs`:
+Add both replay helpers to the exact existing module
+`crates/tinyagents-session/src/transcript/adoption.rs` and export them from
+`transcript.rs`. The transcript representation is used by codec replay; the
+inference `Message` representation is used by the runtime driver. Both must
+remove exactly the same leading tool head after the contiguous system prefix.
 
 ```rust
-pub fn repair_orphaned_tool_head(rows: &[TranscriptMessage]) -> Vec<TranscriptMessage> {
+pub fn repair_orphaned_tool_head(
+    rows: &[TranscriptMessage],
+) -> Cow<'_, [TranscriptMessage]> {
     let prefix = rows.iter().take_while(|row| row.role == "system").count();
     let orphans = rows[prefix..]
         .iter()
         .take_while(|row| row.role == "tool")
         .count();
-    rows[..prefix]
-        .iter()
-        .chain(&rows[prefix + orphans..])
-        .cloned()
-        .collect()
+    if orphans == 0 {
+        Cow::Borrowed(rows)
+    } else {
+        Cow::Owned(rows[..prefix].iter()
+            .chain(&rows[prefix + orphans..])
+            .cloned()
+            .collect())
+    }
+}
+
+pub fn repair_orphaned_tool_head_messages(
+    history: &[tinyinference_llm::message::Message],
+) -> Cow<'_, [tinyinference_llm::message::Message]> {
+    use tinyinference_llm::message::Message;
+    let prefix = history.iter()
+        .take_while(|message| matches!(message, Message::System(_)))
+        .count();
+    let orphans = history[prefix..].iter()
+        .take_while(|message| matches!(message, Message::Tool(_)))
+        .count();
+    if orphans == 0 {
+        Cow::Borrowed(history)
+    } else {
+        Cow::Owned(history[..prefix].iter()
+            .chain(&history[prefix + orphans..])
+            .cloned()
+            .collect())
+    }
 }
 ```
+
+Add `use std::borrow::Cow;` in `adoption.rs`. Do not parse tool-call ids or
+delete assistant rows: the historical repair is the leading run of orphan
+tool-result rows only.
 
 This deliberately removes only leading `tool` rows immediately after the
 contiguous system prefix, matching OpenHuman `driver.rs::repair_orphaned_tool_head`
@@ -101,7 +133,7 @@ pub struct SessionStoreLease {
 }
 
 impl SessionStoreLease {
-    pub fn stores(&self) -> &AgentStores;
+    pub fn stores(&self) -> &AgentStores { &self.stores }
 }
 ```
 
