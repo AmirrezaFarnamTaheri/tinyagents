@@ -15,6 +15,10 @@ fn record(task: &str, parent: &str) -> CompletionRecord {
     )
 }
 
+fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
+    records.iter().filter_map(CompletionRecord::receipt).collect()
+}
+
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
         storage
@@ -131,13 +135,13 @@ async fn attempts_and_give_up_survive_a_reopen() {
     {
         let router = open_router(&path).with_max_attempts(2);
         router.record(record("t1", "p")).await.unwrap();
-        router.claim_pending("p", 1).unwrap();
-        router.mark_failed(&["t1"]).unwrap();
+        let batch = router.claim_pending("p", 1).unwrap();
+        router.mark_failed(&receipts(&batch)).unwrap();
     }
     let router = open_router(&path).with_max_attempts(2);
     let batch = router.claim_pending("p", 1).unwrap();
     assert_eq!(batch[0].attempts, 2, "the earlier attempt was kept");
-    assert_eq!(router.mark_failed(&["t1"]).unwrap().len(), 1);
+    assert_eq!(router.mark_failed(&receipts(&batch)).unwrap().len(), 1);
     drop(router);
     let router = open_router(&path);
     assert!(router.pending_for("p").is_empty());
@@ -151,8 +155,8 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
     {
         let router = open_router(&path);
         router.record(record("done", "p")).await.unwrap();
-        router.claim_pending("p", 1).unwrap();
-        router.mark_delivered(&["done"]).unwrap();
+        let batch = router.claim_pending("p", 1).unwrap();
+        router.mark_delivered(&receipts(&batch)).unwrap();
         router.record(record("waited", "p")).await.unwrap();
         router.tombstone("waited").unwrap();
         router.tombstone("early").unwrap();
@@ -226,8 +230,8 @@ async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
     let path = dir.path().join("completions.sqlite");
     let router = open_router(&path);
     router.record(record("old", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
-    router.mark_delivered(&["old"]).unwrap();
+    let batch = router.claim_pending("p", 1).unwrap();
+    router.mark_delivered(&receipts(&batch)).unwrap();
     router.record(record("live", "p")).await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(router.compact(Duration::from_millis(1)).unwrap(), 1);

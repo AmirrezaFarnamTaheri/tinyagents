@@ -108,14 +108,15 @@ async fn evicting_one_key_preserves_other_cached_routers_and_held_claims() {
         )
         .await
         .unwrap();
-    assert_eq!(removed.pull("parent", 1).unwrap().len(), 1);
+    let claimed = removed.pull("parent", 1).unwrap();
+    assert_eq!(claimed.len(), 1);
 
     let evicted = pool.remove(&"workspace-a").unwrap().unwrap();
     assert!(Arc::ptr_eq(&evicted, &removed));
     assert!(pool.get(&"workspace-a").unwrap().is_none());
     let still_cached = pool.get(&"workspace-b").unwrap().unwrap();
     assert!(Arc::ptr_eq(&still_cached, &unrelated));
-    assert_eq!(removed.mark_delivered(&["held-claim"]).unwrap(), 1);
+    assert_eq!(removed.mark_delivered(&claimed[0].receipt().into_iter().collect::<Vec<_>>()).unwrap(), 1);
     assert_eq!(
         removed.store().get("held-claim").unwrap().state,
         crate::completions::CompletionState::Delivered
