@@ -21,8 +21,11 @@ pub type MediaProgressFn = Arc<dyn Fn(&MediaJobProgress) + Send + Sync>;
 type PerCall<T> =
     Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>;
 
-fn progress_label(kind: &MediaArtifactKind) -> &'static str {
-    match kind { MediaArtifactKind::Image => "Generating image", MediaArtifactKind::Video => "Generating video" }
+pub(super) fn progress_label(kind: &MediaArtifactKind) -> &'static str {
+    match kind {
+        MediaArtifactKind::Image => "Generating image",
+        MediaArtifactKind::Video => "Generating video",
+    }
 }
 
 pub struct MediaArtifactTool<T: Tool> {

@@ -1,8 +1,8 @@
 use super::*;
 use crate::exec::{
     ExecAuditEvent, ExecAuditOutcome, ExecAuthorizationRequest, ExecBackend, ExecBackendOutcome,
-    ExecDenied, ExecGate, ExecOutput, ExecPermit, ExecProgress, ExecRefusalKind,
-    ExecRequest, ShellFlavor,
+    ExecDenied, ExecGate, ExecOutput, ExecPermit, ExecProgress, ExecRefusalKind, ExecRequest,
+    ShellFlavor,
 };
 use std::{
     collections::BTreeMap,

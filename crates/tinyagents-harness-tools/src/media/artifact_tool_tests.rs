@@ -49,15 +49,27 @@ impl ArtifactFiling for Filer {
 struct CallIdentity(&'static str);
 struct Context(CallIdentity);
 impl ToolRunContext for Context {
-    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> { Some(&self.0) }
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(&self.0)
+    }
 }
 
 struct RoutingFiler;
 #[async_trait]
 impl ArtifactFiling for RoutingFiler {
-    async fn file(&self, _: GeneratedArtifact, context: Option<&dyn ToolRunContext>) -> Result<FiledArtifact,String> {
-        let identity=context.and_then(|context|context.host_extension()).and_then(|extension|extension.downcast_ref::<CallIdentity>()).ok_or("missing call identity")?;
-        Ok(FiledArtifact{id:identity.0.to_owned(),path:format!("/files/{}.png",identity.0)})
+    async fn file(
+        &self,
+        _: GeneratedArtifact,
+        context: Option<&dyn ToolRunContext>,
+    ) -> Result<FiledArtifact, String> {
+        let identity = context
+            .and_then(|context| context.host_extension())
+            .and_then(|extension| extension.downcast_ref::<CallIdentity>())
+            .ok_or("missing call identity")?;
+        Ok(FiledArtifact {
+            id: identity.0.to_owned(),
+            path: format!("/files/{}.png", identity.0),
+        })
     }
 }
 
@@ -87,22 +99,41 @@ async fn wrapper_keeps_metadata_and_files_each_artifact() {
 
 #[tokio::test]
 async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_results() {
-    let tool=MediaArtifactTool::new(Inner,MediaArtifactKind::Image,Arc::new(RoutingFiler));
-    let first=Context(CallIdentity("first"));
-    let second=Context(CallIdentity("second"));
-    let (left,right)=tokio::join!(
-        tool.execute_with_context(json!({"prompt":"first"}),ToolCallOptions::default(),Some(&first)),
-        tool.execute_with_context(json!({"prompt":"second"}),ToolCallOptions::default(),Some(&second)),
+    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, Arc::new(RoutingFiler));
+    let first = Context(CallIdentity("first"));
+    let second = Context(CallIdentity("second"));
+    let (left, right) = tokio::join!(
+        tool.execute_with_context(
+            json!({"prompt":"first"}),
+            ToolCallOptions::default(),
+            Some(&first)
+        ),
+        tool.execute_with_context(
+            json!({"prompt":"second"}),
+            ToolCallOptions::default(),
+            Some(&second)
+        ),
     );
-    for (result,identity) in [(left.unwrap(),"first"),(right.unwrap(),"second")] {
-        let ToolContent::Json{data}=&result.content[0] else {panic!("expected JSON result")};
-        assert_eq!(data["artifacts"][0]["artifact_id"],identity);
-        assert_eq!(data["artifacts"][0]["path"],format!("/files/{identity}.png"));
+    for (result, identity) in [(left.unwrap(), "first"), (right.unwrap(), "second")] {
+        let ToolContent::Json { data } = &result.content[0] else {
+            panic!("expected JSON result")
+        };
+        assert_eq!(data["artifacts"][0]["artifact_id"], identity);
+        assert_eq!(
+            data["artifacts"][0]["path"],
+            format!("/files/{identity}.png")
+        );
     }
 }
 
 #[test]
 fn configured_media_kinds_keep_their_exact_heartbeat_labels() {
-    assert_eq!(progress_label(&MediaArtifactKind::Image),"Generating image");
-    assert_eq!(progress_label(&MediaArtifactKind::Video),"Generating video");
+    assert_eq!(
+        super::artifact_tool::progress_label(&MediaArtifactKind::Image),
+        "Generating image"
+    );
+    assert_eq!(
+        super::artifact_tool::progress_label(&MediaArtifactKind::Video),
+        "Generating video"
+    );
 }
