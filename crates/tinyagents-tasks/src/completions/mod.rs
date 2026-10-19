@@ -20,8 +20,8 @@
 //! Live pushes are at-least-once: the host acknowledges with
 //! `mark_delivered`. Nothing here relaunches a child.
 
-mod delivery;
 mod admission;
+mod delivery;
 mod driver;
 mod format;
 mod registry;
@@ -29,20 +29,20 @@ mod router;
 mod store;
 mod types;
 
+pub use admission::CompletionAdmission;
 pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
     ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
 };
-pub use admission::CompletionAdmission;
 pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
-    CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
-    CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
+    open_driver_completion_store, open_driver_completion_store_or_memory, CompletionRouterPool,
+    CompletionRouterPoolError, CompletionRouterReplaceOutcome, CompletionStoreFallback,
 };
 pub use router::{
-    CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,
-    TombstoneOutcome,
+    CompletionRouter, CompletionStoreReplaceOutcome, RecordOutcome, TombstoneOutcome,
+    DEFAULT_MAX_ATTEMPTS,
 };
 pub use store::{
     ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore, ParentGateClaim,

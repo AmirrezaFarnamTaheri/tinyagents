@@ -86,12 +86,10 @@ async fn take_one_at_a_time_pops_only_the_oldest_item() {
         queue.take(QueueLane::Steer, QueueMode::OneAtATime).await,
         vec!["second"]
     );
-    assert!(
-        queue
-            .take(QueueLane::Steer, QueueMode::OneAtATime)
-            .await
-            .is_empty()
-    );
+    assert!(queue
+        .take(QueueLane::Steer, QueueMode::OneAtATime)
+        .await
+        .is_empty());
 }
 
 #[tokio::test]

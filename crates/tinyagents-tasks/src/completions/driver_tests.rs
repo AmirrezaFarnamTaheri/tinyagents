@@ -256,6 +256,46 @@ async fn queued_completion_generation_is_rejected_after_cross_router_close_and_r
     }));
 }
 
+#[tokio::test]
+async fn cross_router_cancellation_rejects_a_queued_completion_at_turn_consumption() {
+    use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
+    use tinyinference_llm::message::Message;
+
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ) as Arc<dyn CompletionStore>
+    };
+    let producer = Arc::new(CompletionRouter::new(open()));
+    let canceller = CompletionRouter::new(open());
+    producer.record(record("queued", "parent")).await.unwrap();
+    let completion = producer.pending_for("parent").remove(0);
+    let queue = RunQueue::new();
+    queue
+        .push_guarded(
+            QueueLane::Followup,
+            Message::user("child completed"),
+            Arc::new(crate::completions::CompletionAdmission::for_record(
+                Arc::clone(&producer),
+                &completion,
+            )),
+        )
+        .await;
+
+    canceller.cancel_parent("parent").unwrap();
+    canceller.resume_parent("parent");
+
+    assert!(
+        queue
+            .take(QueueLane::Followup, QueueMode::All)
+            .await
+            .is_empty(),
+        "a completion queued under the old generation must not reach the model turn"
+    );
+}
+
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();

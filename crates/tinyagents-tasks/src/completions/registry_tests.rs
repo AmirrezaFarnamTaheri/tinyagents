@@ -30,14 +30,12 @@ async fn durable_completion_open_fails_closed_while_explicit_local_fallback_rema
         tinystoragedrivers_core::MemoryStorage::new(),
     ));
     let scope = tinystoragedrivers_core::Scope::new("shared").unwrap();
-    assert!(
-        open_driver_completion_store_or_memory(
-            Arc::clone(&backend),
-            scope.clone(),
-            CompletionStoreFallback::FailClosed,
-        )
-        .is_err()
-    );
+    assert!(open_driver_completion_store_or_memory(
+        Arc::clone(&backend),
+        scope.clone(),
+        CompletionStoreFallback::FailClosed,
+    )
+    .is_err());
 
     let local = open_driver_completion_store_or_memory(
         backend,
