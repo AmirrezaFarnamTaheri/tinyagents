@@ -1071,23 +1071,34 @@ After the runtime red test fails, add the helper implementation to `adoption.rs`
 ### 2. Adopt legacy transcripts into canonical identity without changing old files
 
 **Files:** `crates/tinyagents-session/src/transcript/session_tests.rs` and
-`crates/tinyagents-session/src/transcript/transcript_tests.rs`.
+`crates/tinyagents-session/src/port/drivers/transcripts_adoption_tests.rs`.
 
-Do not parse a legacy filename into a new canonical stem. Add a regression to
-`transcript/session_tests.rs` using `SessionRef::scoped("thread-legacy",
-"agent-legacy")`; assert its `session_stem` is deterministic across two
-constructions and does not equal a timestamped legacy stem. In
-`transcript/transcript_tests.rs`, add an adoption test that creates the old
-stem fixture via the existing in-memory transcript locator, calls
-`TranscriptLocator::adopt_legacy(&canonical_session, "thread-legacy", &meta)`,
-reads the head with `head_generation`, and asserts the imported messages and
-canonical metadata match while the legacy fixture remains readable and
-unchanged. This is a compatibility characterization for adoption; the
-behavioral red test for the missing host identity binding is in step 3. Run
-`run_tinyagents_test -p tinyagents-session legacy_session_adoption`; then ensure the
-runtime calls adoption only through the already existing `ResumeMode::Session`
-path. Do not add a constructor that claims to map arbitrary old raw filenames
-to `SessionRef`.
+Do not parse a legacy filename into a new canonical stem. Preserve the
+existing `a_stem_is_deterministic_and_carries_no_timestamp` regression, and
+add this explicit logical-key assertion to `transcript/session_tests.rs`:
+
+```rust
+#[test]
+fn canonical_identity_is_stable_and_distinct_from_legacy_stems() {
+    let first = SessionRef::scoped("thread-legacy", "agent-legacy");
+    let second = SessionRef::scoped("thread-legacy", "agent-legacy");
+    assert_eq!(session_stem(&first), session_stem(&second));
+    assert_ne!(session_stem(&first), "1700000100_agent-legacy");
+    assert_eq!(first.first_generation(), second.first_generation());
+}
+```
+
+Keep the existing complete `legacy_roots_are_folded_oldest_first_once` test
+in `port/drivers/transcripts_adoption_tests.rs`. It creates timestamped stems,
+calls `adopt_legacy`, checks oldest-first imported messages and canonical
+metadata, verifies a repeated call is a no-op, and leaves legacy roots intact.
+Do not duplicate that integration fixture in `transcript_tests.rs`; this plan
+adds no new adoption algorithm. Run
+`run_tinyagents_test -p tinyagents-session legacy_roots_are_folded_oldest_first_once`
+and `run_tinyagents_test -p tinyagents-session canonical_identity_is_stable_and_distinct_from_legacy_stems`.
+The runtime calls legacy adoption only through the existing
+`ResumeMode::Session` path. Do not add a constructor that maps arbitrary old
+raw filenames to `SessionRef`.
 
 ### 3. Resolve identity before resume and bind the admitted lease
 
