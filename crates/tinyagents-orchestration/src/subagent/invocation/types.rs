@@ -12,7 +12,7 @@
 //! sibling `mod.rs` and its `*_tests.rs` files.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -329,6 +329,8 @@ pub struct SubAgentJobRegistry {
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
     /// Scoped bridge from driver task identity to the public job control id.
     pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
+    /// Monotonic settlement order for deterministic bounded terminal retention.
+    pub(crate) next_terminal_sequence: Arc<AtomicU64>,
 }
 
 impl Default for SubAgentJobRegistry {
@@ -343,6 +345,7 @@ impl Default for SubAgentJobRegistry {
             steering,
             controls: Arc::default(),
             driver_jobs: Arc::default(),
+            next_terminal_sequence: Arc::new(AtomicU64::new(1)),
         }
     }
 }
@@ -408,9 +411,8 @@ pub(crate) struct JobControl {
     /// Watchers keep a terminal job from cap pruning until they consume its
     /// final status or drop their wait future.
     pub(crate) waiters: Arc<AtomicUsize>,
-    /// Set after any waiter consumes a terminal snapshot so the final waiter
-    /// dropping can reclaim it even when it is below the soft cap.
-    pub(crate) terminal_observed: Arc<AtomicBool>,
+    /// Settlement order used to evict the oldest unpinned terminal record.
+    pub(crate) terminal_sequence: AtomicU64,
 }
 
 pub struct DriverJobRegistration {
