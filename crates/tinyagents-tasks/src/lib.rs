@@ -32,6 +32,8 @@ pub use completions::{
     DeliveryTarget, DurableThreadDeliveryLease, DurableThreadDeliveryLeases, ParentBusyGate,
     ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases, open_driver_completion_store,
     open_driver_completion_store_or_memory,
+    open_driver_completion_store_or_memory_with_coordination_domain,
+    open_driver_completion_store_with_coordination_domain,
 };
 pub use driver_store::DriverTaskStore;
 pub use reconcile::{

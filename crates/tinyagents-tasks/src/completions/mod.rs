@@ -41,6 +41,8 @@ pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
     CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
+    open_driver_completion_store_or_memory_with_coordination_domain,
+    open_driver_completion_store_with_coordination_domain,
 };
 pub use router::{
     CompletionRouter, CompletionStoreReplaceOutcome, DEFAULT_MAX_ATTEMPTS, RecordOutcome,

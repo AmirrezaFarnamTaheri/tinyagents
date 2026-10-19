@@ -550,22 +550,18 @@ async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit(
     let backend_a: Arc<dyn StorageBackend> = Arc::new(shared_memory.clone());
     let backend_b: Arc<dyn StorageBackend> = Arc::new(shared_memory);
     let scope = Scope::new("shared").unwrap();
-    let producer_store: Arc<dyn CompletionStore> = Arc::new(
-        DriverCompletionStore::new_with_coordination_domain(
-            Arc::clone(&backend_a),
-            scope.clone(),
-            "shared-backend-aliases",
-        )
-        .unwrap(),
-    );
-    let observer_store: Arc<dyn CompletionStore> = Arc::new(
-        DriverCompletionStore::new_with_coordination_domain(
-            backend_b,
-            scope,
-            "shared-backend-aliases",
-        )
-        .unwrap(),
-    );
+    let producer_store = open_driver_completion_store_with_coordination_domain(
+        Arc::clone(&backend_a),
+        scope.clone(),
+        "shared-backend-aliases",
+    )
+    .unwrap();
+    let observer_store = open_driver_completion_store_with_coordination_domain(
+        backend_b,
+        scope,
+        "shared-backend-aliases",
+    )
+    .unwrap();
     let producer = Arc::new(CompletionRouter::new(producer_store));
     let observer = Arc::new(CompletionRouter::new(observer_store));
     producer.record(record("first", "parent")).await.unwrap();
