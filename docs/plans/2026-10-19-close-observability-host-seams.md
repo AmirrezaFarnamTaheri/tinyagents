@@ -52,6 +52,7 @@ pub struct CloseCopy {
     pub repair_unverified: &'static str,
     pub instruction_needles: &'static [&'static str],
     pub minimum_quoted_words: usize,
+    pub verification_prompt_template: &'static str,
 }
 
 pub const ENGLISH_CLOSE_COPY: CloseCopy = CloseCopy {
@@ -72,6 +73,7 @@ pub const ENGLISH_CLOSE_COPY: CloseCopy = CloseCopy {
     instruction_needles: &[FINAL_ANSWER_INSTRUCTION, TRUNCATED_ANSWER_INSTRUCTION,
         MAX_ITER_CHECKPOINT_INSTRUCTION, FINAL_WRITE_INSTRUCTION, STOP_NOTE_PREAMBLE],
     minimum_quoted_words: 10,
+    verification_prompt_template: "You are checking a reply before it is shown to a user. Below are the user's request, the records of the tool calls made while handling it, and the reply.\n\nAnswer REJECT if any of these is true:\n1. The reply only says what the assistant will do or is about to do, instead of reporting what happened.\n2. The reply states something the tool records contradict, for example that something does not exist or did not work when a record shows it succeeded, or that something succeeded when its record shows it failed.\n3. The request was not completed, a failed record gives the reason, and the reply does not pass that reason on.\n4. The reply narrates the assistant's own deliberation — thinking aloud, correcting itself part way through, or weighing what to do — rather than stating the outcome. Reporting what a tool call returned is not deliberation.\n5. The reply recites or enumerates the tools the assistant has, instead of reporting what this turn's tool calls produced. Naming a tool the reply actually used, or answering a request that asked what the assistant can do, is not a violation.\n\nOtherwise answer ACCEPT. Reply with the single word ACCEPT or REJECT.\n\n<user_request>\n{user_request}\n</user_request>\n\n<tool_records>\n{records}\n</tool_records>\n\n<reply>\n{reply}\n</reply>",
 };
 
 pub fn checkpoint_with_copy(copy: &CloseCopy, steps: usize, rendered_results: &str, has_results: bool) -> String {
@@ -85,6 +87,40 @@ pub fn final_summary_with_copy(copy: &CloseCopy, rendered_results: &str, has_res
         return copy.empty_final_summary.to_owned();
     }
     copy.final_summary_template.replace("{results}", rendered_results)
+}
+
+pub fn final_answer_instruction(copy: &CloseCopy, stop_reason: Option<&str>, truncated: bool, records: &str) -> String {
+    use crate::middleware::wrap_harness_instruction;
+    let mut directive = String::new();
+    if let Some(reason) = stop_reason {
+        directive.push_str(copy.stop_note_preamble);
+        directive.push_str("\n<stop_note>\n");
+        directive.push_str(reason.trim());
+        directive.push_str("\n</stop_note>\n\n");
+    }
+    directive.push_str(if truncated && stop_reason.is_none() {
+        copy.truncated_answer_instruction
+    } else {
+        copy.final_answer_instruction
+    });
+    let mut out = wrap_harness_instruction(&directive);
+    out.push_str("\n\n<tool_records>\n");
+    out.push_str(if records.trim().is_empty() { copy.no_tool_calls } else { records.trim() });
+    out.push_str("\n</tool_records>");
+    out
+}
+
+pub fn verification_prompt(copy: &CloseCopy, request: &str, records: &str, reply: &str, request_char_cap: usize) -> String {
+    copy.verification_prompt_template
+        .replace("{user_request}", &truncate_chars(request, request_char_cap))
+        .replace("{records}", records.trim())
+        .replace("{reply}", reply.trim())
+}
+
+pub fn instruction_needles(copy: &CloseCopy, stop_reason: Option<&str>) -> Vec<String> {
+    let mut sources = copy.instruction_needles.to_vec();
+    if let Some(reason) = stop_reason { sources.push(reason); }
+    harness_instruction_needles(&sources, copy.minimum_quoted_words)
 }
 
 pub fn repair_with_copy(copy: &CloseCopy, instruction: &str, violation: CloseViolation) -> String {
@@ -115,6 +151,28 @@ pub const ENGLISH_STOP_COPY: StopCopy = StopCopy {
     hidden_calls_template: "- …and {count} more tool call(s)",
     proceed_prompt: "\nTell me how you'd like to proceed, or ask me to try again.",
 };
+
+pub fn english_stop_reason(key: &str) -> &'static str {
+    match key {
+        "turn_stop.transient" => "a service I needed kept timing out or was temporarily unavailable",
+        "turn_stop.uncertain_side_effect" => "an action timed out and I could not confirm whether it went through, so I did not repeat it",
+        "turn_stop.authentication" => "a service rejected my credentials",
+        "turn_stop.permission" => "I don't have permission for a step this needs",
+        "turn_stop.policy" => "a step this needs is blocked by your security settings",
+        "turn_stop.missing_program" => "a program or feature this needs is not available on this device",
+        "turn_stop.not_found" => "something this needs could not be found",
+        "turn_stop.invalid_calls" => "a tool kept rejecting my requests as invalid",
+        "turn_stop.unavailable" => "a tool this needs is not available right now",
+        "turn_stop.site_refused" => "a website kept refusing my requests",
+        "turn_stop.repeated_failure" => "the same step kept failing",
+        "turn_stop.varied_failures" => "several different tool calls in a row failed",
+        "turn_stop.repeating_step" => "I kept repeating the same step without getting anything new",
+        "turn_stop.out_of_credits" => "the account is out of inference credits; add credits, then ask me to try again",
+        "turn_stop.provider_config" => "the configured model or provider rejected the request; check the model and API key in Connections",
+        "turn_stop.missing_connection" => "a service this needs isn't connected; connect it in Connections, then ask me to try again",
+        _ => "my tool calls were not getting anywhere",
+    }
+}
 
 pub struct StopSummaryGroup { pub name: String, pub success: bool, pub error: Option<String>, pub count: usize }
 
