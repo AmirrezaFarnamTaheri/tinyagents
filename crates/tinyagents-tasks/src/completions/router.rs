@@ -8,11 +8,13 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::run_queue::{QueueLane, RunQueueHandle};
 
 use super::format::{CompletionFormatter, NeutralCompletionFormatter};
-use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore};
+use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
 use super::types::{CompletionReceipt, CompletionRecord, CompletionState, NotifyMode};
 
 const LOG_PREFIX: &str = "[completion-router]";
 const CLAIM_VISIBILITY: Duration = Duration::from_secs(30);
+const PARENT_GATE_TTL: Duration = Duration::from_secs(60);
+const PARENT_GATE_WAIT: Duration = Duration::from_secs(65);
 
 /// Delivery attempts before a record gives up, unless overridden.
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 5;
@@ -84,6 +86,50 @@ pub struct CompletionRouter {
     formatter: Arc<dyn CompletionFormatter>,
     max_attempts: u32,
     state: Mutex<RouterState>,
+}
+
+struct ParentGateGuard {
+    store: Arc<dyn CompletionStore>,
+    parent_key: String,
+    claim: ParentGateClaim,
+}
+
+impl ParentGateGuard {
+    fn acquire(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
+        let holder = uuid::Uuid::new_v4().to_string();
+        let started = std::time::Instant::now();
+        loop {
+            if let Some(claim) = store.acquire_parent_gate(parent_key, &holder, PARENT_GATE_TTL)? {
+                return Ok(Self {
+                    store,
+                    parent_key: parent_key.to_owned(),
+                    claim,
+                });
+            }
+            if started.elapsed() >= PARENT_GATE_WAIT {
+                return Err(TinyAgentsError::Graph(format!(
+                    "completion router: timed out waiting for parent admission gate `{parent_key}`"
+                )));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn renew(&self) -> Result<bool> {
+        self.store
+            .renew_parent_gate(&self.parent_key, &self.claim, PARENT_GATE_TTL)
+    }
+}
+
+impl Drop for ParentGateGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self
+            .store
+            .release_parent_gate(&self.parent_key, &self.claim)
+        {
+            tracing::warn!(parent_key = %self.parent_key, error = %error, "{LOG_PREFIX} parent gate release failed");
+        }
+    }
 }
 
 impl CompletionRouter {
@@ -265,8 +311,9 @@ impl CompletionRouter {
     /// is lost first ([`Self::detach_parent`], [`Self::release`], or a restart)
     /// the record is claimable again. Delivery is at-least-once.
     pub async fn record(&self, mut record: CompletionRecord) -> Result<RecordOutcome> {
-        let push = {
+        let (push, gate) = {
             let mut state = self.lock()?;
+            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &record.parent_key)?;
             if Self::parent_cancelled(&state, &record.parent_key) {
                 tracing::debug!(
                     task_id = %record.task_id,
@@ -306,7 +353,7 @@ impl CompletionRouter {
             // stays pending and leased until the host acknowledges it with
             // `mark_delivered`, so a crash, a cleared queue or a detached parent
             // never loses it (it is redelivered through `claim_pending`).
-            match lane.and_then(|lane| {
+            let push = match lane.and_then(|lane| {
                 state
                     .parents
                     .get(&record.parent_key)
@@ -337,7 +384,8 @@ impl CompletionRouter {
                     Some((lane, queue, receipt))
                 }
                 None => None,
-            }
+            };
+            (push, gate)
         };
         let Some((lane, queue, push_receipt)) = push else {
             return Ok(RecordOutcome::Recorded {
@@ -345,6 +393,13 @@ impl CompletionRouter {
                 receipt: None,
             });
         };
+        if !gate.renew()? {
+            self.release(std::slice::from_ref(&push_receipt));
+            return Err(TinyAgentsError::Graph(format!(
+                "completion router: parent admission gate lost for `{}`",
+                record.parent_key
+            )));
+        }
         let message = self.formatter.to_message(std::slice::from_ref(&record));
         queue.push(lane, message).await;
         tracing::debug!(
@@ -420,6 +475,7 @@ impl CompletionRouter {
     /// (until [`Self::compact`] drops it after its retention window). Returns how many pending records were withdrawn.
     pub fn cancel_parent(&self, parent_key: &str) -> Result<usize> {
         let mut state = self.lock()?;
+        let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
         Self::set_parent_marker(&state, parent_key, CompletionState::Tombstoned)?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
@@ -440,6 +496,7 @@ impl CompletionRouter {
     /// [`Self::cancel_parent`] (a stopped thread that the user reopened).
     pub fn resume_parent(&self, parent_key: &str) {
         let result = self.lock().and_then(|state| {
+            let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
             Self::set_parent_marker(&state, parent_key, CompletionState::Delivered)
         });
         if let Err(error) = result {
@@ -512,6 +569,10 @@ impl CompletionRouter {
         mode: CompletionClaimMode,
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
+        let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+        if Self::parent_cancelled(&state, parent_key) {
+            return Ok(Vec::new());
+        }
         let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
         let mut candidates =
