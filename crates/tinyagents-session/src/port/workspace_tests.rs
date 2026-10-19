@@ -117,6 +117,21 @@ async fn a_workspace_provider_lease_keeps_the_opened_store_alive() {
         .await
         .unwrap();
     drop(opened);
+    assert_eq!(
+        lease
+            .stores()
+            .kv
+            .get("lease-test", "key")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("retained"))
+    );
+    lease
+        .stores()
+        .kv
+        .put("lease-test", "after-drop", serde_json::json!("written through lease"))
+        .await
+        .unwrap();
 
     let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     assert_eq!(
@@ -130,6 +145,18 @@ async fn a_workspace_provider_lease_keeps_the_opened_store_alive() {
             .await
             .unwrap(),
         Some(serde_json::json!("retained"))
+    );
+    assert_eq!(
+        reopened
+            .provider()
+            .lease_for_agent("agent")
+            .unwrap()
+            .stores()
+            .kv
+            .get("lease-test", "after-drop")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("written through lease"))
     );
 }
 
