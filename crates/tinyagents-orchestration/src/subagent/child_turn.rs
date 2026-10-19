@@ -99,12 +99,12 @@ impl ChildTurnControl {
         self.cancellation.clone()
     }
 
-    fn ensure_admitted<E>(&self) -> Result<(), ChildTurnError<E>> {
+    fn ensure_admitted(&self) -> Result<(), ChildTurnStop> {
         if self.cancellation.is_cancelled() {
-            Err(ChildTurnError::Cancelled)
+            Err(ChildTurnStop::Cancelled)
         } else if !self.fence.admitted() {
             self.cancellation.cancel();
-            Err(ChildTurnError::LeaseLost)
+            Err(ChildTurnStop::LeaseLost)
         } else {
             Ok(())
         }
@@ -113,19 +113,43 @@ impl ChildTurnControl {
     async fn race<T, E>(
         &self,
         future: impl Future<Output = Result<T, E>>,
-    ) -> Result<T, ChildTurnError<E>> {
+    ) -> Result<Result<T, E>, ChildTurnStop> {
         self.ensure_admitted()?;
         tokio::select! {
             biased;
-            _ = self.cancellation.cancelled() => Err(ChildTurnError::Cancelled),
+            _ = self.cancellation.cancelled() => Err(ChildTurnStop::Cancelled),
             _ = self.fence.lost() => {
                 self.cancellation.cancel();
-                Err(ChildTurnError::LeaseLost)
+                Err(ChildTurnStop::LeaseLost)
             }
             result = future => {
                 self.ensure_admitted()?;
-                result.map_err(ChildTurnError::Host)
+                Ok(result)
             }
+        }
+    }
+
+    async fn race_host<T, E>(
+        &self,
+        future: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, ChildTurnError<E>> {
+        match self.race(future).await.map_err(ChildTurnError::from)? {
+            Ok(value) => Ok(value),
+            Err(error) => Err(ChildTurnError::Host(error)),
+        }
+    }
+}
+
+enum ChildTurnStop {
+    Cancelled,
+    LeaseLost,
+}
+
+impl<Error> From<ChildTurnStop> for ChildTurnError<Error> {
+    fn from(stop: ChildTurnStop) -> Self {
+        match stop {
+            ChildTurnStop::Cancelled => Self::Cancelled,
+            ChildTurnStop::LeaseLost => Self::LeaseLost,
         }
     }
 }
@@ -202,12 +226,13 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
 ) -> Result<ChildTurnResult<H::Message>, ChildTurnError<H::Error>> {
     let result = match control
         .race(host.run_turn(control.cancellation()))
-        .await?
+        .await
+        .map_err(ChildTurnError::from)?
     {
         Ok(run) => run,
         Err(failure) => {
             control
-                .race(host.persist_failure(&failure.accepted_history, &failure.accounting))
+                .race_host(host.persist_failure(&failure.accepted_history, &failure.accounting))
                 .await?;
             return Err(ChildTurnError::Host(failure.error));
         }
@@ -218,7 +243,7 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
     run.accounting.model_calls = run.model_calls;
 
     if run.hit_cap {
-        let summary = control.race(host.summarize_cap(&run)).await?;
+        let summary = control.race_host(host.summarize_cap(&run)).await?;
         run.output = summary.text;
         run.accounting.usage.calls = run
             .accounting
@@ -231,7 +256,8 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
 
     if (run.hit_cap || run.early_exit) && !run.output.trim().is_empty() {
         control.ensure_admitted()?;
-        host.append_final_message(&mut run.accepted_history, &run.output)?;
+        host.append_final_message(&mut run.accepted_history, &run.output)
+            .map_err(ChildTurnError::Host)?;
     }
 
     let result = ChildTurnResult {
@@ -241,8 +267,8 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
         hit_cap: run.hit_cap,
         early_exit: run.early_exit,
     };
-    control.race(host.persist_success(&result)).await?;
-    control.race(host.after_commit(&result, control.cancellation()))
+    control.race_host(host.persist_success(&result)).await?;
+    control.race_host(host.after_commit(&result, control.cancellation()))
         .await?;
     Ok(result)
 }
