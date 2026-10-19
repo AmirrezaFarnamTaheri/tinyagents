@@ -114,7 +114,7 @@ pub fn configure(settings: TimeoutSettings) -> &'static TimeoutSettings {
     let ms = settings.inherited_ms.load(Ordering::Relaxed);
     let global = SETTINGS.get_or_init(|| settings);
     global.set_inherited_timeout_ms(ms);
-    log::debug!("[tool_timeout] configured inherited timeout {ms}ms");
+    tracing::debug!("[tool_timeout] configured inherited timeout {ms}ms");
     global
 }
 
