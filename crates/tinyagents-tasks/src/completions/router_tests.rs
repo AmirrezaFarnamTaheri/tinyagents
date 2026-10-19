@@ -898,15 +898,13 @@ impl CompletionStore for LostRenewalGateStore {
         ttl: Duration,
     ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
         let claim = self.inner.acquire_parent_gate(parent_key, holder, ttl)?;
-        if claim.is_some() {
-            if let Some(sender) = self
-                .acquired
+        if let Some(sender) = claim.as_ref().and_then(|_| {
+            self.acquired
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
-            {
-                let _ = sender.send(());
-            }
+        }) {
+            let _ = sender.send(());
         }
         Ok(claim)
     }
