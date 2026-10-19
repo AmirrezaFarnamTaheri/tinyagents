@@ -1471,6 +1471,34 @@ let tool_outcomes =
 tool_outcomes,
 ```
 
+The exact declarations and report construction are:
+
+```rust
+pub struct TurnTail {
+    guard: Option<FeedGuard>,
+    hook: Option<EarlyExitHook>,
+    controls: TurnControls,
+    max_iterations: usize,
+    tools: ToolSetReport,
+    completion: Option<Arc<dyn TurnCompletionSink>>,
+    outcomes: tinyagents_harness::turn_outcome::ToolOutcomeSink,
+}
+
+// At the beginning of TurnTail::finish, before moving other fields:
+let tool_outcomes =
+    tinyagents_harness::turn_outcome::drain_tool_outcomes(&self.outcomes);
+
+// Include this field in the existing TurnReport literal:
+tool_outcomes,
+```
+
+`TurnReport` receives
+`pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>`;
+its manual `Debug` implementation receives
+`.field("tool_outcomes", &self.tool_outcomes)`. `TurnReport::default()` keeps
+failed-before-run reports empty. Keep `PreparedTurn`'s existing `tail` field:
+that owns the sink for both `run` and `split`.
+
 In `TurnDriver::prepare`, create `outcome_sink`, push
 `Arc::new(tinyagents_harness::middleware::library::ToolOutcomeCaptureMiddleware::new(Arc::clone(&outcome_sink)))` into
 the harness before the `for middleware in context` loop, and place the sink in
@@ -1482,23 +1510,31 @@ and each custom-driver literal. In `TurnDriver::execute`, preserve observations
 on both result branches:
 
 ```rust
-let TurnRun { partial, report, input_len } = prepared.run().await?;
-let tool_outcomes = report.tool_outcomes;
-match outcome_from_partial(partial, input_len) {
-    Ok(mut outcome) => {
-        outcome.tool_outcomes = tool_outcomes;
-        Ok(outcome)
-    }
-    Err(mut failure) => {
-        failure.partial.tool_outcomes = tool_outcomes;
-        Err(failure)
+let TurnRun { partial, report, input_len } = prepared.run().await;
+let mut outcome = outcome_from_partial(partial, input_len);
+let tool_outcomes = report.tool_outcomes.clone();
+match &mut outcome {
+    Ok(done) => done.tool_outcomes = tool_outcomes,
+    Err(failure) => {
+        if let Some(partial) = &mut failure.partial {
+            partial.tool_outcomes = tool_outcomes;
+        }
     }
 }
+// Keep the existing early-exit output rewrite and completion emission here.
+if let (Some(exit), Ok(done)) = (&report.early_exit, &mut outcome) {
+    done.output = Some(exit.question.clone());
+}
+if outcome.is_ok() && !defer && !scope.is_subagent() {
+    report.emit_completed();
+}
+outcome
 ```
 
-Retain the existing `outcome_from_partial` argument list at this call site;
-the code above shows the required extraction and assignments. The outcome is
-an in-memory runtime value.
+Initialize the new `DriverOutcome.tool_outcomes` field to `Vec::new()` in
+`outcome_from_partial` and in every custom-driver literal. Keep
+`ToolCallOutcome`'s new `PartialEq` derive so the preserved `DriverOutcome`
+`PartialEq` derive and existing equality assertions remain intact.
 
 Change the owned finalizer to accept the separate observation and sinks, not
 to reconstruct observations from `CommitReceipt`:
