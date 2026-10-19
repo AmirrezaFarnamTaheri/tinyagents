@@ -300,6 +300,9 @@ pub trait SubagentSessionStore: Send + Sync {
         history: Vec<Message>,
     ) -> Result<bool, SubagentError>;
     /// Owner- and lifecycle-checked completion for an owner-bound session.
+    // Each argument is part of the atomic ownership predicate or the new
+    // session result; combining them would hide which values are checked.
+    #[allow(clippy::too_many_arguments)]
     async fn mark_finished_if_current(
         &self,
         id: &str,
