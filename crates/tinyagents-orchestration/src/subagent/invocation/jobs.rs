@@ -35,7 +35,6 @@ struct JobExecutionControls {
 
 struct JobWaitGuard {
     jobs: SubAgentJobRegistry,
-    id: SubAgentJobId,
     waiters: Arc<AtomicUsize>,
     terminal_observed: Arc<AtomicBool>,
 }
@@ -44,11 +43,7 @@ impl Drop for JobWaitGuard {
     fn drop(&mut self) {
         let previous = self.waiters.fetch_sub(1, Ordering::AcqRel);
         if previous == 1 {
-            if self.terminal_observed.load(Ordering::Acquire) {
-                let _ = self.jobs.prune_terminal_after_observation(&self.id);
-            } else {
-                let _ = self.jobs.prune_terminal_over_cap();
-            }
+            let _ = self.jobs.prune_terminal_over_cap();
         }
     }
 }
@@ -263,17 +258,23 @@ impl SubAgentJobRegistry {
             return Ok(());
         }
 
-        let candidates: Vec<_> = controls
+        let mut candidates: Vec<_> = controls
             .iter()
             .filter(|(_, control)| {
                 control.status.borrow().status.is_terminal()
                     && control.waiters.load(Ordering::Acquire) == 0
             })
             .take(excess)
-            .map(|(id, _)| id.clone())
+            .map(|(id, control)| {
+                (
+                    !control.terminal_observed.load(Ordering::Acquire),
+                    id.clone(),
+                )
+            })
             .collect();
+        candidates.sort_by_key(|(unobserved, _)| *unobserved);
         let mut removed = std::collections::HashSet::with_capacity(candidates.len());
-        for id in candidates {
+        for (_, id) in candidates.into_iter().take(excess) {
             let task_id = TaskId::new(id.as_str());
             if self
                 .tasks
@@ -930,7 +931,6 @@ impl SubAgentJobRegistry {
         };
         let waiter_guard = JobWaitGuard {
             jobs: self.clone(),
-            id: id.clone(),
             waiters,
             terminal_observed: terminal_observed.clone(),
         };
@@ -942,9 +942,6 @@ impl SubAgentJobRegistry {
                     terminal_observed.store(true, Ordering::Release);
                 }
                 drop(waiter_guard);
-                if snapshot.status.is_terminal() {
-                    self.prune_terminal_after_observation(&id)?;
-                }
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {
@@ -953,32 +950,9 @@ impl SubAgentJobRegistry {
                     terminal_observed.store(true, Ordering::Release);
                 }
                 drop(waiter_guard);
-                if snapshot.status.is_terminal() {
-                    self.prune_terminal_after_observation(&id)?;
-                }
                 return Ok(snapshot);
             }
         }
-    }
-
-    fn prune_terminal_after_observation(&self, id: &SubAgentJobId) -> Result<(), SubAgentJobError> {
-        let mut driver_jobs = self
-            .driver_jobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut controls = self.controls();
-        if controls.get(id).is_some_and(|control| {
-            !control.status.borrow().status.is_terminal()
-                || control.waiters.load(Ordering::Acquire) > 0
-        }) {
-            return Ok(());
-        }
-        self.tasks
-            .prune_terminal_trusted(&TaskId::new(id.as_str()))
-            .map_err(registry_failure)?;
-        controls.remove(id);
-        driver_jobs.retain(|_, mapped_id| mapped_id != id);
-        Ok(())
     }
 
     /// Returns every job for trusted host-side supervision.
