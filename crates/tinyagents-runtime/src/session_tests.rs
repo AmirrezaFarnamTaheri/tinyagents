@@ -358,6 +358,117 @@ async fn successful_turn_after_orphan_replay_preserves_user_row_and_original_gen
     );
 }
 
+#[tokio::test]
+async fn successful_replay_repairs_same_source_for_thread_and_latest_modes() {
+    for resume in [ResumeMode::Thread, ResumeMode::LatestForAgent] {
+        let locator = memory();
+        let session_ref = SessionRef::scoped("thread-orphan-scan", "agent");
+        let mut user = TranscriptMessage::user("persisted user");
+        user.extra_metadata = Some(serde_json::json!({"source": "kept"}));
+        let rows = vec![
+            TranscriptMessage::system("frozen prompt"),
+            TranscriptMessage::tool("orphan result").with_id("orphan-call"),
+            user,
+        ];
+        seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
+        let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
+            .codec(Arc::new(NativeReplayCodec))
+            .session(locator.clone(), session_ref.clone(), meta())
+            .build()
+            .unwrap();
+
+        session
+            .turn(
+                SessionTurnRequest::new(Message::user("new user turn")),
+                TurnOptions {
+                    resume,
+                    thread_id: Some(session_ref.session_key.clone()),
+                    ..TurnOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let active_ref = locator.head_generation(&session_ref);
+        let active = locator
+            .read_session_transcript(&active_ref)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap();
+        assert_eq!(active_ref.generation, 1, "{resume:?}");
+        assert_eq!(
+            active.messages.iter().map(|row| (row.role.as_str(), row.content.as_str())).collect::<Vec<_>>(),
+            [("system", "frozen prompt"), ("user", "persisted user"), ("user", "new user turn"), ("assistant", "reply after replay")],
+            "same-source {resume:?} replay keeps repaired raw/message correspondence"
+        );
+        assert_eq!(active.messages[1].extra_metadata, Some(serde_json::json!({"source": "kept"})));
+    }
+}
+
+struct LegacyToolReplayCodec;
+
+impl TranscriptCodec for LegacyToolReplayCodec {
+    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        Ok(transcript
+            .messages
+            .iter()
+            .map(|row| match row.role.as_str() {
+                "system" => Message::system(&row.content),
+                "user" => Message::user(&row.content),
+                "legacy_tool" => Message::tool(row.id.as_deref().unwrap_or("legacy"), &row.content),
+                _ => Message::assistant(&row.content),
+            })
+            .collect())
+    }
+}
+
+#[tokio::test]
+async fn successful_replay_keeps_raw_rows_aligned_after_decoded_tool_repair() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-legacy-tool", "agent");
+    let mut legacy_tool = TranscriptMessage::tool("orphan result").with_id("legacy-call");
+    legacy_tool.role = "legacy_tool".into();
+    legacy_tool.extra_metadata = Some(serde_json::json!({"opaque": "preserve"}));
+    let rows = vec![
+        TranscriptMessage::system("frozen prompt"),
+        legacy_tool,
+        TranscriptMessage::user("persisted user"),
+    ];
+    seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
+    let original_fingerprint = fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref());
+    let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
+        .codec(Arc::new(LegacyToolReplayCodec))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("new user turn")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                thread_id: Some(session_ref.session_key.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fingerprint(locator.read_session_transcript(&session_ref).unwrap().as_ref()),
+        original_fingerprint,
+        "the original legacy raw row remains in the sealed source generation"
+    );
+    let active_ref = locator.head_generation(&session_ref);
+    let active = locator.read_session_transcript(&active_ref).unwrap().read_session().unwrap().unwrap();
+    assert_eq!(active_ref.generation, 1);
+    assert_eq!(
+        active.messages.iter().map(|row| (row.role.as_str(), row.content.as_str())).collect::<Vec<_>>(),
+        [("system", "frozen prompt"), ("user", "persisted user"), ("user", "new user turn"), ("assistant", "reply after replay")]
+    );
+}
+
 struct BlockingReadSink {
     locator: Arc<dyn TranscriptLocator>,
     session: SessionRef,
