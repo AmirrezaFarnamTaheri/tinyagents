@@ -36,6 +36,18 @@ struct FixedIdentityResolver {
     agent_id: Arc<Mutex<String>>,
 }
 
+struct FailingIdentityResolver;
+
+impl SessionIdentityResolver<()> for FailingIdentityResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        Err(RuntimeError::Driver("actor admission denied".into()))
+    }
+}
+
 impl SessionIdentityResolver<()> for FixedIdentityResolver {
     fn resolve(
         &self,
@@ -4733,4 +4745,121 @@ async fn resolver_error_does_not_touch_builder_fallback_locator() {
     assert!(matches!(session.resume(&options).await, Err(RuntimeError::Driver(_))));
     assert!(fallback.latest_agents.lock().unwrap().is_empty());
     assert_eq!(*history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let mut fallback_session = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    for _ in 0..9 { fallback_session = fallback_session.next_generation(); }
+    let (fallback, fallback_history) = locator(None);
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(), calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("first"), Message::assistant("admitted root"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .session(fallback.clone(), fallback_session.clone(), meta())
+        .identity_resolver("thread-first-admission", meta(), resolver)
+        .build().unwrap();
+    session.turn(
+        SessionTurnRequest::new(Message::user("first")),
+        TurnOptions {
+            resume: ResumeMode::Never,
+            thread_id: Some("thread-first-admission".into()),
+            ..TurnOptions::default()
+        },
+    ).await.unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "agent-resolved",
+    ).unwrap();
+    let transcripts = &lease.stores().transcripts;
+    let admitted_root = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    assert!(transcripts.read_session_transcript(&admitted_root).is_some());
+    assert!(transcripts.read_session_transcript(&fallback_session).is_none());
+    assert_eq!(*fallback_history.opens.lock().unwrap(), 0);
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_session_override_cannot_change_resolved_identity() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: calls.clone(), agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        session: Some(SessionRef::scoped("other-thread", "agent-resolved")),
+        ..TurnOptions::default()
+    };
+    assert!(matches!(session.resume(&options).await, Err(RuntimeError::InvalidSessionState(_))));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let session_ref = SessionRef::scoped("thread-identity-compact", "agent-resolved");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(), calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![
+            Message::user("one"), Message::assistant("first"),
+            Message::user("two"), Message::assistant("second"),
+        ])),
+        Ok(outcome(vec![Message::user("three"), Message::assistant("third")])),
+        Ok(outcome(vec![
+            Message::user("three"), Message::assistant("third"),
+            Message::user("four"), Message::assistant("fourth"),
+        ])),
+    ]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity-compact", meta(), resolver)
+        .build().unwrap();
+    session.turn(
+        SessionTurnRequest::new(Message::user("one")),
+        session_turn_options(ResumeMode::Session, "thread-identity-compact"),
+    ).await.unwrap();
+    let lease = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "agent-resolved",
+    ).unwrap();
+    let locator = &lease.stores().transcripts;
+    session.turn(
+        SessionTurnRequest::new(Message::user("three")),
+        session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+    ).await.unwrap();
+    let sealed = locator.read_session_transcript(&session_ref).unwrap();
+    let sealed_bytes = fingerprint(sealed.as_ref());
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    session.turn(
+        SessionTurnRequest::new(Message::user("four")),
+        session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+    ).await.unwrap();
+    assert_eq!(fingerprint(sealed.as_ref()), sealed_bytes,
+        "re-admission must not reset or rewrite the sealed generation");
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    let active = locator.read_session_transcript(&session_ref.next_generation())
+        .unwrap().read_session().unwrap().unwrap();
+    assert_eq!(active.messages.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
+        ["three", "third", "four", "fourth"]);
 }
