@@ -1976,16 +1976,8 @@ and post-commit behavior. Do not delete a test merely because an assertion
 currently disagrees; map it to the explicit live-handle or lease contract
 above.
 
-Run the final gates from the TinyAgents workspace root:
-
-```sh
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -Dwarnings
-cargo test --workspace
-```
-
-Long commands must use the super-worktree cancel-aware wrapper, one job, and
-debug info disabled. Run these from the TinyAgents workspace root:
+Run the final gates from the TinyAgents workspace root through the
+super-worktree cancel-aware wrapper, with one job and debug info disabled:
 
 ```sh
 cd -- "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/vendor/tinyagents" && CARGO_BUILD_JOBS=1 CARGO_PROFILE_DEV_DEBUG=0 "/home/enamakel/work/openhuman/worktrees/epic-8088-63-session-runtime/scripts/ci-cancel-aware.sh" cargo check --workspace --all-targets
