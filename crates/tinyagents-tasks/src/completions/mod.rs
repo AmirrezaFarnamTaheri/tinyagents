@@ -21,6 +21,7 @@
 //! `mark_delivered`. Nothing here relaunches a child.
 
 mod delivery;
+mod admission;
 mod driver;
 mod format;
 mod registry;
@@ -32,6 +33,7 @@ pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
     ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
 };
+pub use admission::CompletionAdmission;
 pub use driver::DriverCompletionStore;
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
