@@ -63,10 +63,11 @@ pub async fn complete_once(
         return Err("complete_once: request.model is required".to_owned());
     }
 
-    let model = options
-        .budget
-        .as_ref()
-        .map_or(model.clone(), |budget| budget.wrap_model(model));
+    let model = if let Some(budget) = options.budget.as_ref() {
+        budget.wrap_model(model)
+    } else {
+        model
+    };
     model
         .invoke(&(), request)
         .await
