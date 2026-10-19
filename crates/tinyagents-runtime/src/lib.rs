@@ -53,6 +53,9 @@ pub use types::{
 /// It is object-safe so a host can keep its conversion and metadata ownership
 /// outside this reusable runtime.  The runtime never narrows transcript data
 /// itself; a codec must explicitly decide how every field is represented.
+/// The default reconciliation assumes decoded messages retain positional
+/// correspondence with durable rows; codecs that reorder, combine, or split
+/// rows must override [`Self::reconcile`] to preserve their associations.
 pub trait TranscriptCodec<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
     /// Decodes a durable transcript for model execution.
     fn decode_history(
