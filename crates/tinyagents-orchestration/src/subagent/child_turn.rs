@@ -7,11 +7,11 @@
 //! deferred terminal effects happen only after the transcript commit succeeds.
 
 use async_trait::async_trait;
-use tinyagents_harness::cost::{CallCost, CostTally};
+use std::{future::Future, sync::Arc};
 use tinyagents_harness::CancellationToken;
+use tinyagents_harness::cost::{CallCost, CostTally};
 use tinyagents_tasks::DeliveryFence;
 use tinyinference_llm::usage::UsageTotals;
-use std::{future::Future, sync::Arc};
 
 /// Usage and pricing accumulated by one child graph turn.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -91,7 +91,10 @@ impl ChildTurnControl {
     /// Creates a turn control from the cancellation token and durable fence
     /// acquired by the caller. A turn must never reacquire after fence loss.
     pub fn new(cancellation: CancellationToken, fence: Arc<dyn DeliveryFence>) -> Self {
-        Self { cancellation, fence }
+        Self {
+            cancellation,
+            fence,
+        }
     }
 
     /// Returns the cancellation token passed to host provider/tool work.
@@ -268,7 +271,8 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
         early_exit: run.early_exit,
     };
     control.race_host(host.persist_success(&result)).await?;
-    control.race_host(host.after_commit(&result, control.cancellation()))
+    control
+        .race_host(host.after_commit(&result, control.cancellation()))
         .await?;
     Ok(result)
 }

@@ -1,9 +1,9 @@
 use super::*;
-use tinyagents_harness::cost::{CallCost, CostSource};
-use tinyinference_llm::usage::{ChargedAmount, Usage};
-use tinyagents_harness::CancellationToken;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tinyagents_harness::CancellationToken;
+use tinyagents_harness::cost::{CallCost, CostSource};
+use tinyinference_llm::usage::{ChargedAmount, Usage};
 use tokio::sync::{Notify, oneshot};
 
 #[derive(Default)]
@@ -301,13 +301,10 @@ async fn losing_turn_fence_cancels_host_work_and_skips_persistence() {
         ..FakeHost::default()
     };
 
-    let (outcome, ()) = tokio::join!(
-        drive_child_turn(&mut host, control),
-        async {
-            started_rx.await.unwrap();
-            fence.revoke();
-        }
-    );
+    let (outcome, ()) = tokio::join!(drive_child_turn(&mut host, control), async {
+        started_rx.await.unwrap();
+        fence.revoke();
+    });
 
     assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
     assert!(cancellation.is_cancelled());
