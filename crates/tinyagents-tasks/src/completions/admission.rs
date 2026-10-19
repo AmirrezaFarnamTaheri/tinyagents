@@ -1,6 +1,6 @@
 //! Turn-queue admission tied to a durable parent lifecycle generation.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 use tinyagents_harness::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
 
@@ -14,7 +14,7 @@ use super::{CompletionRecord, CompletionRouter};
 /// durable generation and rejects messages queued under an older generation.
 #[derive(Clone)]
 pub struct CompletionAdmission {
-    store: Arc<RwLock<Arc<dyn CompletionStore>>>,
+    store: Arc<Mutex<super::router::AdmissionStoreSlot>>,
     parent_key: String,
     parent_epoch: u64,
 }
@@ -38,7 +38,10 @@ impl CompletionAdmission {
     /// Binds a queued completion directly to its durable store and lifecycle.
     pub fn for_store(store: Arc<dyn CompletionStore>, record: &CompletionRecord) -> Self {
         Self {
-            store: Arc::new(RwLock::new(store)),
+            store: Arc::new(Mutex::new(super::router::AdmissionStoreSlot {
+                store,
+                migrating: false,
+            })),
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
@@ -57,26 +60,23 @@ impl CompletionAdmission {
 
 impl QueueAdmission for CompletionAdmission {
     fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
-        let store = self
-            .store
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        super::router::ParentAdmissionPermit::acquire(
+        let store = CompletionRouter::admission_store_snapshot(&self.store)
+            .ok_or(QueueAdmissionError)?;
+        let permit = super::router::ParentAdmissionPermit::acquire(
             Arc::clone(&store),
             &self.parent_key,
             self.parent_epoch,
         )
-        .ok()
-        .flatten()
-        .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
-        .ok_or(QueueAdmissionError)
+        .map_err(|_| QueueAdmissionError)?
+        .ok_or(QueueAdmissionError)?;
+        if !CompletionRouter::admission_store_is_current(&self.store, &store) {
+            return Err(QueueAdmissionError);
+        }
+        Ok(Arc::new(permit))
     }
 
     fn batch_key(&self) -> Option<String> {
-        let store = self
-            .store
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let store = CompletionRouter::admission_store_snapshot(&self.store)?;
         let identity = store
             .coordination_identity()
             .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(&*store)));

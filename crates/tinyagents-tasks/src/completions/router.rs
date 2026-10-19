@@ -1,7 +1,7 @@
 //! The completion router.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
@@ -86,7 +86,36 @@ pub struct CompletionRouter {
     formatter: Arc<dyn CompletionFormatter>,
     max_attempts: u32,
     state: Mutex<RouterState>,
-    admission_store: Arc<RwLock<Arc<dyn CompletionStore>>>,
+    admission_store: Arc<Mutex<AdmissionStoreSlot>>,
+}
+
+pub(super) struct AdmissionStoreSlot {
+    pub(super) store: Arc<dyn CompletionStore>,
+    pub(super) migrating: bool,
+}
+
+struct StoreMigration<'a> {
+    slot: &'a Mutex<AdmissionStoreSlot>,
+    replacement: Option<Arc<dyn CompletionStore>>,
+}
+
+impl StoreMigration<'_> {
+    fn publish(mut self, replacement: Arc<dyn CompletionStore>) {
+        self.replacement = Some(replacement);
+    }
+}
+
+impl Drop for StoreMigration<'_> {
+    fn drop(&mut self) {
+        let mut slot = self
+            .slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(replacement) = self.replacement.take() {
+            slot.store = replacement;
+        }
+        slot.migrating = false;
+    }
 }
 
 struct ParentGateGuard {
@@ -173,7 +202,10 @@ impl CompletionRouter {
     /// A router over `store` with the neutral formatter and
     /// [`DEFAULT_MAX_ATTEMPTS`].
     pub fn new(store: Arc<dyn CompletionStore>) -> Self {
-        let admission_store = Arc::new(RwLock::new(Arc::clone(&store)));
+        let admission_store = Arc::new(Mutex::new(AdmissionStoreSlot {
+            store: Arc::clone(&store),
+            migrating: false,
+        }));
         Self {
             formatter: Arc::new(NeutralCompletionFormatter),
             max_attempts: DEFAULT_MAX_ATTEMPTS,
@@ -187,8 +219,27 @@ impl CompletionRouter {
         }
     }
 
-    pub(super) fn admission_store_handle(&self) -> Arc<RwLock<Arc<dyn CompletionStore>>> {
+    pub(super) fn admission_store_handle(&self) -> Arc<Mutex<AdmissionStoreSlot>> {
         Arc::clone(&self.admission_store)
+    }
+
+    pub(super) fn admission_store_snapshot(
+        slot: &Mutex<AdmissionStoreSlot>,
+    ) -> Option<Arc<dyn CompletionStore>> {
+        let slot = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (!slot.migrating).then(|| Arc::clone(&slot.store))
+    }
+
+    pub(super) fn admission_store_is_current(
+        slot: &Mutex<AdmissionStoreSlot>,
+        store: &Arc<dyn CompletionStore>,
+    ) -> bool {
+        let slot = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !slot.migrating && Arc::ptr_eq(&slot.store, store)
     }
 
     /// Returns the persistence store backing this router.
@@ -221,13 +272,20 @@ impl CompletionRouter {
                 &state.store,
             )));
         }
-        // Stop new queue admissions while migrating. Existing permits are
-        // represented by durable parent gates; acquiring those below waits
-        // for the queue-to-turn transfer to linearize before publication.
-        let mut admission_store = self
-            .admission_store
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Stop new queue admissions without holding a slot lock while waiting
+        // on durable parent gates. Existing permits finish first; admissions
+        // racing the migration fail closed and remain recoverable in the store.
+        {
+            let mut slot = self
+                .admission_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            slot.migrating = true;
+        }
+        let migration = StoreMigration {
+            slot: &self.admission_store,
+            replacement: None,
+        };
         let records = state.store.try_list(None)?;
         let mut parents = records
             .iter()
@@ -257,7 +315,7 @@ impl CompletionRouter {
             replacement.put_fenced(&record, &parent_key, gate.claim())?;
         }
         state.store = Arc::clone(&replacement);
-        *admission_store = Arc::clone(&replacement);
+        migration.publish(Arc::clone(&replacement));
         Ok(CompletionStoreReplaceOutcome::Replaced(replacement))
     }
 
