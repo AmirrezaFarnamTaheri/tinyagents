@@ -222,23 +222,9 @@ impl CompletionStore for BlockingParentMarkerRead {
 
     fn claim_task(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
+        request: TaskClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        )
+        self.inner.claim_task(request)
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -445,57 +431,23 @@ impl CompletionStore for BlockingFirstReadStore {
 
     fn claim_pending(
         &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
+        request: PendingClaimRequest,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner.claim_pending(
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            max,
-            token,
-            visible_after,
-        )
+        self.inner.claim_pending(request)
     }
 
     fn claim_task(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
+        request: TaskClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        )
+        self.inner.claim_task(request)
     }
 
     fn resolve_claim(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
+        request: ResolveClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner
-            .resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
+        self.inner.resolve_claim(request)
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -1388,36 +1340,22 @@ impl CompletionStore for FailingSecondPut {
     }
     fn claim_pending(
         &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
+        request: PendingClaimRequest,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let claimed = self.inner.claim_pending(
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            max,
-            token,
-            visible_after,
-        )?;
+        let claimed = self.inner.claim_pending(request.clone())?;
         if (0..claimed.len()).any(|_| self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst))
         {
             for record in &claimed {
                 if let Some(receipt) = record.receipt() {
-                    self.inner.resolve_claim(
-                        &receipt.task_id,
-                        &receipt.parent_key,
-                        receipt.parent_epoch,
-                        gate,
-                        &receipt.token,
-                        ClaimResolution::Release,
-                    )?;
+                    self.inner.resolve_claim(ResolveClaimRequest {
+                        task_id: receipt.task_id,
+                        parent_key: receipt.parent_key,
+                        parent_epoch: receipt.parent_epoch,
+                        gate: request.gate.clone(),
+                        token: receipt.token,
+                        resolution: ClaimResolution::Release,
+                    })?;
                 }
             }
             return Err(tinyagents_harness::error::TinyAgentsError::Graph(
@@ -1428,13 +1366,7 @@ impl CompletionStore for FailingSecondPut {
     }
     fn claim_task(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
+        request: TaskClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
@@ -1442,15 +1374,7 @@ impl CompletionStore for FailingSecondPut {
                 "disk".into(),
             ));
         }
-        self.inner.claim_task(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        )
+        self.inner.claim_task(request)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
@@ -1551,55 +1475,21 @@ impl CompletionStore for BlockingTryList {
     }
     fn claim_task(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
+        request: TaskClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(
-            task_id,
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            token,
-            visible_after,
-        )
+        self.inner.claim_task(request)
     }
     fn claim_pending(
         &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
+        request: PendingClaimRequest,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner.claim_pending(
-            parent_key,
-            parent_epoch,
-            gate,
-            mode,
-            max,
-            token,
-            visible_after,
-        )
+        self.inner.claim_pending(request)
     }
     fn resolve_claim(
         &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
+        request: ResolveClaimRequest,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner
-            .resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
+        self.inner.resolve_claim(request)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)

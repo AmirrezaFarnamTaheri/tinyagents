@@ -43,6 +43,7 @@ pub use detached::{
     SpawnedSubagent, SubagentIdentity, SubagentResumeRef, SubagentSnapshot, WaitAllItem, WaitError,
     WaitOutcome, cancel_detached_or_durable, cancel_detached_or_durable_with_owners,
     format_roster_for_owner, list_subagent_records, orphaned_subagent_reason, pause_record_prefix,
+    format_parent_roster_for_owner, parent_roster_for_owner, ParentRosterEntry,
     record_agent_id, record_cancelled, record_detached_completion, record_parent_session,
     record_spawned, record_status, record_subagent_session_id, record_to_wait_outcome,
     resolve_detached_or_durable, resolve_detached_or_durable_with_owners, resume_ref_for_task,

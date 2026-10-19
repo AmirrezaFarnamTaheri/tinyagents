@@ -781,6 +781,29 @@ impl SubAgentJobRegistry {
         Self::sorted(self.tasks.snapshots(None))
     }
 
+    /// Returns live jobs for one exact owner and parent workspace/thread.
+    /// Incomplete parent metadata never matches this scoped roster query.
+    pub fn list_for_parent_scope(
+        &self,
+        owner: &str,
+        scope: &ParentJobScope,
+    ) -> Result<Vec<SubAgentJob>, SubAgentJobError> {
+        let mut jobs: Vec<SubAgentJob> = self
+            .tasks
+            .snapshots(Some(owner))
+            .map_err(registry_failure)?
+            .into_iter()
+            .filter(|snapshot| {
+                snapshot.metadata.workspace.as_ref() == Some(&scope.workspace)
+                    && snapshot.metadata.parent_thread_id.as_deref()
+                        == Some(scope.thread_id.as_str())
+            })
+            .map(|snapshot| snapshot.status)
+            .collect();
+        jobs.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        Ok(jobs)
+    }
+
     /// Jobs in stable id order, independent of the detached registry's own
     /// iteration order. A registry failure is logged, never silent.
     fn sorted(
