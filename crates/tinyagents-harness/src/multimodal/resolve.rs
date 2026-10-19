@@ -94,7 +94,7 @@ impl TextExtractor for NoTextExtractor {
 /// be used here: reqwest does not let a request override its DNS or redirect
 /// policy, so that client could reach a different address after validation.
 async fn guarded_remote_get(source: &str) -> std::result::Result<reqwest::Response, String> {
-    let validated = tinytools_std::url_guard::validate_url_with_dns_check(source, &[])
+    let validated = crate::url_guard::validate_url_with_dns_check(source, &[])
         .await
         .map_err(|error| error.to_string())?;
     let client = guarded_remote_client(&validated).map_err(|error| error.to_string())?;
@@ -106,7 +106,7 @@ async fn guarded_remote_get(source: &str) -> std::result::Result<reqwest::Respon
 }
 
 fn guarded_remote_client(
-    validated: &tinytools_std::url_guard::ValidatedUrl,
+    validated: &crate::url_guard::ValidatedUrl,
 ) -> reqwest::Result<Client> {
     Client::builder()
         .no_proxy()

@@ -68,7 +68,7 @@ pub fn validate_url(raw_url: &str, allowed_domains: &[String]) -> anyhow::Result
     let host = extract_host(url)?;
 
     if is_private_or_local_host(&host) {
-        log::debug!(
+        tracing::debug!(
             "[url_guard] ssrf block: host={host} mode={}",
             if allowed_domains.is_empty() {
                 "open"
@@ -85,7 +85,7 @@ pub fn validate_url(raw_url: &str, allowed_domains: &[String]) -> anyhow::Result
     // domain list, and keeps web-fetch consistent across routing paths.
     // A non-empty list = strict mode: only listed domains pass. (#2700)
     if !allowed_domains.is_empty() && !host_matches_allowlist(&host, allowed_domains) {
-        log::debug!(
+        tracing::debug!(
             "[url_guard] strict-allowlist rejection: host={host} allowed={allowed_domains:?}"
         );
         anyhow::bail!(
@@ -95,7 +95,7 @@ pub fn validate_url(raw_url: &str, allowed_domains: &[String]) -> anyhow::Result
         );
     }
 
-    log::debug!(
+    tracing::debug!(
         "[url_guard] validate_url ok: host={host} mode={}",
         if allowed_domains.is_empty() {
             "open"
@@ -187,19 +187,19 @@ where
         });
     }
 
-    log::debug!("[url_guard] resolving DNS for host={host} port={port}");
+    tracing::debug!("[url_guard] resolving DNS for host={host} port={port}");
     let addrs = resolver(host.clone(), port).await?;
 
     if addrs.is_empty() {
         anyhow::bail!("DNS resolution returned no addresses for '{host}'");
     }
 
-    log::debug!("[url_guard] DNS resolved host={host} addrs={}", addrs.len());
+    tracing::debug!("[url_guard] DNS resolved host={host} addrs={}", addrs.len());
 
     for addr in &addrs {
         let ip_str = addr.to_string();
         if is_private_or_local_host(&ip_str) {
-            log::debug!("[url_guard] DNS rebinding blocked host={host} resolved_ip={ip_str}");
+            tracing::debug!("[url_guard] DNS rebinding blocked host={host} resolved_ip={ip_str}");
             anyhow::bail!(
                 "DNS rebinding blocked: '{host}' resolved to private/local address {ip_str}"
             );
@@ -222,14 +222,14 @@ async fn resolve_host_ips(host: String, port: u16) -> anyhow::Result<Vec<IpAddr>
         (host.as_str(), port)
             .to_socket_addrs()
             .map_err(|e| {
-                log::debug!("[url_guard] DNS resolution failed host={host} port={port} error={e}");
+                tracing::debug!("[url_guard] DNS resolution failed host={host} port={port} error={e}");
                 anyhow::anyhow!("DNS resolution failed for '{host}': {e}")
             })
             .map(|iter| iter.map(|addr| addr.ip()).collect())
     })
     .await
     .map_err(|e| {
-        log::debug!("[url_guard] DNS resolution task failed host={log_host} port={port} error={e}");
+        tracing::debug!("[url_guard] DNS resolution task failed host={log_host} port={port} error={e}");
         anyhow::anyhow!("DNS resolution task failed for '{log_host}': {e}")
     })?
 }
@@ -252,7 +252,7 @@ pub fn normalize_allowed_domains(domains: Vec<String>) -> Vec<String> {
         // filtered out. Returning empty would silently enter open mode; instead
         // return a sentinel that keeps the tool in strict mode and rejects every
         // URL — fail-closed on misconfiguration. (#2738)
-        log::warn!(
+        tracing::warn!(
             "[url_guard] all configured allowed_domains entries are invalid — \
              treating as misconfigured allowlist (fail-closed)"
         );
@@ -492,5 +492,5 @@ pub fn is_non_global_v6(v6: std::net::Ipv6Addr) -> bool {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
-mod test;
+#[path = "url_guard_tests.rs"]
+mod tests;
