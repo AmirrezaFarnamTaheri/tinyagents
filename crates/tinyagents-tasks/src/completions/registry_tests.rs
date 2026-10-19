@@ -163,6 +163,12 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
     );
     queued.parent_epoch = 1;
     let old_admission = CompletionAdmission::for_router(&first, &queued);
+    let old_store_alias = CompletionAdmission::for_store(first.store(), &queued);
+    assert_eq!(
+        old_admission.batch_key(),
+        old_store_alias.batch_key(),
+        "for_store aliases must use the pool-bound lifecycle coordination key"
+    );
     let permit = tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission)
         .expect("the current lifecycle admits its queued child");
     drop(permit);
@@ -171,6 +177,12 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
 
     pool.clear().unwrap();
     let reopened = pool.get_or_open(&"workspace").unwrap();
+    let reopened_store_alias = CompletionAdmission::for_store(reopened.store(), &queued);
+    assert_eq!(
+        old_admission.batch_key(),
+        reopened_store_alias.batch_key(),
+        "queued handles across clear must preserve the same scoped lifecycle key"
+    );
 
     assert!(
         !reopened.admit_child("parent").unwrap(),
