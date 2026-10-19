@@ -399,7 +399,8 @@ The exact source-root map is:
 | Source root | Destination root |
 | --- | --- |
 | `vendor/tinytools/crates/tinytools-std/src/filesystem/**` | `crates/tinyagents-harness-tools/src/fs/filesystem/**` |
-| `vendor/tinytools/crates/tinytools-std/src/file_state/**` | `crates/tinyagents-harness-tools/src/fs/file_state/**` |
+| `vendor/tinytools/crates/tinytools-std/src/file_state/{agent_context.rs,mod.rs,ops.rs,types.rs}` | `crates/tinyagents-harness-tools/src/fs/file_state/{agent_context.rs,mod.rs,ops.rs,types.rs}` |
+| `vendor/tinytools/crates/tinytools-std/src/file_state/test/{agent_context.rs,ops.rs}` | Combine all assertions into `crates/tinyagents-harness-tools/src/fs/file_state_tests.rs`; do not copy the old `test/mod.rs` aggregator |
 | `vendor/tinytools/crates/tinytools-std/src/network/**` | `crates/tinyagents-harness-tools/src/net/network/**` |
 | `vendor/tinytools/crates/tinytools-std/src/detect_tools/**` | `crates/tinyagents-harness-tools/src/exec/detect_tools/**` |
 | `vendor/tinytools/crates/tinytools-std/src/timeout/**` | `crates/tinyagents-harness-tools/src/exec/timeout/**` |
@@ -407,7 +408,12 @@ The exact source-root map is:
 | `vendor/tinytools/crates/tinytools-std/src/url_guard/mod_tests.rs` | `crates/tinyagents-harness/src/url_guard_tests.rs` |
 
 `**` includes all source files, nested modules, sibling test files, and
-fixtures below that directory, keeping relative paths. Do not copy
+fixtures below that directory, keeping relative paths. For `file_state`, the
+table lists production files explicitly because the two test files must move
+to the mandated sibling test module. In `file_state/mod.rs`, replace
+`mod test;` with `#[cfg(test)] #[path = "file_state_tests.rs"] mod tests;`.
+The consolidated test file starts with `use super::*;` and retains every
+assertion from both source test files. Do not copy
 `tinytools-std/src/lib.rs`, its manifest, or `sanitize/**`; explicitly declare
 the new root modules and keep sanitization with TinyTools. The remaining
 source map is directory-to-directory, with file contents preserved
