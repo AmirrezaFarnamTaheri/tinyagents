@@ -259,7 +259,10 @@ before any auto-approval decision, making the fail-closed test meaningful.
 The tool keeps `request_plan_review`, `PermissionLevel::None`, no external
 effect, and an unbounded timeout because the port's review deadline is
 authoritative. It trims summary and nonempty string steps exactly as the source
-does. Preserve the approve/reject/revise result wording and make the port's
+does. The port reads the provider-assigned call id from the generic
+`ToolExecutionContext` exposed through `ToolRunContext::host_extension()`;
+the request itself contains no OpenHuman identifier type. Preserve the
+approve/reject/revise result wording and make the port's
 missing/expired/error result fail closed; never turn port errors into approval.
 
 ### Media artifact filing port
@@ -356,6 +359,9 @@ Files: `crates/tinyagents-harness-tools/Cargo.toml`,
 new `src/fs/`, `src/net/`, and `src/exec/` modules; remove the harness's
 `tinytools-std` manifest entry. Add opt-in `fs`, `net`, and `exec` features;
 preserve the existing `default = ["todos", "goals", "skills"]` behavior.
+Add non-default `media` and `plan-review` features too, so migrating those
+OpenHuman-only tools does not widen the defaults. Gate their modules in
+`src/lib.rs` by those features.
 Use this dependency-to-feature mapping, retaining existing mandatory
 dependencies (`anyhow`, `async-trait`, `chrono`, `serde`, `serde_json`,
 `tinyagents-harness`, `tinytools`, `tokio` base, and `tracing`) for old tool
@@ -369,6 +375,7 @@ families:
 | Tokio `fs`, `io-util` capabilities | `fs`, `net`, and `exec` where used |
 | Tokio `process` capability | `exec` |
 | `tinyinference-video` | `media` only, for `ProgressFn` |
+| no added dependency | `plan-review` |
 | `tempfile`, Tokio `test-util` | dev-dependencies only |
 
 The URL guard itself uses no optional dependency; replace its `log` calls with
@@ -417,6 +424,8 @@ At the end of this task, these must compile independently:
 cargo check -p tinyagents-harness-tools --no-default-features --features fs
 cargo check -p tinyagents-harness-tools --no-default-features --features net
 cargo check -p tinyagents-harness-tools --no-default-features --features exec
+cargo check -p tinyagents-harness-tools --no-default-features --features media
+cargo check -p tinyagents-harness-tools --no-default-features --features plan-review
 cargo check -p tinyagents-harness-tools --no-default-features
 ```
 
@@ -544,7 +553,7 @@ Files: `crates/tinyagents-harness-tools/src/plan_review/{mod.rs,port.rs,tool.rs,
 and `src/lib.rs`.
 
 Port `RequestPlanReviewTool` to `plan_review::RequestPlanReviewTool` with an
-`Arc<dyn PlanReviewPort>`. Preserve tool name, schema, permission,
+`Option<Arc<dyn PlanReviewPort>>`. Preserve tool name, schema, permission,
 external-effect flag, unbounded timeout, argument trimming, and result text.
 The port owns interactive/noninteractive policy, review event delivery,
 plan-mode gating, and its own expiry. If absent or failing, return a clear
