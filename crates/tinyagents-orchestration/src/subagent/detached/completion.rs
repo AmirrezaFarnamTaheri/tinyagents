@@ -221,9 +221,9 @@ pub fn spawn_status_watcher_with_completions(
             let snapshot = status.borrow_and_update().clone();
             match snapshot {
                 DetachedSubagentStatus::Running => {}
-                DetachedSubagentStatus::AwaitingUser { question } => {
+                DetachedSubagentStatus::AwaitingUser { ref question } => {
                     record_status_with_retries(store.as_ref(), &task_id, &snapshot);
-                    target.record_pause(&task_id, question).await;
+                    target.record_pause(&task_id, question.clone()).await;
                 }
                 _ => break snapshot,
             }
