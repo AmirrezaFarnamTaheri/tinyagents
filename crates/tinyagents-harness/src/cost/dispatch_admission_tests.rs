@@ -319,6 +319,25 @@ async fn admission_refuses_before_provider_or_physical_observer_start() {
 }
 
 #[tokio::test]
+async fn chat_model_trait_consumer_observes_admission_refusal() {
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Err(
+        DispatchRefusalReason::CallLimit,
+    ))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+
+    let result = ChatModel::invoke(&controlled, &(), ModelRequest::default()).await;
+
+    assert!(matches!(result, Err(tinyinference_llm::Error::Validation(_))));
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn money_refusal_does_not_commit_admission() {
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
