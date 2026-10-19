@@ -23,9 +23,13 @@ fn target(router: &Arc<CompletionRouter>) -> DetachedCompletionTarget {
         .with_label("indexer")
 }
 
-async fn settle(router: &CompletionRouter, parent: &str) {
+async fn settle(router: &CompletionRouter, parent: &str, task_id: &str) {
     for _ in 0..100 {
-        if !router.pending_for(parent).is_empty() {
+        if router
+            .pending_for(parent)
+            .iter()
+            .any(|record| record.task_id == task_id)
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -139,7 +143,7 @@ async fn the_watcher_mirrors_the_status_and_records_the_completion() {
         iterations: 1,
     })
     .unwrap();
-    settle(&router, "p").await;
+    settle(&router, "p", "t1").await;
     let pending = router.pending_for("p");
     assert_eq!(pending[0].result.text, "found it");
     let record = store.get(&"t1".into()).unwrap();
@@ -153,7 +157,7 @@ async fn a_dropped_sender_is_recorded_as_a_failure() {
     let (tx, rx) = watch::channel(DetachedSubagentStatus::Running);
     spawn_status_watcher_with_completions(store, "t1".into(), rx, target(&router));
     drop(tx);
-    settle(&router, "p").await;
+    settle(&router, "p", "t1").await;
     assert_eq!(router.pending_for("p")[0].status, CompletionStatus::Failed);
 }
 
@@ -210,13 +214,23 @@ async fn a_paused_child_records_a_separate_notice_not_its_terminal_task_id() {
 #[tokio::test]
 async fn a_cancelled_child_is_not_pushed_back_to_its_parent() {
     let router = router();
+    let existing = CompletionRecord::new(
+        "existing-child",
+        "p",
+        "worker",
+        CompletionStatus::Success,
+        tinyagents_tasks::CompletionResult::text("already waiting"),
+    );
+    router.record(existing).await.unwrap();
     let store = spawned_store("t1");
     let (tx, rx) = watch::channel(DetachedSubagentStatus::Running);
     record_cancelled(store.as_ref(), "t1").unwrap();
     spawn_status_watcher_with_completions(store, "t1".into(), rx, target(&router));
     drop(tx);
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(router.pending_for("p").len(), 1);
+    let pending = router.pending_for("p");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].task_id, "existing-child");
 }
 
 #[tokio::test]
@@ -236,7 +250,7 @@ async fn a_resumed_child_is_recorded_when_it_finally_finishes() {
         iterations: 2,
     })
     .unwrap();
-    settle(&router, "p").await;
+    settle(&router, "p", "t1").await;
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 2);
     assert!(
