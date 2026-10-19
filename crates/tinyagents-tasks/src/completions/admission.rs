@@ -64,6 +64,11 @@ impl QueueAdmission for CompletionAdmission {
         let identity = self.store.coordination_identity().unwrap_or_else(|| {
             format!("store:{:p}", Arc::as_ptr(&self.store))
         });
-        Some(format!("{identity}:{}:{}", self.parent_key, self.parent_epoch))
+        // Keep each component framed: scope and parent keys are caller-owned
+        // strings and may contain any punctuation, including colons.
+        Some(
+            serde_json::to_string(&(identity, self.parent_key.as_str(), self.parent_epoch))
+                .expect("serializing a completion admission batch key cannot fail"),
+        )
     }
 }
