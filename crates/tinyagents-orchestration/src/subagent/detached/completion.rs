@@ -21,6 +21,18 @@ use super::ledger::record_status_with_retries;
 use super::types::DetachedSubagentStatus;
 
 const LOG_PREFIX: &str = "[detached-completion]";
+const PAUSE_RECORD_PREFIX: &str = "\u{1}subagent-pause:";
+
+/// Stable prefix for independently deliverable pause notices belonging to a
+/// task. Hosts may use it to withdraw notices when the task is collected.
+pub fn pause_record_prefix(task_id: &str) -> String {
+    let encoded_task: String = task_id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{PAUSE_RECORD_PREFIX}{encoded_task}:")
+}
 
 /// Where a detached child's completion goes and how it announces itself.
 #[derive(Clone)]
@@ -91,6 +103,43 @@ impl DetachedCompletionTarget {
         .with_notify_mode(self.notify_mode);
         record.label = self.label.clone();
         Some(record)
+    }
+
+    /// Creates a separate deliverable notice for a child pause. The unique
+    /// record id leaves `task_id` available for the child's eventual terminal
+    /// completion and permits the same child to pause more than once.
+    pub fn pause_record_for(&self, task_id: &str, notice: impl Into<String>) -> CompletionRecord {
+        let record_id = format!(
+            "{}{}",
+            pause_record_prefix(task_id),
+            uuid::Uuid::new_v4().simple()
+        );
+        let mut record = CompletionRecord::new(
+            record_id,
+            self.parent_key.clone(),
+            self.agent_id.clone(),
+            CompletionStatus::Incomplete,
+            CompletionResult::text(notice),
+        )
+        .with_notify_mode(self.notify_mode);
+        record.label = self.label.clone();
+        record
+    }
+
+    /// Records an independently deliverable pause notice with the same retry
+    /// policy as terminal detached completions.
+    pub async fn record_pause(&self, task_id: &str, notice: impl Into<String>) -> bool {
+        let record = self.pause_record_for(task_id, notice);
+        match self.router.record_with_retries(record, 3).await {
+            Ok(outcome) => {
+                tracing::debug!(task_id, outcome = ?outcome, "{LOG_PREFIX} recorded pause notice");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(task_id, error = %error, "{LOG_PREFIX} could not record pause notice");
+                false
+            }
+        }
     }
 }
 
