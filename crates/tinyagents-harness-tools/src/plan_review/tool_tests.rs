@@ -10,6 +10,12 @@ struct Port {
     request: Mutex<Option<PlanReviewRequest>>,
 }
 struct FailingPort;
+struct NonInteractive;
+#[async_trait]
+impl PlanReviewHost for NonInteractive {
+    fn interactive_surface(&self, _: Option<&dyn ToolRunContext>) -> Option<()> { None }
+    async fn request_review(&self, _: PlanReviewRequest, _: Option<&dyn ToolRunContext>) -> Result<PlanReviewResolution, String> { panic!("non-interactive requests are auto-approved before parking") }
+}
 #[async_trait]
 impl PlanReviewHost for FailingPort {
     async fn request_review(
@@ -40,6 +46,13 @@ async fn missing_port_fails_closed() {
         .unwrap();
     assert!(result.is_error);
     assert!(result.text().contains("no review port"));
+}
+
+#[tokio::test]
+async fn missing_interactive_surface_auto_approves() {
+    let result = RequestPlanReviewTool::new(Some(Arc::new(NonInteractive)))
+        .execute(json!({"summary":"plan"})).await.unwrap();
+    assert_eq!(result.text(), "approved: non-interactive turn (no review surface) — proceed with the plan.");
 }
 
 #[tokio::test]

@@ -53,11 +53,14 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
         let expires_at = (chrono::Utc::now() + chrono::Duration::from_std(self.ttl).unwrap_or_default()).to_rfc3339();
         let snapshot = ParkedReview { request_id: id.clone(), scope: scope.clone(), thread_id: thread_id.clone(), client_id, summary: request.summary, steps: request.steps, tool_call_id: request.tool_call_id, expires_at };
         let (tx, rx) = oneshot::channel();
-        {
+        let superseded = {
             let mut state = self.state.lock();
-            state.newest.insert((scope.clone(), thread_id.clone()), id.clone());
+            let old = state.newest.insert((scope.clone(), thread_id.clone()), id.clone());
+            let superseded = old.and_then(|old_id| state.entries.remove(&old_id));
             state.entries.insert(id.clone(), Entry { snapshot: snapshot.clone(), sender: tx });
-        }
+            superseded
+        };
+        drop(superseded);
         let mut guard = ParkGuard { store: self, snapshot: snapshot.clone(), armed: true };
         self.notifier.requested(&snapshot);
         let (resolution, reason) = match tokio::time::timeout(self.ttl, rx).await {
@@ -74,6 +77,7 @@ where S: Clone + Eq + Hash + Send + Sync + 'static {
     pub fn decide(&self, scope: &S, request_id: &str, resolution: PlanReviewResolution) -> bool {
         let mut state = self.state.lock();
         if !state.entries.get(request_id).is_some_and(|entry| entry.snapshot.scope.eq(scope)) { return false; }
+        if !state.newest.get(&(scope.clone(), state.entries[request_id].snapshot.thread_id.clone())).is_some_and(|id| id == request_id) { return false; }
         let entry = state.entries.remove(request_id).expect("entry checked above");
         let key = (entry.snapshot.scope.clone(), entry.snapshot.thread_id.clone());
         if state.newest.get(&key).is_some_and(|id| id == request_id) { state.newest.remove(&key); }

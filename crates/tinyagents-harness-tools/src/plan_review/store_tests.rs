@@ -63,6 +63,6 @@ async fn decisions_are_scope_isolated_and_newest_review_is_replayed() {
     assert!(!store.decide(&2, &newest.request_id, PlanReviewResolution::Approve));
     assert!(store.decide_by_thread(&1, "same", PlanReviewResolution::Approve));
     assert_eq!(two.await.unwrap(), PlanReviewResolution::Approve);
-    assert!(store.decide(&1, &old.request_id, PlanReviewResolution::Reject));
+    assert!(!store.decide(&1, &old.request_id, PlanReviewResolution::Reject));
     assert_eq!(one.await.unwrap(), PlanReviewResolution::Reject);
 }
