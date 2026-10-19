@@ -117,3 +117,32 @@ async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
     );
     let _ = parked.await;
 }
+
+#[tokio::test]
+async fn plan_exit_rejects_empty_plan() {
+    let (tool, _) = tool(RunMode::Plan, None, Arc::new(Changes::default()));
+    let result = tool.execute(json!({"plan":"  \n "})).await.unwrap();
+    assert!(result.is_error);
+    assert!(result.text().contains("must not be empty"));
+}
+
+#[tokio::test]
+async fn plan_exit_without_context_returns_plan_without_changing_mode() {
+    let changes = Arc::new(Changes::default());
+    let (tool, mode) = tool(RunMode::Plan, None, changes.clone());
+    let before = changes.0.lock().unwrap().clone();
+    let result = tool.execute(json!({"plan":"step"})).await.unwrap();
+    assert!(!result.is_error);
+    assert_eq!(result.text(), format!("{PLAN_EXIT_MARKER}\nstep"));
+    assert_eq!(mode.get(), RunMode::Plan);
+    assert_eq!(*changes.0.lock().unwrap(), before);
+}
+
+#[test]
+fn plan_exit_keeps_tool_metadata() {
+    use tinytools::{PermissionLevel, Tool};
+
+    let (tool, _) = tool(RunMode::Build, None, Arc::new(Changes::default()));
+    assert_eq!(tool.name(), "plan_exit");
+    assert_eq!(tool.permission_level(), PermissionLevel::None);
+}
