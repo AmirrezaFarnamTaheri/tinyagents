@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use tinyinference_llm::model::workload::WORKLOAD_ROUTE_TIERS;
 use tinyinference_llm::model::{
     ChatModel, ErrorSlotModel, ModelErrorSlot, ResolvedModelRoute, RouteRecordingModel,
 };
-use tinyinference_llm::model::workload::WORKLOAD_ROUTE_TIERS;
 
 use crate::error::Result;
 use crate::host::model_resolver::PrebuiltModelResolver;
@@ -44,7 +44,8 @@ pub struct ModelBuildRequest {
     pub route: Option<String>,
     /// Construction purpose.
     pub purpose: ModelPurpose,
-    /// Optional exact provider model id.
+    /// Optional requested provider model id or route alias. Hosts may resolve an
+    /// alias to a concrete model; [`ResolvedModelRoute::model`] reports that result.
     pub model_pin: Option<String>,
     /// Provider construction options.
     pub opts: BuildOpts,
@@ -78,7 +79,7 @@ pub trait ModelFactory<State: Send + Sync> {
 }
 
 /// Configures construction of a primary, workload models, and summarizer.
-pub struct TurnModelSetBuilder<'a, State: Send + Sync, F, G> {
+pub struct TurnModelSetBuilder<'a, State: Send + Sync, F: ?Sized, G: ?Sized> {
     factory: &'a F,
     gate: &'a G,
     primary: ModelBuildRequest,
@@ -86,10 +87,12 @@ pub struct TurnModelSetBuilder<'a, State: Send + Sync, F, G> {
     summarization_role: Option<String>,
     summarization_pin: Option<String>,
     summarization_opts: Option<BuildOpts>,
+    workload_opts: Option<BuildOpts>,
+    workload_tier_opts: HashMap<String, BuildOpts>,
     marker: std::marker::PhantomData<fn() -> State>,
 }
 
-impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate>
+impl<'a, State: Send + Sync + 'static, F: ModelFactory<State> + ?Sized, G: ModelBuildGate + ?Sized>
     TurnModelSetBuilder<'a, State, F, G>
 {
     /// Configures the default workload routes with `primary_role`.
@@ -99,10 +102,11 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
             .iter()
             .map(|route| {
                 let mut request = ModelBuildRequest::new(
-                    *route,
+                    route.strip_prefix("hint:").unwrap_or(route),
                     ModelPurpose::WorkloadTier((*route).to_owned()),
                 );
                 request.route = Some((*route).to_owned());
+                request.model_pin = Some((*route).to_owned());
                 request
             })
             .collect();
@@ -114,6 +118,8 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
             summarization_role: None,
             summarization_pin: None,
             summarization_opts: None,
+            workload_opts: None,
+            workload_tier_opts: HashMap::new(),
             marker: std::marker::PhantomData,
         }
     }
@@ -138,8 +144,8 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
     }
 
     /// Replaces default workload routes with caller-defined route aliases.
-    /// Each route name is also its default role key; use
-    /// [`workload_requests`](Self::workload_requests) for distinct keys.
+    /// A `hint:` prefix is removed for the default role key; use
+    /// [`workload_requests`](Self::workload_requests) for other role keys.
     #[must_use]
     pub fn workload_tiers<I, S>(mut self, tiers: I) -> Self
     where
@@ -151,10 +157,11 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
             .map(|route| {
                 let route = route.into();
                 let mut request = ModelBuildRequest::new(
-                    route.clone(),
+                    route.strip_prefix("hint:").unwrap_or(&route),
                     ModelPurpose::WorkloadTier(route.clone()),
                 );
-                request.route = Some(route);
+                request.route = Some(route.clone());
+                request.model_pin = Some(route);
                 request
             })
             .collect();
@@ -165,6 +172,22 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
     #[must_use]
     pub fn workload_requests(mut self, tiers: Vec<ModelBuildRequest>) -> Self {
         self.tiers = tiers;
+        self
+    }
+
+    /// Sets options shared by every workload-tier build. Use
+    /// [`workload_tier_opts`](Self::workload_tier_opts) for a route-specific
+    /// override.
+    #[must_use]
+    pub fn workload_opts(mut self, opts: BuildOpts) -> Self {
+        self.workload_opts = Some(opts);
+        self
+    }
+
+    /// Overrides shared workload options for one route alias.
+    #[must_use]
+    pub fn workload_tier_opts(mut self, route: impl Into<String>, opts: BuildOpts) -> Self {
+        self.workload_tier_opts.insert(route.into(), opts);
         self
     }
 
@@ -200,24 +223,27 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
         let primary = Arc::new(RouteRecordingModel::new(
             primary_model,
             primary_route.clone(),
-        ));
+        )) as Arc<dyn ChatModel<State>>;
         let primary_error_slot = Arc::new(Mutex::new(None));
-        let lead = Arc::new(ErrorSlotModel::new(
-            Arc::clone(&primary) as Arc<dyn ChatModel<State>>,
-            Arc::clone(&primary_error_slot),
-        ));
 
-        let mut routes = Vec::new();
+        let mut tiers = Vec::new();
         let mut route_errors = HashMap::new();
-        for request in self.tiers {
+        for mut request in self.tiers {
             if self
                 .primary
                 .model_pin
                 .as_deref()
-                .is_some_and(|pin| request.model_pin.as_deref() == Some(pin))
+                .is_some_and(|pin| request.route.as_deref() == Some(pin))
             {
                 tracing::debug!(route = ?request.route, "skipping workload model matching the primary pin");
                 continue;
+            }
+            if let Some(opts) = &self.workload_opts {
+                request.opts = opts.clone();
+            }
+            let route_name = request.route.as_deref().unwrap_or(&request.role);
+            if let Some(opts) = self.workload_tier_opts.get(route_name) {
+                request.opts = opts.clone();
             }
             if let Err(error) = self.gate.check(&request) {
                 tracing::debug!(route = ?request.route, %error, "skipping gated workload model");
@@ -226,14 +252,14 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
             match self.factory.build(&request) {
                 Ok((model, route)) => {
                     let slot = Arc::new(Mutex::new(None));
-                    let recorded = Arc::new(RouteRecordingModel::new(model, route));
-                    let wrapped = Arc::new(ErrorSlotModel::new(
-                        recorded as Arc<dyn ChatModel<State>>,
-                        Arc::clone(&slot),
-                    ));
-                    let name = request.route.clone().unwrap_or_else(|| request.role.clone());
+                    let recorded = Arc::new(RouteRecordingModel::new(model, route))
+                        as Arc<dyn ChatModel<State>>;
+                    let name = request
+                        .route
+                        .clone()
+                        .unwrap_or_else(|| request.role.clone());
                     route_errors.insert(name.clone(), slot);
-                    routes.push((name, wrapped as Arc<dyn ChatModel<State>>));
+                    tiers.push((name, request.purpose, recorded));
                 }
                 Err(error) => {
                     tracing::debug!(route = ?request.route, %error, "skipping unavailable workload model");
@@ -253,42 +279,48 @@ impl<'a, State: Send + Sync + 'static, F: ModelFactory<State>, G: ModelBuildGate
         self.gate.check(&summary_request)?;
         let (summary_model, summary_route) = self.factory.build(&summary_request)?;
         let summary_error_slot = Arc::new(Mutex::new(None));
-        let summarizer = Arc::new(ErrorSlotModel::new(
-            Arc::new(RouteRecordingModel::new(summary_model, summary_route.clone()))
-                as Arc<dyn ChatModel<State>>,
-            Arc::clone(&summary_error_slot),
-        ));
-
-        let resolver = PrebuiltModelResolver::new(
-            primary as Arc<dyn ChatModel<State>>,
-            routes,
-        )
-        .with_lead_model(lead as Arc<dyn ChatModel<State>>);
+        let summarizer = Arc::new(RouteRecordingModel::new(
+            summary_model,
+            summary_route.clone(),
+        )) as Arc<dyn ChatModel<State>>;
 
         Ok(TurnModelSet {
-            resolver,
+            primary,
+            tiers,
             primary_route,
             summary_route,
             summarizer,
             primary_error_slot,
             summary_error_slot,
             route_errors,
+            _state: std::marker::PhantomData,
         })
     }
 }
 
 /// Built models for one turn configuration.
 pub struct TurnModelSet<State: Send + Sync> {
-    resolver: PrebuiltModelResolver<State>,
+    primary: Arc<dyn ChatModel<State>>,
+    tiers: Vec<(String, ModelPurpose, Arc<dyn ChatModel<State>>)>,
     primary_route: ResolvedModelRoute,
     summary_route: ResolvedModelRoute,
     summarizer: Arc<dyn ChatModel<State>>,
     primary_error_slot: ModelErrorSlot,
     summary_error_slot: ModelErrorSlot,
     route_errors: HashMap<String, ModelErrorSlot>,
+    _state: std::marker::PhantomData<fn() -> State>,
 }
 
 impl<State: Send + Sync + 'static> TurnModelSet<State> {
+    /// Builds a turn's primary, canonical workload routes, and summarizer.
+    pub fn build<F, G>(factory: &F, gate: &G, primary_role: impl Into<String>) -> Result<Self>
+    where
+        F: ModelFactory<State> + ?Sized,
+        G: ModelBuildGate + ?Sized,
+    {
+        Self::builder(factory, gate, primary_role).build()
+    }
+
     /// Starts building a model set using the standard workload aliases.
     pub fn builder<'a, F, G>(
         factory: &'a F,
@@ -296,15 +328,47 @@ impl<State: Send + Sync + 'static> TurnModelSet<State> {
         primary_role: impl Into<String>,
     ) -> TurnModelSetBuilder<'a, State, F, G>
     where
-        F: ModelFactory<State>,
-        G: ModelBuildGate,
+        F: ModelFactory<State> + ?Sized,
+        G: ModelBuildGate + ?Sized,
     {
         TurnModelSetBuilder::new(factory, gate, primary_role)
     }
 
-    /// Borrows the prebuilt route resolver.
-    pub fn resolver(&self) -> &PrebuiltModelResolver<State> {
-        &self.resolver
+    /// Builds an owned route resolver from the already constructed and mapped models.
+    pub fn resolver(&self) -> PrebuiltModelResolver<State> {
+        let routes = self.tiers.iter().map(|(name, _, model)| {
+            let slot = self
+                .route_errors
+                .get(name)
+                .expect("built workload route has an error slot");
+            (
+                name.clone(),
+                Arc::new(ErrorSlotModel::new(Arc::clone(model), Arc::clone(slot)))
+                    as Arc<dyn ChatModel<State>>,
+            )
+        });
+        PrebuiltModelResolver::new(Arc::clone(&self.primary), routes).with_lead_model(Arc::new(
+            ErrorSlotModel::new(
+                Arc::clone(&self.primary),
+                Arc::clone(&self.primary_error_slot),
+            ),
+        ))
+    }
+
+    /// Applies a host-owned decorator once to the primary, every built
+    /// workload route, and the summarizer before the resolver/error slots are
+    /// assembled. Hosts use this for per-turn wrappers such as model budgets.
+    #[must_use]
+    pub fn map_models<F>(mut self, mut map: F) -> Self
+    where
+        F: FnMut(&ModelPurpose, Arc<dyn ChatModel<State>>) -> Arc<dyn ChatModel<State>>,
+    {
+        self.primary = map(&ModelPurpose::Primary, Arc::clone(&self.primary));
+        for (_, purpose, model) in &mut self.tiers {
+            *model = map(purpose, Arc::clone(model));
+        }
+        self.summarizer = map(&ModelPurpose::Summarization, Arc::clone(&self.summarizer));
+        self
     }
 
     /// Primary model's concrete route.
@@ -319,7 +383,29 @@ impl<State: Send + Sync + 'static> TurnModelSet<State> {
 
     /// Model reserved for summarization.
     pub fn summarizer(&self) -> Arc<dyn ChatModel<State>> {
-        Arc::clone(&self.summarizer)
+        Arc::new(ErrorSlotModel::new(
+            Arc::clone(&self.summarizer),
+            Arc::clone(&self.summary_error_slot),
+        ))
+    }
+
+    /// Returns primary and workload models in construction order for host
+    /// turn planners that attach their own run-level error policy. The primary
+    /// name is supplied by the host; workload names are their route aliases.
+    /// Models are the already mapped instances, before this set's dedicated
+    /// resolver error slots are applied.
+    pub fn registrations(
+        &self,
+        primary_name: impl Into<String>,
+    ) -> Vec<(String, Arc<dyn ChatModel<State>>)> {
+        let mut models = Vec::with_capacity(1 + self.tiers.len());
+        models.push((primary_name.into(), Arc::clone(&self.primary)));
+        models.extend(
+            self.tiers
+                .iter()
+                .map(|(name, _, model)| (name.clone(), Arc::clone(model))),
+        );
+        models
     }
 
     /// Error slot for team-lead calls routed through the primary model.
@@ -353,34 +439,76 @@ pub struct SubprocessProviderContext {
 
 /// Builds one supported Claude subprocess route, returning `None` for other
 /// provider kinds. Hosts must run their [`ModelBuildGate`] before calling this
-/// function; it never reads host credentials or modifies process environment.
+/// function. The default Claude Code constructor probes the installed CLI and
+/// resolves its credential through the existing provider; it does not mutate
+/// the process environment. Use [`build_claude_subprocess_model_with`] to
+/// inject a constructor in tests or hosts that resolve these values elsewhere.
 #[cfg(feature = "claude-code")]
 pub fn build_claude_subprocess_model(
     route: &tinyinference_providers::route::ProviderRoute,
     context: &SubprocessProviderContext,
 ) -> anyhow::Result<Option<Arc<dyn ChatModel<()>>>> {
-    use crate::providers::{claude_agent_sdk::ClaudeAgentSdkProvider, claude_code::ClaudeCodeProvider};
+    use crate::providers::claude_code::ClaudeCodeProvider;
+
+    build_claude_subprocess_model_with(route, context, |model, workspace_dir, action_dir, mcp| {
+        // Keep the host's existing environment-based CLI discovery and auth
+        // resolution. This constructor probes the installed CLI and resolves
+        // its credential; hosts must run their build gate before this call.
+        let mut provider = ClaudeCodeProvider::from_env(
+            model,
+            workspace_dir.to_path_buf(),
+            action_dir.to_path_buf(),
+        )?;
+        if let Some(mcp) = mcp {
+            provider = provider.with_mcp_provider(mcp);
+        }
+        Ok(Arc::new(provider) as Arc<dyn ChatModel<()>>)
+    })
+}
+
+/// Routes supported Claude subprocess providers through their existing
+/// adapters. `build_claude_code` is called only for a non-empty Claude Code
+/// model and receives the host's selected model, workspace, action directory,
+/// and optional MCP endpoint. Injecting this constructor makes route assembly
+/// testable without CLI discovery, credentials, environment access, or a
+/// subprocess. The SDK route is built from the host-supplied SDK config.
+#[cfg(feature = "claude-code")]
+pub fn build_claude_subprocess_model_with<F>(
+    route: &tinyinference_providers::route::ProviderRoute,
+    context: &SubprocessProviderContext,
+    build_claude_code: F,
+) -> anyhow::Result<Option<Arc<dyn ChatModel<()>>>>
+where
+    F: FnOnce(
+        &str,
+        &std::path::Path,
+        &std::path::Path,
+        Option<Arc<dyn crate::providers::claude_code::driver::McpEndpointProvider>>,
+    ) -> anyhow::Result<Arc<dyn ChatModel<()>>>,
+{
+    use crate::providers::claude_agent_sdk::ClaudeAgentSdkProvider;
     use tinyinference_providers::route::RouteKind;
 
-    let model: Arc<dyn ChatModel<()>> = match route.kind() {
+    match route.kind() {
         RouteKind::ClaudeCode => {
-            let mut provider = ClaudeCodeProvider::from_env(
-                route.model.clone(),
-                context.workspace_dir.clone(),
-                context.action_dir.clone(),
+            anyhow::ensure!(
+                !route.model.trim().is_empty(),
+                "Claude Code model must not be empty"
+            );
+            let model = build_claude_code(
+                &route.model,
+                &context.workspace_dir,
+                &context.action_dir,
+                context.mcp_provider.clone(),
             )?;
-            if let Some(mcp) = &context.mcp_provider {
-                provider = provider.with_mcp_provider(Arc::clone(mcp));
-            }
-            Arc::new(provider)
+            Ok(Some(model))
         }
-        RouteKind::ClaudeAgentSdk => Arc::new(ClaudeAgentSdkProvider::for_model(
+        RouteKind::ClaudeAgentSdk => Ok(Some(Arc::new(ClaudeAgentSdkProvider::for_model(
             context.claude_agent_sdk.clone(),
             route.model.clone(),
-        )),
-        _ => return Ok(None),
-    };
-    Ok(Some(model))
+        )))),
+        _ => Ok(None),
+    }
 }
 
 #[cfg(test)]
