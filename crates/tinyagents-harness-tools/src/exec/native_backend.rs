@@ -4,7 +4,7 @@ use tinytools::ToolRunContext;
 
 use super::{
     ExecBackend, ExecBackendOutcome, ExecOutput, ExecProgress, ExecRequest, ShellFlavor,
-    timeout::{output_or_kill_with_progress, output_unbounded_with_progress},
+    timeout::{output_or_kill_with_progress_isolated, output_unbounded_with_progress_isolated},
 };
 
 /// Capability token required by [`NativeExecBackend`] before it may spawn.
@@ -67,7 +67,7 @@ impl ExecBackend for NativeExecBackend {
         let run = async {
             match request.timeout {
                 Some(timeout) => {
-                    match output_or_kill_with_progress(&mut command, timeout, progress).await {
+                    match output_or_kill_with_progress_isolated(&mut command, timeout, progress).await {
                         Ok(Ok(output)) => Ok(ExecOutput {
                             stdout: output.stdout,
                             stderr: output.stderr,
@@ -83,7 +83,7 @@ impl ExecBackend for NativeExecBackend {
                         }),
                     }
                 }
-                None => output_unbounded_with_progress(&mut command, progress)
+                None => output_unbounded_with_progress_isolated(&mut command, progress)
                     .await
                     .map(|output| ExecOutput {
                         stdout: output.stdout,
