@@ -106,7 +106,7 @@ impl Tool for MultiInner {
         json!({"type":"object","properties":{"prompt":{"type":"string"}}})
     }
     fn category(&self) -> ToolCategory {
-        ToolCategory::Media
+        ToolCategory::Workflow
     }
     fn external_effect(&self) -> bool {
         true
@@ -199,7 +199,7 @@ async fn per_call_inner_preserves_stable_metadata_and_files_multiple_entries_ind
         }));
     assert_eq!(tool.name(), "multi");
     assert_eq!(tool.description(), "multi description");
-    assert_eq!(tool.category(), ToolCategory::Media);
+    assert_eq!(tool.category(), ToolCategory::Workflow);
     assert_eq!(tool.permission_level(), PermissionLevel::Dangerous);
     assert!(tool.external_effect());
     assert_eq!(tool.timeout_policy(&json!({})), ToolTimeout::Unbounded);
