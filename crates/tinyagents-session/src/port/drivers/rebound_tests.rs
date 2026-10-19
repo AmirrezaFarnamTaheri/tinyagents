@@ -122,6 +122,8 @@ async fn actor_bound_driver_provider_can_open_a_pinned_lease() {
     .unwrap();
     let actor = root.bind_actor(Arc::clone(&backend)).unwrap().unwrap();
     let lease = actor.lease_for_agent("agent").unwrap();
+    let session = SessionRef::scoped("actor-lease-thread", "agent");
+    append_session_row(lease.stores(), &session, "actor transcript");
     lease
         .stores()
         .kv
@@ -135,6 +137,12 @@ async fn actor_bound_driver_provider_can_open_a_pinned_lease() {
     assert_eq!(
         direct.kv.get("prefs", "key").await.unwrap(),
         Some(serde_json::json!("actor"))
+    );
+    let second_lease = actor.lease_for_agent("agent").unwrap();
+    assert_eq!(
+        session_contents(second_lease.stores(), &session),
+        vec!["actor transcript"],
+        "reusing one actor-bound provider must preserve its admitted backend across operations"
     );
 }
 

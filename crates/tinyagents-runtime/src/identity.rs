@@ -6,6 +6,14 @@ use crate::types::{ResolvedSessionStores, SessionIdentity, SessionIdentityReques
 use crate::RuntimeError;
 
 /// Resolves logical session naming inputs against host-authorized storage.
+///
+/// Implementations must reuse the actor-bound provider (and its pinned store
+/// lease) for the lifetime of one admitted runtime session. A new admission
+/// epoch must create a fresh fenced binding and runtime session; returning a
+/// different tenant/backend locator during an existing admission is rejected.
+/// Identity-changing preparation belongs in `before_resume`, which runs before
+/// admission. `before_turn` is a trusted execution hook and must preserve the
+/// admitted actor/backend authority for that turn.
 pub trait SessionIdentityResolver<C: Send + Sync + 'static>: Send + Sync {
     /// Admits the current host context and returns a pinned transcript store lease.
     fn resolve(

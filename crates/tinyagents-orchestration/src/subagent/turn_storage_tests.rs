@@ -228,6 +228,7 @@ impl SessionDriver for GateDriver {
             partial: None,
             interrupted: false,
             outcome: None,
+            tool_outcomes: Vec::new(),
         })
     }
 }
