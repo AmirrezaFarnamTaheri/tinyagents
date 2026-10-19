@@ -516,13 +516,33 @@ type replaces that value; different host types coexist. Clones share immutable
 `exact` semantics remain unchanged.
 
 In the existing `ToolSnapshot::new`, initialize `extensions` to
-`ToolSnapshotExtensions::default()`. In `retaining`, add
-`extensions: self.extensions.clone()` to the returned `Self`. In
-`with_retained`, construct the merged spec set with `let mut merged =
-Self::new(...)`, then assign `merged.extensions = self.extensions.clone()` before returning it with
-the retained count. Keep `from_json` going through `Self::new`; decoded
-snapshots therefore have an empty extension collection, and the existing
-array wire format stays unchanged.
+`ToolSnapshotExtensions::default()`. Replace `retaining` with this complete
+body:
+
+```rust
+pub fn retaining(&self, keep: impl Fn(&ToolSpec) -> bool) -> Self {
+    Self {
+        specs: self.specs.iter().filter(|spec| keep(spec)).cloned().collect(),
+        exact: self.exact,
+        extensions: self.extensions.clone(),
+    }
+}
+```
+
+Keep the existing early return in `with_retained`, and replace its success
+tail with this exact code. The `Self::new` call continues to validate name
+collisions:
+
+```rust
+let count = retained.len();
+let mut merged = Self::new(self.specs.iter().cloned().chain(retained).collect())?;
+merged.extensions = self.extensions.clone();
+Ok((merged, count))
+```
+
+Keep `from_json` going through `Self::new`; decoded snapshots therefore have
+an empty extension collection, and the existing array wire format stays
+unchanged.
 
 Keep `ToolSnapshot::to_json` and `from_json` as the existing array-of-specs
 format with no extension serialization. The harness transcript record already
