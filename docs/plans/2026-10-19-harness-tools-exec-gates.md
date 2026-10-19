@@ -433,6 +433,7 @@ cargo check -p tinyagents-harness-tools --no-default-features --features exec
 cargo check -p tinyagents-harness-tools --no-default-features --features media
 cargo check -p tinyagents-harness-tools --no-default-features --features plan-review
 cargo check -p tinyagents-harness-tools --no-default-features
+cargo check -p tinyagents-harness-tools --no-default-features --features fs,net,exec,media,plan-review
 ```
 
 The final command proves a disabled-tools build remains lean and does not
@@ -613,8 +614,12 @@ cargo check -p tinyagents-harness-tools --no-default-features
 cargo check -p tinyagents-harness-tools --no-default-features --features fs
 cargo check -p tinyagents-harness-tools --no-default-features --features net
 cargo check -p tinyagents-harness-tools --no-default-features --features exec
+cargo check -p tinyagents-harness-tools --no-default-features --features media
+cargo check -p tinyagents-harness-tools --no-default-features --features plan-review
+cargo check -p tinyagents-harness-tools --no-default-features --features fs,net,exec,media,plan-review
 cargo tree -p tinyagents-harness -e normal
 cargo tree -p tinyagents-harness-tools -e normal
+cargo tree -p tinyagents-harness-tools -e normal --no-default-features
 cargo machete
 ```
 
