@@ -331,7 +331,7 @@ impl CompletionRouter {
                 None => None,
             }
         };
-        let Some((lane, queue)) = push else {
+        let Some((lane, queue, push_receipt)) = push else {
             return Ok(RecordOutcome::Recorded { lane: None, receipt: None });
         };
         let message = self.formatter.to_message(std::slice::from_ref(&record));
@@ -498,17 +498,7 @@ impl CompletionRouter {
         mode: CompletionClaimMode,
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
-        static NEXT_CLAIM: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(1);
-        let nonce = NEXT_CLAIM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let token = format!(
-            "{}-{}-{nonce}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        );
+        let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
         let mut candidates = state.store.claim_pending(
             parent_key,
@@ -520,10 +510,8 @@ impl CompletionRouter {
         sort_oldest_first(&mut candidates);
         for record in &candidates {
             state.leased.insert(record.task_id.clone());
-            if let Some(claim) = &record.claim {
-                state
-                    .claim_tokens
-                    .insert(record.task_id.clone(), claim.token.clone());
+            if let Some(receipt) = record.receipt() {
+                state.active_receipts.insert(record.task_id.clone(), receipt);
             }
         }
         if !candidates.is_empty() {
@@ -538,28 +526,20 @@ impl CompletionRouter {
 
     /// Settles claimed (or pulled) records as delivered. Returns how many
     /// changed; records that are not pending are left alone.
-    pub fn mark_delivered<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<usize> {
+    pub fn mark_delivered(&self, receipts: &[CompletionReceipt]) -> Result<usize> {
         let mut state = self.lock()?;
         let mut changed = 0;
-        for id in task_ids {
-            let id = id.as_ref();
-            state.leased.remove(id);
-            if let Some(token) = state.claim_tokens.remove(id) {
-                if state
-                    .store
-                    .resolve_claim(id, &token, ClaimResolution::Delivered)?
-                    .is_some()
-                {
-                    changed += 1;
-                }
-                continue;
+        for receipt in receipts {
+            let resolved = state.store.resolve_claim(
+                &receipt.task_id,
+                &receipt.token,
+                ClaimResolution::Delivered,
+            )?;
+            if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
+                state.active_receipts.remove(&receipt.task_id);
+                state.leased.remove(&receipt.task_id);
             }
-            if let Some(mut record) = state.store.get(id)
-                && record.state == CompletionState::Pending
-            {
-                record.state = CompletionState::Delivered;
-                record.updated_at = SystemTime::now();
-                state.store.put(&record)?;
+            if resolved.is_some() {
                 changed += 1;
             }
         }
@@ -571,47 +551,25 @@ impl CompletionRouter {
     /// claimed again, unless its attempts have reached [`Self::max_attempts`]:
     /// then it becomes [`CompletionState::GaveUp`] and is returned so the host
     /// can apply its own give-up policy (the router never delivers it again).
-    pub fn mark_failed<S: AsRef<str>>(&self, task_ids: &[S]) -> Result<Vec<CompletionRecord>> {
+    pub fn mark_failed(&self, receipts: &[CompletionReceipt]) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
-        for id in task_ids {
-            let id = id.as_ref();
-            state.leased.remove(id);
-            if let Some(token) = state.claim_tokens.remove(id) {
-                if let Some(record) = state.store.resolve_claim(
-                    id,
-                    &token,
-                    ClaimResolution::Failed {
-                        max_attempts: self.max_attempts,
-                    },
-                )? && record.state == CompletionState::GaveUp
-                {
-                    tracing::warn!(
-                        task_id = %record.task_id,
-                        parent_key = %record.parent_key,
-                        attempts = record.attempts,
-                        "{LOG_PREFIX} gave up"
-                    );
-                    gave_up.push(record);
-                }
-                continue;
+        for receipt in receipts {
+            let record = state.store.resolve_claim(
+                &receipt.task_id,
+                &receipt.token,
+                ClaimResolution::Failed {
+                    max_attempts: self.max_attempts,
+                },
+            )?;
+            if state.active_receipts.get(&receipt.task_id) == Some(receipt) {
+                state.active_receipts.remove(&receipt.task_id);
+                state.leased.remove(&receipt.task_id);
             }
-            let Some(mut record) = state.store.get(id) else {
-                continue;
-            };
-            if record.state != CompletionState::Pending || record.attempts < self.max_attempts {
-                continue;
+            if let Some(record) = record.filter(|record| record.state == CompletionState::GaveUp) {
+                tracing::warn!(task_id = %record.task_id, parent_key = %record.parent_key, attempts = record.attempts, "{LOG_PREFIX} gave up");
+                gave_up.push(record);
             }
-            record.state = CompletionState::GaveUp;
-            record.updated_at = SystemTime::now();
-            state.store.put(&record)?;
-            tracing::warn!(
-                task_id = %record.task_id,
-                parent_key = %record.parent_key,
-                attempts = record.attempts,
-                "{LOG_PREFIX} gave up"
-            );
-            gave_up.push(record);
         }
         Ok(gave_up)
     }

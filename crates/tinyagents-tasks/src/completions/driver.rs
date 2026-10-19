@@ -237,6 +237,58 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> Result<Option<CompletionRecord>> {
+        let this = self.clone();
+        let task_id = task_id.to_owned();
+        let parent_key = parent_key.to_owned();
+        let token = token.to_owned();
+        self.run(async move {
+            this.declare().await?;
+            let id = task_id_key(&task_id).map_err(map_error)?;
+            let Some(row) = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
+                return Ok(None);
+            };
+            let mut record = decode_strict(row.clone())?;
+            let now = SystemTime::now();
+            if record.parent_key != parent_key
+                || record.state != CompletionState::Pending
+                || !mode.accepts(record.notify_mode)
+                || record.claim.as_ref().is_some_and(|claim| claim.visible_after > now)
+            {
+                return Ok(None);
+            }
+            record.attempts = record.attempts.saturating_add(1);
+            record.updated_at = now;
+            record.claim = Some(crate::completions::CompletionClaim {
+                token: format!("{token}:{task_id}"),
+                visible_after,
+            });
+            let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
+            match this
+                .docs
+                .put_with(
+                    COMPLETIONS,
+                    &id,
+                    body,
+                    Precondition::Version(row.version),
+                    WriteOptions::new().schema(SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => Ok(Some(record)),
+                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => Ok(None),
+                Err(error) => Err(map_error(error)),
+            }
+        })
+    }
+
     fn resolve_claim(
         &self,
         task_id: &str,
