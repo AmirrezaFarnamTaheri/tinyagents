@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::{TestGate, WorkspaceContext, WrapGate};
+use crate::fs::filesystem::test_support::{TestGate, WorkspaceContext, WrapGate};
 use tempfile::TempDir;
 
 #[test]
@@ -18,7 +18,7 @@ async fn rate_limit_and_exhausted_budget_are_refused() {
     let dir = TempDir::new().unwrap();
     let limited = GrepTool::new(TestGate::with(
         dir.path().to_path_buf(),
-        crate::filesystem::test_support::AutonomyLevel::Supervised,
+        crate::fs::filesystem::test_support::AutonomyLevel::Supervised,
         0,
     ));
     let r = limited.execute(json!({"pattern": "x"})).await.unwrap();

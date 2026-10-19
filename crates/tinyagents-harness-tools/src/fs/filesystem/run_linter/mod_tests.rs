@@ -82,7 +82,7 @@ async fn eslint_rejects_path_traversal() {
 
 #[tokio::test]
 async fn a_workspace_descriptor_overrides_the_configured_directory() {
-    use crate::filesystem::test_support::WorkspaceContext;
+    use crate::fs::filesystem::test_support::WorkspaceContext;
     let configured = TempDir::new().unwrap();
     let isolated = TempDir::new().unwrap();
     let context = WorkspaceContext::at(isolated.path());

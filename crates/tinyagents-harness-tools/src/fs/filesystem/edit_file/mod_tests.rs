@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate};
 
 fn test_security(workspace: std::path::PathBuf) -> Arc<TestGate> {
     TestGate::supervised(workspace)
@@ -159,7 +159,7 @@ async fn edit_reports_an_os_write_failure_rather_than_a_silent_success() {
     tokio::fs::write(&file, "abc").await.unwrap();
 
     let tool = EditFileTool::new(test_security(dir.clone())).with_sink(Arc::new(
-        crate::filesystem::file_sink::RefusingSink(std::io::ErrorKind::PermissionDenied),
+        crate::fs::filesystem::file_sink::RefusingSink(std::io::ErrorKind::PermissionDenied),
     ));
     let result = tool
         .execute(json!({"path": "f.txt", "old_string": "abc", "new_string": "xyz"}))
@@ -182,7 +182,7 @@ async fn edit_reports_an_os_write_failure_rather_than_a_silent_success() {
 
 // ── Coverage of the budget, symlink, size, read and guard branches ──────
 
-use crate::filesystem::test_support::{RacyGate, WorkspaceContext};
+use crate::fs::filesystem::test_support::{RacyGate, WorkspaceContext};
 
 fn edit_args(path: &str) -> serde_json::Value {
     json!({"path": path, "old_string": "aaa", "new_string": "bbb"})
@@ -271,7 +271,7 @@ async fn edit_uses_the_context_workspace_when_one_is_threaded() {
 
 #[tokio::test]
 async fn edit_honours_the_file_state_guard_and_records_its_write() {
-    crate::file_state::init_global(true);
+    crate::fs::file_state::init_global(true);
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().canonicalize().unwrap().join("g.txt");
     std::fs::write(&target, "aaa").unwrap();
@@ -279,10 +279,10 @@ async fn edit_honours_the_file_state_guard_and_records_its_write() {
     let agent = format!("ed-agent-{}", dir.path().display());
     let other = format!("ed-other-{}", dir.path().display());
     let run = |agent: String| {
-        crate::file_state::with_file_state_agent_id(agent, tool.execute(edit_args("g.txt")))
+        crate::fs::file_state::with_file_state_agent_id(agent, tool.execute(edit_args("g.txt")))
     };
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
@@ -292,18 +292,18 @@ async fn edit_honours_the_file_state_guard_and_records_its_write() {
     let result = run(agent.clone()).await.unwrap();
     assert!(result.output().contains("Partial read"));
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
         false,
         std::time::Instant::now(),
     );
-    crate::file_state::record_write(&other, target.clone());
+    crate::fs::file_state::record_write(&other, target.clone());
     let result = run(agent.clone()).await.unwrap();
     assert!(result.output().contains("Stale read"));
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
@@ -312,5 +312,5 @@ async fn edit_honours_the_file_state_guard_and_records_its_write() {
     );
     let result = run(agent.clone()).await.unwrap();
     assert!(!result.is_error, "{}", result.output());
-    assert!(crate::file_state::check_stale_read(&agent, &target).is_none());
+    assert!(crate::fs::file_state::check_stale_read(&agent, &target).is_none());
 }

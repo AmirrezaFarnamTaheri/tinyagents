@@ -301,7 +301,7 @@ async fn a_symlinked_lock_file_is_refused() {
 
 #[tokio::test]
 async fn a_workspace_descriptor_overrides_the_configured_directory() {
-    use crate::filesystem::test_support::WorkspaceContext;
+    use crate::fs::filesystem::test_support::WorkspaceContext;
     let configured = tempfile::tempdir().unwrap();
     let isolated = tempfile::tempdir().unwrap();
     let context = WorkspaceContext::at(isolated.path());

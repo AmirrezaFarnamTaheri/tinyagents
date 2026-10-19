@@ -7,7 +7,7 @@
 //! proxy is applied to a client all belong to the host whose threat model and
 //! configuration they depend on. A tool asks a [`NetGate`] instead.
 //!
-//! Like [`crate::filesystem::FsGate`], the trait carries no decision *types* of
+//! Like [`crate::fs::filesystem::FsGate`], the trait carries no decision *types* of
 //! its own, only booleans, strings and the `reqwest` builder the tool was
 //! already holding, so a host maps its own policy onto it without translating
 //! a vocabulary.
@@ -108,7 +108,7 @@ pub trait NetGate: std::fmt::Debug + Send + Sync {
     /// module that resolves, applies an address floor and pins) answers here so
     /// there is one URL guard, not one per tool.
     ///
-    /// [`validate_url_with_dns_check`]: crate::url_guard::validate_url_with_dns_check
+    /// [`validate_url_with_dns_check`]: tinyagents_harness::url_guard::validate_url_with_dns_check
     fn authorize_destination<'a>(
         &'a self,
         destination: &'a Destination<'a>,
@@ -155,8 +155,8 @@ pub(super) async fn validate_destination(
     method: &str,
     headers: &[(String, String)],
     body: Option<&str>,
-) -> anyhow::Result<crate::url_guard::ValidatedUrl> {
-    use crate::url_guard::{
+) -> anyhow::Result<tinyagents_harness::url_guard::ValidatedUrl> {
+    use tinyagents_harness::url_guard::{
         ValidatedUrl, extract_host, extract_port, is_private_or_local_host, validate_url,
         validate_url_with_dns_check,
     };

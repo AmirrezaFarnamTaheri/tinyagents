@@ -131,7 +131,7 @@ async fn base_ref_and_staged_flags_are_passed_to_git() {
 
 #[tokio::test]
 async fn a_workspace_descriptor_overrides_the_configured_directory() {
-    use crate::filesystem::test_support::WorkspaceContext;
+    use crate::fs::filesystem::test_support::WorkspaceContext;
     let elsewhere = TempDir::new().unwrap();
     let repo = repo_with_change();
     let context = WorkspaceContext::at(repo.path());

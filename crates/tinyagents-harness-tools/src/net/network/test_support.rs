@@ -163,12 +163,12 @@ impl HtmlExtractor for TestHtml {
 /// A [`ValidatedUrl`] for a loopback test server: the host is the IP literal in
 /// `url`, pinned to that one socket address, as the SSRF guard would return it
 /// for a public literal.
-pub fn pinned_to_local(url: &str) -> crate::url_guard::ValidatedUrl {
+pub fn pinned_to_local(url: &str) -> tinyagents_harness::url_guard::ValidatedUrl {
     let parsed = reqwest::Url::parse(url).expect("test URL parses");
     let host = parsed.host_str().expect("test URL has a host").to_string();
     let ip: std::net::IpAddr = host.parse().expect("test URL host is an IP literal");
     let port = parsed.port_or_known_default().expect("test URL has a port");
-    crate::url_guard::ValidatedUrl {
+    tinyagents_harness::url_guard::ValidatedUrl {
         url: url.to_string(),
         host,
         addrs: vec![std::net::SocketAddr::new(ip, port)],

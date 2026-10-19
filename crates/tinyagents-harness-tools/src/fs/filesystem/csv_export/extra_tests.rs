@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate, WrapGate};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate, WrapGate};
 use tempfile::TempDir;
 
 fn tool_in(dir: &TempDir) -> CsvExportTool {

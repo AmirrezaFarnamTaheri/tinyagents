@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::WorkspaceContext;
+use crate::fs::filesystem::test_support::WorkspaceContext;
 use serde_json::json;
 use tempfile::TempDir;
 

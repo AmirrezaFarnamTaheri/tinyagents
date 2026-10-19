@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::{TestGate, WorkspaceContext, WrapGate};
+use crate::fs::filesystem::test_support::{TestGate, WorkspaceContext, WrapGate};
 use tempfile::TempDir;
 
 #[test]
@@ -46,7 +46,7 @@ async fn a_read_under_an_agent_id_records_file_state() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("a.txt"), "tracked").unwrap();
     let tool = FileReadTool::new(TestGate::supervised(dir.path().to_path_buf()));
-    let r = crate::file_state::with_file_state_agent_id(
+    let r = crate::fs::file_state::with_file_state_agent_id(
         "agent-file-read-extra".to_string(),
         tool.execute(json!({"path": "a.txt"})),
     )

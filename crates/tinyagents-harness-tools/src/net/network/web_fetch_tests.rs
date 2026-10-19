@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use super::*;
-use crate::network::test_support::{DEFAULT_LIMITS, TestHtml, TestNetGate, pinned_to_local};
+use crate::net::network::test_support::{DEFAULT_LIMITS, TestHtml, TestNetGate, pinned_to_local};
 use std::sync::Mutex;
 
 fn test_security() -> Arc<TestNetGate> {
@@ -219,7 +219,7 @@ async fn html_is_converted_through_the_host_extractor_only_when_it_is_html() {
 #[tokio::test]
 async fn execute_blocks_when_rate_limited() {
     let tool = fetch(
-        TestNetGate::with(crate::network::test_support::AutonomyLevel::Supervised, 0),
+        TestNetGate::with(crate::net::network::test_support::AutonomyLevel::Supervised, 0),
         vec!["example.com".into()],
         None,
         None,

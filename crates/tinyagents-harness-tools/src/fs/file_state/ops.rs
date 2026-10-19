@@ -41,7 +41,7 @@ pub fn try_global() -> Option<Arc<FileStateCoordinator>> {
 /// ```
 /// use std::path::PathBuf;
 /// use std::time::{Instant, SystemTime};
-/// use tinytools_std::file_state::record_read;
+/// use tinyagents_harness_tools::fs::file_state::record_read;
 ///
 /// let path = PathBuf::from("/workspace/notes.txt");
 /// let read_started = Instant::now();

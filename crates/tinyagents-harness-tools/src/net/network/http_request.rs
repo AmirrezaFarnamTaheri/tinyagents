@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinytools::{PermissionLevel, Tool, ToolResult};
 
-use crate::url_guard::{ValidatedUrl, normalize_allowed_domains};
+use tinyagents_harness::url_guard::{ValidatedUrl, normalize_allowed_domains};
 
 use super::gate::validate_destination;
 

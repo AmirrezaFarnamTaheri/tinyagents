@@ -1,5 +1,5 @@
 use super::*;
-use crate::network::test_support::{AutonomyLevel, DEFAULT_LIMITS, TestNetGate, pinned_to_local};
+use crate::net::network::test_support::{AutonomyLevel, DEFAULT_LIMITS, TestNetGate, pinned_to_local};
 
 fn test_tool(allowed_domains: Vec<&str>) -> HttpRequestTool {
     let security = TestNetGate::supervised();
@@ -650,7 +650,7 @@ async fn the_request_connects_to_the_pinned_address_and_keeps_the_host_name() {
     let ok = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
     let (addr, seen) = serve(vec![ok.to_string()]).await;
     let tool = test_tool(vec![]);
-    let target = crate::url_guard::ValidatedUrl {
+    let target = tinyagents_harness::url_guard::ValidatedUrl {
         url: format!("http://pinned.invalid:{}/x", addr.port()),
         host: "pinned.invalid".to_string(),
         addrs: vec![addr],

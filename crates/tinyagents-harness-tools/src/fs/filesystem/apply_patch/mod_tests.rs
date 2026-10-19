@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::TestGate;
+use crate::fs::filesystem::test_support::TestGate;
 
 fn test_security(workspace: std::path::PathBuf) -> Arc<TestGate> {
     TestGate::supervised(workspace)
@@ -388,7 +388,7 @@ async fn apply_patch_create_still_obeys_the_path_policy() {
 
 // ── Coverage of limits, budgets, guards, symlinks and write failures ────
 
-use crate::filesystem::test_support::{AutonomyLevel, RacyGate, WorkspaceContext};
+use crate::fs::filesystem::test_support::{AutonomyLevel, RacyGate, WorkspaceContext};
 
 fn one_edit(path: &str, old: &str, new: &str) -> serde_json::Value {
     json!({"edits": [{"path": path, "old_string": old, "new_string": new}]})
@@ -556,7 +556,7 @@ async fn apply_patch_uses_the_context_workspace_when_one_is_threaded() {
 
 #[tokio::test]
 async fn apply_patch_honours_the_file_state_guard_and_records_writes() {
-    crate::file_state::init_global(true);
+    crate::fs::file_state::init_global(true);
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().canonicalize().unwrap().join("g.txt");
     std::fs::write(&target, "x").unwrap();
@@ -564,13 +564,13 @@ async fn apply_patch_honours_the_file_state_guard_and_records_writes() {
     let agent = format!("ap-agent-{}", dir.path().display());
     let other = format!("ap-other-{}", dir.path().display());
     let run = |agent: String| {
-        crate::file_state::with_file_state_agent_id(
+        crate::fs::file_state::with_file_state_agent_id(
             agent,
             tool.execute(one_edit("g.txt", "x", "y")),
         )
     };
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
@@ -585,14 +585,14 @@ async fn apply_patch_honours_the_file_state_guard_and_records_writes() {
             .contains("Partial read")
     );
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
         false,
         std::time::Instant::now(),
     );
-    crate::file_state::record_write(&other, target.clone());
+    crate::fs::file_state::record_write(&other, target.clone());
     assert!(
         run(agent.clone())
             .await
@@ -601,7 +601,7 @@ async fn apply_patch_honours_the_file_state_guard_and_records_writes() {
             .contains("Stale read")
     );
 
-    crate::file_state::record_read(
+    crate::fs::file_state::record_read(
         &agent,
         target.clone(),
         std::time::SystemTime::now(),
@@ -610,7 +610,7 @@ async fn apply_patch_honours_the_file_state_guard_and_records_writes() {
     );
     let result = run(agent.clone()).await.unwrap();
     assert!(!result.is_error, "{}", result.output());
-    assert!(crate::file_state::check_stale_read(&agent, &target).is_none());
+    assert!(crate::fs::file_state::check_stale_read(&agent, &target).is_none());
 }
 
 /// A create whose file name exceeds the OS limit passes every check and then

@@ -5,7 +5,7 @@
 //! privacy mode) and how the process-wide proxy is applied. The gate trait
 //! ([`NetGate`]) is the whole seam; nothing here knows what an autonomy level,
 //! an approval prompt or an egress descriptor is. URL allowlisting and SSRF
-//! checks are [`crate::url_guard`]'s.
+//! checks are [`tinyagents_harness::url_guard`]'s.
 //!
 //! Two more seams keep host-specific behavior out of the tools: a
 //! [`PaymentHook`] answers a `402 Payment Required` for `http_request`, and an

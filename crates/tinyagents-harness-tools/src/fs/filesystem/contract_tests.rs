@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tinytools::Tool;
 
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate};
 
 fn tools() -> Vec<(&'static str, Box<dyn Tool>)> {
     let gate = TestGate::supervised(std::env::temp_dir());

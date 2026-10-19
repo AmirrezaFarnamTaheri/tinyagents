@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate};
 
 fn test_security() -> Arc<TestGate> {
     TestGate::with(std::env::temp_dir(), AutonomyLevel::Full, 1_000_000)

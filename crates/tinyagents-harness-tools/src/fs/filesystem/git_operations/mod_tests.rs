@@ -4,7 +4,7 @@
 
 use super::config::NULL_CONFIG_PATH;
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate, WorkspaceContext};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate, WorkspaceContext};
 use tempfile::TempDir;
 
 pub(super) fn test_tool(dir: &std::path::Path) -> GitOperationsTool {

@@ -7,7 +7,7 @@
 //! every match). Set `replace_all` to override.
 
 use super::gate::{FsGate, gate_for_context};
-use crate::file_state;
+use crate::fs::file_state;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;

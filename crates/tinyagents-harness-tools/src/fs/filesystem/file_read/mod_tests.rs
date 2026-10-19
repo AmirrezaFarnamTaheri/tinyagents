@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate};
 
 fn test_security(workspace: std::path::PathBuf) -> Arc<TestGate> {
     TestGate::supervised(workspace)

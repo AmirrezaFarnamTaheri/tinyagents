@@ -6,7 +6,7 @@
 
 use super::test::{hermetic, init_git_repo, test_tool};
 use super::*;
-use crate::filesystem::test_support::{AutonomyLevel, TestGate, WorkspaceContext};
+use crate::fs::filesystem::test_support::{AutonomyLevel, TestGate, WorkspaceContext};
 use tempfile::TempDir;
 
 fn git(dir: &std::path::Path, args: &[&str]) {

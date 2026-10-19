@@ -1,5 +1,5 @@
 use super::*;
-use crate::network::test_support::{AutonomyLevel, TestNetGate};
+use crate::net::network::test_support::{AutonomyLevel, TestNetGate};
 use tempfile::TempDir;
 fn slash_norm(s: String) -> String {
     s.replace('\\', "/")

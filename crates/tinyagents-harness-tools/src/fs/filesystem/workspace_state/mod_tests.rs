@@ -1,5 +1,5 @@
 use super::*;
-use crate::filesystem::git_operations::config::normalise_config_key;
+use crate::fs::filesystem::git_operations::config::normalise_config_key;
 use serde_json::json;
 use tempfile::TempDir;
 

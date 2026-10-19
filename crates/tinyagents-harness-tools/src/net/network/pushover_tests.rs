@@ -1,5 +1,5 @@
 use super::*;
-use crate::network::test_support::{AutonomyLevel, TestNetGate};
+use crate::net::network::test_support::{AutonomyLevel, TestNetGate};
 use std::fs;
 use tempfile::TempDir;
 
