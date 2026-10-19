@@ -117,7 +117,7 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
         let step = index + 1;
         let base = 1_010 + index as u64 * 30;
         observations.push(obs(
-            observations.len(),
+            observations.len() as u64,
             step,
             base,
             GraphEvent::StepStarted {
@@ -126,7 +126,7 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
             },
         ));
         observations.push(obs(
-            observations.len(),
+            observations.len() as u64,
             step,
             base + 2,
             GraphEvent::NodeStarted {
@@ -135,7 +135,7 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
             },
         ));
         observations.push(obs(
-            observations.len(),
+            observations.len() as u64,
             step,
             base + 8,
             GraphEvent::NodeCompleted {
@@ -151,7 +151,7 @@ fn sample_three_step_run() -> Vec<GraphObservation> {
         ));
     }
     observations.push(obs(
-        observations.len(),
+        observations.len() as u64,
         3,
         1_100,
         GraphEvent::RunCompleted {
@@ -484,7 +484,7 @@ fn generic_span_export_matches_graph_export_for_three_step_run() {
     );
 
     let old_otlp = exporter()
-        .build_otlp_requests(trace, &observations, "demo")
+        .build_otlp_requests(trace.clone(), &observations, "demo")
         .unwrap();
     let new_otlp = SpanExporter::new(exporter().client().clone())
         .build_otlp_requests(trace, &spans, "demo", "demo.graph")
