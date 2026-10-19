@@ -501,10 +501,23 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             }
             attempt += 1;
             tracing::debug!("{LOG_PREFIX} retry task_id={task_id} attempt={attempt}");
-            tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => break Err(SubagentError::Cancelled),
-                _ = policy.retry.sleep_backoff(attempt) => {}
+            if let Some(fence) = &turn_fence {
+                tokio::select! {
+                    biased;
+                    _ = fence.lost() => {
+                        token.cancel();
+                        turn_lease_lost = true;
+                        break Err(SubagentError::Cancelled);
+                    }
+                    _ = cancellation.cancelled() => break Err(SubagentError::Cancelled),
+                    _ = policy.retry.sleep_backoff(attempt) => {}
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => break Err(SubagentError::Cancelled),
+                    _ = policy.retry.sleep_backoff(attempt) => {}
+                }
             }
             let next_token = cancellation.child_token();
             match attempts.next(attempt as u32, next_token.clone()) {
