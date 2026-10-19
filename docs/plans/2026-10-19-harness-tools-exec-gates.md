@@ -231,14 +231,15 @@ more permissive route. OpenHuman retains authority over native/sandbox/Docker/
 TinyBox/SaaS selection. A SaaS-unavailable refusal and Docker configuration or
 preflight refusal are typed `Refused` outcomes before process creation; they
 are not policy denials and are not launch failures. `LaunchFailed` means a
-process-creation attempt failed. Audit exactly once for each well-formed operation that reaches the gate,
-recording the source approval-required proxy (`external_effect_with_args(args)`) separately from authorization and
-allowed status. Gate denial is
-`authorized=false, allowed=false, process_attempted=false`; backend refusal
-(including SaaS refusal or Docker configuration/preflight failure) is
-`authorized=true, allowed=false, process_attempted=false`; launch failure is
-`authorized=true, allowed=true, process_attempted=true`; completed execution
-is allowed and attempted, with success derived from the source result mapping. Include the selected backend
+process-creation attempt failed. Audit exactly once for each well-formed
+operation that reaches the gate, recording the source approval-required proxy
+(`external_effect_with_args(args)`) separately from authorization and allowed
+status. Gate denial is `authorized=false, allowed=false,
+process_attempted=false`; backend refusal (including SaaS refusal or Docker
+configuration/preflight failure) is `authorized=true, allowed=false,
+process_attempted=false`; launch failure is `authorized=true, allowed=true,
+process_attempted=true`; completed execution is allowed and attempted, with
+success derived from the source result mapping. Include the selected backend
 when a permit exists. Never represent a backend refusal as an allowed successful
 execution.
 
@@ -669,11 +670,12 @@ until its wait has completed. On Windows use the existing platform-supported
 cleanup path; do not claim descendant termination where the platform does not
 provide it. Tests use a temporary executable
 script/process and assert: only the expected argv reaches it; malformed
-package inputs never launch; denied calls have a zero backend count; timeout does not return until the owned waiter's `Reaped` acknowledgment after
-process-group kill, output-pipe drain, and child reap; assert on return that
-neither the child nor its descendant remains alive and that captured pipes
-are closed. Separate stdout/stderr
-truncation remains Unicode safe; exit status survives. Cancellation tests run
+package inputs never launch; denied calls have a zero backend count; timeout
+does not return until the owned waiter's `Reaped` acknowledgment after
+process-group kill, output-pipe drain, and child reap. On return, assert that
+neither the child nor its descendant remains alive and that captured pipes are
+closed. Separate stdout/stderr truncation remains Unicode safe; exit status
+survives. Cancellation tests run
 the call under `ProcessCleanup::scope`, drop the call future, then await
 `ProcessCleanup::wait()` and assert the child and descendant are gone. The
 cleanup acknowledgement is the `wait()` completion after the owned waiter has
