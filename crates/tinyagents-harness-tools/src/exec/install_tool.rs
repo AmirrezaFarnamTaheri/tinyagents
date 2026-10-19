@@ -59,7 +59,7 @@ impl Tool for InstallTool {
         "Install an OS or language package on the host (apt/dnf/pacman/apk/brew/winget/pipx/npm -g/cargo). HIGH IMPACT: host policy must require explicit user approval. Prefer detect_tools first; only install what's actually missing."
     }
     fn parameters_schema(&self) -> Value {
-        json!({"type":"object","properties":{"package":{"type":"string","description":"Package name to install (e.g. 'ripgrep', 'jq', '@scope/cli')."},"manager":{"type":"string","enum":["apt","apt-get","dnf","yum","pacman","apk","brew","winget","pipx","npm","cargo"],"description":"Package manager to use. If omitted, the host's system package manager is auto-detected."}},"required":["package"]})
+        crate::static_schema!(include_str!("install_schema.json"))
     }
     fn permission_level(&self) -> PermissionLevel { PermissionLevel::Dangerous }
     fn external_effect(&self) -> bool { true }

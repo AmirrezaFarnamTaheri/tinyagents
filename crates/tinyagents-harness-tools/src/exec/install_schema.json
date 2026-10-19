@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "package": { "type": "string", "description": "Package name to install (e.g. 'ripgrep', 'jq', '@scope/cli')." },
+    "manager": { "type": "string", "enum": ["apt", "apt-get", "dnf", "yum", "pacman", "apk", "brew", "winget", "pipx", "npm", "cargo"], "description": "Package manager to use. If omitted, the host's system package manager is auto-detected." }
+  },
+  "required": ["package"]
+}

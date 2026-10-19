@@ -9,6 +9,9 @@ mod ask_clarification;
 mod canonical_json;
 pub mod per_call;
 mod plan_exit;
+pub mod schema;
+#[cfg(feature = "plan-review")]
+pub mod plan_review;
 pub mod thread_locks;
 mod time;
 mod time_parse;
