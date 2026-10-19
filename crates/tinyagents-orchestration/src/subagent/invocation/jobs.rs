@@ -1,7 +1,7 @@
 //! Asynchronous subagent job registry and host-facing control tools.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
@@ -36,7 +36,6 @@ struct JobExecutionControls {
 struct JobWaitGuard {
     jobs: SubAgentJobRegistry,
     waiters: Arc<AtomicUsize>,
-    terminal_observed: Arc<AtomicBool>,
 }
 
 impl Drop for JobWaitGuard {
@@ -204,7 +203,7 @@ impl SubAgentJobRegistry {
                 steering: execution.steering,
                 cancellation: execution.cancellation,
                 waiters: Arc::new(AtomicUsize::new(0)),
-                terminal_observed: Arc::new(AtomicBool::new(false)),
+                terminal_sequence: AtomicU64::new(0),
             },
         );
         Ok(())
