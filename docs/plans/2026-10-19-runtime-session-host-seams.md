@@ -143,17 +143,12 @@ pub enum SessionStoreLeaseError {
 #[derive(Clone)]
 pub struct SessionStoreLease {
     stores: AgentStores,
-    // Keeps the immutable provider/backend snapshot alive for all handles.
-    _owner: Arc<dyn std::any::Any + Send + Sync>,
 }
 
 impl SessionStoreLease {
     pub fn stores(&self) -> &AgentStores { &self.stores }
-    pub(crate) fn pinned(
-        stores: AgentStores,
-        owner: Arc<dyn std::any::Any + Send + Sync>,
-    ) -> Self {
-        Self { stores, _owner: owner }
+    pub(crate) fn pinned(stores: AgentStores) -> Self {
+        Self { stores }
     }
 }
 ```
@@ -173,37 +168,51 @@ fn lease_for_agent(
 }
 ```
 
-`RebindableSessionStores` is the first supported provider: its
-override holds the same `current` read lock used by `current()`, clones the
-current `Arc<DriverSessionStores>`, opens the agent through that snapshot, and
-stores the resulting non-forwarding `AgentStores` in the lease. If agent open
-fails, return `SessionStoreLeaseError::Open(error)` without creating a
-lease. Keep `for_agent`, `try_for_agent`, and existing retained handles
+`DriverSessionStores` and `RebindableSessionStores` support leases. The former
+is immutable after construction, including actor providers returned by
+`bind_actor`, so it may open direct stores and return them in the lease. The
+latter takes one `current()` snapshot and delegates lease opening to that
+immutable provider. In both cases, the lease owns the returned non-forwarding
+`AgentStores`; each direct store adapter owns its scoped backend handle. If
+agent open fails, return `SessionStoreLeaseError::Open(error)` without
+creating a lease. Keep `for_agent`, `try_for_agent`, and existing retained handles
 live-following `rebind` exactly as they are today. `bind_actor` remains the
 host-admission seam: the host resolves the actor and supplies the already
 admitted backend; TinyAgents neither resolves tenant scope nor infers it from
 agent/session keys. A provider that cannot attest that its handles pin their
 backend returns `Unsupported`.
 
-The override body is:
+The immutable driver implementation is:
 
 ```rust
 fn lease_for_agent(
     &self,
     agent_id: &str,
 ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
-    let snapshot = self.current();
-    let stores = snapshot
-        .try_for_agent(agent_id)
+    let stores = DriverSessionStores::try_for_agent(self, agent_id)
         .map_err(SessionStoreLeaseError::Open)?;
-    Ok(SessionStoreLease::pinned(stores, snapshot))
+    Ok(SessionStoreLease::pinned(stores))
+}
+```
+
+The rebindable implementation uses one immutable snapshot:
+
+```rust
+fn lease_for_agent(
+    &self,
+    agent_id: &str,
+) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    self.current().lease_for_agent(agent_id)
 }
 ```
 
 `current()` takes and releases the `RwLock` read guard while cloning the
-current `Arc`; the subsequent `try_for_agent` runs against that immutable
+current provider `Arc`; `lease_for_agent` then runs on that immutable
 snapshot. `DriverSessionStores` carries the tenant `Scope`, so no second scope
-lookup occurs after opening.
+lookup occurs after opening. Because `bind_actor` in `drivers/mod.rs` returns
+`Arc<DriverSessionStores>` as `Arc<dyn SessionStoreProvider>`, its result
+supports `lease_for_agent` directly; do not rely on the trait's unsupported
+default for actor-bound storage.
 
 Rebind may update the provider's current backend for future opens, but must
 not mutate an already returned lease. `WorkspaceStores::open`
@@ -769,7 +778,7 @@ Run `cargo test -p tinyagents-runtime identity_resolver` and then
 `port/drivers/rebound_tests.rs`, `port/workspace_tests.rs`, and
 `testkit/conformance.rs`.
 
-In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores, _owner }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `RebindableSessionStores::lease_for_agent` clones `self.current()` while holding the read lock and opens through that snapshot, retaining the snapshot's tenant. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
+In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `actor_bound_driver_provider_can_open_a_pinned_lease`: call `bind_actor(admitted_backend)`, then open a lease from the returned provider and assert its tenant-scoped stores access the admitted backend. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `DriverSessionStores::lease_for_agent` opens immutable, direct handles, and `RebindableSessionStores::lease_for_agent` delegates to `self.current()` so a live forwarding handle never escapes. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
 
 ### 5. Capture tool observations and route post-commit sinks in the owned finalizer
 
