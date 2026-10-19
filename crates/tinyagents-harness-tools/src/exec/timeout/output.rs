@@ -2,7 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use super::ProcessCleanup;
@@ -73,6 +73,34 @@ pub async fn output_or_kill_with_progress_isolated(
     output_or_kill_with_progress_mode(cmd, deadline, progress, false).await
 }
 
+/// Process result that retains bytes collected before a deadline killed it.
+pub enum CapturedCommandResult {
+    Completed(std::io::Result<std::process::Output>),
+    TimedOut(std::process::Output),
+}
+
+/// Run with a deadline and return the captured streams after cleanup on timeout.
+pub async fn output_or_kill_captured_isolated(
+    cmd: &mut tokio::process::Command,
+    deadline: Duration,
+    progress: Option<ExecProgress>,
+) -> CapturedCommandResult {
+    let cleanup = ProcessCleanup::default();
+    let captured = Arc::new(Mutex::new(None));
+    match cleanup.scope(tokio::time::timeout(
+        deadline,
+        output_with_input_and_progress_mode(cmd, None, progress, false, Some(Arc::clone(&captured))),
+    )).await {
+        Ok(result) => CapturedCommandResult::Completed(result),
+        Err(_) => {
+            cleanup.wait().await;
+            let output=captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+                .expect("the process waiter stores its output before acknowledging cleanup");
+            CapturedCommandResult::TimedOut(output)
+        }
+    }
+}
+
 async fn output_or_kill_with_progress_mode(
     cmd: &mut tokio::process::Command,
     deadline: Duration,
@@ -126,7 +154,7 @@ async fn output_unbounded_with_progress_mode(
     progress: Option<ExecProgress>,
     apply_task_environment: bool,
 ) -> std::io::Result<std::process::Output> {
-    output_with_input_and_progress_mode(cmd, None, progress, apply_task_environment).await
+    output_with_input_and_progress_mode(cmd, None, progress, apply_task_environment, None).await
 }
 
 /// Capture a command, optionally supplying stdin, in the current cleanup scope.
@@ -144,7 +172,7 @@ pub async fn output_with_input_and_progress(
     input: Option<Vec<u8>>,
     progress: Option<ExecProgress>,
 ) -> std::io::Result<std::process::Output> {
-    output_with_input_and_progress_mode(cmd, input, progress, true).await
+    output_with_input_and_progress_mode(cmd, input, progress, true, None).await
 }
 
 async fn output_with_input_and_progress_mode(
@@ -152,6 +180,7 @@ async fn output_with_input_and_progress_mode(
     input: Option<Vec<u8>>,
     progress: Option<ExecProgress>,
     apply_task_environment: bool,
+    captured: Option<Arc<Mutex<Option<std::process::Output>>>>,
 ) -> std::io::Result<std::process::Output> {
     use std::process::Stdio;
     cmd.stdin(if input.is_some() {
@@ -184,6 +213,13 @@ async fn output_with_input_and_progress_mode(
             write_input,
             collect_command_output(child, cancellation, progress)
         );
+        if let (Some(captured), Ok(output)) = (captured, output.as_ref()) {
+            *captured.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(std::process::Output {
+                status: output.status,
+                stdout: output.stdout.clone(),
+                stderr: output.stderr.clone(),
+            });
+        }
         output
     });
     let _cancel_on_drop = CancelOnDrop(cancel);
