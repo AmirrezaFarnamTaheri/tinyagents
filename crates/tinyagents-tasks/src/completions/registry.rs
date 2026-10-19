@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use tinyagents_harness::error::Result;
 use tinystoragedrivers_core::{Scope, StorageBackend};
 
-use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
+use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 
 /// Outcome of replacing one cached router only if it is still current.
 pub enum CompletionRouterReplaceOutcome {
@@ -146,7 +146,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
 ///
 /// Shared-store setup fails closed; callers that intentionally want local
 /// storage can construct [`InMemoryCompletionStore`] explicitly.
-pub fn open_driver_completion_store_or_memory(
+pub fn open_driver_completion_store(
     backend: Arc<dyn StorageBackend>,
     scope: Scope,
 ) -> Result<Arc<dyn CompletionStore>> {
