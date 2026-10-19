@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use tinyagents_harness::error::Result;
+use tinyagents_harness::error::Result as HarnessResult;
 use tinystoragedrivers_core::{Scope, StorageBackend};
 
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
@@ -149,7 +149,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for CompletionRouterPoo
 pub fn open_driver_completion_store(
     backend: Arc<dyn StorageBackend>,
     scope: Scope,
-) -> Result<Arc<dyn CompletionStore>> {
+) -> HarnessResult<Arc<dyn CompletionStore>> {
     let store = DriverCompletionStore::new(backend, scope)
         .map_err(|error| tinyagents_harness::error::TinyAgentsError::Storage(error.to_string()))?;
     store.declare_collections()?;
