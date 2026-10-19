@@ -53,7 +53,7 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     assert!(!registered_token.is_cancelled());
 
     assert!(
-        jobs.cancel_key_owned_and_tombstone(&key, "owner-b")
+        jobs.cancel_key_owned_and_tombstone(&key, "owner-b", &completions)
             .is_err()
     );
     assert!(!token.is_cancelled());
@@ -69,7 +69,7 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
         RecordOutcome::Recorded { .. }
     ));
     let canceled = jobs
-        .cancel_key_owned_and_tombstone(&key, "owner-a")
+        .cancel_key_owned_and_tombstone(&key, "owner-a", &completions)
         .unwrap();
     assert!(token.is_cancelled());
     assert_eq!(canceled.status, SubAgentJobStatus::Cancelled);
