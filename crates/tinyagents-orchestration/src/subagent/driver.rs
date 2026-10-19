@@ -213,14 +213,30 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         cancellation: CancellationToken,
     ) -> Result<SubagentRunResult, SubagentError> {
         let task_key = request.task_key().clone();
-        if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
+        let turn_fence = request.turn_fence();
+        ensure_turn_fence(turn_fence.as_ref(), None)?;
+        if let Some(outcome) = await_with_turn_fence(turn_fence.as_ref(), None, async {
+            Ok(self.terminal_outcomes.lock().await.get(&task_key).cloned())
+        })
+        .await?
+        {
             return Ok(SubagentRunResult::new(
                 outcome,
                 SubagentPersistenceDisposition::TerminalExisting,
             ));
         }
-        if let Some(outcome) = self.persistence.load_terminal(&task_key).await? {
-            self.cache_terminal(task_key, &outcome).await;
+        if let Some(outcome) = await_with_turn_fence(
+            turn_fence.as_ref(),
+            None,
+            self.persistence.load_terminal(&task_key),
+        )
+        .await?
+        {
+            await_with_turn_fence(turn_fence.as_ref(), None, async {
+                self.cache_terminal(task_key, &outcome).await;
+                Ok(())
+            })
+            .await?;
             return Ok(SubagentRunResult::new(
                 outcome,
                 SubagentPersistenceDisposition::TerminalExisting,
@@ -229,7 +245,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
 
         let (entry, is_leader) = self.in_flight.claim(task_key.clone());
         if !is_leader {
-            return match entry.wait_or_cancel(&cancellation).await {
+            return match await_with_turn_fence(
+                turn_fence.as_ref(),
+                None,
+                async { Ok(entry.wait_or_cancel(&cancellation).await) },
+            )
+            .await?
+            {
                 None => Ok(SubagentRunResult::new(
                     SubagentOutcome::cancelled(task_key.task_id.clone()),
                     SubagentPersistenceDisposition::ObserverCancelled,
