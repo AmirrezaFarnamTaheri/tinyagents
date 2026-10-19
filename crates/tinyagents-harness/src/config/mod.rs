@@ -29,11 +29,13 @@
 //! nothing in this module is a behaviour seam.
 
 mod required_output;
+mod context;
 mod types;
 
 pub use required_output::{
     find_required_block, output_satisfies_contract, repair_instruction, synthesize_block,
 };
+pub use context::*;
 pub use types::*;
 
 #[cfg(test)]

@@ -4597,5 +4597,6 @@ async fn child_identity_resolution_preserves_parent_lineage() {
     let transcripts = &lease.stores().transcripts;
     assert!(transcripts.read_session_transcript(&child).is_some());
     assert!(transcripts.read_session_transcript(&parent).is_none());
-    assert_eq!(child.parent_session_id(), Some(parent.session_id()));
+    assert!(child.is_subagent());
+    assert!(session_stem(&child).starts_with(&format!("{}__", session_stem(&parent))));
 }
