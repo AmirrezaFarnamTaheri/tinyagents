@@ -321,6 +321,7 @@ pub fn turn_summary<C: Clone + Send + Sync + 'static>(
         tinyinference_llm::usage::Usage {
             input_tokens: usage.usage.input,
             output_tokens: usage.usage.output,
+            total_tokens: usage.usage.input.saturating_add(usage.usage.output),
             cache_read_tokens: usage.usage.cached_input,
             context_window_tokens: (usage.usage.context_window > 0)
                 .then_some(usage.usage.context_window),
@@ -436,11 +437,22 @@ fn summary_keeps_only_tool_digest_classification_and_captured_usage() {
     assert_eq!(summary.tool_outcomes[0].duration_ms, 23);
     assert_eq!(summary.usage.input_tokens, 12);
     assert_eq!(summary.usage.output_tokens, 5);
+    assert_eq!(summary.usage.total_tokens, 17);
     assert_eq!(summary.usage.cache_read_tokens, 3);
     assert_eq!(summary.usage.context_window_tokens, Some(128));
     let encoded = serde_json::to_string(&summary).unwrap();
     assert!(!encoded.contains("do-not-persist"));
     assert!(!encoded.contains("timeout: private details"));
+}
+
+#[test]
+fn summary_usage_total_saturates_on_overflow() {
+    let mut observation = observation(Some("thread-1"), Some("agent-1"));
+    let usage = observation.usage.as_mut().unwrap();
+    usage.usage.input = u64::MAX;
+    usage.usage.output = 1;
+    let summary = turn_summary(&observation).unwrap();
+    assert_eq!(summary.usage.total_tokens, u64::MAX);
 }
 
 #[test]
