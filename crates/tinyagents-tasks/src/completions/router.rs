@@ -558,6 +558,16 @@ impl CompletionRouter {
     fn close_parent(&self, parent_key: &str, marker_state: CompletionState) -> Result<usize> {
         let mut state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+        let marker_id = Self::parent_marker_id(parent_key);
+        if marker_state != CompletionState::ParentDeleted
+            && state
+                .store
+                .try_get(&marker_id)?
+                .is_some_and(|marker| marker.state == CompletionState::ParentDeleted)
+        {
+            state.parents.remove(parent_key);
+            return Ok(0);
+        }
         Self::set_parent_marker(&state, parent_key, marker_state, gate.claim())?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
