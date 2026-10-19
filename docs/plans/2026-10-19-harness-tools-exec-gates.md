@@ -253,13 +253,19 @@ nonzero/signal exits; append the source “command's own timeout” note for exi
 text; launch failure maps to the stable sandbox-execution failure text. The
 Python UTF-8 defaults and caller overrides remain unchanged.
 
-The authorization tests assert a denied gate produces one denial audit event,
-zero backend calls, and no `process_attempted`; separate fake-backend tests
-assert SaaS refusal and Docker config/preflight refusal are typed refusals and
-never launches, launch failure is attempted/unsuccessful, and completed
-success records the chosen backend, attempted=true, and success=true. Preserve
-shell-analysis preparation and `external_effect_with_args` tests using source
-arguments, including empty and nonempty commands.
+The fake gate captures audit events. Test each branch and assert exactly one
+event per well-formed call: gate denial records `GateDenied` with
+`authorized=false, allowed=false, process_attempted=false` and zero backend
+calls; SaaS refusal and Docker config/preflight refusal each record
+`BackendRefused` with `authorized=true, allowed=false,
+process_attempted=false`; launch failure records `LaunchFailed` with
+`authorized=true, allowed=true, process_attempted=true, success=false`; and
+completed success records `Completed` with the selected backend,
+`authorized=true, allowed=true, process_attempted=true, success=true`.
+Completed command failure/timeout also records exactly one `Completed` event
+with success matching the final `ToolResult`. Preserve shell-analysis
+preparation and `external_effect_with_args` tests using source arguments,
+including empty and nonempty commands.
 
 ### Plan-review port
 
@@ -453,9 +459,11 @@ retains the existing versioning, trusted-file-root checks, blob cleanup, and
 reference allowlist policy. Metadata tests use a fake inner tool with distinct
 name, description, schema, category, policy and permissions and assert the
 wrapper returns each declaration from the retained instance with and without a
-per-call factory. Image/video configuration tests assert the exact kind passed
-to each filer and exact heartbeat label, including when the factory returns a
-new temporary inner tool.
+per-call factory. Image/video configuration tests assert the exact configured
+kind passed to each filer and exact heartbeat label (`Generating image` /
+`Generating video`), including when the factory returns a new temporary inner
+tool. This catches both metadata borrowing from a temporary and accidental
+use of the fallback image kind for video calls.
 
 ## Bite-sized implementation tasks
 
