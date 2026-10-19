@@ -105,7 +105,7 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let tenant = Scope::tenant("writer-test").unwrap();
     let bootstrap = backend.for_scope(&tenant).unwrap();
-    DriverSessionStores::prepare_schema(bootstrap.documents())
+    DriverSessionStores::prepare_schema(bootstrap.documents().as_ref())
         .await
         .unwrap();
     let provider = DriverSessionStores::new(Arc::clone(&backend), tenant.clone()).unwrap();
