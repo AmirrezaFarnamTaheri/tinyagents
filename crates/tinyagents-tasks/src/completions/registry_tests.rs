@@ -184,6 +184,12 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
         "only explicit resume opens a new generation"
     );
     assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission).is_err());
+    assert_eq!(
+        first.admit_child_generation("parent").unwrap(),
+        Some(3),
+        "an old router must reconcile its stale marker with the retained newer generation"
+    );
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission).is_err());
     let mut current = queued;
     current.parent_epoch = 3;
     let current_admission = CompletionAdmission::for_router(&reopened, &current);
@@ -204,6 +210,18 @@ fn deleted_parent_stays_deleted_across_pool_clear() {
     pool.clear().unwrap();
     let reopened = pool.get_or_open(&"workspace").unwrap();
     reopened.resume_parent("parent");
+
+    assert_eq!(first.admit_child_generation("parent").unwrap(), None);
+    let mut old_record = CompletionRecord::new(
+        "queued-child",
+        "parent",
+        "worker",
+        crate::completions::CompletionStatus::Success,
+        crate::completions::CompletionResult::default(),
+    );
+    old_record.parent_epoch = 1;
+    let old_admission = CompletionAdmission::for_router(&first, &old_record);
+    assert!(tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission).is_err());
 
     assert!(
         !reopened.admit_child("parent").unwrap(),

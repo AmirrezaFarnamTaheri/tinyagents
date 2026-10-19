@@ -36,9 +36,9 @@ impl ParentLifecycle {
 
     pub(super) fn for_store(store: &dyn super::CompletionStore) -> Arc<Self> {
         Self::with_identity(
-            store
-                .coordination_identity()
-                .unwrap_or_else(|| format!("store:{:p}", store as *const dyn super::CompletionStore)),
+            store.coordination_identity().unwrap_or_else(|| {
+                format!("store:{:p}", store as *const dyn super::CompletionStore)
+            }),
         )
     }
 

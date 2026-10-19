@@ -221,7 +221,9 @@ impl ParentGateGuard {
     }
 
     pub(super) fn local_guard(&self) -> &ParentLifecycleGuard {
-        self._local.as_ref().expect("router gates retain local lifecycle")
+        self._local
+            .as_ref()
+            .expect("router gates retain local lifecycle")
     }
 }
 
@@ -304,19 +306,19 @@ impl CompletionRouter {
                         marker_epoch.max(snapshot.map_or(0, status_epoch)),
                     ))
                 }
-                (Some(marker), Some(ParentLifecycleStatus::Deleted(snapshot_epoch))) => {
-                    Some(ParentLifecycleStatus::Deleted(
-                        snapshot_epoch.max(status_epoch(marker)),
-                    ))
-                }
+                (Some(marker), Some(ParentLifecycleStatus::Deleted(snapshot_epoch))) => Some(
+                    ParentLifecycleStatus::Deleted(snapshot_epoch.max(status_epoch(marker))),
+                ),
                 (None, Some(ParentLifecycleStatus::Deleted(epoch))) => {
                     Some(ParentLifecycleStatus::Deleted(epoch))
                 }
-                (Some(marker), Some(snapshot)) => Some(if status_epoch(marker) >= status_epoch(snapshot) {
-                    marker
-                } else {
-                    snapshot
-                }),
+                (Some(marker), Some(snapshot)) => {
+                    Some(if status_epoch(marker) >= status_epoch(snapshot) {
+                        marker
+                    } else {
+                        snapshot
+                    })
+                }
                 (Some(marker), None) => Some(marker),
                 (None, snapshot) => snapshot,
             };
