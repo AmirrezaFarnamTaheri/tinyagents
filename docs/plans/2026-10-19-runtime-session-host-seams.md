@@ -487,50 +487,6 @@ The existing host `CompactionSettings` call site and full TOML compatibility
 are part of this task, even though host deletion/adoption of the rest of
 `session_host` is later in #212.
 
-Keep these implementation bodies and values when moving the definitions:
-
-```rust
-pub const DEFAULT_KEEP_RECENT_TOOL_RESULTS: usize = 5;
-
-impl ContextConfig {
-    pub fn compaction_settings(&self) -> CompactionSettings {
-        CompactionSettings {
-            trigger_tokens: self.compaction_trigger_tokens.filter(|value| *value > 0),
-            strategy: self.compaction_strategy,
-        }
-    }
-}
-
-impl CompactionStrategy {
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-            "task_state" | "typed" | "s4" => Some(Self::TaskState),
-            "summary" | "free_form" | "s0" => Some(Self::Summary),
-            _ => None,
-        }
-    }
-}
-
-impl Default for ContextConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            microcompact_enabled: true,
-            autocompact_enabled: true,
-            microcompact_keep_recent: DEFAULT_KEEP_RECENT_TOOL_RESULTS,
-            tool_result_budget_bytes: crate::config::TurnConfig::default().tool_result_budget_bytes,
-            summarizer_payload_threshold_tokens: 4_000,
-            summarizer_max_payload_tokens: 64_000,
-            summarizer_model: None,
-            prefer_markdown_tool_output: true,
-            compaction_enabled: true,
-            compaction_trigger_tokens: None,
-            compaction_strategy: CompactionStrategy::TaskState,
-        }
-    }
-}
-```
-
 In `config/context_tests.rs`, use a TOML string with exactly these keys and
 values: `enabled=false`, `microcompact_enabled=false`,
 `autocompact_enabled=true`, `microcompact_keep_recent=9`,
@@ -1046,6 +1002,25 @@ pub enum CompactionStrategy {
     Summary,
 }
 
+impl ContextConfig {
+    pub fn compaction_settings(&self) -> CompactionSettings {
+        CompactionSettings {
+            trigger_tokens: self.compaction_trigger_tokens.filter(|value| *value > 0),
+            strategy: self.compaction_strategy,
+        }
+    }
+}
+
+impl CompactionStrategy {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "task_state" | "typed" | "s4" => Some(Self::TaskState),
+            "summary" | "free_form" | "s0" => Some(Self::Summary),
+            _ => None,
+        }
+    }
+}
+
 fn default_enabled() -> bool { true }
 fn default_true() -> bool { true }
 fn default_microcompact_keep_recent() -> usize { DEFAULT_KEEP_RECENT_TOOL_RESULTS }
@@ -1054,6 +1029,25 @@ fn default_tool_result_budget_bytes() -> usize {
 }
 fn default_summarizer_payload_threshold_tokens() -> usize { 4_000 }
 fn default_summarizer_max_payload_tokens() -> usize { 64_000 }
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_enabled(),
+            microcompact_enabled: default_true(),
+            autocompact_enabled: default_true(),
+            microcompact_keep_recent: default_microcompact_keep_recent(),
+            tool_result_budget_bytes: default_tool_result_budget_bytes(),
+            summarizer_payload_threshold_tokens: default_summarizer_payload_threshold_tokens(),
+            summarizer_max_payload_tokens: default_summarizer_max_payload_tokens(),
+            summarizer_model: None,
+            prefer_markdown_tool_output: default_true(),
+            compaction_enabled: default_true(),
+            compaction_trigger_tokens: None,
+            compaction_strategy: CompactionStrategy::default(),
+        }
+    }
+}
 ```
 
 Export all three types and the default constant from `config/mod.rs` and the
