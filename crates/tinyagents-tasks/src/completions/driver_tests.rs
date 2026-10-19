@@ -23,19 +23,14 @@ fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
         .collect()
 }
 
-fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
-    Arc::clone(
-        storage
-            .for_scope(&Scope::new(scope).unwrap())
-            .unwrap()
-            .documents(),
-    )
-}
-
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
 fn open_router(path: &std::path::Path) -> CompletionRouter {
     let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    let store = DriverCompletionStore::new(
+        Arc::new(storage),
+        Scope::new("local").unwrap(),
+    )
+    .unwrap();
     CompletionRouter::new(Arc::new(store))
 }
 
@@ -70,11 +65,13 @@ async fn pending_completions_survive_a_reopen() {
 #[tokio::test]
 async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
     let storage = MemoryStorage::new();
-    let docs = docs_of(&storage, "shared");
+    let backend: Arc<dyn StorageBackend> = Arc::new(storage);
     let first = CompletionRouter::new(Arc::new(
-        DriverCompletionStore::new(Arc::clone(&docs)).unwrap(),
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap(),
     ));
-    let second = CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()));
+    let second = CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap(),
+    ));
     first.record(record("shared-task", "parent")).await.unwrap();
 
     let first_claim = first.claim_pending("parent", 1).unwrap();
@@ -90,11 +87,13 @@ async fn two_routers_on_one_backend_do_not_claim_the_same_completion() {
 #[tokio::test]
 async fn a_live_push_claim_blocks_a_second_driver_router() {
     let storage = MemoryStorage::new();
-    let docs = docs_of(&storage, "shared");
+    let backend: Arc<dyn StorageBackend> = Arc::new(storage);
     let first = CompletionRouter::new(Arc::new(
-        DriverCompletionStore::new(Arc::clone(&docs)).unwrap(),
+        DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap()).unwrap(),
     ));
-    let second = CompletionRouter::new(Arc::new(DriverCompletionStore::new(docs).unwrap()));
+    let second = CompletionRouter::new(Arc::new(
+        DriverCompletionStore::new(backend, Scope::new("shared").unwrap()).unwrap(),
+    ));
     first.attach_parent(
         "parent",
         Arc::new(tinyagents_harness::run_queue::RunQueue::<
@@ -111,7 +110,7 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
     use crate::completions::CompletionClaimMode;
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let now = SystemTime::now();
     store
         .put(&record("z-older", "p").with_finished_at(now))
@@ -143,7 +142,7 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     use crate::completions::{ClaimResolution, CompletionClaimMode};
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let original = record("claim-owner", "parent");
     assert!(store.insert_if_absent(&original).unwrap());
     let claimed = store
@@ -181,7 +180,7 @@ fn conditional_driver_create_preserves_an_existing_claim() {
 #[test]
 fn conditional_driver_create_does_not_replace_a_tombstone() {
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(docs_of(&storage, "shared")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("shared").unwrap()).unwrap();
     let tombstone = CompletionRecord::tombstone_stub("deleted");
     store.put(&tombstone).unwrap();
 
@@ -305,7 +304,7 @@ async fn delivered_and_tombstoned_stay_deduped_after_a_reopen() {
 #[tokio::test]
 async fn the_store_keeps_the_latest_record_per_task() {
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     let mut first = record("t1", "p");
     store.put(&first).unwrap();
     first.state = CompletionState::Delivered;
@@ -328,7 +327,7 @@ async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_t
     use tinystoragedrivers_core::Precondition;
 
     let storage = MemoryStorage::new();
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("corrupt", "p")).unwrap();
     store
         .docs
@@ -387,7 +386,7 @@ fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>)
         Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
     };
     let storage = MemoryStorage::with_clock(clock);
-    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap();
     (store, now)
 }
 
@@ -455,7 +454,7 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
     use tinystoragedrivers_core::Precondition;
     let storage = MemoryStorage::new();
     let docs = docs_of(&storage, "local");
-    let store = DriverCompletionStore::new(docs.clone()).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("good", "p")).unwrap();
     docs.put(
         "tasks.completions",
@@ -473,8 +472,9 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
 #[tokio::test]
 async fn scopes_keep_completions_apart() {
     let storage = MemoryStorage::new();
-    let alice = DriverCompletionStore::new(docs_of(&storage, "alice")).unwrap();
-    let bob = DriverCompletionStore::new(docs_of(&storage, "bob")).unwrap();
+    let backend: Arc<dyn StorageBackend> = Arc::new(storage);
+    let alice = DriverCompletionStore::new(Arc::clone(&backend), Scope::new("alice").unwrap()).unwrap();
+    let bob = DriverCompletionStore::new(backend, Scope::new("bob").unwrap()).unwrap();
     alice.put(&record("t", "p")).unwrap();
     assert!(bob.get("t").is_none());
     assert!(bob.list(None).is_empty());
@@ -482,7 +482,7 @@ async fn scopes_keep_completions_apart() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_sync_trait_works_from_a_multi_thread_runtime() {
-    let store = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("mt", "p")).unwrap();
     assert!(store.get("mt").is_some());
 }
@@ -491,7 +491,7 @@ async fn the_sync_trait_works_from_a_multi_thread_runtime() {
 async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
     let storage = MemoryStorage::new();
     let docs = docs_of(&storage, "local");
-    let store = DriverCompletionStore::new(docs.clone()).unwrap();
+    let store = DriverCompletionStore::new(Arc::new(storage.clone()), Scope::new("local").unwrap()).unwrap();
     store.put(&record("c/1", "p")).unwrap();
     let row = docs
         .get("tasks.completions", "c%2F1")
