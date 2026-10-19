@@ -546,8 +546,9 @@ cargo check -p tinyagents-harness-tools --no-default-features --features fs,net,
 ```
 
 The final command proves a disabled-tools build remains lean and does not
-accidentally rely on a new module's imports. Add or update crate docs showing
-the three features and their public module paths. Validate actual dependency
+accidentally rely on a new module's imports. Add or update crate docs showing all opt-in features (`fs`, `net`, `exec`,
+`media`, `plan-review`), their public module paths, and the unchanged default
+features. Validate actual dependency
 resolution per feature with `cargo tree -e features -p tinyagents-harness-tools
 --no-default-features --features media` and the equivalent `--features net`.
 The `media` graph must not introduce `tinyinference-video`,
