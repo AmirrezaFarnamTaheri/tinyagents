@@ -39,6 +39,11 @@ Grouped by extension shape:
   and hand one completed logical-call response to a host-owned usage sink.
   Pair these with `tinyagents_registry::WorkloadRouter::from_workload_routes`,
   supplying the host's vision hint.
+- `ResolvedRouteMiddleware` — records a successful response's typed route in a
+  per-run host sink and enriches its generation event with sanitized provider,
+  host-supplied pricing, and a `CostEstimator` result. It emits configured
+  provider metadata before dispatch, preserves control outcomes and complete
+  responses, and skips estimates for cache-served or provider-charged calls.
 
 ### Tool policy / selection (`Middleware` lifecycle hooks)
 
@@ -132,6 +137,7 @@ Grouped by extension shape:
 | `tool_policy.rs` | Constructors and `Middleware` impls for `ToolAllowlistMiddleware`, `ToolPolicyMiddleware`, `DynamicToolSelectionMiddleware`, `ContextualToolSelectionMiddleware`, `HumanApprovalMiddleware`. |
 | `tool_outcome_capture.rs` | Shared call-identity/timing recorder and standalone `ToolOutcomeCaptureMiddleware`. |
 | `transcript_snapshot.rs` | Shared transcript snapshot sink, live snapshot middleware, and bounded unanswered-step renderer. |
+| `workload.rs` | Generic route capability, fallback, usage-carry, and resolved-route model-call middleware. |
 | `failure_scope.rs` | Host-classified failure-scope driver over shared no-progress, classified and recoverable trackers. |
 | `output_cap.rs`, `output_ladder.rs` | Generic output-stage plan and the shared compaction/cap/disclosure runner. |
 | `context.rs` | Constructors and `Middleware` impls for `MessageTrimMiddleware`, `ContextCompressionMiddleware`, `MicrocompactMiddleware`, `PromptCacheGuardMiddleware` — note these structs are *defined* in `middleware/types.rs`, not here; this file only holds their behavior. See `middleware/README.md`. |
