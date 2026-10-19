@@ -27,7 +27,7 @@ fn parent_gate(store: &dyn CompletionStore, parent_key: &str) -> crate::completi
     store
         .acquire_parent_gate(
             parent_key,
-            &uuid::Uuid::new_v4().to_string(),
+            "driver-test-owner",
             Duration::from_secs(30),
         )
         .unwrap()
@@ -75,6 +75,57 @@ fn stale_parent_admission_cannot_create_a_completion_after_takeover() {
         .insert_if_absent(&record("stale-create", "parent"), &stale)
         .is_err());
     assert!(store.get("stale-create").is_none());
+}
+
+#[tokio::test]
+async fn a_claim_prepared_before_takeover_cannot_land_after_the_new_epoch() {
+    let store = DriverCompletionStore::new(
+        Arc::new(MemoryStorage::new()),
+        Scope::new("shared").unwrap(),
+    )
+    .unwrap();
+    let stale = store
+        .acquire_parent_gate("parent", "router-a", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    let stale_docs = store.fenced_docs("parent", &stale).await.unwrap();
+
+    assert!(store
+        .release_parent_gate("parent", &stale)
+        .unwrap());
+    let current = store
+        .acquire_parent_gate("parent", "router-b", Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    let pending = record("late-claim", "parent");
+    assert!(store.insert_if_absent(&pending, &current).unwrap());
+
+    let id = task_id_key(&pending.task_id).unwrap();
+    let row = stale_docs
+        .get(COMPLETIONS, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut claimed = decode_strict(row.clone()).unwrap();
+    claimed.attempts = 1;
+    claimed.claim = Some(crate::completions::CompletionClaim {
+        token: "router-a:late-claim".into(),
+        visible_after: SystemTime::now() + Duration::from_secs(30),
+    });
+    let error = stale_docs
+        .put_with(
+            COMPLETIONS,
+            &id,
+            serde_json::to_value(CompletionDoc::from_record(&claimed)).unwrap(),
+            Precondition::Version(row.version),
+            WriteOptions::new().schema(SCHEMA_VERSION),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), tinystoragedrivers_core::ErrorKind::Fenced);
+    let persisted = store.get(&pending.task_id).unwrap();
+    assert_eq!(persisted.attempts, 0);
+    assert!(persisted.claim.is_none());
 }
 
 /// A router over the SQLite file at `path`, opened afresh (a simulated restart).
@@ -213,11 +264,13 @@ fn conditional_driver_create_preserves_an_existing_claim() {
         .unwrap()
         .unwrap();
 
-    assert!(
-        !store
-            .insert_if_absent(&record("claim-owner", "other-parent"), &gate)
-            .unwrap()
-    );
+    let other_parent_gate = parent_gate(&store, "other-parent");
+    assert!(!store
+        .insert_if_absent(
+            &record("claim-owner", "other-parent"),
+            &other_parent_gate,
+        )
+        .unwrap());
     let persisted = store.get("claim-owner").unwrap();
     assert_eq!(persisted.parent_key, claimed.parent_key);
     assert_eq!(persisted.attempts, claimed.attempts);
