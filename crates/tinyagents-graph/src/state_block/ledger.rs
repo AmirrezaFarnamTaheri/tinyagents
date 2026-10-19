@@ -102,14 +102,15 @@ const SEARCH_COMMANDS: &[&str] = &[
 ];
 
 /// Whether an error is an exploration miss rather than a failure: exit code 1
-/// or 2 from a search command, or from a compound command (`;`, `&&`, `|`)
-/// whose last step is usually such a probe. Those are not worth a line in the
-/// block; a real failure (a crash, 127, a non-search command) still is.
+/// or 2 with nothing on stderr, from a search command or from a compound
+/// command (`;`, `&&`, `|`) whose last step is usually such a probe. Those are
+/// not worth a line in the block; a failure that explains itself on stderr (a
+/// traceback), a 127 or a non-search command still is.
 fn is_search_miss(call: &CallRecord, output: &str) -> bool {
     let Some(command) = call.command.as_deref() else {
         return false;
     };
-    if !matches!(exit_code(output), Some(1 | 2)) {
+    if !matches!(exit_code(output), Some(1 | 2)) || stderr_line(output).is_some() {
         return false;
     }
     let compound = command.contains(';') || command.contains("&&") || command.contains('|');
@@ -139,16 +140,21 @@ pub(super) fn error_line(output: &str) -> String {
         },
         |code| format!("exit code {code}"),
     );
-    let stderr = output.split_once("[stderr]").and_then(|(_, rest)| {
-        rest.lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with('['))
-    });
+    let stderr = stderr_line(output);
     let line = match stderr {
         Some(stderr) if !head.contains(stderr) => format!("{head}; stderr: {stderr}"),
         _ => head,
     };
     one_line(&line, MAX_ERROR_CHARS)
+}
+
+/// The first non-empty line of the output's `[stderr]` section.
+fn stderr_line(output: &str) -> Option<&str> {
+    output.split_once("[stderr]").and_then(|(_, rest)| {
+        rest.lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('['))
+    })
 }
 
 /// The executables an error output reports missing, from the shells' own
