@@ -617,6 +617,12 @@ cargo check -p tinyagents-harness-tools --no-default-features --features exec
 cargo check -p tinyagents-harness-tools --no-default-features --features media
 cargo check -p tinyagents-harness-tools --no-default-features --features plan-review
 cargo check -p tinyagents-harness-tools --no-default-features --features fs,net,exec,media,plan-review
+cargo test -p tinyagents-harness-tools --no-default-features --features fs
+cargo test -p tinyagents-harness-tools --no-default-features --features net
+cargo test -p tinyagents-harness-tools --no-default-features --features exec
+cargo test -p tinyagents-harness-tools --no-default-features --features media
+cargo test -p tinyagents-harness-tools --no-default-features --features plan-review
+cargo test -p tinyagents-harness-tools --no-default-features --features fs,net,exec,media,plan-review
 cargo tree -p tinyagents-harness -e normal
 cargo tree -p tinyagents-harness-tools -e normal
 cargo tree -p tinyagents-harness-tools -e normal --no-default-features
