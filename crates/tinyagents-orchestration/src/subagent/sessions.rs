@@ -364,6 +364,7 @@ pub struct ScopedSubagentSessionStore<S> {
     inner: Arc<S>,
     parent_session: String,
     parent_thread_id: Option<String>,
+    close_callback: Option<Arc<dyn Fn(&str, &str, &SubagentTaskKey) + Send + Sync>>,
 }
 
 impl<S> ScopedSubagentSessionStore<S> {
@@ -377,6 +378,24 @@ impl<S> ScopedSubagentSessionStore<S> {
             inner,
             parent_session: parent_session.into(),
             parent_thread_id,
+            close_callback: None,
+        }
+    }
+
+    /// Binds a host cancellation callback to successful lifecycle closes.
+    /// The callback receives the closed session id, task id and lifecycle key
+    /// only after the store's conditional close wins.
+    pub fn with_close_callback(
+        inner: Arc<S>,
+        parent_session: impl Into<String>,
+        parent_thread_id: Option<String>,
+        callback: impl Fn(&str, &str, &SubagentTaskKey) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner,
+            parent_session: parent_session.into(),
+            parent_thread_id,
+            close_callback: Some(Arc::new(callback)),
         }
     }
 
@@ -448,7 +467,7 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
             return Ok(false);
         };
-        self.inner
+        let closed = self.inner
             .close_if_current(
                 id,
                 task_id,
@@ -456,7 +475,11 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
                 &self.parent_session,
                 self.parent_thread_id.as_deref(),
             )
-            .await
+            .await?;
+        if closed && let Some(callback) = &self.close_callback {
+            callback(id, task_id, lifecycle_key);
+        }
+        Ok(closed)
     }
 
     async fn close_if_current(
@@ -472,8 +495,7 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         {
             return Ok(false);
         }
-        self.inner
-            .close_if_current(
+        self.close_if_current(
                 id,
                 task_id,
                 lifecycle_key,
