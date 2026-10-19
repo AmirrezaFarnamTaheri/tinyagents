@@ -1278,9 +1278,13 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         self.committed = true;
         let hooks = self.hooks.clone();
         tokio::spawn(async move {
-            let _ = hooks.after_commit(receipt).await;
+            if let Err(error) = hooks.after_commit(receipt).await {
+                tracing::warn!("[session] after_commit hook failed: {error}");
+            }
             for sink in sinks {
-                let _ = sink.after_commit(&observation).await;
+                if let Err(error) = sink.after_commit(&observation).await {
+                    tracing::warn!("[session] post-commit sink failed: {error}");
+                }
             }
             let _ = hooks.on_terminal_outcome(outcome).await;
             let _ = hooks.on_terminal(terminal).await;
