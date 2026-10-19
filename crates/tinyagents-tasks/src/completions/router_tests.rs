@@ -784,6 +784,30 @@ async fn queued_admission_after_store_replacement_observes_new_cancellation_mark
 }
 
 #[tokio::test]
+async fn queued_admission_survives_store_replacement_without_cancellation() {
+    let source = Arc::new(InMemoryCompletionStore::new());
+    let source_port: Arc<dyn CompletionStore> = source;
+    let router = CompletionRouter::new(source_port.clone());
+    let q = queue();
+    router.attach_parent("p", q.clone());
+    router.record(record("queued", "p")).await.unwrap();
+
+    let replacement: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    router
+        .replace_store_if_current(&source_port, replacement)
+        .unwrap();
+
+    let admitted = q
+        .take_admitted(
+            QueueLane::Followup,
+            tinyagents_harness::run_queue::QueueMode::All,
+        )
+        .await;
+    assert_eq!(admitted.len(), 1);
+    assert!(format!("{:?}", admitted[0].value).contains("queued"));
+}
+
+#[tokio::test]
 async fn collect_mode_pushes_onto_the_collect_lane() {
     let router = router();
     let q = queue();
