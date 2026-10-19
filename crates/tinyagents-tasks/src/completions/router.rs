@@ -248,11 +248,16 @@ impl CompletionRouter {
     }
 
     fn release_parent_locked(&self, state: &mut RouterState, parent_key: &str) {
+        let Ok(gate) = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key) else {
+            return;
+        };
         for record in state.store.list(Some(parent_key)) {
             state.leased.remove(&record.task_id);
             if let Some(receipt) = state.active_receipts.remove(&record.task_id) {
                 let _ = state.store.resolve_claim(
                     &record.task_id,
+                    parent_key,
+                    gate.claim(),
                     &receipt.token,
                     ClaimResolution::Release,
                 );
@@ -270,8 +275,16 @@ impl CompletionRouter {
                     state.leased.remove(&receipt.task_id);
                     state.active_receipts.remove(&receipt.task_id);
                 }
+                let Ok(gate) = ParentGateGuard::acquire(
+                    Arc::clone(&state.store),
+                    &receipt.parent_key,
+                ) else {
+                    continue;
+                };
                 let _ = state.store.resolve_claim(
                     &receipt.task_id,
+                    &receipt.parent_key,
+                    gate.claim(),
                     &receipt.token,
                     ClaimResolution::Release,
                 );
@@ -629,6 +642,8 @@ impl CompletionRouter {
         for receipt in receipts {
             let resolved = state.store.resolve_claim(
                 &receipt.task_id,
+                &receipt.parent_key,
+                ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
                 &receipt.token,
                 ClaimResolution::Delivered,
             )?;
@@ -654,6 +669,8 @@ impl CompletionRouter {
         for receipt in receipts {
             let record = state.store.resolve_claim(
                 &receipt.task_id,
+                &receipt.parent_key,
+                ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
                 &receipt.token,
                 ClaimResolution::Failed {
                     max_attempts: self.max_attempts,
