@@ -486,6 +486,27 @@ fn same_thread_id_is_isolated_between_tenants_for_delivery_and_busy_gates() {
     drop((lease_a, lease_b));
 }
 
+#[tokio::test]
+async fn delivery_accepts_a_call_specific_initial_delay() {
+    let router = CompletionRouter::new(Arc::new(InMemoryCompletionStore::new()));
+    let delivery = CompletionDelivery::new(
+        CompletionDeliveryConfig::default(),
+        ThreadDeliveryLeases::default(),
+    );
+    let outcome = delivery
+        .deliver_once_with_initial_delay(
+            target(&router),
+            Duration::ZERO,
+            || false,
+            || true,
+            |_| async { Ok::<(), &'static str>(()) },
+            |_| {},
+        )
+        .await;
+    assert_eq!(outcome, DeliveryOutcome::Empty);
+    assert_eq!(delivery.config.debounce, Duration::from_secs(3));
+}
+
 #[test]
 fn release_all_clears_delivery_leases_without_touching_busy_state() {
     let delivery = ThreadDeliveryLeases::default();

@@ -109,6 +109,33 @@ impl CompletionDelivery {
         .await
     }
 
+    /// Delivers one batch with a call-specific initial delay. The override
+    /// applies only to this drain; recovery and later calls keep their own
+    /// configured delays.
+    pub async fn deliver_once_with_initial_delay<B, F, D, Fut, E, U>(
+        &self,
+        target: DeliveryTarget<'_>,
+        initial_delay: Duration,
+        is_busy: B,
+        admitted: F,
+        deliver: D,
+        write_undelivered: U,
+    ) -> DeliveryOutcome
+    where
+        B: FnMut() -> bool,
+        F: DeliveryFence,
+        D: FnMut(&[CompletionRecord]) -> Fut,
+        Fut: Future<Output = std::result::Result<(), E>>,
+        E: std::fmt::Display,
+        U: FnMut(&[CompletionRecord]),
+    {
+        let mut config = self.config;
+        config.debounce = initial_delay;
+        Self::new(config, self.thread_leases.clone())
+            .deliver_once(target, is_busy, admitted, deliver, write_undelivered)
+            .await
+    }
+
     /// Error-aware form of [`Self::deliver_once`]. The callback receives the
     /// final delivery error for records that give up, synchronously under the
     /// thread lease after the durable give-up transition.
