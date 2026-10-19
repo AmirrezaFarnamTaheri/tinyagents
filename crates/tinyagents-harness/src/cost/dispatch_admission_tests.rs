@@ -13,32 +13,50 @@ use crate::observability::{
     PhysicalDispatchTerminal,
 };
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{StreamExt, poll};
+use std::task::Poll;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
 use tinyinference_llm::model::{ChatModel, ModelRequest, ModelResponse, ModelStream};
+use tinyinference_llm::usage::Usage;
 
 type Action = Result<(), DispatchRefusalReason>;
 
 struct PermitState {
     committed: AtomicUsize,
     active: AtomicUsize,
+    refuse_commit: std::sync::atomic::AtomicBool,
 }
 
-struct TestPermit(Arc<PermitState>);
+struct TestPermit {
+    state: Arc<PermitState>,
+    committed: std::sync::atomic::AtomicBool,
+}
 
 impl PhysicalDispatchPermit for TestPermit {
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal> {
-        self.0.committed.fetch_add(1, Ordering::SeqCst);
+        if self.committed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        if self.state.refuse_commit.load(Ordering::SeqCst) {
+            return Err(DispatchRefusal::new(DispatchRefusalReason::Deadline));
+        }
+        if self
+            .committed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            self.state.committed.fetch_add(1, Ordering::SeqCst);
+        }
         Ok(())
     }
 }
 
 impl Drop for TestPermit {
     fn drop(&mut self) {
-        self.0.active.fetch_sub(1, Ordering::SeqCst);
+        self.state.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -98,6 +116,7 @@ impl ScriptedAdmission {
             permits: Arc::new(PermitState {
                 committed: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
+                refuse_commit: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -119,7 +138,10 @@ impl PhysicalDispatchAdmission for ScriptedAdmission {
         };
         action.map_err(DispatchRefusal::new)?;
         self.permits.active.fetch_add(1, Ordering::SeqCst);
-        Ok(Arc::new(TestPermit(self.permits.clone())))
+        Ok(Arc::new(TestPermit {
+            state: self.permits.clone(),
+            committed: std::sync::atomic::AtomicBool::new(false),
+        }))
     }
 }
 
@@ -157,6 +179,36 @@ enum ModelBehavior {
 struct TestModel {
     counts: Arc<Counts>,
     behavior: ModelBehavior,
+}
+
+struct FirstCallGateModel {
+    counts: Arc<Counts>,
+    entered: Arc<tokio::sync::Semaphore>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+
+#[async_trait]
+impl ChatModel<()> for FirstCallGateModel {
+    async fn invoke(
+        &self,
+        _: &(),
+        _: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        let invocation = self.counts.provider.fetch_add(1, Ordering::SeqCst);
+        if invocation == 0 {
+            self.entered.add_permits(1);
+            self.release
+                .acquire()
+                .await
+                .expect("provider release semaphore remains open")
+                .forget();
+        }
+        Ok(ModelResponse {
+            usage: Some(Usage::new(2, 1)),
+            raw: Some(serde_json::json!({"usage":{"buyer_cost_micro":3}})),
+            ..ModelResponse::assistant("paid")
+        })
+    }
 }
 
 #[async_trait]
@@ -265,6 +317,73 @@ async fn money_refusal_does_not_commit_admission() {
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
     assert_eq!(admission.acquired.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn late_refusal_after_money_wait_refunds_the_uncommitted_call() {
+    let counts = Arc::new(Counts::default());
+    let entered = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let admission = ScriptedAdmission::new([
+        Step::Immediate(Ok(())),
+        Step::Immediate(Ok(())),
+    ]);
+    let budget = ModelBudget::new(
+        Budget::new(SpendLimits {
+            tokens: Some(2_000),
+            cost_micros: Some(15),
+        })
+        .wait_for_capacity(),
+        CallBudget {
+            input_tokens: 1_000,
+            output_tokens: 5,
+            cost_micros: 10,
+        },
+    );
+    let controlled = ControlledChatModel::new(
+        Arc::new(FirstCallGateModel {
+            counts: counts.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        }),
+        options(Some(admission.clone()), Some(budget.clone()), &counts),
+    );
+
+    let mut first = Box::pin(
+        controlled.invoke_controlled(&(), ModelRequest::default()),
+    );
+    assert!(poll!(first.as_mut()).is_pending());
+    entered
+        .acquire()
+        .await
+        .expect("first provider call entered")
+        .forget();
+    let mut second = Box::pin(
+        controlled.invoke_controlled(&(), ModelRequest::default()),
+    );
+    assert!(poll!(second.as_mut()).is_pending(), "second waits for money");
+    assert_eq!(admission.acquired.load(Ordering::SeqCst), 2);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+    assert_eq!(budget.ledger.snapshot().reserved.cost_micros, 10);
+
+    admission
+        .permits
+        .refuse_commit
+        .store(true, Ordering::SeqCst);
+    release.add_permits(1);
+    assert!(matches!(poll!(first.as_mut()), Poll::Ready(Ok(_))));
+    assert!(matches!(
+        second.await,
+        Err(ControlledDispatchError::Admission(refusal))
+            if refusal.reason() == DispatchRefusalReason::Deadline
+    ));
+
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
+    assert_eq!(budget.ledger.snapshot().spent.cost_micros, 3);
+    assert_eq!(budget.ledger.snapshot().reserved, tinyinference_llm::model::budget::Spend::default());
 }
 
 #[tokio::test]
