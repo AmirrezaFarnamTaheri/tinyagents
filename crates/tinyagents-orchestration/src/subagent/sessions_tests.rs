@@ -1,6 +1,11 @@
 use super::*;
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, MemoryStorage, Page, Precondition, Query, Scope, StorageBackend,
+    Version, Versioned,
+};
+use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn key(task_id: &str) -> SubagentTaskKey {
     SubagentTaskKey {
@@ -372,4 +377,118 @@ async fn scoped_mutations_recheck_reused_task_owner_after_a_paused_read() {
             _ => unreachable!(),
         });
     }
+}
+
+#[derive(Debug)]
+struct PauseAfterSelectorRead {
+    inner: Arc<dyn DocumentStore>,
+    pause_once: AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl DocumentStore for PauseAfterSelectorRead {
+    fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
+        self.inner.capabilities()
+    }
+
+    async fn ensure_collection(&self, spec: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+        self.inner.ensure_collection(spec).await
+    }
+
+    async fn get(
+        &self,
+        collection: &str,
+        id: &str,
+    ) -> tinystoragedrivers_core::Result<Option<Versioned<Value>>> {
+        self.inner.get(collection, id).await
+    }
+
+    async fn put(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: Value,
+        precondition: Precondition,
+    ) -> tinystoragedrivers_core::Result<Version> {
+        self.inner.put(collection, id, doc, precondition).await
+    }
+
+    async fn delete(
+        &self,
+        collection: &str,
+        id: &str,
+        precondition: Precondition,
+    ) -> tinystoragedrivers_core::Result<bool> {
+        self.inner.delete(collection, id, precondition).await
+    }
+
+    async fn query(
+        &self,
+        collection: &str,
+        query: &Query,
+    ) -> tinystoragedrivers_core::Result<Page<Versioned<Value>>> {
+        let page = self.inner.query(collection, query).await?;
+        if self.pause_once.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+        Ok(page)
+    }
+}
+
+#[tokio::test]
+async fn stale_reuse_selection_cannot_overwrite_a_newer_session_owner() {
+    let backend = MemoryStorage::new();
+    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let gate = Arc::new(PauseAfterSelectorRead {
+        inner: docs.clone(),
+        pause_once: AtomicBool::new(false),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let stale_store = Arc::new(DriverSubagentSessionStore::new(gate.clone()).unwrap());
+    let current_store = DriverSubagentSessionStore::new(docs).unwrap();
+    let old_key = key("task-old");
+    let (old, _) = stale_store
+        .upsert_running(upsert("task-old", old_key.clone()))
+        .await
+        .unwrap();
+
+    gate.pause_once.store(true, Ordering::SeqCst);
+    let selector_read = gate.entered.notified();
+    let stale_attempt = {
+        let store = Arc::clone(&stale_store);
+        tokio::spawn(async move {
+            store
+                .upsert_running(upsert("task-old", old_key))
+                .await
+        })
+    };
+    selector_read.await;
+
+    let new_key = key("task-new");
+    let (current, _) = current_store
+        .upsert_running(upsert("task-new", new_key.clone()))
+        .await
+        .unwrap();
+    assert_eq!(current.subagent_session_id, old.subagent_session_id);
+    gate.release.notify_one();
+
+    assert!(stale_attempt.await.unwrap().is_err());
+    let retained = current_store
+        .get(&current.subagent_session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.current_task_id.as_deref(), Some("task-new"));
+    assert_eq!(retained.lifecycle_key, Some(new_key.clone()));
+
+    let (fresh, _) = current_store
+        .upsert_running(upsert("task-fresh", key("task-fresh")))
+        .await
+        .unwrap();
+    assert_eq!(fresh.subagent_session_id, current.subagent_session_id);
+    assert_eq!(fresh.current_task_id.as_deref(), Some("task-fresh"));
 }
