@@ -63,9 +63,9 @@ fn python_utf8_defaults_keep_explicit_values() {
         (OsString::from("PYTHONUTF8"), OsString::from("0")),
         (OsString::from("KEEP"), OsString::from("value")),
     ]));
-    assert_eq!(env.get("PYTHONUTF8"), Some(&OsString::from("0")));
-    assert_eq!(env.get("PYTHONIOENCODING"), Some(&OsString::from("utf-8")));
-    assert_eq!(env.get("KEEP"), Some(&OsString::from("value")));
+    assert_eq!(env.get(std::ffi::OsStr::new("PYTHONUTF8")), Some(&OsString::from("0")));
+    assert_eq!(env.get(std::ffi::OsStr::new("PYTHONIOENCODING")), Some(&OsString::from("utf-8")));
+    assert_eq!(env.get(std::ffi::OsStr::new("KEEP")), Some(&OsString::from("value")));
 }
 
 #[test]
