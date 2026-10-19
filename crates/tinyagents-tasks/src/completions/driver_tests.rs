@@ -226,7 +226,13 @@ fn conditional_driver_create_preserves_an_existing_claim() {
     let receipt = claimed.receipt().unwrap();
     assert_eq!(
         store
-            .resolve_claim(&receipt.task_id, &receipt.token, ClaimResolution::Delivered)
+            .resolve_claim(
+                &receipt.task_id,
+                "parent",
+                &gate,
+                &receipt.token,
+                ClaimResolution::Delivered,
+            )
             .unwrap()
             .unwrap()
             .state,
@@ -279,14 +285,20 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
         .unwrap();
     first.release_parent_gate("parent", &first_gate).unwrap();
     let first_token = first_claim.claim.unwrap().token;
+    let second_gate = parent_gate(&second, "parent");
     assert!(
         first
-            .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+            .resolve_claim(
+                "lease-task",
+                "parent",
+                &second_gate,
+                &first_token,
+                ClaimResolution::Delivered,
+            )
             .unwrap()
             .is_none(),
         "an expired owner cannot settle before another router reclaims"
     );
-    let second_gate = parent_gate(&second, "parent");
     let second_claim = second
         .claim_pending(
             "parent",
@@ -306,12 +318,24 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
 
     assert!(
         first
-            .resolve_claim("lease-task", &first_token, ClaimResolution::Delivered)
+            .resolve_claim(
+                "lease-task",
+                "parent",
+                &second_gate,
+                &first_token,
+                ClaimResolution::Delivered,
+            )
             .unwrap()
             .is_none()
     );
     let settled = second
-        .resolve_claim("lease-task", &second_token, ClaimResolution::Delivered)
+        .resolve_claim(
+            "lease-task",
+            "parent",
+            &second_gate,
+            &second_token,
+            ClaimResolution::Delivered,
+        )
         .unwrap()
         .unwrap();
     assert_eq!(settled.state, CompletionState::Delivered);
