@@ -15,6 +15,18 @@ use tinyinference_llm::message::Message;
 /// [`Message::user`] (or [`Message::system`]) — the host chooses the role.
 pub type RunQueueHandle = Arc<super::RunQueue<Message>>;
 
+/// A retained capability checked when a queued item is consumed by an agent
+/// turn. Hosts can attach durable lifecycle admission to messages without
+/// changing the transcript payload.
+pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
+    /// Validates that the queued item still belongs to an admitted lifecycle.
+    fn validate(&self) -> Result<(), QueueAdmissionError>;
+}
+
+/// The queued item's admission capability is no longer valid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueueAdmissionError;
+
 /// A queue lane consumed by the agent runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

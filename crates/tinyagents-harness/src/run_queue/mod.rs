@@ -43,7 +43,7 @@ pub use forwarder::{
     forward_collects, forward_message_collects, forward_message_steers, forward_steers,
 };
 
-pub use types::{QueueLane, QueueMode, QueueStatus, RunQueueHandle};
+pub use types::{QueueAdmission, QueueAdmissionError, QueueLane, QueueMode, QueueStatus, RunQueueHandle};
 
 /// Thread-safe FIFO queue split into steer, follow-up, and collect lanes.
 ///
@@ -62,11 +62,39 @@ pub struct RunQueue<T> {
 struct RunQueueInner<T> {
     /// Immediate steering messages, consumed as soon as the loop reaches a
     /// safe iteration boundary.
-    steers: Vec<T>,
+    steers: Vec<Queued<T>>,
     /// Deferred follow-up work, consumed once the current run settles.
-    followups: Vec<T>,
+    followups: Vec<Queued<T>>,
     /// Collected context (e.g. observations) accumulated for later use.
-    collects: Vec<T>,
+    collects: Vec<Queued<T>>,
+}
+
+#[derive(Debug)]
+struct Queued<T> {
+    value: T,
+    admission: Option<std::sync::Arc<dyn QueueAdmission>>,
+}
+
+impl<T> Queued<T> {
+    fn admitted(value: T) -> Self {
+        Self {
+            value,
+            admission: None,
+        }
+    }
+
+    fn guarded(value: T, admission: std::sync::Arc<dyn QueueAdmission>) -> Self {
+        Self {
+            value,
+            admission: Some(admission),
+        }
+    }
+
+    fn validate(&self) -> bool {
+        self.admission
+            .as_ref()
+            .is_none_or(|admission| admission.validate().is_ok())
+    }
 }
 
 impl<T> RunQueue<T> {
@@ -96,6 +124,32 @@ impl<T> RunQueue<T> {
     /// Appends `item` to `lane` without awaiting: the synchronous form of
     /// [`Self::push`], for `Drop` impls and other non-async callers.
     pub fn push_now(&self, lane: QueueLane, item: T) {
+        self.push_entry_now(lane, Queued::admitted(item));
+    }
+
+    /// Appends `item` with a retained capability checked when the agent loop
+    /// consumes it. Rejected items are discarded without entering the model
+    /// transcript.
+    pub async fn push_guarded(
+        &self,
+        lane: QueueLane,
+        item: T,
+        admission: std::sync::Arc<dyn QueueAdmission>,
+    ) {
+        self.push_guarded_now(lane, item, admission);
+    }
+
+    /// Synchronous form of [`Self::push_guarded`].
+    pub fn push_guarded_now(
+        &self,
+        lane: QueueLane,
+        item: T,
+        admission: std::sync::Arc<dyn QueueAdmission>,
+    ) {
+        self.push_entry_now(lane, Queued::guarded(item, admission));
+    }
+
+    fn push_entry_now(&self, lane: QueueLane, item: Queued<T>) {
         let mut inner = self.lock();
         match lane {
             QueueLane::Steer => inner.steers.push(item),
@@ -117,7 +171,7 @@ impl<T> RunQueue<T> {
             QueueLane::Followup => &mut inner.followups,
             QueueLane::Collect => &mut inner.collects,
         };
-        target.splice(0..0, items);
+        target.splice(0..0, items.into_iter().map(Queued::admitted));
     }
 
     /// Drains one lane in FIFO order.
@@ -129,11 +183,16 @@ impl<T> RunQueue<T> {
     /// of [`Self::drain`].
     pub fn drain_now(&self, lane: QueueLane) -> Vec<T> {
         let mut inner = self.lock();
-        match lane {
+        let items = match lane {
             QueueLane::Steer => std::mem::take(&mut inner.steers),
             QueueLane::Followup => std::mem::take(&mut inner.followups),
             QueueLane::Collect => std::mem::take(&mut inner.collects),
-        }
+        };
+        items
+            .into_iter()
+            .filter(Queued::validate)
+            .map(|item| item.value)
+            .collect()
     }
 
     /// Drains matching items from one lane in FIFO order and leaves all other
@@ -150,8 +209,11 @@ impl<T> RunQueue<T> {
         let mut drained = Vec::new();
         let mut remaining = Vec::with_capacity(items.len());
         for item in std::mem::take(items) {
-            if pred(&item) {
-                drained.push(item);
+            if !item.validate() {
+                continue;
+            }
+            if pred(&item.value) {
+                drained.push(item.value);
             } else {
                 remaining.push(item);
             }
@@ -176,7 +238,13 @@ impl<T> RunQueue<T> {
                 if items.is_empty() {
                     Vec::new()
                 } else {
-                    vec![items.remove(0)]
+                    while !items.is_empty() {
+                        let item = items.remove(0);
+                        if item.validate() {
+                            return vec![item.value];
+                        }
+                    }
+                    Vec::new()
                 }
             }
         }
@@ -225,21 +293,24 @@ impl<T> RunQueue<T> {
                 .steers
                 .iter()
                 .cloned()
-                .map(|item| (QueueLane::Steer, item)),
+                .filter(|item| item.validate())
+                .map(|item| (QueueLane::Steer, item.value.clone())),
         );
         items.extend(
             inner
                 .followups
                 .iter()
                 .cloned()
-                .map(|item| (QueueLane::Followup, item)),
+                .filter(|item| item.validate())
+                .map(|item| (QueueLane::Followup, item.value.clone())),
         );
         items.extend(
             inner
                 .collects
                 .iter()
                 .cloned()
-                .map(|item| (QueueLane::Collect, item)),
+                .filter(|item| item.validate())
+                .map(|item| (QueueLane::Collect, item.value.clone())),
         );
         items
     }
@@ -253,9 +324,15 @@ impl<T> RunQueue<T> {
     pub async fn remove_where(&self, pred: impl Fn(&T) -> bool) -> usize {
         let mut inner = self.lock();
         let before = inner.steers.len() + inner.followups.len() + inner.collects.len();
-        inner.steers.retain(|item| !pred(item));
-        inner.followups.retain(|item| !pred(item));
-        inner.collects.retain(|item| !pred(item));
+        inner
+            .steers
+            .retain(|item| item.validate() && !pred(&item.value));
+        inner
+            .followups
+            .retain(|item| item.validate() && !pred(&item.value));
+        inner
+            .collects
+            .retain(|item| item.validate() && !pred(&item.value));
         let after = inner.steers.len() + inner.followups.len() + inner.collects.len();
         before - after
     }
