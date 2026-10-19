@@ -8,7 +8,6 @@ use tinyagents_harness::ids::TaskId;
 #[tokio::test]
 async fn jobs_are_registered_in_the_shared_detached_registry() {
     let jobs = SubAgentJobRegistry::new();
-    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
     let (job_id, _steering) = jobs.create("worker", 7);
     let task_id = TaskId::new(job_id.as_str());
 
@@ -48,6 +47,7 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
     use tinyagents_harness::cancel::CancellationToken;
 
     let jobs = SubAgentJobRegistry::new();
+    let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");
     let thread_token = CancellationToken::new();
     let other_token = CancellationToken::new();
     let (thread_job, _) = jobs.create_with_cancellation(
