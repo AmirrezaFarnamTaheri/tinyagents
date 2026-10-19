@@ -171,7 +171,8 @@ fn english_close_copy_frames_records_and_keeps_write_and_truncation_rules() {
 
 #[test]
 fn english_close_guard_rejects_the_instruction_and_stop_note_it_received() {
-    let needles = instruction_needles(&ENGLISH_CLOSE_COPY, Some("The stop note says to stop now."));
+    let stop_note = "The stop note says to stop now before the work is complete.";
+    let needles = instruction_needles(&ENGLISH_CLOSE_COPY, Some(stop_note));
     let needle_refs = needles.iter().map(String::as_str).collect::<Vec<_>>();
     let directive = ENGLISH_CLOSE_COPY
         .final_answer_instruction
@@ -184,7 +185,7 @@ fn english_close_guard_rejects_the_instruction_and_stop_note_it_received() {
         1
     ));
     assert!(quotes_harness_instruction_with_minimum(
-        "The stop note says to stop now.",
+        stop_note,
         &needle_refs,
         1
     ));
