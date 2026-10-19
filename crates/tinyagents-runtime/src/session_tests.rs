@@ -79,7 +79,7 @@ async fn owned_post_commit_sink_finishes_after_caller_abort() {
         .build().unwrap();
     let turn = tokio::spawn(async move {
         let mut session = session;
-        session.turn(Message::user("commit this"), TurnOptions::default()).await
+        session.turn(SessionTurnRequest::new(Message::user("commit this")), TurnOptions::default()).await
     });
     started_rx.await.unwrap();
     turn.abort();
@@ -148,7 +148,7 @@ async fn persisted_failure_partial_skips_post_commit_sinks_and_fails_once() {
         .post_commit_sink(Arc::new(CountSink(sink_calls.clone())))
         .session(locator.clone(), session_ref.clone(), meta())
         .build().unwrap();
-    assert!(session.turn(Message::user("fail"), TurnOptions::default()).await.is_err());
+    assert!(session.turn(SessionTurnRequest::new(Message::user("fail")), TurnOptions::default()).await.is_err());
     assert_eq!(sink_calls.load(Ordering::SeqCst), 0);
     let terminals = terminals.lock().unwrap();
     assert_eq!(terminals.len(), 1);
@@ -182,7 +182,7 @@ async fn precommit_error_does_not_call_post_commit_sink() {
         .hooks(Arc::new(RejectBeforeCommit))
         .post_commit_sink(Arc::new(CountSink(calls.clone())))
         .build().unwrap();
-    assert!(session.turn(Message::user("reject"), TurnOptions::default()).await.is_err());
+    assert!(session.turn(SessionTurnRequest::new(Message::user("reject")), TurnOptions::default()).await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -208,7 +208,7 @@ async fn normal_interrupted_commit_still_invokes_post_commit_sink() {
     let mut session = SessionBuilder::new(Arc::new(InterruptedDriver))
         .post_commit_sink(Arc::new(CountSink(calls.clone())))
         .build().unwrap();
-    let outcome = session.turn(Message::user("stop"), TurnOptions::default()).await.unwrap();
+    let outcome = session.turn(SessionTurnRequest::new(Message::user("stop")), TurnOptions::default()).await.unwrap();
     assert!(outcome.interrupted);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -231,7 +231,7 @@ async fn post_commit_sink_error_does_not_change_successful_turn_result() {
         .post_commit_sink(Arc::new(ErrorSink))
         .session(locator, session_ref, meta())
         .build().unwrap();
-    let outcome = session.turn(Message::user("succeed"), TurnOptions::default()).await.unwrap();
+    let outcome = session.turn(SessionTurnRequest::new(Message::user("succeed")), TurnOptions::default()).await.unwrap();
     assert_eq!(outcome.output.as_deref(), Some("committed reply"));
 }
 

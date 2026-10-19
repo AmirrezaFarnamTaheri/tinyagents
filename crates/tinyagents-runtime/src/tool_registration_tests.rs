@@ -38,7 +38,7 @@ async fn host_only_policy_denies_before_delegating_and_allows_named_calls() {
     let policy = HostOnlyToolPolicy::new(
         ["read_file".to_owned()], Some(Arc::new(CountingPolicy(calls.clone()))),
     );
-    let context = RunContext::new(RunConfig::new("host-only-test"), ());
+    let context = RunContext::new(tinyagents_harness::context::RunConfig::new("host-only-test"), ());
     let denied = policy.check(&context, &policy_call("write_file")).await;
     assert!(matches!(denied, PolicyDecision::Deny { .. }));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
