@@ -156,13 +156,14 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
             .unwrap()
             .is_none()
     );
+    let epoch_a = lease_a.epoch();
     assert!(lease_a.release().await.unwrap());
     let lease_b = leases_b
         .try_acquire(&tenant, "thread-1")
         .await
         .unwrap()
         .unwrap();
-    assert!(lease_b.epoch() > lease_a.epoch());
+    assert!(lease_b.epoch() > epoch_a);
     let actor_b = provider
         .bind_actor_with_schema_admission(
             Arc::new(
