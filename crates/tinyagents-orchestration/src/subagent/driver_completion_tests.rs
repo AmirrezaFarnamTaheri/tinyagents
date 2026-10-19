@@ -977,8 +977,33 @@ async fn a_running_child_completion_keeps_its_spawned_parent_generation() {
     release.notify_one();
 
     assert!(run.await.unwrap().is_ok());
+    let fresh_driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(Planner {
+            mode: Some(NotifyMode::Followup),
+            parent: Some("parent-a"),
+        })),
+        executor: Some(Arc::new(Executor(Arc::new(|task| {
+            Ok(SubagentOutcome::completed(task, "fresh-generation child"))
+        })))),
+        persistence: Some(Arc::new(Memory::default())),
+    })
+    .unwrap()
+    .with_completion_router(router_b.clone());
     assert!(
-        router_a.pending_for("parent-a").is_empty(),
-        "a child admitted in the old generation must not become a new-generation completion"
+        fresh_driver
+            .run(
+                request_in_scope("parent-b-run", "root-b", "thread-a"),
+                CancellationToken::new(),
+            )
+            .await
+            .is_ok()
     );
+
+    let pending = router_b.pending_for("parent-a");
+    assert!(
+        pending.len() == 1,
+        "the old generation remains suppressed while a fresh child is deliverable"
+    );
+    assert_eq!(pending[0].result.text, "fresh-generation child");
+    assert!(pending[0].parent_epoch > spawned_generation);
 }
