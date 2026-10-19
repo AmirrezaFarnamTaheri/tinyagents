@@ -65,18 +65,30 @@ fn signal(tracker: &mut WorkTracker, event: &AgentProgress) -> Option<&'static s
 fn an_open_model_call_is_work_until_it_completes() {
     let mut tracker = WorkTracker::default();
     assert_eq!(signal(&mut tracker, &iteration_started()), Some("started"));
-    assert_eq!(signal(&mut tracker, &AgentProgress::TextDelta {
-        delta: "hi".into(),
-        iteration: 1,
-    }), None);
-    assert_eq!(signal(&mut tracker, &model_call_completed(None)), Some("finished"));
+    assert_eq!(
+        signal(
+            &mut tracker,
+            &AgentProgress::TextDelta {
+                delta: "hi".into(),
+                iteration: 1,
+            }
+        ),
+        None
+    );
+    assert_eq!(
+        signal(&mut tracker, &model_call_completed(None)),
+        Some("finished")
+    );
 }
 
 #[test]
 fn a_subagent_model_call_does_not_close_parent_work() {
     let mut tracker = WorkTracker::default();
     signal(&mut tracker, &iteration_started());
-    assert_eq!(signal(&mut tracker, &model_call_completed(Some("task-1"))), None);
+    assert_eq!(
+        signal(&mut tracker, &model_call_completed(Some("task-1"))),
+        None
+    );
 }
 
 /// Parallel tool calls stay open until the last completion arrives.
@@ -104,7 +116,10 @@ fn the_next_iteration_closes_a_tool_with_missing_completion() {
     let mut tracker = WorkTracker::default();
     signal(&mut tracker, &tool_started("a"));
     assert_eq!(signal(&mut tracker, &iteration_started()), None);
-    assert_eq!(signal(&mut tracker, &model_call_completed(None)), Some("finished"));
+    assert_eq!(
+        signal(&mut tracker, &model_call_completed(None)),
+        Some("finished")
+    );
 }
 
 #[test]
@@ -112,7 +127,10 @@ fn turn_completion_closes_all_open_work() {
     let mut tracker = WorkTracker::default();
     signal(&mut tracker, &iteration_started());
     signal(&mut tracker, &tool_started("a"));
-    assert_eq!(signal(&mut tracker, &AgentProgress::turn_completed(1)), Some("finished"));
+    assert_eq!(
+        signal(&mut tracker, &AgentProgress::turn_completed(1)),
+        Some("finished")
+    );
 }
 
 #[test]
