@@ -178,7 +178,9 @@ impl DriverConversationStore {
     /// I/O, run the purge from an appropriate blocking executor. Completed
     /// callbacks remain observable if a later query, decode, or delete fails; the
     /// purge is not crash-atomic, so a process failure between deletion and the
-    /// callback can still leave a deletion obligation unreported.
+    /// callback can still leave a deletion obligation unreported. Cancellation
+    /// while a document delete is in flight can likewise leave a deletion that
+    /// the backend completed without a callback.
     ///
     /// The returned counts retain [`ConversationPersistence::purge_threads`]
     /// semantics: tombstones are removed but are not included in the live thread
@@ -215,8 +217,10 @@ impl DriverConversationStore {
     /// delete fails, completed callbacks remain observable and the purge returns
     /// the same error as [`ConversationPersistence::purge_threads`]. The purge
     /// is not crash-atomic: a process failure between document deletion and
-    /// callback completion can leave an obligation unreported. Cancellation can
-    /// likewise stop the purge after a deletion and before callback completion.
+    /// callback completion can leave an obligation unreported. Cancellation
+    /// while a document delete is in flight can leave a deletion that the
+    /// backend completed without a callback; cancellation after deletion can
+    /// also stop the purge before an async callback completes.
     ///
     /// The returned counts retain [`ConversationPersistence::purge_threads`]
     /// semantics: tombstones are removed but are not included in the live thread
