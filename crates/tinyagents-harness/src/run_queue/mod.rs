@@ -294,7 +294,6 @@ impl<T> RunQueue<T> {
             inner
                 .steers
                 .iter()
-                .cloned()
                 .filter(|item| item.validate())
                 .map(|item| (QueueLane::Steer, item.value.clone())),
         );
@@ -302,7 +301,6 @@ impl<T> RunQueue<T> {
             inner
                 .followups
                 .iter()
-                .cloned()
                 .filter(|item| item.validate())
                 .map(|item| (QueueLane::Followup, item.value.clone())),
         );
@@ -310,7 +308,6 @@ impl<T> RunQueue<T> {
             inner
                 .collects
                 .iter()
-                .cloned()
                 .filter(|item| item.validate())
                 .map(|item| (QueueLane::Collect, item.value.clone())),
         );
