@@ -153,6 +153,9 @@ impl ToolSnapshot {
         &self,
         recorded: &ToolSnapshot,
     ) -> Result<(Self, usize), ToolSnapshotError> {
+        if self.exact {
+            return Ok((self.clone(), 0));
+        }
         let retained: Vec<ToolSpec> = recorded
             .specs
             .iter()
