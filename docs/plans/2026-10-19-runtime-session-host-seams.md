@@ -1494,6 +1494,46 @@ async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn()
     assert_eq!(active.messages.iter().map(|row| row.content.as_str()).collect::<Vec<_>>(),
         ["three", "third", "four", "fourth"]);
 }
+
+#[tokio::test]
+async fn first_admission_ignores_same_identity_fallback_at_generation_nine() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let mut fallback_session = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    for _ in 0..9 {
+        fallback_session = fallback_session.next_generation();
+    }
+    let (fallback, fallback_history) = locator(None);
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("first"), Message::assistant("admitted root"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .session(fallback.clone(), fallback_session.clone(), meta())
+        .identity_resolver("thread-first-admission", meta(), resolver)
+        .build().unwrap();
+    session.turn(
+        Message::user("first"),
+        session_turn_options(ResumeMode::Never, "thread-first-admission"),
+    ).await.unwrap();
+
+    let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "agent-resolved",
+    ).unwrap();
+    let transcripts = &stores.stores().transcripts;
+    let admitted_root = SessionRef::scoped("thread-first-admission", "agent-resolved");
+    assert!(transcripts.read_session_transcript(&admitted_root).unwrap().is_some());
+    assert!(transcripts.read_session_transcript(&fallback_session).is_none());
+    assert_eq!(*fallback_history.opens.lock().unwrap(), 0);
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+}
 ```
 
 Use these exact adversarial test bodies. They reuse `locator(None)`, `meta()`,
