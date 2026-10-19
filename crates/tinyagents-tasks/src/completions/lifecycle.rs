@@ -16,7 +16,7 @@ pub(super) enum ParentLifecycleStatus {
     Deleted(u64),
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct ParentLifecycleEntry {
     held: bool,
     status: Option<ParentLifecycleStatus>,
@@ -24,6 +24,7 @@ struct ParentLifecycleEntry {
 
 /// Scope-owned state that outlives cached routers and their backing stores.
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct ParentLifecycle {
     identity: String,
     entries: Mutex<HashMap<String, ParentLifecycleEntry>>,

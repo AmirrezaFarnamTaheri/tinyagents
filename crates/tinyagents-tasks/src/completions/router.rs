@@ -227,7 +227,9 @@ impl CompletionRouter {
     /// [`DEFAULT_MAX_ATTEMPTS`].
     pub fn new(store: Arc<dyn CompletionStore>) -> Self {
         let lifecycle = if store.is_process_local() {
-            ParentLifecycle::for_store(store.as_ref())
+            store
+                .parent_lifecycle()
+                .unwrap_or_else(|| ParentLifecycle::for_store(store.as_ref()))
         } else {
             ParentLifecycle::new()
         };
@@ -251,7 +253,11 @@ impl CompletionRouter {
     }
 
     pub(super) fn attach_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
-        self.lock()?.lifecycle = Arc::clone(&lifecycle);
+        let mut state = self.lock()?;
+        if state.store.is_process_local() {
+            state.store.bind_parent_lifecycle(Arc::clone(&lifecycle))?;
+        }
+        state.lifecycle = Arc::clone(&lifecycle);
         *self
             .lifecycle
             .lock()

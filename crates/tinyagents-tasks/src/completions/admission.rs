@@ -45,7 +45,9 @@ impl CompletionAdmission {
                 migrating: false,
             })),
             lifecycle: if store.is_process_local() {
-                ParentLifecycle::for_store(store.as_ref())
+                store
+                    .parent_lifecycle()
+                    .unwrap_or_else(|| ParentLifecycle::for_store(store.as_ref()))
             } else {
                 ParentLifecycle::new()
             },

@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 
-use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
 use super::lifecycle::ParentLifecycle;
+use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
 
 fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("completion store: {what}: {err}"))

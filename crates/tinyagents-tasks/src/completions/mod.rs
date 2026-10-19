@@ -32,8 +32,6 @@ mod store;
 mod types;
 
 pub use admission::CompletionAdmission;
-#[doc(hidden)]
-pub use lifecycle::ParentLifecycle;
 pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
     ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
@@ -41,6 +39,8 @@ pub use delivery::{
 pub use driver::DriverCompletionStore;
 pub use durable_lease::{DurableThreadDeliveryLease, DurableThreadDeliveryLeases};
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
+#[doc(hidden)]
+pub use lifecycle::ParentLifecycle;
 pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
     CompletionStoreFallback, open_driver_completion_store, open_driver_completion_store_or_memory,
