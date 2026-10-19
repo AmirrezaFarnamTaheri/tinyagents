@@ -91,11 +91,11 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
         retained.error,
         Some(TinyAgentsError::Cancelled.to_string())
     );
-    assert!(completions.pending_for("thread").is_empty());
     assert_eq!(
         completions.record(late_completion).await.unwrap(),
         RecordOutcome::Suppressed
     );
+    assert!(completions.pending_for("thread").is_empty());
 }
 
 #[tokio::test]
