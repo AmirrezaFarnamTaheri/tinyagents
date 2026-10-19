@@ -260,6 +260,15 @@ pub struct HostOnlyToolPolicy<C: Send + Sync + 'static> {
     host: Option<Arc<dyn tinyagents_harness::middleware::ToolCallPolicy<C>>>,
 }
 
+impl<C: Send + Sync + 'static> HostOnlyToolPolicy<C> {
+    pub fn new(
+        allowed: impl IntoIterator<Item = String>,
+        host: Option<Arc<dyn tinyagents_harness::middleware::ToolCallPolicy<C>>>,
+    ) -> Self {
+        Self { allowed: allowed.into_iter().collect(), host }
+    }
+}
+
 #[async_trait]
 impl<C: Send + Sync + 'static> ToolCallPolicy<C> for HostOnlyToolPolicy<C> {
     fn name(&self) -> &str { "host_only" }
@@ -305,6 +314,13 @@ input order, and `drop_synthesized_name_collisions(&[Arc<ToolSpec>],
 Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>>`, which removes synthesized specs
 whose names occur in the durable set before the first-wins pass.
 
+The host-policy test uses a counter-backed host policy and calls
+`ToolCallPolicy::check` directly with a real `RunContext::new(RunConfig::new("test"), ())`:
+assert unknown name yields `PolicyDecision::Deny` with counter `0`, admitted
+name forwards the same call and counter becomes `1`, and empty allowlist
+denies. Also run it through `TurnPlan::tool_policy` and assert the underlying
+tool executor is never invoked for an unknown call.
+
 Extend harness `ToolSnapshot` in `harness/src/tool/snapshot.rs` with a
 Rust-type keyed extension carrier. TinyAgents defines no Composio/REPL names
 or payload schemas; the host owns each payload type and its lifecycle:
@@ -349,8 +365,19 @@ impl ToolSnapshot {
 }
 ```
 
-Implement `Debug` for the collection by printing its length, so `ToolSnapshot`
-keeps its current `Debug` derive. Replacing an existing value of the same Rust
+Implement `Debug` for the collection as:
+
+```rust
+impl std::fmt::Debug for ToolSnapshotExtensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolSnapshotExtensions")
+            .field("len", &self.values.len())
+            .finish()
+    }
+}
+```
+
+This lets `ToolSnapshot` keep its current `Debug` derive. Replacing an existing value of the same Rust
 type replaces that value; different host types coexist. Clones share immutable
 `Arc` payloads. `retaining` and `with_retained` copy the extension collection;
 `exact` semantics remain unchanged.
