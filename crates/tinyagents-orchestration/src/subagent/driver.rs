@@ -388,12 +388,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             }
             token = execution.cancellation.clone();
             let run = self.executor.execute(execution);
+            let timeout_token = token.clone();
             let run = async {
                 match policy.timeout {
                     Some(limit) => match tokio::time::timeout(limit, run).await {
                         Ok(result) => result,
                         Err(_) => {
-                            token.cancel();
+                            timeout_token.cancel();
                             timed_out = true;
                             tracing::debug!(
                                 "{LOG_PREFIX} timeout task_id={task_id} after_ms={}",
