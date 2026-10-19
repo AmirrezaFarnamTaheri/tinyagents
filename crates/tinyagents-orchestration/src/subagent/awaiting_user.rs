@@ -42,7 +42,7 @@ impl SubagentAwaitingUser {
              question: {question}\n\
              checkpointed: {}\n\
              [/SUBAGENT_AWAITING_USER]\n\n\
-             The sub-agent needs clarification before it can continue. Surface the above question to the user. When the user responds, call continue_subagent with the task_id, agent_id, and the user's answer as the message parameter. Do NOT re-spawn or re-delegate the sub-agent — that restarts it from scratch and loses its progress.{resume_caveat}",
+             The sub-agent needs clarification before it can continue. Surface the above question to the user. When the user responds, re-call spawn_subagent with the same task_key and the user's answer as the message. Do NOT use a new task_key; reusing it resumes the paused child session.{resume_caveat}",
             self.checkpointed
         )
     }
