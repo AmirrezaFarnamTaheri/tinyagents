@@ -925,12 +925,85 @@ run_tinyagents_test() {
 `transcript.rs` as `#[cfg(test)] #[path = "transcript/adoption_tests.rs"] mod adoption_tests;`.
 
 First add this failing runtime behavior test in
-`crates/tinyagents-runtime/src/session_tests.rs`: build a session with the
-existing in-memory transcript locator, append rows `[system, tool orphan,
-user next]`, resume it, and assert the driver's resumed history is
-`[system, user next]` while `read_session_transcript` still returns all three
-durable rows. This exercises a currently callable public path and fails on the
-wrong history contents; it is not a test that merely names a missing helper.
+`crates/tinyagents-runtime/src/session_tests.rs`. The codec deliberately
+retains prior raw rows while encoding only new inference messages, so the test
+proves replay repair does not rewrite durable history:
+
+```rust
+struct CaptureHistoryDriver(Arc<Mutex<Option<Vec<Message>>>>);
+
+#[async_trait]
+impl SessionDriver for CaptureHistoryDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        *self.0.lock().unwrap() = Some(request.history.clone());
+        let mut history = request.history;
+        history.push(Message::assistant("done"));
+        Ok(DriverOutcome {
+            output: Some("done".into()),
+            history,
+            partial: None,
+            interrupted: false,
+            outcome: None,
+            tool_outcomes: Vec::new(),
+        })
+    }
+}
+
+struct ToolAwareCodec;
+
+impl TranscriptCodec for ToolAwareCodec {
+    fn decode_history(&self, transcript: &SessionTranscript) -> Result<Vec<Message>, RuntimeError> {
+        Ok(transcript.messages.iter().map(|row| match row.role.as_str() {
+            "system" => Message::system(&row.content),
+            "user" => Message::user(&row.content),
+            "tool" => Message::tool(row.id.as_deref().unwrap_or("missing-call"), &row.content),
+            _ => Message::assistant(&row.content),
+        }).collect())
+    }
+    fn reconcile(
+        &self,
+        prior: &[TranscriptMessage],
+        previous: &[Message],
+        next: &[Message],
+        _: &TranscriptTurnOptions,
+    ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
+        let mut rows = prior.to_vec();
+        rows.extend(next[previous.len().min(next.len())..].iter().map(|message| match message {
+            Message::System(_) => TranscriptMessage::system(message.text()),
+            Message::User(_) => TranscriptMessage::user(message.text()),
+            Message::Tool(_) => TranscriptMessage::tool(message.text()),
+            Message::Assistant(_) => TranscriptMessage::assistant(message.text()),
+        }));
+        Ok(rows)
+    }
+}
+
+#[tokio::test]
+async fn resume_repairs_leading_orphan_for_driver_without_rewriting_source_rows() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-orphan", "agent");
+    let stem = session_stem(&session_ref);
+    let durable = vec![
+        TranscriptMessage::system("frozen"),
+        TranscriptMessage::tool("orphan result").with_id("orphan-call"),
+        TranscriptMessage::user("next turn"),
+    ];
+    seed(locator.as_ref(), &stem, &durable, &meta());
+    let seen = Arc::new(Mutex::new(None));
+    let mut session = SessionBuilder::new(Arc::new(CaptureHistoryDriver(seen.clone())))
+        .codec(Arc::new(ToolAwareCodec))
+        .session(locator.clone(), session_ref, meta())
+        .build().unwrap();
+    session.turn(
+        Message::user("next turn"),
+        TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() },
+    ).await.unwrap();
+    let history = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(history.iter().map(Message::text).collect::<Vec<_>>(), ["frozen", "next turn"]);
+    assert_eq!(&read(locator.as_ref(), &stem).messages[..durable.len()], durable.as_slice());
+}
+```
+
 Then add direct parity tests in the new session `adoption_tests.rs` for both
 `TranscriptMessage` and inference `Message` representations. The direct rows
 fixture is:
@@ -950,6 +1023,23 @@ fn repair_removes_only_tool_rows_after_the_leading_system_prefix() {
     assert_eq!(repaired[1], rows[2]);
     assert_eq!(repaired[2], rows[3]);
     assert_eq!(rows[1].id.as_deref(), Some("orphan")); // source untouched
+}
+
+#[test]
+fn later_orphans_are_left_for_strict_validation() {
+    let rows = vec![
+        TranscriptMessage::system("frozen"),
+        TranscriptMessage::user("turn"),
+        TranscriptMessage::tool("later orphan").with_id("call-later"),
+    ];
+    let repaired = repair_orphaned_tool_head(&rows);
+    assert_eq!(repaired.as_ref(), rows.as_slice());
+}
+
+#[test]
+fn clean_head_borrows_the_original_rows() {
+    let rows = vec![TranscriptMessage::system("frozen"), TranscriptMessage::user("turn")];
+    assert!(matches!(repair_orphaned_tool_head(&rows), Cow::Borrowed(_)));
 }
 ```
 
