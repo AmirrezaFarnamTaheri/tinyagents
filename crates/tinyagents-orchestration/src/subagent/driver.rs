@@ -307,12 +307,9 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         }
 
         if request.resume().is_none() {
-            let resume = await_with_turn_fence(
-                turn_fence.as_ref(),
-                None,
-                self.persistence.load(&task_key),
-            )
-            .await?;
+            let resume =
+                await_with_turn_fence(turn_fence.as_ref(), None, self.persistence.load(&task_key))
+                    .await?;
             request.set_resume(resume);
         }
         // Keep the exact pause seen at the durable read boundary. The
@@ -373,12 +370,8 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         let mut reservation = reservation.map_err(SubagentError::SpawnRejected)?;
 
         ensure_turn_fence(turn_fence.as_ref(), None)?;
-        let mut prepared = await_with_turn_fence(
-            turn_fence.as_ref(),
-            None,
-            self.planner.prepare(request),
-        )
-        .await?;
+        let mut prepared =
+            await_with_turn_fence(turn_fence.as_ref(), None, self.planner.prepare(request)).await?;
         if prepared.task_id != task_id {
             return Err(SubagentError::TaskIdMismatch {
                 expected: task_id,
@@ -404,8 +397,13 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 ),
             )
             .await?;
-            self.record_completion_under_fence(turn_fence.as_ref(), completion_origin.as_ref(), &result, 0)
-                .await;
+            self.record_completion_under_fence(
+                turn_fence.as_ref(),
+                completion_origin.as_ref(),
+                &result,
+                0,
+            )
+            .await?;
             return Ok(result);
         }
         prepared.tools = restrict_tools_with_scope(
@@ -539,14 +537,11 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                 if cancellation.is_cancelled() || (!timed_out && token.is_cancelled()) {
                     outcome.cancelled_preserving()
                 } else {
-                    let (outcome, omitted) = await_with_turn_fence(
-                        turn_fence.as_ref(),
-                        Some(&token),
-                        async {
+                    let (outcome, omitted) =
+                        await_with_turn_fence(turn_fence.as_ref(), Some(&token), async {
                             Ok(apply_outcome_policies(outcome, &policy, &result_policy).await)
-                        },
-                    )
-                    .await?;
+                        })
+                        .await?;
                     omitted_chars = omitted;
                     outcome
                 }
