@@ -11,6 +11,8 @@ pub use ports::{
     ExecRequest, ShellFlavor,
 };
 pub use progress::ExecProgress;
+mod tool;
+pub use tool::ExecTool;
 
 #[cfg(test)]
 #[path = "ports_tests.rs"]
