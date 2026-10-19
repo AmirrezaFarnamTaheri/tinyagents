@@ -338,13 +338,23 @@ impl Tool for ProgressInner {
 struct ProgressArtifactInner(MediaProgressFn);
 #[async_trait]
 impl Tool for ProgressArtifactInner {
-    fn name(&self) -> &str { "progress_artifact" }
-    fn description(&self) -> &str { "progress artifact" }
-    fn parameters_schema(&self) -> Value { json!({"type":"object"}) }
+    fn name(&self) -> &str {
+        "progress_artifact"
+    }
+    fn description(&self) -> &str {
+        "progress artifact"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
         (self.0)(&MediaJobProgress {
-            id: "job-kind".into(), state: "running".into(), outputs: 1,
-            output_indices: vec![0], cost_usd: None, error: None,
+            id: "job-kind".into(),
+            state: "running".into(),
+            outputs: 1,
+            output_indices: vec![0],
+            cost_usd: None,
+            error: None,
         });
         tokio::time::sleep(Duration::from_secs(20)).await;
         Ok(ToolResult::success_with_markdown(
@@ -465,18 +475,22 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
         identity: CallIdentity("second"),
         progress: Mutex::new(Vec::new()),
     };
-    let (left, right) = tokio::time::timeout(Duration::from_secs(60), async { tokio::join!(
-        tool.execute_with_context(
-            json!({"prompt":"first"}),
-            ToolCallOptions::default(),
-            Some(&first)
-        ),
-        tool.execute_with_context(
-            json!({"prompt":"second"}),
-            ToolCallOptions::default(),
-            Some(&second)
-        ),
-    ) }).await.expect("both factory calls must reach the overlap barrier");
+    let (left, right) = tokio::time::timeout(Duration::from_secs(60), async {
+        tokio::join!(
+            tool.execute_with_context(
+                json!({"prompt":"first"}),
+                ToolCallOptions::default(),
+                Some(&first)
+            ),
+            tool.execute_with_context(
+                json!({"prompt":"second"}),
+                ToolCallOptions::default(),
+                Some(&second)
+            ),
+        )
+    })
+    .await
+    .expect("both factory calls must reach the overlap barrier");
     for (result, identity) in [(left.unwrap(), "first"), (right.unwrap(), "second")] {
         let ToolContent::Json { data } = &result.content[0] else {
             panic!("expected JSON result")
@@ -490,6 +504,10 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
         assert_eq!(
             data["artifacts"][1]["path"],
             format!("/files/{identity}.png")
+        );
+        assert_eq!(
+            result.markdown_formatted.as_deref(),
+            Some(format!("/files/{identity}.png and /files/{identity}.png").as_str())
         );
     }
     assert_eq!(
@@ -629,8 +647,16 @@ async fn image_and_video_factory_calls_keep_configured_kind_and_heartbeat() {
             kind.clone(),
             filer.clone(),
         )
-        .with_per_call_inner(Arc::new(|progress, _context| ProgressArtifactInner(progress)));
-        assert_eq!(tool.execute_with_context(json!({}), ToolCallOptions::default(), Some(&recorder)).await.unwrap().text(), "blob:kind");
+        .with_per_call_inner(Arc::new(|progress, _context| {
+            ProgressArtifactInner(progress)
+        }));
+        assert_eq!(
+            tool.execute_with_context(json!({}), ToolCallOptions::default(), Some(&recorder))
+                .await
+                .unwrap()
+                .text(),
+            "blob:kind"
+        );
         assert_eq!(
             *recorder.0.lock().unwrap(),
             vec![format!("{label} — 15s elapsed (job running)")]
