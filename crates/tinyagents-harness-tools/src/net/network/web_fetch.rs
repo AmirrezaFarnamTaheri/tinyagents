@@ -666,7 +666,7 @@ async fn is_html(
 /// The HTTP status of a `web_fetch` error result. This remains available from
 /// the producer module, while the single parser lives in `tinytools::status`
 /// so lightweight hosts can consume the result contract without depending on
-/// `tinytools-std`.
+/// `tinyagents-harness-tools`.
 pub use tinytools::status::web_fetch_status as status_of;
 
 #[cfg(test)]

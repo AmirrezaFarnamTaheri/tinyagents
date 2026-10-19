@@ -12,6 +12,13 @@ feature enables the generic job and message tools and brings in
 clarification, plan-exit, per-call binding, and thread-lock support are
 available without optional features.
 
+The opt-in `fs`, `net`, and `exec` features expose the standard tool families
+under `tinyagents_harness_tools::{fs,net,exec}`. The `media` feature exposes
+the generic artifact-filing wrapper at `tinyagents_harness_tools::media`, and
+`plan-review` exposes the host-backed review tool at
+`tinyagents_harness_tools::plan_review`. These features do not change the
+default set.
+
 ## Public modules and tools
 
 - `goals` provides `GoalStore`, `GoalTool`, observer notifications, atomic
@@ -25,6 +32,14 @@ available without optional features.
   `SubAgentMessageTool` over the orchestration crate's shared
   `SubAgentJobRegistry`.
 - `thread_locks` provides the public `ThreadLockMap` concurrency primitive.
+- `fs` provides filesystem tools and file-state operations in `fs`.
+- `net` provides network tools in `net`.
+- `exec` provides `ExecTool`, `InstallTool`, process timeout utilities, and
+  host-supplied execution ports in `exec`.
+- `media` provides `MediaArtifactTool` and its `ArtifactFiling` port in
+  `media`.
+- `plan-review` provides `RequestPlanReviewTool` and its `PlanReviewPort` in
+  `plan_review`.
 - The crate root exports `CurrentTimeTool`, `ResolveTimeTool`,
   `AskClarificationTool`, `PlanExitTool`, and the `per_call` binding adapter.
 
