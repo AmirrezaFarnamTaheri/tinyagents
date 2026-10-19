@@ -204,20 +204,22 @@ impl CompletionStore for BlockingParentMarkerRead {
     fn insert_if_absent(
         &self,
         record: &CompletionRecord,
+        gate: &ParentGateClaim,
     ) -> tinyagents_harness::error::Result<bool> {
-        self.inner.insert_if_absent(record)
+        self.inner.insert_if_absent(record, gate)
     }
 
     fn claim_task(
         &self,
         task_id: &str,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
         self.inner
-            .claim_task(task_id, parent_key, mode, token, visible_after)
+            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -400,32 +402,35 @@ impl CompletionStore for BlockingFirstReadStore {
     fn insert_if_absent(
         &self,
         record: &CompletionRecord,
+        gate: &ParentGateClaim,
     ) -> tinyagents_harness::error::Result<bool> {
-        self.inner.insert_if_absent(record)
+        self.inner.insert_if_absent(record, gate)
     }
 
     fn claim_pending(
         &self,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         self.inner
-            .claim_pending(parent_key, mode, max, token, visible_after)
+            .claim_pending(parent_key, gate, mode, max, token, visible_after)
     }
 
     fn claim_task(
         &self,
         task_id: &str,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
         self.inner
-            .claim_task(task_id, parent_key, mode, token, visible_after)
+            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
     }
 
     fn resolve_claim(
@@ -1028,6 +1033,7 @@ impl CompletionStore for FailingSecondPut {
     fn insert_if_absent(
         &self,
         record: &CompletionRecord,
+        gate: &ParentGateClaim,
     ) -> tinyagents_harness::error::Result<bool> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst) {
@@ -1035,11 +1041,12 @@ impl CompletionStore for FailingSecondPut {
                 "disk".into(),
             ));
         }
-        self.inner.insert_if_absent(record)
+        self.inner.insert_if_absent(record, gate)
     }
     fn claim_pending(
         &self,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
@@ -1048,7 +1055,7 @@ impl CompletionStore for FailingSecondPut {
         use std::sync::atomic::Ordering::SeqCst;
         let claimed = self
             .inner
-            .claim_pending(parent_key, mode, max, token, visible_after)?;
+            .claim_pending(parent_key, gate, mode, max, token, visible_after)?;
         if (0..claimed.len()).any(|_| self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst))
         {
             for record in &claimed {
@@ -1070,6 +1077,7 @@ impl CompletionStore for FailingSecondPut {
         &self,
         task_id: &str,
         parent_key: &str,
+        gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
@@ -1081,7 +1089,7 @@ impl CompletionStore for FailingSecondPut {
             ));
         }
         self.inner
-            .claim_task(task_id, parent_key, mode, token, visible_after)
+            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
