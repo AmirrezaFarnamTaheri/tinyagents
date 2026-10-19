@@ -125,16 +125,8 @@ pub trait CompletionStore: Send + Sync {
 
     /// Resolves a claim only while its token still owns the record. `None`
     /// means the claim expired, was reclaimed, or the record was withdrawn.
-    fn resolve_claim(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
-    ) -> Result<Option<CompletionRecord>> {
-        let _ = (task_id, parent_key, parent_epoch, gate, token, resolution);
+    fn resolve_claim(&self, request: ResolveClaimRequest) -> Result<Option<CompletionRecord>> {
+        let _ = request;
         Err(store_err(
             "resolve claim",
             "store does not support atomic delivery claims",
@@ -203,6 +195,17 @@ pub struct TaskClaimRequest {
     pub mode: CompletionClaimMode,
     pub token: String,
     pub visible_after: SystemTime,
+}
+
+/// Inputs for settling one owned delivery claim.
+#[derive(Debug, Clone)]
+pub struct ResolveClaimRequest {
+    pub task_id: String,
+    pub parent_key: String,
+    pub parent_epoch: u64,
+    pub gate: ParentGateClaim,
+    pub token: String,
+    pub resolution: ClaimResolution,
 }
 
 impl CompletionClaimMode {
@@ -527,31 +530,23 @@ impl CompletionStore for InMemoryCompletionStore {
         })
     }
 
-    fn resolve_claim(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
-    ) -> Result<Option<CompletionRecord>> {
-        self.with_current_gate(parent_key, gate, |records| {
-            let Some(record) = records.get_mut(task_id) else {
+    fn resolve_claim(&self, request: ResolveClaimRequest) -> Result<Option<CompletionRecord>> {
+        self.with_current_gate(&request.parent_key, &request.gate, |records| {
+            let Some(record) = records.get_mut(&request.task_id) else {
                 return Ok(None);
             };
-            if record.parent_key != parent_key
-                || record.parent_epoch != parent_epoch
+            if record.parent_key != request.parent_key
+                || record.parent_epoch != request.parent_epoch
                 || record.state != CompletionState::Pending
                 || record.claim.as_ref().is_none_or(|claim| {
-                    claim.token != token || claim.visible_after <= SystemTime::now()
+                    claim.token != request.token || claim.visible_after <= SystemTime::now()
                 })
             {
                 return Ok(None);
             }
             record.updated_at = SystemTime::now();
             record.claim = None;
-            match resolution {
+            match request.resolution {
                 ClaimResolution::Delivered => record.state = CompletionState::Delivered,
                 ClaimResolution::Failed { max_attempts } if record.attempts >= max_attempts => {
                     record.state = CompletionState::GaveUp;

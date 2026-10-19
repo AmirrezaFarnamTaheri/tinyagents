@@ -509,6 +509,35 @@ impl SubAgentJobRegistry {
         self.cancel_owned(id.as_str(), owner)
     }
 
+    /// Cancels a driver-backed job and immediately tombstones its public
+    /// result. A later completion from the old driver cannot replace the
+    /// owner-authorized cancellation.
+    pub fn cancel_key_owned_and_tombstone(
+        &self,
+        key: &crate::subagent::SubagentTaskKey,
+        owner: impl ToString,
+    ) -> Result<SubAgentJob, SubAgentJobError> {
+        let owner = owner.to_string();
+        let id = self
+            .driver_job_for_key(key, &owner)
+            .ok_or_else(|| SubAgentJobError::NotFound(key.task_id.clone()))?;
+        self.cancel_owned(id.as_str(), owner)?;
+        let controls = self.controls();
+        let control = controls
+            .get(&id)
+            .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
+        if !control.status.borrow().status.is_terminal() {
+            let task_id = TaskId::new(id.as_str());
+            let _ = self.tasks.release_cancellation_trusted(&task_id);
+            control.status.send_modify(|job| {
+                job.status = SubAgentJobStatus::Cancelled;
+                job.error = Some(TinyAgentsError::Cancelled.to_string());
+            });
+            self.steering.deregister(&task_id);
+        }
+        Ok(control.status.borrow().clone())
+    }
+
     /// Points the job link at the attempt that is now running.
     pub(crate) fn set_attempt_run_id(&self, id: &SubAgentJobId, run_id: &str) {
         if let Some(control) = self.controls().get(id) {
