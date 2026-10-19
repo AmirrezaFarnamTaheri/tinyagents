@@ -2,8 +2,14 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use tinyinference_llm::model::ChatModel;
 use tinyinference_llm::model::budget::{Budget, BudgetedModel, CallBudget};
+use tinyinference_llm::model::{ModelRequest, ModelResponse, ModelStream};
+
+use super::dispatch_admission::{
+    ControlledDispatchError, DispatchModelOptions,
+};
 
 /// Budget state shared by the concrete models used for one turn and its child
 /// agents.
@@ -50,16 +56,108 @@ impl ModelBudget {
         model: Arc<dyn ChatModel<()>>,
         observer: Option<Arc<dyn crate::observability::PhysicalDispatchObserver>>,
     ) -> Arc<dyn ChatModel<()>> {
-        let charged = Arc::new(super::GatewayChargeModel::new(model));
-        let explicitly_observed: Arc<dyn ChatModel<()>> = match observer {
-            Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(
-                charged, observer,
-            )),
-            None => charged,
+        let observed = wrap_observed_model(model, observer);
+        Arc::new(BudgetedModel::new(
+            observed,
+            self.ledger.clone(),
+            self.call,
+        ))
+    }
+}
+
+fn wrap_observed_model(
+    model: Arc<dyn ChatModel<()>>,
+    observer: Option<Arc<dyn crate::observability::PhysicalDispatchObserver>>,
+) -> Arc<dyn ChatModel<()>> {
+    let charged = Arc::new(super::GatewayChargeModel::new(model));
+    let explicitly_observed: Arc<dyn ChatModel<()>> = match observer {
+        Some(observer) => Arc::new(crate::observability::ObservedChatModel::new(charged, observer)),
+        None => charged,
+    };
+    crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed)
+}
+
+/// Controlled invocation facade around the existing budget and observer stack.
+///
+/// This constructor stage intentionally preserves the old pass-through behavior
+/// while the admission hook is wired into the wrapper.
+pub struct ControlledChatModel {
+    inner: Arc<dyn ChatModel<()>>,
+}
+
+impl ControlledChatModel {
+    /// Builds the compatibility wrapper from an existing model and policies.
+    pub fn new(model: Arc<dyn ChatModel<()>>, options: DispatchModelOptions) -> Self {
+        let observed = wrap_observed_model(model, options.observer);
+        let inner = match options.monetary_budget {
+            Some(budget) => Arc::new(BudgetedModel::new(
+                observed,
+                budget.ledger,
+                budget.call,
+            )) as Arc<dyn ChatModel<()>>,
+            None => observed,
         };
-        let observed =
-            crate::observability::turn_observer::observe_physical_dispatches(explicitly_observed);
-        Arc::new(BudgetedModel::new(observed, self.ledger.clone(), self.call))
+        Self { inner }
+    }
+
+    /// Invokes this model with a typed physical-admission result.
+    pub async fn invoke_controlled(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> Result<ModelResponse, ControlledDispatchError> {
+        self.inner
+            .invoke(state, request)
+            .await
+            .map_err(ControlledDispatchError::Model)
+    }
+
+    /// Opens a stream with a typed physical-admission result.
+    pub async fn stream_controlled(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> Result<ModelStream, ControlledDispatchError> {
+        self.inner
+            .stream(state, request)
+            .await
+            .map_err(ControlledDispatchError::Model)
+    }
+}
+
+#[async_trait]
+impl ChatModel<()> for ControlledChatModel {
+    fn profile(&self) -> Option<&tinyinference_llm::model::ModelProfile> {
+        self.inner.profile()
+    }
+
+    fn supports_input(
+        &self,
+        modality: tinyinference_llm::model::InputModality,
+        mime: &str,
+        source: tinyinference_llm::model::InputSource,
+    ) -> bool {
+        self.inner.supports_input(modality, mime, source)
+    }
+
+    fn cache_identity(&self) -> Option<String> {
+        self.inner.cache_identity()
+    }
+
+    async fn invoke(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelResponse> {
+        self.inner.invoke(state, request).await
+    }
+
+    async fn stream(
+        &self,
+        state: &(),
+        request: ModelRequest,
+    ) -> tinyinference_llm::Result<ModelStream> {
+        self.inner.stream(state, request).await
     }
 }
 

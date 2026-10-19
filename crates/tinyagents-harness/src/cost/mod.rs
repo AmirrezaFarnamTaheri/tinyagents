@@ -24,7 +24,7 @@ pub use dispatch_admission::{
 };
 pub(crate) use gateway_charge::has_authoritative_billing_source;
 pub(crate) use gateway_charge::provider_cost_usd;
-pub use model_budget::ModelBudget;
+pub use model_budget::{ControlledChatModel, ModelBudget};
 use tinyinference_llm::usage::Usage;
 pub use turn_cost::{
     CallCost, CallUsage, CostSource, CostTally, PricingLookup, TurnCost, call_cost,
