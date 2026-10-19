@@ -953,21 +953,106 @@ async fn direct_resume_resolves_and_uses_the_admitted_lease() {
 }
 ```
 
-For the three rejection cases, use the same `FixedIdentityResolver` with
-distinct `agent_id`s and a `TranscriptLocator` wrapped in the existing
-`Destination` fixture. Assert the call returns
-`Err(RuntimeError::InvalidSessionState(_))`, the `Driver.requests` vector
-remains empty, and the wrong locator's `latest_agents`/`opened_stems` vectors
-remain empty. The hook case's hook implementation must return a
-`ResumePreparation { transcript: Some(TranscriptTarget::for_session(
-wrong_locator, SessionRef::scoped("thread-identity", "agent-resolved"),
-meta())) }`; its `before_turn` returns `Ok(TurnPreparation::default())`,
-`before_commit` returns `Ok(())`, and `on_terminal` returns `Ok(())`. The
-explicit option case sets `options.session = Some(SessionRef::scoped(
-"other-thread", "agent-resolved"))`. The changed-identity case performs one
-successful turn, changes resolver agent id, then asserts the next turn fails
-before the second driver request. Keep the same destination/rebuilt locator
-case accepted by asserting the second turn's driver request is recorded.
+Use these exact adversarial test bodies. They reuse `locator(None)`, `meta()`,
+and `Driver` from `lib_tests.rs`:
+
+```rust
+struct ReplaceTargetHook(Arc<dyn TranscriptLocator>);
+
+#[async_trait]
+impl SessionHooks for ReplaceTargetHook {
+    async fn before_resume(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<ResumePreparation, RuntimeError> {
+        Ok(ResumePreparation { transcript: Some(TranscriptTarget::for_session(
+            self.0.clone(), SessionRef::scoped("thread-identity", "agent-resolved"), meta(),
+        )) })
+    }
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> { Ok(()) }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> { Ok(()) }
+}
+
+#[tokio::test]
+async fn hook_cannot_replace_the_identity_locator() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls, agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let (wrong, wrong_history) = locator(None);
+    let driver = Arc::new(Driver::new(vec![]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    assert!(matches!(session.turn(Message::user("next"), options).await,
+        Err(RuntimeError::InvalidSessionState(_))));
+    assert!(driver.requests.lock().unwrap().is_empty());
+    assert_eq!(*wrong_history.opens.lock().unwrap(), 0);
+    assert!(wrong.latest_agents.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_session_override_cannot_change_resolved_identity() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
+    let calls = Arc::new(Mutex::new(0));
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: calls.clone(), agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::Session,
+        session: Some(SessionRef::scoped("other-thread", "agent-resolved")),
+        ..TurnOptions::default()
+    };
+    assert!(matches!(session.resume(&options).await,
+        Err(RuntimeError::InvalidSessionState(_))));
+    assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn later_agent_change_is_rejected_before_second_driver_call() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::local()).unwrap());
+    let calls = Arc::new(Mutex::new(0));
+    let agent_id = Arc::new(Mutex::new("agent-one".into()));
+    let resolver = Arc::new(FixedIdentityResolver { provider, calls, agent_id: agent_id.clone() });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::user("one"), Message::assistant("done")])),
+        Ok(outcome(vec![Message::user("two"), Message::assistant("done")])),
+    ]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = || TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    session.turn(Message::user("one"), options()).await.unwrap();
+    *agent_id.lock().unwrap() = "agent-two".into();
+    assert!(matches!(session.turn(Message::user("two"), options()).await,
+        Err(RuntimeError::InvalidSessionState(_))));
+    assert_eq!(driver.requests.lock().unwrap().len(), 1);
+}
+```
+
+The option mismatch must precede the `head_generation` call; the hook mismatch
+must precede both locators; the later identity mismatch must precede the
+second driver invocation. Also add the accepted same-destination/new-generation
+case by binding a second generation under the same first generation and
+asserting two driver requests. Run the direct test filter and the runtime suite.
 Run `cargo test -p tinyagents-runtime direct_resume_resolves_and_uses_the_admitted_lease`
 and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
 
