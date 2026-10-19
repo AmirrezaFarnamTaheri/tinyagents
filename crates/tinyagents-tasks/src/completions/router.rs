@@ -1199,3 +1199,27 @@ fn sort_oldest_first(records: &mut [CompletionRecord]) {
             .then_with(|| a.task_id.cmp(&b.task_id))
     });
 }
+
+fn status_epoch(status: ParentLifecycleStatus) -> u64 {
+    match status {
+        ParentLifecycleStatus::Open(epoch)
+        | ParentLifecycleStatus::Stopped(epoch)
+        | ParentLifecycleStatus::Deleted(epoch) => epoch,
+    }
+}
+
+fn marker_state(status: ParentLifecycleStatus) -> CompletionState {
+    match status {
+        ParentLifecycleStatus::Open(_) => CompletionState::Delivered,
+        ParentLifecycleStatus::Stopped(_) => CompletionState::Tombstoned,
+        ParentLifecycleStatus::Deleted(_) => CompletionState::ParentDeleted,
+    }
+}
+
+fn status_from_marker(state: CompletionState, epoch: u64) -> ParentLifecycleStatus {
+    match state {
+        CompletionState::Delivered => ParentLifecycleStatus::Open(epoch),
+        CompletionState::ParentDeleted => ParentLifecycleStatus::Deleted(epoch),
+        _ => ParentLifecycleStatus::Stopped(epoch),
+    }
+}

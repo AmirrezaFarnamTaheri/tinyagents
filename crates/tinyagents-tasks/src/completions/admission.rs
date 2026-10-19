@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tinyagents_harness::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
 
 use super::CompletionStore;
+use super::lifecycle::ParentLifecycle;
 use super::{CompletionRecord, CompletionRouter};
 
 /// Retained admission capability for one queued completion message.
@@ -15,6 +16,7 @@ use super::{CompletionRecord, CompletionRouter};
 #[derive(Clone)]
 pub struct CompletionAdmission {
     store: Arc<Mutex<super::router::AdmissionStoreSlot>>,
+    lifecycle: Arc<ParentLifecycle>,
     parent_key: String,
     parent_epoch: u64,
 }
@@ -39,9 +41,10 @@ impl CompletionAdmission {
     pub fn for_store(store: Arc<dyn CompletionStore>, record: &CompletionRecord) -> Self {
         Self {
             store: Arc::new(Mutex::new(super::router::AdmissionStoreSlot {
-                store,
+                store: Arc::clone(&store),
                 migrating: false,
             })),
+            lifecycle: ParentLifecycle::new(),
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
@@ -52,15 +55,20 @@ impl CompletionAdmission {
     pub(crate) fn for_router(router: &CompletionRouter, record: &CompletionRecord) -> Self {
         Self {
             store: router.admission_store_handle(),
+            lifecycle: router.parent_lifecycle_handle(),
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
     }
 
     fn key_for(&self, store: &Arc<dyn CompletionStore>) -> String {
-        let identity = store
-            .coordination_identity()
-            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(store)));
+        let identity = if store.is_process_local() {
+            format!("lifecycle:{}", self.lifecycle.identity())
+        } else {
+            store
+                .coordination_identity()
+                .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(store)))
+        };
         serde_json::to_string(&(identity, self.parent_key.as_str(), self.parent_epoch))
             .expect("serializing a completion admission batch key cannot fail")
     }
@@ -85,6 +93,7 @@ impl QueueAdmission for CompletionAdmission {
         }
         let permit = super::router::ParentAdmissionPermit::acquire(
             Arc::clone(&store),
+            Arc::clone(&self.lifecycle),
             &self.parent_key,
             self.parent_epoch,
         )
