@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use super::{CompletionRecord, CompletionRouter};
+use super::{CompletionReceipt, CompletionRecord, CompletionRouter};
 
 /// Timing and batch bounds for one delivery drain.
 #[derive(Clone, Copy, Debug)]
@@ -263,8 +263,8 @@ impl CompletionDelivery {
             }
             match delivery_result {
                 Ok(()) => {
-                    let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    match target.router.mark_delivered(&ids) {
+                    let receipts: Vec<_> = batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    match target.router.mark_delivered(&receipts) {
                         Ok(_) => {
                             claim.clear();
                             delivered_total += batch.len();
@@ -308,8 +308,8 @@ impl CompletionDelivery {
                 }
                 Err(error) => {
                     tracing::warn!(parent_key = target.parent_key, error = %error, "completion delivery turn failed");
-                    let ids: Vec<_> = batch.iter().map(|record| record.task_id.as_str()).collect();
-                    let gave_up = match target.router.mark_failed(&ids) {
+                    let receipts: Vec<_> = batch.iter().filter_map(CompletionRecord::receipt).collect();
+                    let gave_up = match target.router.mark_failed(&receipts) {
                         Ok(records) => records,
                         Err(error) => {
                             tracing::warn!(parent_key = target.parent_key, error = %error, "completion failure update failed");
@@ -377,31 +377,25 @@ async fn sleep_if_admitted<F: DeliveryFence>(duration: Duration, admitted: &F) -
 
 struct BatchClaim<'a> {
     router: &'a CompletionRouter,
-    ids: Vec<String>,
+    receipts: Vec<CompletionReceipt>,
 }
 impl<'a> BatchClaim<'a> {
     fn new(router: &'a CompletionRouter, records: &[CompletionRecord]) -> Self {
         Self {
             router,
-            ids: records
-                .iter()
-                .map(|record| record.task_id.clone())
-                .collect(),
+            receipts: records.iter().filter_map(CompletionRecord::receipt).collect(),
         }
     }
     fn replace(&mut self, records: &[CompletionRecord]) {
-        self.ids = records
-            .iter()
-            .map(|record| record.task_id.clone())
-            .collect();
+        self.receipts = records.iter().filter_map(CompletionRecord::receipt).collect();
     }
     fn clear(&mut self) {
-        self.ids.clear();
+        self.receipts.clear();
     }
 }
 impl Drop for BatchClaim<'_> {
     fn drop(&mut self) {
-        self.router.release(&self.ids);
+        self.router.release(&self.receipts);
     }
 }
 
