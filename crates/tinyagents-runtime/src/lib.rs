@@ -38,7 +38,8 @@ pub use tool_registration::{
     register_admitted, tool_surface_diff,
 };
 pub use types::{
-    CommitReceipt, ResumeMode, ResumePreparation, SessionResume, SessionStateView, SessionTerminal,
+    CommitReceipt, PostCommitObservation, ResumeMode, ResumePreparation, SessionResume,
+    SessionStateView, SessionTerminal,
     ResolvedSessionStores, SessionIdentity, SessionIdentityRequest,
     SessionTurnOutcome, SessionTurnRequest, TranscriptCommitReceipt, TranscriptDelta,
     TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,

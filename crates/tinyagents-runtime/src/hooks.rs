@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 use tinyagents_harness::terminal::TerminalOutcome;
-use std::sync::Arc;
 
 use crate::{
     CommitReceipt, ResumePreparation, RuntimeError, SessionStateView, SessionTerminal,
-    PostCommitObservation, SessionTurnOutcome, SessionTurnRequest, TranscriptTurnOptions,
+    SessionTurnOutcome, SessionTurnRequest, TranscriptTurnOptions,
     TurnOptions, TurnPreparation,
 };
+use crate::types::PostCommitObservation;
 
 /// Receives captured execution facts after a successful durable commit.
 #[async_trait]

@@ -816,7 +816,22 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             options: codec_options,
             transcript,
         };
-        let finalization = terminal_guard.finalize_commit(receipt);
+        let observation = crate::PostCommitObservation {
+            receipt: receipt.clone(),
+            input: original_input,
+            usage: turn_usage.clone(),
+            tool_outcomes: outcome.tool_outcomes.clone(),
+            thread_id,
+            agent_id: self
+                .identity
+                .as_ref()
+                .map(|identity| identity.agent_id().to_owned()),
+        };
+        let finalization = terminal_guard.finalize_commit(
+            receipt,
+            observation,
+            self.post_commit_sinks.clone(),
+        );
         // This await deliberately does not observe cancellation. If this turn
         // future is dropped, dropping `JoinHandle` detaches rather than aborts
         // the owned finalization task.
@@ -1246,7 +1261,12 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         Some((terminal, outcome))
     }
 
-    fn finalize_commit(&mut self, receipt: CommitReceipt<C>) -> tokio::task::JoinHandle<()> {
+    fn finalize_commit(
+        &mut self,
+        receipt: CommitReceipt<C>,
+        observation: crate::PostCommitObservation<C>,
+        sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
+    ) -> tokio::task::JoinHandle<()> {
         let terminal = SessionTerminal::Completed(receipt.outcome.clone());
         let outcome = self
             .driver_success_outcome
@@ -1259,6 +1279,9 @@ impl<C: Clone + Send + Sync + 'static> TerminalGuard<C> {
         let hooks = self.hooks.clone();
         tokio::spawn(async move {
             let _ = hooks.after_commit(receipt).await;
+            for sink in sinks {
+                let _ = sink.after_commit(&observation).await;
+            }
             let _ = hooks.on_terminal_outcome(outcome).await;
             let _ = hooks.on_terminal(terminal).await;
         })
