@@ -87,6 +87,51 @@ fn close_copy_builders_match_english_checkpoint_and_empty_summary() {
         final_summary_with_copy(&ENGLISH_CLOSE_COPY, "", false),
         ENGLISH_CLOSE_COPY.empty_final_summary
     );
+    let needles = instruction_needles(&ENGLISH_CLOSE_COPY, None);
+    let needle_refs = needles.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(quotes_harness_instruction_with_minimum(
+        ENGLISH_CLOSE_COPY.final_write_instruction,
+        &needle_refs,
+        1
+    ));
+}
+
+#[test]
+fn result_renderer_accepts_the_host_block_format_and_charges_rendered_bytes() {
+    let results = [
+        CloseToolResult {
+            name: "read_file".into(),
+            success: true,
+            content: "first line\nsecond line".into(),
+        },
+        CloseToolResult {
+            name: "write_file".into(),
+            success: false,
+            content: "permission denied".into(),
+        },
+    ];
+    let rendered = render_tool_results_with_options(
+        &results,
+        CloseResultRenderOptions {
+            per_result_cap: 100,
+            truncation_marker: "…",
+            total_budget: 200,
+            render_block: |result| {
+                let status = if result.success { "ok" } else { "failed" };
+                let body = result
+                    .content
+                    .lines()
+                    .map(|line| format!("  > {line}\n"))
+                    .collect::<String>();
+                format!("- `{}` — {status}\n{body}", result.name)
+            },
+            omitted_notice: |count| format!("omitted {count}\n"),
+        },
+    );
+    assert_eq!(
+        rendered,
+        "omitted 0\n- `read_file` — ok\n  > first line\n  > second line\n- `write_file` — failed\n  > permission denied\n"
+    );
 }
 
 #[test]
@@ -133,25 +178,17 @@ fn close_usage_accepts_host_billing_without_host_types() {
         ..Default::default()
     });
 
-    usage.record_close_call_with_cost(
-        CloseRequestKind::Generation,
-        Some(&response),
-        |response| {
-            assert!(response.is_some());
-            Some((
-                "actual-route-model".into(),
-                crate::cost::CallCost::Charged(0.007),
-            ))
-        },
-    );
-    usage.record_close_call_with_cost(
-        CloseRequestKind::RequiredOutputRepair,
-        None,
-        |response| {
-            assert!(response.is_none());
-            None
-        },
-    );
+    usage.record_close_call_with_cost(CloseRequestKind::Generation, Some(&response), |response| {
+        assert!(response.is_some());
+        Some((
+            "actual-route-model".into(),
+            crate::cost::CallCost::Charged(0.007),
+        ))
+    });
+    usage.record_close_call_with_cost(CloseRequestKind::RequiredOutputRepair, None, |response| {
+        assert!(response.is_none());
+        None
+    });
 
     assert_eq!(usage.model_calls, 2);
     assert_eq!((usage.input_tokens, usage.output_tokens), (17, 5));

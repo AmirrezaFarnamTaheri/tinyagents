@@ -20,7 +20,7 @@ fn stop_summary_with_copy_preserves_placeholder_shaped_values() {
 }
 
 #[test]
-fn english_stop_copy_keeps_transient_summary_golden() {
+fn stop_copy_keeps_transient_summary_golden() {
     let groups = [
         StopSummaryGroup {
             name: "get_profile".into(),
@@ -37,12 +37,53 @@ fn english_stop_copy_keeps_transient_summary_golden() {
     ];
     assert_eq!(
         render_stop_summary_with_copy(
-            english_stop_reason("turn_stop.transient"),
+            "a service I needed kept timing out or was temporarily unavailable",
             &groups,
             &ENGLISH_STOP_COPY
         ),
         "I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- `get_profile` succeeded\n- `use_skill` failed 3 times: tool `use_skill` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again."
     );
+}
+
+#[test]
+fn stop_summary_groups_scrubbed_failures_and_keeps_the_newest_eight_rows() {
+    let mut results = vec![CloseToolResult {
+        name: "oldest".into(),
+        success: true,
+        content: "ok".into(),
+    }];
+    for index in 0..8 {
+        results.push(CloseToolResult {
+            name: format!("tool-{index}"),
+            success: false,
+            content: format!("secret-{index}"),
+        });
+    }
+    results.extend([
+        CloseToolResult {
+            name: "repeat".into(),
+            success: false,
+            content: "credential: hidden".into(),
+        },
+        CloseToolResult {
+            name: "repeat".into(),
+            success: false,
+            content: "credential: hidden".into(),
+        },
+    ]);
+    let groups = group_stop_results(&results, |content| {
+        content.replace("credential: hidden", "credential redacted")
+    });
+    assert_eq!(groups.last().unwrap().count, 2);
+    assert_eq!(
+        groups.last().unwrap().error.as_deref(),
+        Some("credential redacted")
+    );
+    let output = render_stop_summary_with_copy("reason", &groups, &ENGLISH_STOP_COPY);
+    assert!(!output.contains("oldest"));
+    assert!(!output.contains("secret-"));
+    assert!(output.contains("- …and 1 more tool call(s)"));
+    assert!(output.contains("- `repeat` failed 2 times: credential redacted"));
 }
 
 fn fallback(note: &str) -> &'static str {
