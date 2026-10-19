@@ -312,7 +312,6 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             });
         };
         let scanned_session_id = transcript.meta.session_id.clone();
-        let scanned_messages = transcript.messages.clone();
         if let Some(selected) = session_binding.as_ref() {
             let expected = selected.session_id();
             if transcript
@@ -354,6 +353,11 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .iter()
             .take_while(|message| matches!(message, Message::Tool(_)))
             .count();
+        if decoded_orphan_count != 0 && reconcile_prior.len() == decoded.len() {
+            reconcile_prior.drain(
+                decoded_system_prefix..decoded_system_prefix + decoded_orphan_count,
+            );
+        }
         decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
             .into_owned();
         // A compacted head can start with a System summary immediately after
@@ -597,7 +601,19 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .as_ref()
                         .map(|session| target.locator.head_generation(session))
                         .and_then(|head| target.locator.read_session_transcript(&head));
-                    self.reconcile_prior = destination_transcript.messages.clone();
+                    let same_source = destination_transcript
+                        .meta
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| {
+                            scanned_session_id.as_deref() == Some(session_id)
+                        })
+                        || destination
+                            .as_ref()
+                            .is_some_and(|destination| destination.path() == read.path());
+                    if !same_source {
+                        self.reconcile_prior = destination_transcript.messages.clone();
+                    }
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
                     }
