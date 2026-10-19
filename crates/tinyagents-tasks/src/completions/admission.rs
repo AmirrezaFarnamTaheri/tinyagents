@@ -1,6 +1,6 @@
 //! Turn-queue admission tied to a durable parent lifecycle generation.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tinyagents_harness::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
 
@@ -14,7 +14,7 @@ use super::{CompletionRecord, CompletionRouter};
 /// durable generation and rejects messages queued under an older generation.
 #[derive(Clone)]
 pub struct CompletionAdmission {
-    store: Arc<dyn CompletionStore>,
+    store: Arc<RwLock<Arc<dyn CompletionStore>>>,
     parent_key: String,
     parent_epoch: u64,
 }
@@ -32,13 +32,23 @@ impl std::fmt::Debug for CompletionAdmission {
 impl CompletionAdmission {
     /// Binds a queued completion to the lifecycle generation that recorded it.
     pub fn for_record(router: Arc<CompletionRouter>, record: &CompletionRecord) -> Self {
-        Self::for_store(router.store(), record)
+        Self::for_router(&router, record)
     }
 
     /// Binds a queued completion directly to its durable store and lifecycle.
     pub fn for_store(store: Arc<dyn CompletionStore>, record: &CompletionRecord) -> Self {
         Self {
-            store,
+            store: Arc::new(RwLock::new(store)),
+            parent_key: record.parent_key.clone(),
+            parent_epoch: record.parent_epoch,
+        }
+    }
+
+    /// Binds the admission to the router's live store slot so a queued item
+    /// follows a successful durable-store migration.
+    pub(crate) fn for_router(router: &CompletionRouter, record: &CompletionRecord) -> Self {
+        Self {
+            store: router.admission_store_handle(),
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
@@ -47,8 +57,12 @@ impl CompletionAdmission {
 
 impl QueueAdmission for CompletionAdmission {
     fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        let store = self
+            .store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         super::router::ParentAdmissionPermit::acquire(
-            Arc::clone(&self.store),
+            Arc::clone(&store),
             &self.parent_key,
             self.parent_epoch,
         )
@@ -59,10 +73,13 @@ impl QueueAdmission for CompletionAdmission {
     }
 
     fn batch_key(&self) -> Option<String> {
-        let identity = self
+        let store = self
             .store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let identity = store
             .coordination_identity()
-            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(&self.store)));
+            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(&*store)));
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
         Some(

@@ -1,7 +1,7 @@
 //! The completion router.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, SystemTime};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
@@ -86,6 +86,7 @@ pub struct CompletionRouter {
     formatter: Arc<dyn CompletionFormatter>,
     max_attempts: u32,
     state: Mutex<RouterState>,
+    admission_store: Arc<RwLock<Arc<dyn CompletionStore>>>,
 }
 
 struct ParentGateGuard {
@@ -172,6 +173,7 @@ impl CompletionRouter {
     /// A router over `store` with the neutral formatter and
     /// [`DEFAULT_MAX_ATTEMPTS`].
     pub fn new(store: Arc<dyn CompletionStore>) -> Self {
+        let admission_store = Arc::new(RwLock::new(Arc::clone(&store)));
         Self {
             formatter: Arc::new(NeutralCompletionFormatter),
             max_attempts: DEFAULT_MAX_ATTEMPTS,
@@ -181,7 +183,14 @@ impl CompletionRouter {
                 active_receipts: HashMap::new(),
                 parents: HashMap::new(),
             }),
+            admission_store,
         }
+    }
+
+    pub(super) fn admission_store_handle(
+        &self,
+    ) -> Arc<RwLock<Arc<dyn CompletionStore>>> {
+        Arc::clone(&self.admission_store)
     }
 
     /// Returns the persistence store backing this router.
@@ -214,7 +223,31 @@ impl CompletionRouter {
                 &state.store,
             )));
         }
+        // Stop new queue admissions while migrating. Existing permits are
+        // represented by durable parent gates; acquiring those below waits
+        // for the queue-to-turn transfer to linearize before publication.
+        let mut admission_store = self
+            .admission_store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let records = state.store.try_list(None)?;
+        let mut parents = records
+            .iter()
+            .map(|record| {
+                if record.parent_key.is_empty() {
+                    Self::parent_from_marker_id(&record.task_id)
+                        .unwrap_or_else(|| record.task_id.clone())
+                } else {
+                    record.parent_key.clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        parents.sort();
+        parents.dedup();
+        let _source_gates = parents
+            .iter()
+            .map(|parent| ParentGateGuard::acquire(Arc::clone(&state.store), parent))
+            .collect::<Result<Vec<_>>>()?;
         for record in records {
             let parent_key = if record.parent_key.is_empty() {
                 Self::parent_from_marker_id(&record.task_id)
@@ -226,6 +259,7 @@ impl CompletionRouter {
             replacement.put_fenced(&record, &parent_key, gate.claim())?;
         }
         state.store = Arc::clone(&replacement);
+        *admission_store = Arc::clone(&replacement);
         Ok(CompletionStoreReplaceOutcome::Replaced(replacement))
     }
 
@@ -506,7 +540,7 @@ impl CompletionRouter {
             )));
         }
         let message = self.formatter.to_message(std::slice::from_ref(&record));
-        let admission = Arc::new(super::CompletionAdmission::for_store(self.store(), &record));
+        let admission = Arc::new(super::CompletionAdmission::for_router(self, &record));
         queue.push_guarded(lane, message, admission).await;
         tracing::debug!(
             task_id = %record.task_id,
