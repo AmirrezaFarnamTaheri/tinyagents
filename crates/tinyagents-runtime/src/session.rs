@@ -128,6 +128,82 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         Ok(())
     }
 
+    fn resolve_and_bind(
+        &mut self,
+        options: &TurnOptions<C>,
+        hook_target: Option<&TranscriptTarget>,
+    ) -> Result<(), RuntimeError> {
+        let Some(config) = self.identity_config.as_ref() else {
+            return Ok(());
+        };
+        self.identity = None;
+        let request = crate::SessionIdentityRequest {
+            thread_id: options.thread_id.clone(),
+            session_key: config.session_key.clone(),
+            parent: config.parent.clone(),
+            child_key: config.child_key.clone(),
+        };
+        let resolved = config.resolver.resolve(&request, &options.run_context.data)?;
+        if resolved.agent_id.is_empty() {
+            return Err(RuntimeError::InvalidSessionState(
+                "resolver returned empty agent id".into(),
+            ));
+        }
+        let first_session = match (&request.parent, &request.child_key) {
+            (Some(parent), Some(child_key)) => SessionRef::child_of(parent, child_key),
+            (None, None) => SessionRef::scoped(&request.session_key, &resolved.agent_id),
+            _ => {
+                return Err(RuntimeError::InvalidSessionState(
+                    "identity request has an incomplete child lineage".into(),
+                ));
+            }
+        };
+        let identity = crate::SessionIdentity {
+            session: first_session.clone(),
+            agent_id: resolved.agent_id,
+            stores: resolved.stores,
+        };
+        if options.session.as_ref().is_some_and(|selected| {
+            selected.first_generation() != first_session.first_generation()
+        }) {
+            return Err(RuntimeError::InvalidSessionState(
+                "TurnOptions.session conflicts with resolved identity".into(),
+            ));
+        }
+        let session = if let Some(previous) = self.established_identity.as_ref() {
+            if !same_admission(previous, &identity) {
+                return Err(RuntimeError::InvalidSessionState(
+                    "session identity or pinned store changed".into(),
+                ));
+            }
+            self.target
+                .as_ref()
+                .and_then(|target| target.session.clone())
+                .filter(|current| current.first_generation() == first_session.first_generation())
+                .unwrap_or(first_session)
+        } else {
+            first_session
+        };
+        let mut meta = config.meta.clone();
+        meta.agent_id = Some(identity.agent_id.clone());
+        let target = TranscriptTarget::for_session(
+            identity.stores.stores().transcripts.clone(),
+            session.clone(),
+            meta,
+        );
+        if hook_target.is_some_and(|selected| !selected.same_binding(&target)) {
+            return Err(RuntimeError::InvalidSessionState(
+                "before_resume target conflicts with resolved identity".into(),
+            ));
+        }
+        self.target = Some(target);
+        let mut identity = identity;
+        identity.session = session;
+        self.established_identity = Some(identity.clone());
+        self.identity = Some(identity);
+        Ok(())
+    }
+
     /// Loads the selected durable transcript, retaining its lossless raw rows
     /// as the base for the next append-only delta.
     pub async fn resume(
@@ -552,6 +628,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         options: &mut TurnOptions<C>,
         terminal_guard: &mut TerminalGuard<C>,
     ) -> Result<SessionTurnOutcome, RuntimeError> {
+        let original_input = request.input.clone();
         if options.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
@@ -562,7 +639,9 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .before_resume(request, options, self.state_view(false)),
         )
         .await?;
+        let hook_target = resume_preparation.transcript.clone();
         self.apply_resume_preparation(resume_preparation)?;
+        self.resolve_and_bind(options, hook_target.as_ref())?;
         // Resume preparation may install a lazy target or change the selected
         // session, so choose the shared locks only after applying it. The lock
         // still covers the complete resume read and subsequent write.
@@ -571,7 +650,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let resumed = if options.resume == ResumeMode::Never {
             false
         } else {
-            self.resume(options).await?.loaded
+            self.resume_admitted(options).await?.loaded
         };
         // `resume` is synchronous after its read, so this explicit boundary
         // makes cancellation between loading and before-turn preparation
@@ -890,6 +969,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             transcript_target: self.target.as_ref(),
             committed_turns: self.committed_turns,
             resumed,
+            identity: self.established_identity.as_ref(),
         }
     }
 
