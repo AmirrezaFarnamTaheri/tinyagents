@@ -258,7 +258,7 @@ async fn assert_retained_metadata(factory: bool) {
         assert!(tool.supports_markdown());
     };
     assert_metadata(&tool);
-    let long_prompt = format!("{}", "x".repeat(70));
+    let long_prompt = "x".repeat(70);
     tool.execute(json!({"prompt":long_prompt})).await.unwrap();
     assert_metadata(&tool);
     let filed = filer.0.lock().unwrap();
