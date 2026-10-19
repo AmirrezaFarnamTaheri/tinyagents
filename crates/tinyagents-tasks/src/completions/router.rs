@@ -335,7 +335,7 @@ impl CompletionRouter {
         let mut released = 0;
         for receipt in receipts {
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?;
-            state.store.resolve_claim(
+            let resolved = state.store.resolve_claim(
                 &receipt.task_id,
                 &receipt.parent_key,
                 receipt.parent_epoch,
@@ -343,9 +343,13 @@ impl CompletionRouter {
                 &receipt.token,
                 ClaimResolution::Release,
             )?;
-            state.leased.remove(&receipt.task_id);
-            state.active_receipts.remove(&receipt.task_id);
-            released += 1;
+            if state.active_receipts.get(&receipt.task_id) == Some(&receipt) {
+                state.leased.remove(&receipt.task_id);
+                state.active_receipts.remove(&receipt.task_id);
+            }
+            if resolved.is_some() {
+                released += 1;
+            }
         }
         Ok(released)
     }
@@ -635,7 +639,7 @@ impl CompletionRouter {
         Self::set_parent_marker(&state, parent_key, marker_state, gate.claim())?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
-        for mut record in state.store.list(Some(parent_key)) {
+        for mut record in state.store.try_list(Some(parent_key))? {
             if record.state == CompletionState::Pending {
                 record.state = CompletionState::Tombstoned;
                 record.updated_at = SystemTime::now();
