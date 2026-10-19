@@ -198,6 +198,10 @@ impl ParentGateGuard {
     fn claim(&self) -> &ParentGateClaim {
         &self.claim
     }
+
+    pub(super) fn local_guard(&self) -> &ParentLifecycleGuard {
+        &self._local
+    }
 }
 
 impl Drop for ParentGateGuard {
@@ -241,6 +245,31 @@ impl CompletionRouter {
 
     pub(super) fn parent_lifecycle_handle(&self) -> Result<Arc<ParentLifecycle>> {
         Ok(Arc::clone(&self.lock()?.lifecycle))
+    }
+
+    pub(super) fn parent_lifecycle_status(
+        store: &Arc<dyn CompletionStore>,
+        lifecycle: &Arc<ParentLifecycle>,
+        gate: &ParentLifecycleGuard,
+    ) -> Result<Option<ParentLifecycleStatus>> {
+        let parent_key = gate.parent_key();
+        let marker = store.try_get(&Self::parent_marker_id(parent_key))?;
+        let marker_status = marker.map(|marker| match marker.state {
+            CompletionState::Delivered => ParentLifecycleStatus::Open(marker.parent_epoch),
+            CompletionState::ParentDeleted => ParentLifecycleStatus::Deleted(marker.parent_epoch),
+            _ => ParentLifecycleStatus::Stopped(marker.parent_epoch),
+        });
+
+        if store.is_process_local() {
+            if let Some(status) = lifecycle.status(parent_key)? {
+                return Ok(Some(status));
+            }
+        }
+        if let Some(status) = marker_status {
+            lifecycle.set_status(gate, status)?;
+            return Ok(Some(status));
+        }
+        lifecycle.status(parent_key)
     }
 
     pub(super) fn admission_store_handle(&self) -> Arc<Mutex<AdmissionStoreSlot>> {
@@ -545,7 +574,7 @@ impl CompletionRouter {
             let marker_id = Self::parent_marker_id(&record.parent_key);
             let marker_before = state.store.try_get(&marker_id)?;
             let Some(parent_epoch) =
-                Self::admit_child_locked(&state, &record.parent_key, gate.claim())?
+                Self::admit_child_locked(&state, &record.parent_key, &gate)?
             else {
                 tracing::debug!(
                     task_id = %record.task_id,
@@ -769,17 +798,20 @@ impl CompletionRouter {
     fn close_parent(&self, parent_key: &str, marker_state: CompletionState) -> Result<usize> {
         let mut state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-        let marker_id = Self::parent_marker_id(parent_key);
+        let current = Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?;
         if marker_state != CompletionState::ParentDeleted
-            && state
-                .store
-                .try_get(&marker_id)?
-                .is_some_and(|marker| marker.state == CompletionState::ParentDeleted)
+            && matches!(current, Some(ParentLifecycleStatus::Deleted(_)))
         {
             state.parents.remove(parent_key);
             return Ok(0);
         }
-        Self::set_parent_marker(&state, parent_key, marker_state, gate.claim())?;
+        if marker_state == CompletionState::ParentDeleted
+            && matches!(current, Some(ParentLifecycleStatus::Deleted(_)))
+        {
+            state.parents.remove(parent_key);
+            return Ok(0);
+        }
+        Self::set_parent_marker(&state, parent_key, marker_state, &gate)?;
         state.parents.remove(parent_key);
         let mut withdrawn = 0;
         for mut record in state.store.try_list(Some(parent_key))? {
@@ -801,19 +833,18 @@ impl CompletionRouter {
     pub fn resume_parent(&self, parent_key: &str) {
         let result = self.lock().and_then(|state| {
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-            let marker_id = Self::parent_marker_id(parent_key);
-            match state.store.try_get(&marker_id)? {
-                Some(marker) if marker.state == CompletionState::Delivered => Ok(()),
-                Some(marker) if marker.state == CompletionState::ParentDeleted => {
+            match Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())? {
+                Some(ParentLifecycleStatus::Open(_)) => Ok(()),
+                Some(ParentLifecycleStatus::Deleted(_)) => {
                     Err(TinyAgentsError::Graph(format!(
                         "completion router: deleted parent {parent_key:?} cannot be resumed"
                     )))
                 }
-                _ => Self::set_parent_marker(
+                Some(ParentLifecycleStatus::Stopped(_)) | None => Self::set_parent_marker(
                     &state,
                     parent_key,
                     CompletionState::Delivered,
-                    gate.claim(),
+                    &gate,
                 ),
             }
         });

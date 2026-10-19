@@ -118,6 +118,12 @@ pub(super) struct ParentLifecycleGuard {
     parent_key: String,
 }
 
+impl ParentLifecycleGuard {
+    pub(super) fn parent_key(&self) -> &str {
+        &self.parent_key
+    }
+}
+
 impl Drop for ParentLifecycleGuard {
     fn drop(&mut self) {
         let Ok(mut entries) = self.lifecycle.entries.lock() else {

@@ -68,6 +68,13 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
     assert_eq!(retained.status, SubAgentJobStatus::Cancelled);
     assert_eq!(retained.output, None);
+    jobs.mark_driver_result(&id, Err("late failure".into()));
+    let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
+    assert_eq!(retained.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(
+        retained.error,
+        Some(TinyAgentsError::Cancelled.to_string())
+    );
 }
 
 #[tokio::test]

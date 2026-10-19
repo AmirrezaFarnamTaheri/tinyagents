@@ -521,21 +521,8 @@ impl SubAgentJobRegistry {
         let id = self
             .driver_job_for_key(key, &owner)
             .ok_or_else(|| SubAgentJobError::NotFound(key.task_id.clone()))?;
-        self.cancel_owned(id.as_str(), owner)?;
-        let controls = self.controls();
-        let control = controls
-            .get(&id)
-            .ok_or_else(|| SubAgentJobError::NotFound(id.as_str().to_owned()))?;
-        if !control.status.borrow().status.is_terminal() {
-            let task_id = TaskId::new(id.as_str());
-            let _ = self.tasks.release_cancellation_trusted(&task_id);
-            control.status.send_modify(|job| {
-                job.status = SubAgentJobStatus::Cancelled;
-                job.error = Some(TinyAgentsError::Cancelled.to_string());
-            });
-            self.steering.deregister(&task_id);
-        }
-        Ok(control.status.borrow().clone())
+        self.cancel_owned_with_change(id.as_str(), owner, true)
+            .map(|(job, _)| job)
     }
 
     /// Points the job link at the attempt that is now running.
@@ -600,7 +587,7 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
-        self.cancel_owned_with_change(job_id, owner)
+        self.cancel_owned_with_change(job_id, owner, false)
             .map(|(job, _)| job)
     }
 
@@ -608,6 +595,7 @@ impl SubAgentJobRegistry {
         &self,
         job_id: &str,
         owner: impl ToString,
+        tombstone: bool,
     ) -> Result<(SubAgentJob, bool), SubAgentJobError> {
         let id = SubAgentJobId(job_id.to_owned());
         let mut controls = self.controls();
@@ -615,6 +603,16 @@ impl SubAgentJobRegistry {
             .get_mut(&id)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
         if control.cancellation_requested {
+            if tombstone && !control.status.borrow().status.is_terminal() {
+                let task_id = TaskId::new(job_id);
+                let _ = self.tasks.release_cancellation_trusted(&task_id);
+                control.status.send_modify(|job| {
+                    job.status = SubAgentJobStatus::Cancelled;
+                    job.error = Some(TinyAgentsError::Cancelled.to_string());
+                });
+                self.steering.deregister(&task_id);
+                return Ok((control.status.borrow().clone(), true));
+            }
             return Ok((control.status.borrow().clone(), false));
         }
         let task_id = TaskId::new(job_id);
@@ -633,7 +631,7 @@ impl SubAgentJobRegistry {
         };
         tracing::debug!("{LOG_PREFIX} cancel_owned job_id={job_id}");
         control.cancellation_requested = true;
-        if control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
+        if tombstone || control.status.borrow().status == SubAgentJobStatus::AwaitingInput {
             let _ = self.tasks.release_cancellation_trusted(&task_id);
             control.status.send_modify(|job| {
                 job.status = SubAgentJobStatus::Cancelled;
@@ -688,7 +686,7 @@ impl SubAgentJobRegistry {
             if !matches(&snapshot.metadata) {
                 continue;
             }
-            match self.cancel_owned_with_change(id.as_str(), snapshot.owner_id) {
+            match self.cancel_owned_with_change(id.as_str(), snapshot.owner_id, false) {
                 Ok((_, changed)) => requested += usize::from(changed),
                 Err(SubAgentJobError::Terminal { .. } | SubAgentJobError::NotFound(_)) => {}
                 Err(error) => return Err(error),
