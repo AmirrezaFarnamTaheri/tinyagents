@@ -3,6 +3,10 @@
 
 use std::path::PathBuf;
 
+#[cfg(test)]
+#[path = "adoption_tests.rs"]
+mod tests;
+
 /// What adoption did for one session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionAdoption {
