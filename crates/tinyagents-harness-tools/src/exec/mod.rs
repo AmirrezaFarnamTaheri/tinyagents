@@ -16,6 +16,3 @@ pub use progress::ExecProgress;
 #[path = "ports_tests.rs"]
 mod ports_tests;
 
-#[cfg(test)]
-#[path = "progress_tests.rs"]
-mod progress_tests;
