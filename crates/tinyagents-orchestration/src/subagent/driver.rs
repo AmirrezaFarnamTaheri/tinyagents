@@ -285,7 +285,11 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         // A preceding caller may have committed a terminal result between the
         // initial cache check and this reservation. Do not reopen that task
         // after its in-flight entry has been removed.
-        if let Some(outcome) = self.terminal_outcomes.lock().await.get(&task_key).cloned() {
+        if let Some(outcome) = await_with_turn_fence(turn_fence.as_ref(), None, async {
+            Ok(self.terminal_outcomes.lock().await.get(&task_key).cloned())
+        })
+        .await?
+        {
             reservation.finish(Ok(SubagentRunResult::new(
                 outcome.clone(),
                 SubagentPersistenceDisposition::TerminalExisting,
