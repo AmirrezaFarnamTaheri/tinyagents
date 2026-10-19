@@ -830,3 +830,84 @@ async fn generic_child_driver_cancels_dispatch_and_skips_persistence_when_turn_f
         "a stale turn must not persist a terminal outcome after losing its fence"
     );
 }
+
+struct HeldArtifactStore {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl ArtifactStore for HeldArtifactStore {
+    async fn store(&self, _: &str, _: &str) -> Result<ArtifactReference, String> {
+        self.started.notify_one();
+        self.release.notified().await;
+        Ok(ArtifactReference {
+            id: "stored-artifact".into(),
+            ..ArtifactReference::default()
+        })
+    }
+}
+
+struct ArtifactPlanner(Arc<HeldArtifactStore>);
+
+#[async_trait]
+impl SubagentPlanner<String> for ArtifactPlanner {
+    async fn prepare(
+        &self,
+        request: SubagentRequest<String>,
+    ) -> Result<PreparedSubagent<String>, SubagentError> {
+        let parts = request.into_parts();
+        Ok(PreparedSubagent::new(
+            parts.task_key.task_id,
+            "worker",
+            vec![Message::user(parts.input)],
+            ToolSnapshot::new(vec![]).unwrap(),
+            parts.run_context,
+        )
+        .with_notify_mode(NotifyMode::Always)
+        .with_completion_parent("parent-a")
+        .with_result_policy(
+            ResultPolicy::new()
+                .with_max_bytes(1)
+                .with_overflow(ResultOverflow::Artifact)
+                .with_artifact_store(self.0.clone()),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn losing_turn_fence_during_artifact_storage_skips_terminal_and_completion_writes() {
+    let fence = Arc::new(RevocableTurnFence::new());
+    let artifacts = Arc::new(HeldArtifactStore {
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let persistence = Arc::new(Memory::default());
+    let router = router();
+    let driver = SubagentDriver::new(SubagentCapabilities {
+        planner: Some(Arc::new(ArtifactPlanner(artifacts.clone()))),
+        executor: Some(Arc::new(Executor(Arc::new(|task| {
+            Ok(SubagentOutcome::completed(task, "oversized child output"))
+        })))),
+        persistence: Some(persistence.clone()),
+    })
+    .unwrap()
+    .with_completion_router(router.clone());
+    let request = request_in_scope("parent-a", "root-a", "thread-a")
+        .with_turn_fence(fence.clone());
+    let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
+    artifacts.started.notified().await;
+
+    fence.revoke();
+    artifacts.release.notify_one();
+
+    assert!(matches!(turn.await.unwrap(), Err(SubagentError::Cancelled)));
+    assert!(
+        persistence.terminals.lock().unwrap().is_empty(),
+        "a result policy await after executor completion must not reopen terminal persistence"
+    );
+    assert!(
+        router.pending_for("parent-a").is_empty(),
+        "lease loss must not dispatch a completion"
+    );
+}
