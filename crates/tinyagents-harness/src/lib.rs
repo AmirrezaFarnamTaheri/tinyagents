@@ -86,6 +86,7 @@ pub mod model_registry;
 #[cfg(feature = "multimodal")]
 pub mod multimodal;
 pub mod no_progress;
+pub mod oneshot;
 pub mod observability;
 pub mod prompt;
 pub mod providers;
