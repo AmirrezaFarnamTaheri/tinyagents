@@ -16,6 +16,7 @@ use super::{SubagentError, SubagentTaskKey};
 
 const COLLECTION: &str = "subagent_sessions";
 const CAS_ATTEMPTS: usize = 32;
+type SessionCloseCallback = dyn Fn(&str, &str, &SubagentTaskKey) + Send + Sync;
 
 fn session_id_for_selector(selector: &SubagentSessionSelector) -> String {
     let encoded =
@@ -364,7 +365,7 @@ pub struct ScopedSubagentSessionStore<S> {
     inner: Arc<S>,
     parent_session: String,
     parent_thread_id: Option<String>,
-    close_callback: Option<Arc<dyn Fn(&str, &str, &SubagentTaskKey) + Send + Sync>>,
+    close_callback: Option<Arc<SessionCloseCallback>>,
 }
 
 impl<S> ScopedSubagentSessionStore<S> {
