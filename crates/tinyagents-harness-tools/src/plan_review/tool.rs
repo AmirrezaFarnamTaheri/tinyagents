@@ -70,15 +70,26 @@ impl Tool for RequestPlanReviewTool {
             })
             .unwrap_or_default();
         let Some(()) = port.interactive_surface(context) else {
-            return Ok(ToolResult::success("approved: non-interactive turn (no review surface) — proceed with the plan."));
+            return Ok(ToolResult::success(
+                "approved: non-interactive turn (no review surface) — proceed with the plan.",
+            ));
         };
         let thread_id = port.thread_id(context);
         if port.run_mode(context, thread_id.as_deref()) != RunMode::Plan {
-            return Ok(ToolResult::success("not applicable: this thread is not in plan mode, so there is no plan to review. Do not call `request_plan_review` again this turn."));
+            return Ok(ToolResult::success(
+                "not applicable: this thread is not in plan mode, so there is no plan to review. Do not call `request_plan_review` again this turn.",
+            ));
         }
         let tool_call_id = port.tool_call_id(context);
         let resolution = match port
-            .request_review(PlanReviewRequest { summary, steps, tool_call_id }, context)
+            .request_review(
+                PlanReviewRequest {
+                    summary,
+                    steps,
+                    tool_call_id,
+                },
+                context,
+            )
             .await
         {
             Ok(value) => value,

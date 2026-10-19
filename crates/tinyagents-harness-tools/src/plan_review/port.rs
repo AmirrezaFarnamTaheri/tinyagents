@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use tinytools::ToolRunContext;
 use tinyagents_harness::middleware::library::RunMode;
+use tinytools::ToolRunContext;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanReviewRequest {
@@ -21,10 +21,18 @@ pub enum PlanReviewResolution {
 #[async_trait]
 pub trait PlanReviewHost: Send + Sync {
     /// `None` selects the established non-interactive auto-approval path.
-    fn interactive_surface(&self, _context: Option<&dyn ToolRunContext>) -> Option<()> { Some(()) }
-    fn thread_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> { None }
-    fn run_mode(&self, _context: Option<&dyn ToolRunContext>, _thread_id: Option<&str>) -> RunMode { RunMode::Plan }
-    fn tool_call_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> { None }
+    fn interactive_surface(&self, _context: Option<&dyn ToolRunContext>) -> Option<()> {
+        Some(())
+    }
+    fn thread_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> {
+        None
+    }
+    fn run_mode(&self, _context: Option<&dyn ToolRunContext>, _thread_id: Option<&str>) -> RunMode {
+        RunMode::Plan
+    }
+    fn tool_call_id(&self, _context: Option<&dyn ToolRunContext>) -> Option<String> {
+        None
+    }
     async fn request_review(
         &self,
         request: PlanReviewRequest,

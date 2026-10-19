@@ -1,20 +1,51 @@
 use super::*;
-use std::{sync::Arc, time::Duration};
 use crate::plan_review::PlanReviewRequest;
 use std::sync::Mutex as StdMutex;
+use std::{sync::Arc, time::Duration};
 
-#[derive(Default)] struct Events(StdMutex<Vec<(String, PlanReviewReason)>>);
+#[derive(Default)]
+struct Events(StdMutex<Vec<(String, PlanReviewReason)>>);
 impl PlanReviewNotifier<u8> for Events {
     fn requested(&self, _: &ParkedReview<u8>) {}
-    fn decided(&self, review: &ParkedReview<u8>, _: &PlanReviewResolution, reason: PlanReviewReason) { self.0.lock().unwrap().push((review.request_id.clone(), reason)); }
+    fn decided(
+        &self,
+        review: &ParkedReview<u8>,
+        _: &PlanReviewResolution,
+        reason: PlanReviewReason,
+    ) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((review.request_id.clone(), reason));
+    }
 }
 fn store(ttl: Duration) -> (Arc<PlanReviewStore<u8>>, Arc<Events>) {
     let events = Arc::new(Events::default());
-    (Arc::new(PlanReviewStore::with_ttl(ttl, events.clone())), events)
+    (
+        Arc::new(PlanReviewStore::with_ttl(ttl, events.clone())),
+        events,
+    )
 }
-fn request(store: Arc<PlanReviewStore<u8>>, scope: u8, thread: &str) -> tokio::task::JoinHandle<PlanReviewResolution> {
+fn request(
+    store: Arc<PlanReviewStore<u8>>,
+    scope: u8,
+    thread: &str,
+) -> tokio::task::JoinHandle<PlanReviewResolution> {
     let thread = thread.to_owned();
-    tokio::spawn(async move { store.request_review(scope, thread, None, PlanReviewRequest { summary: "plan".into(), steps: vec!["one".into()], tool_call_id: None }).await })
+    tokio::spawn(async move {
+        store
+            .request_review(
+                scope,
+                thread,
+                None,
+                PlanReviewRequest {
+                    summary: "plan".into(),
+                    steps: vec!["one".into()],
+                    tool_call_id: None,
+                },
+            )
+            .await
+    })
 }
 
 #[tokio::test(start_paused = true)]
@@ -43,7 +74,9 @@ async fn revise_returns_feedback_to_the_parked_turn() {
     let (store, _) = store(Duration::from_secs(60));
     let task = request(store.clone(), 1, "revise");
     tokio::task::yield_now().await;
-    let resolution = PlanReviewResolution::Revise { feedback: "add tests".into() };
+    let resolution = PlanReviewResolution::Revise {
+        feedback: "add tests".into(),
+    };
     assert!(store.decide_by_thread(&1, "revise", resolution.clone()));
     assert_eq!(task.await.unwrap(), resolution);
 }
@@ -59,7 +92,20 @@ fn unknown_request_cannot_be_decided() {
 async fn parked_snapshot_replays_routing_call_id_and_expiry() {
     let (store, _) = store(Duration::from_secs(60));
     let parked_store = store.clone();
-    let task = tokio::spawn(async move { parked_store.request_review(1, "replay".into(), Some("client".into()), PlanReviewRequest { summary: "plan".into(), steps: vec!["step".into()], tool_call_id: Some("call".into()) }).await });
+    let task = tokio::spawn(async move {
+        parked_store
+            .request_review(
+                1,
+                "replay".into(),
+                Some("client".into()),
+                PlanReviewRequest {
+                    summary: "plan".into(),
+                    steps: vec!["step".into()],
+                    tool_call_id: Some("call".into()),
+                },
+            )
+            .await
+    });
     tokio::task::yield_now().await;
     let snapshot = store.parked_review_for_thread(&1, "replay").unwrap();
     assert_eq!(snapshot.client_id.as_deref(), Some("client"));
@@ -102,9 +148,11 @@ async fn dropped_sender_is_cancelled_not_expired() {
 #[tokio::test]
 async fn decisions_are_scope_isolated_and_newest_review_is_replayed() {
     let (store, _) = store(Duration::from_secs(60));
-    let one = request(store.clone(), 1, "same"); tokio::task::yield_now().await;
+    let one = request(store.clone(), 1, "same");
+    tokio::task::yield_now().await;
     let old = store.parked_review_for_thread(&1, "same").unwrap();
-    let two = request(store.clone(), 1, "same"); tokio::task::yield_now().await;
+    let two = request(store.clone(), 1, "same");
+    tokio::task::yield_now().await;
     let newest = store.parked_review_for_thread(&1, "same").unwrap();
     assert_ne!(old.request_id, newest.request_id);
     assert!(store.parked_review_for_thread(&2, "same").is_none());

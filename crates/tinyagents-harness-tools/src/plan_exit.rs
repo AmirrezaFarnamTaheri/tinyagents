@@ -2,12 +2,11 @@
 
 use std::{hash::Hash, sync::Arc};
 
+use crate::{plan_review::PlanReviewStore, run_mode::RunModeStore};
 use async_trait::async_trait;
 use serde_json::json;
-use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
-use crate::{plan_review::PlanReviewStore, run_mode::RunModeStore};
 use tinyagents_harness::middleware::library::RunMode;
-
+use tinytools::{PermissionLevel, Tool, ToolCallOptions, ToolResult, ToolRunContext};
 
 /// Stable marker emitted for a plan-to-build handoff.
 pub const PLAN_EXIT_MARKER: &str = "[plan_exit]";
@@ -34,8 +33,16 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> PlanExitTool<S> {
 
     /// Creates a tool whose parked-review check and mode transition are
     /// delegated to the host's generic stores.
-    pub fn new(host: Arc<dyn PlanExitHost<Scope = S>>, run_modes: Arc<dyn RunModeStore<S>>, reviews: Option<Arc<PlanReviewStore<S>>>) -> Self {
-        Self { host, run_modes, reviews }
+    pub fn new(
+        host: Arc<dyn PlanExitHost<Scope = S>>,
+        run_modes: Arc<dyn RunModeStore<S>>,
+        reviews: Option<Arc<PlanReviewStore<S>>>,
+    ) -> Self {
+        Self {
+            host,
+            run_modes,
+            reviews,
+        }
     }
 }
 
@@ -85,8 +92,14 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> Tool for PlanExitTool<S> {
 
         if let Some(context) = context {
             let (scope, thread_id) = self.host.scope_and_thread(context);
-            if self.reviews.as_ref().is_some_and(|reviews| reviews.has_parked_review(&scope, &thread_id)) {
-                return Ok(ToolResult::error("A plan review is still pending for this thread"));
+            if self
+                .reviews
+                .as_ref()
+                .is_some_and(|reviews| reviews.has_parked_review(&scope, &thread_id))
+            {
+                return Ok(ToolResult::error(
+                    "A plan review is still pending for this thread",
+                ));
             }
             self.run_modes.set_mode(&scope, &thread_id, RunMode::Build);
         }

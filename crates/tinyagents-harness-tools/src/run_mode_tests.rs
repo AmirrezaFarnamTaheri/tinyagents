@@ -1,8 +1,16 @@
 use super::*;
 use std::sync::Mutex as StdMutex;
 
-#[derive(Default)] struct Events(StdMutex<Vec<(u8, String, RunMode)>>);
-impl ModeChangeNotifier<u8> for Events { fn changed(&self, scope: &u8, thread: &str, mode: RunMode) { self.0.lock().unwrap().push((*scope, thread.to_owned(), mode)); } }
+#[derive(Default)]
+struct Events(StdMutex<Vec<(u8, String, RunMode)>>);
+impl ModeChangeNotifier<u8> for Events {
+    fn changed(&self, scope: &u8, thread: &str, mode: RunMode) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((*scope, thread.to_owned(), mode));
+    }
+}
 
 #[test]
 fn modes_are_scoped_reused_and_notified() {
@@ -14,7 +22,10 @@ fn modes_are_scoped_reused_and_notified() {
     store.set_mode(&1, "same", RunMode::Plan);
     assert_eq!(second.get(), RunMode::Plan);
     assert_eq!(store.get_mode(&2, "same"), RunMode::Build);
-    assert_eq!(*events.0.lock().unwrap(), vec![(1, "same".into(), RunMode::Plan)]);
+    assert_eq!(
+        *events.0.lock().unwrap(),
+        vec![(1, "same".into(), RunMode::Plan)]
+    );
 }
 
 #[test]

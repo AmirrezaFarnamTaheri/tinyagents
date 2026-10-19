@@ -729,5 +729,15 @@ pub fn plan_mode_middleware(
 /// Product-level tool names commonly required for plan-mode control.
 /// Hosts may extend this list for their own safe planning tools.
 pub const fn plan_mode_allowlist() -> &'static [&'static str] {
-    &["plan_exit", "request_plan_review", "todo", "goal_get", "goal_set", "goal_complete", "goal_pause", "goal_resume", "goal_clear"]
+    &[
+        "plan_exit",
+        "request_plan_review",
+        "todo",
+        "goal_get",
+        "goal_set",
+        "goal_complete",
+        "goal_pause",
+        "goal_resume",
+        "goal_clear",
+    ]
 }

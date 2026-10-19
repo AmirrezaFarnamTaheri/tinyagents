@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::Mutex;
-use tinytools::{Tool, ToolRunContext};
 use tinyagents_harness::middleware::library::RunMode;
+use tinytools::{Tool, ToolRunContext};
 
 struct Port {
     resolution: PlanReviewResolution,
@@ -15,13 +15,29 @@ struct NonInteractive;
 struct BuildMode;
 #[async_trait]
 impl PlanReviewHost for NonInteractive {
-    fn interactive_surface(&self, _: Option<&dyn ToolRunContext>) -> Option<()> { None }
-    async fn request_review(&self, _: PlanReviewRequest, _: Option<&dyn ToolRunContext>) -> Result<PlanReviewResolution, String> { panic!("non-interactive requests are auto-approved before parking") }
+    fn interactive_surface(&self, _: Option<&dyn ToolRunContext>) -> Option<()> {
+        None
+    }
+    async fn request_review(
+        &self,
+        _: PlanReviewRequest,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Result<PlanReviewResolution, String> {
+        panic!("non-interactive requests are auto-approved before parking")
+    }
 }
 #[async_trait]
 impl PlanReviewHost for BuildMode {
-    fn run_mode(&self, _: Option<&dyn ToolRunContext>, _: Option<&str>) -> RunMode { RunMode::Build }
-    async fn request_review(&self, _: PlanReviewRequest, _: Option<&dyn ToolRunContext>) -> Result<PlanReviewResolution, String> { panic!("non-plan requests are not parked") }
+    fn run_mode(&self, _: Option<&dyn ToolRunContext>, _: Option<&str>) -> RunMode {
+        RunMode::Build
+    }
+    async fn request_review(
+        &self,
+        _: PlanReviewRequest,
+        _: Option<&dyn ToolRunContext>,
+    ) -> Result<PlanReviewResolution, String> {
+        panic!("non-plan requests are not parked")
+    }
 }
 #[async_trait]
 impl PlanReviewHost for FailingPort {
@@ -35,7 +51,9 @@ impl PlanReviewHost for FailingPort {
 }
 #[async_trait]
 impl PlanReviewHost for Port {
-    fn tool_call_id(&self, _: Option<&dyn ToolRunContext>) -> Option<String> { Some("call-1".into()) }
+    fn tool_call_id(&self, _: Option<&dyn ToolRunContext>) -> Option<String> {
+        Some("call-1".into())
+    }
     async fn request_review(
         &self,
         request: PlanReviewRequest,
@@ -59,14 +77,21 @@ async fn missing_port_fails_closed() {
 #[tokio::test]
 async fn missing_interactive_surface_auto_approves() {
     let result = RequestPlanReviewTool::new(Some(Arc::new(NonInteractive)))
-        .execute(json!({"summary":"plan"})).await.unwrap();
-    assert_eq!(result.text(), "approved: non-interactive turn (no review surface) — proceed with the plan.");
+        .execute(json!({"summary":"plan"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        result.text(),
+        "approved: non-interactive turn (no review surface) — proceed with the plan."
+    );
 }
 
 #[tokio::test]
 async fn build_mode_returns_not_applicable_without_parking() {
     let result = RequestPlanReviewTool::new(Some(Arc::new(BuildMode)))
-        .execute(json!({"summary":"plan"})).await.unwrap();
+        .execute(json!({"summary":"plan"}))
+        .await
+        .unwrap();
     assert!(result.text().starts_with("not applicable:"));
 }
 

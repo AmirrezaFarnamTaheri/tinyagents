@@ -6,8 +6,8 @@ pub use port::{PlanReviewHost, PlanReviewPort, PlanReviewRequest, PlanReviewReso
 pub use store::{ParkedReview, PlanReviewNotifier, PlanReviewReason, PlanReviewStore};
 pub use tool::RequestPlanReviewTool;
 #[cfg(test)]
-#[path = "tool_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
+#[cfg(test)]
+#[path = "tool_tests.rs"]
+mod tests;
