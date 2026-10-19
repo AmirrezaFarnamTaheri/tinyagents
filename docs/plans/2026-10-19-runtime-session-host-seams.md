@@ -58,8 +58,8 @@ using the existing `SessionRef::scoped` or `SessionRef::child_of`, then use
 their rows into that canonical identity. Adoption is one-time and read-only
 with respect to the old files. `TranscriptTarget::for_session` and
 `SessionBuilder::session` already derive `session_id` and `parent_session_id`;
-only add a `TranscriptMeta` constructor if it removes a real duplicate without
-changing the wire schema.
+do not add a raw legacy-stem identity constructor or a duplicate identity
+builder.
 
 Add both replay helpers to the exact existing module
 `crates/tinyagents-session/src/transcript/adoption.rs` and export them from
@@ -568,7 +568,11 @@ reading the appended row inside the sink, and a cancellation test that drops
 the caller future after durable commit but still observes sink completion.
 Add a failure test proving pre-commit failure never invokes the sink and a
 sink-error test proving it cannot change the successful result. Each test
-must fail before the corresponding API/code exists. Extend `DriverOutcome`
+must fail before the corresponding API/code exists. `DriverOutcome` derives
+`PartialEq`, so add `PartialEq` to `ToolCallOutcome`'s existing `Debug, Clone`
+derive and preserve the `DriverOutcome` derive and its existing assertions.
+Add a value test comparing call id, name, structured arguments, success,
+content, and duration. Extend `DriverOutcome`
 with `Vec<ToolCallOutcome>` defaulted empty; have `TurnDriver` build a shared
 `ToolOutcomeSink`, install `ToolOutcomeCaptureMiddleware` into its per-turn
 middleware chain, drain it into the outcome, and keep custom drivers' empty
@@ -655,10 +659,6 @@ Do not set `CARGO_TARGET_DIR`.
 
 ## Risks to resolve during implementation
 
-* A legacy stem can be lossy if it is parsed without the original key/agent
-  inputs. The builder must accept those inputs and use the old stem only to
-  represent parent lineage; it must not pretend arbitrary old strings are
-  reversible.
 * Lease wrappers must snapshot both backend and tenant scope atomically.
   Capturing a backend while deriving scope later would permit cross-tenant
   reads after actor context changes.
