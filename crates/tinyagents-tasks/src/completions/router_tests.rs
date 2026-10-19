@@ -1358,9 +1358,10 @@ fn parent_cancellation_propagates_pending_enumeration_failure() {
 }
 
 struct BlockingTryList {
-    inner: InMemoryCompletionStore,
+    inner: Arc<InMemoryCompletionStore>,
     entered: Arc<std::sync::Barrier>,
     resume: Arc<std::sync::Barrier>,
+    pause_list: std::sync::atomic::AtomicBool,
     gate_wait: Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>,
 }
 
@@ -1419,9 +1420,12 @@ impl CompletionStore for BlockingTryList {
         &self,
         parent_key: Option<&str>,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.entered.wait();
-        self.resume.wait();
-        Ok(self.inner.list(parent_key))
+        let records = self.inner.list(parent_key);
+        if self.pause_list.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            self.entered.wait();
+            self.resume.wait();
+        }
+        Ok(records)
     }
 }
 
@@ -1521,9 +1525,10 @@ fn a_source_enumeration_error_does_not_replace_the_store() {
 #[test]
 fn a_record_racing_store_migration_is_not_lost() {
     let source = Arc::new(BlockingTryList {
-        inner: InMemoryCompletionStore::new(),
+        inner: Arc::new(InMemoryCompletionStore::new()),
         entered: Arc::new(std::sync::Barrier::new(2)),
         resume: Arc::new(std::sync::Barrier::new(2)),
+        pause_list: std::sync::atomic::AtomicBool::new(true),
         gate_wait: Arc::new(Mutex::new(None)),
     });
     let source_port: Arc<dyn CompletionStore> = source.clone();
