@@ -1408,8 +1408,8 @@ Add a paired `prepared_run_exposes_the_same_rewritten_tool_outcome` test that
 uses the same scripted tool/model setup but calls `prepared.run().await`; assert
 the same three fields on `TurnRun.report.tool_outcomes`. Put a
 `RewriteResult` middleware after capture in the planner's `TurnPlan.context`
-and assert both public drive paths observe the rewritten text
-`host-enriched final text`. The capture is registered first/outermost; the
+and assert both public drive paths observe the rewritten text `[capped]`. The
+capture is registered first/outermost; the
 harness runs `after_tool` in reverse order, so capture observes the result
 after each planner rewriter. Then add a recording
 sink test that reads the appended transcript row inside the callback, a
@@ -1431,6 +1431,68 @@ in that task and in its current position. The `TurnSummary` adapter consumes
 outcomes and must not persist the raw argument/result. Verify with
 `cargo test -p tinyagents-runtime post_commit` and then
 `cargo test -p tinyagents-runtime`.
+
+In `a_split_turn_is_driven_by_the_host_and_settled_by_its_tail`, add this
+planner context middleware after its tool builder setup:
+
+```rust
+plan.context.push(Arc::new(Trace {
+    name: "rewrite",
+    log: Arc::new(Mutex::new(Vec::new())),
+    rewrite_result: true,
+}));
+```
+
+After `tail.finish(Some(&run))`, assert:
+
+```rust
+assert_eq!(report.tool_outcomes.len(), 1);
+assert_eq!(report.tool_outcomes[0].name, "ask_user");
+assert_eq!(report.tool_outcomes[0].content, "[capped]");
+```
+
+Add this paired run-path test body in `turn_driver/driver_tests.rs`:
+
+```rust
+#[tokio::test]
+async fn prepared_run_exposes_the_same_rewritten_tool_outcome() {
+    let model = Arc::new(ScriptedModel::new(vec![
+        tool_call_response(call("c1", "ask_user", 1)),
+        text_response("never requested"),
+    ]));
+    let tools: Vec<Box<dyn Tool>> = vec![Box::new(FakeTool::returning("ask_user", "question"))];
+    let snapshot = snapshot_of(&tools, &["ask_user"]);
+    let set: SharedToolSet = Arc::new(tools);
+    let planner = {
+        let model = model.clone();
+        move |_: &DriverRequest<()>| {
+            let chat: Arc<dyn ChatModel<()>> = model.clone();
+            let mut plan = TurnPlan::new(vec![("scripted".to_string(), chat)]);
+            plan.tools = ToolSetBuilder::new().set(set.clone());
+            plan.context.push(Arc::new(Trace {
+                name: "rewrite",
+                log: Arc::new(Mutex::new(Vec::new())),
+                rewrite_result: true,
+            }));
+            Ok(plan)
+        }
+    };
+    let driver = TurnDriver::new(Arc::new(planner), Arc::new(()));
+    let request = DriverRequest {
+        history: vec![Message::user("go")],
+        tools: snapshot,
+        run_context: RunContext::new(
+            tinyagents_harness::context::RunConfig::new("prepared-run"), (),
+        ),
+        stream: false,
+        controls: TurnControls::default(),
+    };
+    let run = driver.prepare(request).await.unwrap().run().await;
+    assert_eq!(run.report.tool_outcomes.len(), 1);
+    assert_eq!(run.report.tool_outcomes[0].name, "ask_user");
+    assert_eq!(run.report.tool_outcomes[0].content, "[capped]");
+}
+```
 
 Capture must live in `TurnDriver::prepare`, not only `execute`: callers may
 drive `PreparedTurn::split` themselves and never call `execute`. Create the
