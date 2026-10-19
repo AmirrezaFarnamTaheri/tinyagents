@@ -12,7 +12,7 @@ use super::ModelBudget;
 /// Admission remains independent of monetary accounting. `None` preserves
 /// the existing unbounded dispatch behavior; an observer records only calls
 /// that pass the final admission check.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DispatchModelOptions {
     /// Optional existing shared monetary budget.
     pub monetary_budget: Option<ModelBudget>,
@@ -115,6 +115,12 @@ impl std::error::Error for ControlledDispatchError {
             Self::Admission(error) => Some(error),
             Self::Model(error) => Some(error),
         }
+    }
+}
+
+impl From<DispatchRefusal> for ControlledDispatchError {
+    fn from(refusal: DispatchRefusal) -> Self {
+        Self::Admission(refusal)
     }
 }
 
