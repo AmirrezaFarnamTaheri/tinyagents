@@ -7,6 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tinytools::{Tool, ToolCallOptions, ToolContent, ToolResult, ToolRunContext};
+use tinytools::{ToolAccess, ToolPolicy, ToolScope, ToolSideEffects, WorkspaceAccess};
 
 struct Inner;
 #[async_trait]
@@ -25,8 +26,11 @@ impl Tool for Inner {
     }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
         Ok(ToolResult::success_with_markdown(
-            json!({"artifacts":[{"type":"image","path":"blob:key","bytes":4}]}),
-            "saved blob:key",
+            json!({"artifacts":[
+                {"type":"image","path":"blob:key","bytes":4},
+                {"type":"video","path":"blob:second","bytes":5}
+            ]}),
+            "saved blob:key and blob:second",
         ))
     }
 }
@@ -48,10 +52,19 @@ impl ArtifactFiling for Filer {
 }
 
 struct CallIdentity(&'static str);
-struct Context(CallIdentity);
+struct Context {
+    identity: CallIdentity,
+    progress: Mutex<Vec<String>>,
+}
 impl ToolRunContext for Context {
     fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
-        Some(&self.0)
+        Some(&self.identity)
+    }
+    fn report_progress(&self, update: tinytools::ToolProgress) {
+        self.progress
+            .lock()
+            .unwrap()
+            .push(update.message.unwrap_or_default());
     }
 }
 
@@ -125,6 +138,33 @@ impl Tool for MultiInner {
                 {"type":"image","path":"blob:last","bytes":5}
             ],"other":"retained"}),
             "good blob:good; bad blob:bad; last blob:last",
+        ))
+    }
+}
+
+struct ConcurrentInner {
+    identity: &'static str,
+    progress: MediaProgressFn,
+    barrier: Arc<tokio::sync::Barrier>,
+}
+#[async_trait]
+impl Tool for ConcurrentInner {
+    fn name(&self) -> &str { "concurrent" }
+    fn description(&self) -> &str { "per-call concurrent tool" }
+    fn parameters_schema(&self) -> Value { json!({"type":"object"}) }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        (self.progress)(&MediaJobProgress {
+            id: self.identity.into(), state: format!("{}-job", self.identity),
+            outputs: 2, output_indices: vec![0, 1], cost_usd: None, error: None,
+        });
+        self.barrier.wait().await;
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        Ok(ToolResult::success_with_markdown(
+            json!({"artifacts":[
+                {"type":"image","path":format!("blob:{}-one", self.identity)},
+                {"type":"image","path":format!("blob:{}-two", self.identity)}
+            ]}),
+            format!("{}-one and {}-two", self.identity, self.identity),
         ))
     }
 }
@@ -227,17 +267,31 @@ async fn wrapper_keeps_metadata_and_files_each_artifact() {
     assert_eq!(filed[0].path, PathBuf::from("blob:key"));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_results() {
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let factory_barrier = Arc::clone(&barrier);
     let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, Arc::new(RoutingFiler))
+        .with_per_call_inner(Arc::new(move |progress, context| {
+            let identity = context
+                .and_then(|context| context.host_extension())
+                .and_then(|extension| extension.downcast_ref::<CallIdentity>())
+                .expect("factory receives each invocation context")
+                .0;
+            ConcurrentInner {
+                identity,
+                progress,
+                barrier: Arc::clone(&factory_barrier),
+            }
+        }))
         .with_tool_call_id(Arc::new(|context| {
             context
                 .and_then(|context| context.host_extension())
                 .and_then(|extension| extension.downcast_ref::<CallIdentity>())
                 .map(|identity| identity.0.to_owned())
         }));
-    let first = Context(CallIdentity("first"));
-    let second = Context(CallIdentity("second"));
+    let first = Context { identity: CallIdentity("first"), progress: Mutex::new(Vec::new()) };
+    let second = Context { identity: CallIdentity("second"), progress: Mutex::new(Vec::new()) };
     let (left, right) = tokio::join!(
         tool.execute_with_context(
             json!({"prompt":"first"}),
@@ -259,7 +313,17 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
             data["artifacts"][0]["path"],
             format!("/files/{identity}.png")
         );
+        assert_eq!(data["artifacts"][1]["artifact_id"], identity);
+        assert_eq!(data["artifacts"][1]["path"], format!("/files/{identity}.png"));
     }
+    assert_eq!(
+        *first.progress.lock().unwrap(),
+        vec!["Generating image — 15s elapsed (job first-job)"]
+    );
+    assert_eq!(
+        *second.progress.lock().unwrap(),
+        vec!["Generating image — 15s elapsed (job second-job)"]
+    );
 }
 
 #[tokio::test]
