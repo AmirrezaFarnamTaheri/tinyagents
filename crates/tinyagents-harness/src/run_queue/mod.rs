@@ -78,6 +78,12 @@ struct Queued<T> {
     admission: Option<std::sync::Arc<dyn QueueAdmission>>,
 }
 
+enum AdmissionDecision<T> {
+    Accepted(AdmittedQueueItem<T>),
+    Retry(Queued<T>),
+    Rejected,
+}
+
 impl<T> Queued<T> {
     fn admitted(value: T) -> Self {
         Self {
@@ -168,7 +174,14 @@ impl<T> RunQueue<T> {
     ) -> Vec<AdmittedQueueItem<T>> {
         if mode == QueueMode::OneAtATime {
             let mut permits = std::collections::HashMap::new();
-            let count = self.status().await.lane_count(lane);
+            let count = {
+                let inner = self.lock();
+                match lane {
+                    QueueLane::Steer => inner.steers.len(),
+                    QueueLane::Followup => inner.followups.len(),
+                    QueueLane::Collect => inner.collects.len(),
+                }
+            };
             let mut deferred = Vec::new();
             for _ in 0..count {
                 let item = {
@@ -225,7 +238,8 @@ impl<T> RunQueue<T> {
             std::sync::Arc<dyn types::QueueAdmissionPermit>,
         >,
     ) -> AdmissionDecision<T> {
-        let permit = match item.admission {
+        let Queued { value, admission } = item;
+        let permit = match admission.as_ref() {
             Some(admission) => {
                 let key = admission.batch_key();
                 if let Some(key) = key.as_ref() {
@@ -235,7 +249,7 @@ impl<T> RunQueue<T> {
                             let permit = match admission.acquire_for(Some(key)) {
                                 Ok(permit) => permit,
                                 Err(_) if admission.retry_after_rejection(Some(key)) => {
-                                    return AdmissionDecision::Retry(item);
+                                    return AdmissionDecision::Retry(Queued { value, admission });
                                 }
                                 Err(_) => return AdmissionDecision::Rejected,
                             };
@@ -247,7 +261,7 @@ impl<T> RunQueue<T> {
                     match admission.acquire_for(None) {
                         Ok(permit) => Some(permit),
                         Err(_) if admission.retry_after_rejection(None) => {
-                            return AdmissionDecision::Retry(item);
+                            return AdmissionDecision::Retry(Queued { value, admission });
                         }
                         Err(_) => return AdmissionDecision::Rejected,
                     }
@@ -255,10 +269,7 @@ impl<T> RunQueue<T> {
             }
             None => None,
         };
-        AdmissionDecision::Accepted(AdmittedQueueItem {
-            value: item.value,
-            _permit: permit,
-        })
+        AdmissionDecision::Accepted(AdmittedQueueItem { value, _permit: permit })
     }
 
     fn requeue_front_now(&self, lane: QueueLane, items: Vec<Queued<T>>) {

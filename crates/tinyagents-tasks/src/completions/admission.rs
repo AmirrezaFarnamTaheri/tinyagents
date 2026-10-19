@@ -56,12 +56,34 @@ impl CompletionAdmission {
             parent_epoch: record.parent_epoch,
         }
     }
+
+    fn key_for(&self, store: &Arc<dyn CompletionStore>) -> String {
+        let identity = store
+            .coordination_identity()
+            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(store)));
+        serde_json::to_string(&(
+            identity,
+            self.parent_key.as_str(),
+            self.parent_epoch,
+        ))
+        .expect("serializing a completion admission batch key cannot fail")
+    }
 }
 
 impl QueueAdmission for CompletionAdmission {
     fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+        self.acquire_for(self.batch_key().as_deref())
+    }
+
+    fn acquire_for(
+        &self,
+        expected_key: Option<&str>,
+    ) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         let store = CompletionRouter::admission_store_snapshot(&self.store)
             .ok_or(QueueAdmissionError)?;
+        if expected_key.is_some_and(|expected| self.key_for(&store) != expected) {
+            return Err(QueueAdmissionError);
+        }
         let permit = super::router::ParentAdmissionPermit::acquire(
             Arc::clone(&store),
             &self.parent_key,
@@ -75,16 +97,19 @@ impl QueueAdmission for CompletionAdmission {
         Ok(Arc::new(permit))
     }
 
+    fn retry_after_rejection(&self, expected_key: Option<&str>) -> bool {
+        let slot = self
+            .store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.migrating
+            || expected_key.is_some_and(|expected| self.key_for(&slot.store) != expected)
+    }
+
     fn batch_key(&self) -> Option<String> {
         let store = CompletionRouter::admission_store_snapshot(&self.store)?;
-        let identity = store
-            .coordination_identity()
-            .unwrap_or_else(|| format!("store:{:p}", Arc::as_ptr(&*store)));
         // Keep each component framed: scope and parent keys are caller-owned
         // strings and may contain any punctuation, including colons.
-        Some(
-            serde_json::to_string(&(identity, self.parent_key.as_str(), self.parent_epoch))
-                .expect("serializing a completion admission batch key cannot fail"),
-        )
+        Some(self.key_for(&store))
     }
 }
