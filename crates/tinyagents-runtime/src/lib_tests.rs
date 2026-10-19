@@ -5090,44 +5090,63 @@ async fn same_agent_backend_change_is_rejected_until_a_fresh_session_admits_it()
 
 #[tokio::test]
 async fn direct_resume_reads_admitted_transcript_and_rejects_later_actor_change() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
     use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let alice_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()), Scope::tenant("alice").unwrap(),
-    ).unwrap();
+        Arc::new(MemoryStorage::new()),
+        Scope::tenant("alice").unwrap(),
+    )
+    .unwrap();
     let bob_root = DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()), Scope::tenant("bob").unwrap(),
-    ).unwrap();
-    let alice: Arc<dyn SessionStoreProvider> = alice_root.bind_actor(backend.clone()).unwrap().unwrap();
+        Arc::new(MemoryStorage::new()),
+        Scope::tenant("bob").unwrap(),
+    )
+    .unwrap();
+    let alice: Arc<dyn SessionStoreProvider> =
+        alice_root.bind_actor(backend.clone()).unwrap().unwrap();
     let bob: Arc<dyn SessionStoreProvider> = bob_root.bind_actor(backend).unwrap().unwrap();
     let provider = Arc::new(Mutex::new(alice));
-    let resolver = Arc::new(SwitchableActorResolver { provider: provider.clone() });
+    let resolver = Arc::new(SwitchableActorResolver {
+        provider: provider.clone(),
+    });
     let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
-        Message::user("persisted"), Message::assistant("admitted transcript"),
+        Message::user("persisted"),
+        Message::assistant("admitted transcript"),
     ]))]));
     let mut session = SessionBuilder::new(driver.clone())
         .codec(Arc::new(Codec::default()))
         .identity_resolver("direct-resume-actor", meta(), resolver)
-        .build().unwrap();
+        .build()
+        .unwrap();
     let options = TurnOptions {
         resume: ResumeMode::Session,
         thread_id: Some("direct-resume-actor".into()),
         ..TurnOptions::default()
     };
-    session.turn(
-        SessionTurnRequest::new(Message::user("persisted")),
-        TurnOptions {
-            resume: ResumeMode::Never,
-            thread_id: Some("direct-resume-actor".into()),
-            ..TurnOptions::default()
-        },
-    ).await.unwrap();
-    assert!(session.resume(&options).await.unwrap().loaded,
-        "direct resume should read the transcript from the admitted actor lease");
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("persisted")),
+            TurnOptions {
+                resume: ResumeMode::Never,
+                thread_id: Some("direct-resume-actor".into()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        session.resume(&options).await.unwrap().loaded,
+        "direct resume should read the transcript from the admitted actor lease"
+    );
     *provider.lock().unwrap() = bob;
-    assert!(matches!(session.resume(&options).await, Err(RuntimeError::InvalidSessionState(_))),
-        "direct resume must reject a later actor/backend binding before it reads another history");
+    assert!(
+        matches!(
+            session.resume(&options).await,
+            Err(RuntimeError::InvalidSessionState(_))
+        ),
+        "direct resume must reject a later actor/backend binding before it reads another history"
+    );
     assert_eq!(driver.requests.lock().unwrap().len(), 1);
 }
