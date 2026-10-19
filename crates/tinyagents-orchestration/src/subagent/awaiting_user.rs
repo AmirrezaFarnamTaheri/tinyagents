@@ -31,7 +31,7 @@ impl SubagentAwaitingUser {
         let resume_caveat = if self.checkpointed {
             ""
         } else {
-            " NOTE: this pause could NOT be saved to disk, so resuming may fail. If continue_subagent reports no checkpoint and no durable session, tell the user the sub-agent's progress was lost instead of retrying."
+            " NOTE: this pause could NOT be saved to disk, so reusing the task_key may fail. If spawn_subagent reports no checkpoint and no durable session, tell the user the sub-agent's progress was lost instead of retrying."
         };
         format!(
             "[SUBAGENT_AWAITING_USER]\n\
