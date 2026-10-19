@@ -19,7 +19,7 @@ fn repair_removes_only_the_leading_tool_run_after_system_prefix() {
     assert_eq!(repaired[1].content, "keep");
     assert_eq!(repaired[2].id.as_deref(), Some("later"));
     assert_eq!(rows.len(), 5);
-    assert_eq!(rows[1].tool_call_id.as_deref(), Some("one"));
+    assert_eq!(rows[1].id.as_deref(), Some("one"));
 }
 
 #[test]
