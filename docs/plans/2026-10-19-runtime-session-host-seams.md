@@ -1252,9 +1252,43 @@ async fn later_agent_change_is_rejected_before_second_driver_call() {
 
 The option mismatch must precede the `head_generation` call; the hook mismatch
 must precede both locators; the later identity mismatch must precede the
-second driver invocation. Also add the accepted same-destination/new-generation
-case by binding a second generation under the same first generation and
-asserting two driver requests. Run the direct test filter and the runtime suite.
+second driver invocation. Add this accepted case using the same immutable
+`DriverSessionStores` destination and resolved agent for both admissions. The
+second public turn must pass the established-binding guard and reach the
+driver:
+
+```rust
+#[tokio::test]
+async fn same_admission_can_resume_the_current_generation_twice() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    use tinyagents_session::port::DriverSessionStores;
+    let provider = Arc::new(DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![Message::user("one"), Message::assistant("done one")])),
+        Ok(outcome(vec![Message::user("two"), Message::assistant("done two")])),
+    ]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = || TurnOptions {
+        resume: ResumeMode::Session,
+        thread_id: Some("thread-identity".into()),
+        ..TurnOptions::default()
+    };
+    session.turn(Message::user("one"), options()).await.unwrap();
+    session.turn(Message::user("two"), options()).await.unwrap();
+    assert_eq!(driver.requests.lock().unwrap().len(), 2);
+}
+```
+
+Run the direct test filter and the runtime suite.
 Run `cargo test -p tinyagents-runtime direct_resume_resolves_and_uses_the_admitted_lease`
 and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
 
