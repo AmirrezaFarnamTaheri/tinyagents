@@ -14,12 +14,14 @@ pub trait RunModeStore<S>: Send + Sync {
 
 pub struct InMemoryRunModeStore<S> {
     handles: Mutex<HashMap<(S, String), RunModeHandle>>,
+    update: Mutex<()>,
     notifier: Arc<dyn ModeChangeNotifier<S>>,
 }
 impl<S: Clone + Eq + Hash> InMemoryRunModeStore<S> {
     pub fn new(notifier: Arc<dyn ModeChangeNotifier<S>>) -> Self {
         Self {
             handles: Mutex::new(HashMap::new()),
+            update: Mutex::new(()),
             notifier,
         }
     }
@@ -33,11 +35,25 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> RunModeStore<S> for InMemoryR
             .clone()
     }
     fn get_mode(&self, scope: &S, thread_id: &str) -> RunMode {
-        self.handle_for_thread(scope, thread_id).get()
+        self.handles
+            .lock()
+            .get(&(scope.clone(), thread_id.to_owned()))
+            .map_or(RunMode::Build, RunModeHandle::get)
     }
     fn set_mode(&self, scope: &S, thread_id: &str, mode: RunMode) {
-        self.handle_for_thread(scope, thread_id).set(mode);
-        self.notifier.changed(scope, thread_id, mode);
+        let changed = {
+            let _update = self.update.lock();
+            let handle = self.handle_for_thread(scope, thread_id);
+            if handle.get() == mode {
+                false
+            } else {
+                handle.set(mode);
+                true
+            }
+        };
+        if changed {
+            self.notifier.changed(scope, thread_id, mode);
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+pub use super::types::PlanReviewResolution;
 use async_trait::async_trait;
 use tinyagents_harness::middleware::library::RunMode;
 use tinytools::ToolRunContext;
@@ -7,15 +8,6 @@ pub struct PlanReviewRequest {
     pub summary: String,
     pub steps: Vec<String>,
     pub tool_call_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlanReviewResolution {
-    Approve,
-    NonInteractiveApprove,
-    NotApplicable,
-    Reject,
-    Revise { feedback: String },
 }
 
 /// Opaque marker that the host has an interactive surface for this request.

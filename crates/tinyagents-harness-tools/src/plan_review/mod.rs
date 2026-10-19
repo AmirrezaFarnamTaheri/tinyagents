@@ -2,6 +2,7 @@
 mod port;
 mod store;
 mod tool;
+pub mod types;
 pub use port::{
     InteractiveReviewSurface, PlanReviewHost, PlanReviewPort, PlanReviewRequest,
     PlanReviewResolution,

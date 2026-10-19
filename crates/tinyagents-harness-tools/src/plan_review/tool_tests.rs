@@ -178,7 +178,14 @@ async fn interactive_tool_parks_in_the_scoped_store_until_decided() {
     #[derive(Default)]
     struct StoreEvents {
         requested: tokio::sync::Notify,
-        decided: Mutex<Vec<(String, PlanReviewResolution, Option<String>, PlanReviewReason)>>,
+        decided: Mutex<
+            Vec<(
+                String,
+                PlanReviewResolution,
+                Option<String>,
+                PlanReviewReason,
+            )>,
+        >,
     }
     impl PlanReviewNotifier<u8> for StoreEvents {
         fn requested(&self, _: &ParkedReview<u8>) {
@@ -227,7 +234,11 @@ async fn interactive_tool_parks_in_the_scoped_store_until_decided() {
     let tool = RequestPlanReviewTool::new(Some(Arc::new(StorePort(store.clone()))));
     let pending = tool.execute(json!({"summary":"ship it","steps":["build"]}));
     tokio::pin!(pending);
-    assert!(tokio::time::timeout(Duration::ZERO, &mut pending).await.is_err());
+    assert!(
+        tokio::time::timeout(Duration::ZERO, &mut pending)
+            .await
+            .is_err()
+    );
     events.requested.notified().await;
     let parked = store.parked_review_for_thread(&42, "thread-7").unwrap();
     assert_eq!(parked.client_id.as_deref(), Some("client-3"));
