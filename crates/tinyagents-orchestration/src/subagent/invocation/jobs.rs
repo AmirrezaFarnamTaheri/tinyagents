@@ -226,7 +226,7 @@ impl SubAgentJobRegistry {
         self.prune_terminal_over_cap_locked(driver_jobs, controls)
     }
 
-    /// Keeps unobserved terminal history within the soft cap while allowing
+    /// Keeps unpinned terminal history within the soft cap while allowing
     /// live work and terminal jobs pinned by waiters to exceed it temporarily.
     fn prune_terminal_over_cap(&self) -> Result<(), SubAgentJobError> {
         let mut driver_jobs = self
@@ -250,7 +250,10 @@ impl SubAgentJobRegistry {
     ) -> Result<(), SubAgentJobError> {
         let terminal_count = controls
             .values()
-            .filter(|control| control.status.borrow().status.is_terminal())
+            .filter(|control| {
+                control.status.borrow().status.is_terminal()
+                    && control.waiters.load(Ordering::Acquire) == 0
+            })
             .count();
         let excess = terminal_count.saturating_sub(super::types::SUBAGENT_JOB_SOFT_CAP);
         if excess == 0 {
@@ -263,15 +266,9 @@ impl SubAgentJobRegistry {
                 control.status.borrow().status.is_terminal()
                     && control.waiters.load(Ordering::Acquire) == 0
             })
-            .take(excess)
-            .map(|(id, control)| {
-                (
-                    !control.terminal_observed.load(Ordering::Acquire),
-                    id.clone(),
-                )
-            })
+            .map(|(id, control)| (control.terminal_sequence.load(Ordering::Acquire), id.clone()))
             .collect();
-        candidates.sort_by_key(|(unobserved, _)| *unobserved);
+        candidates.sort_by_key(|(sequence, _)| *sequence);
         let mut removed = std::collections::HashSet::with_capacity(candidates.len());
         for (_, id) in candidates.into_iter().take(excess) {
             let task_id = TaskId::new(id.as_str());
@@ -438,6 +435,9 @@ impl SubAgentJobRegistry {
             control
                 .status
                 .send_modify(|job| settle(job, cancellation_requested));
+            if control.status.borrow().status.is_terminal() {
+                self.stamp_terminal_sequence(control);
+            }
             self.steering.deregister(&task_id);
             true
         };
@@ -445,6 +445,20 @@ impl SubAgentJobRegistry {
             let _ = self.prune_terminal_over_cap();
         }
         settled
+    }
+
+    fn stamp_terminal_sequence(&self, control: &JobControl) {
+        if control.terminal_sequence.load(Ordering::Acquire) == 0 {
+            let sequence = self
+                .next_terminal_sequence
+                .fetch_add(1, Ordering::Relaxed);
+            let _ = control.terminal_sequence.compare_exchange(
+                0,
+                sequence,
+                Ordering::Release,
+                Ordering::Relaxed,
+            );
+        }
     }
 
     pub(crate) fn mark_result(
@@ -529,6 +543,7 @@ impl SubAgentJobRegistry {
                         job.status = SubAgentJobStatus::Cancelled;
                         job.error = Some(TinyAgentsError::Cancelled.to_string());
                     });
+                    self.stamp_terminal_sequence(control);
                     self.steering.deregister(&task_id);
                     drop(controls);
                     let _ = self.prune_terminal_over_cap();
@@ -756,6 +771,7 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Cancelled;
                     job.error = Some(TinyAgentsError::Cancelled.to_string());
                 });
+                self.stamp_terminal_sequence(control);
                 self.steering.deregister(&task_id);
                 let snapshot = control.status.borrow().clone();
                 drop(controls);
@@ -787,6 +803,7 @@ impl SubAgentJobRegistry {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
+            self.stamp_terminal_sequence(control);
             self.steering.deregister(&task_id);
             let snapshot = control.status.borrow().clone();
             drop(controls);
