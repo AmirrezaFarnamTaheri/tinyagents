@@ -66,6 +66,7 @@ pub mod capability;
 pub mod catalog;
 pub mod close;
 pub mod config;
+pub use config::{CompactionSettings, CompactionStrategy, ContextConfig, DEFAULT_KEEP_RECENT_TOOL_RESULTS};
 pub mod context;
 pub mod cost;
 pub mod dialect;
