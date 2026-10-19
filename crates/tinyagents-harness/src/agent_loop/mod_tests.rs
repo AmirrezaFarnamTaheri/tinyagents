@@ -9121,6 +9121,64 @@ async fn request_reasoning_wins_over_the_run_policy_default() {
     );
 }
 
+#[tokio::test]
+async fn thread_reasoning_snapshot_flows_through_policy_and_request_override_wins() {
+    use crate::testkit::ScriptedModel;
+
+    let store = crate::thread_reasoning::ThreadReasoningStore::default();
+    let thread = crate::ids::ThreadId::new("conversation-a");
+    store.set_effort(&thread, ReasoningEffort::High);
+    let turn_snapshot = store.reasoning_for_turn(Some(&thread), Some(4_000));
+    store.set_effort(&thread, ReasoningEffort::Low);
+
+    let model = Arc::new(ScriptedModel::replies(vec!["first", "second", "third"]));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("mock", model.clone());
+    harness.with_policy(RunPolicy {
+        default_reasoning: turn_snapshot,
+        ..RunPolicy::default()
+    });
+
+    harness
+        .invoke_default(&(), vec![Message::user("first turn")])
+        .await
+        .expect("first run succeeds");
+
+    let requests = model.requests();
+    let first = requests.first().expect("first model call");
+    let reasoning = first.reasoning.as_ref().expect("reasoning configured");
+    assert_eq!(reasoning.effort, Some(ReasoningEffort::High));
+    assert_eq!(reasoning.budget_tokens, Some(2_200));
+
+    harness.with_policy(RunPolicy {
+        default_reasoning: store.reasoning_for_turn(Some(&thread), Some(4_000)),
+        ..RunPolicy::default()
+    });
+    harness
+        .invoke_default(&(), vec![Message::user("next turn")])
+        .await
+        .expect("next run succeeds");
+    let requests = model.requests();
+    let next_reasoning = requests[1]
+        .reasoning
+        .as_ref()
+        .expect("reasoning configured");
+    assert_eq!(next_reasoning.effort, Some(ReasoningEffort::Low));
+
+    harness.push_middleware(Arc::new(RequestReasoningEffort(ReasoningEffort::XHigh)));
+    harness
+        .invoke_default(&(), vec![Message::user("request override")])
+        .await
+        .expect("request override run succeeds");
+    let requests = model.requests();
+    let reasoning = requests[2]
+        .reasoning
+        .as_ref()
+        .expect("request reasoning configured");
+    assert_eq!(reasoning.effort, Some(ReasoningEffort::XHigh));
+    assert_eq!(reasoning.budget_tokens, None);
+}
+
 // ── wave 1 follow-ups: batch termination and mixed truncated turns ───────────
 
 #[tokio::test]

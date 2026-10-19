@@ -125,3 +125,11 @@ fn a_zero_iteration_cap_means_unset() {
     assert_eq!(effective_max_iterations(0), DEFAULT_MAX_ITERATIONS);
     assert_eq!(effective_max_iterations(7), 7);
 }
+
+#[test]
+fn interactive_output_cap_is_available_without_changing_run_policy_defaults() {
+    assert_eq!(AGENT_TURN_MAX_OUTPUT_TOKENS, 16_384);
+    let policy = RunPolicy::default();
+    assert!(policy.default_reasoning.is_none());
+    assert_eq!(policy.limits, crate::limits::RunLimits::default());
+}
