@@ -703,6 +703,41 @@ decoding or extension serialization. Run each new filter and verify red before
 code, then run
 `cargo test -p tinyagents-runtime -p tinyagents-harness`.
 
+The typed-carrier regression test is concrete and host-neutral:
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HostAlpha(u8);
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HostBeta(&'static str);
+
+#[test]
+fn typed_extensions_survive_snapshot_copies_without_changing_json() {
+    let original_json = serde_json::json!([]);
+    let snapshot = ToolSnapshot::from_json(&original_json).unwrap()
+        .with_extension(HostAlpha(7))
+        .with_extension(HostBeta("host-owned"));
+    assert_eq!(snapshot.extension::<HostAlpha>(), Some(&HostAlpha(7)));
+    assert_eq!(snapshot.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
+    assert_eq!(snapshot.to_json(), original_json);
+
+    let clone = snapshot.clone();
+    let narrowed = snapshot.retaining(|_| true);
+    let (retained, count) = snapshot.with_retained(&ToolSnapshot::default()).unwrap();
+    assert_eq!(count, 0);
+    for copy in [&clone, &narrowed, &retained] {
+        assert_eq!(copy.extension::<HostAlpha>(), Some(&HostAlpha(7)));
+        assert_eq!(copy.extension::<HostBeta>(), Some(&HostBeta("host-owned")));
+        assert_eq!(copy.to_json(), original_json);
+    }
+}
+```
+
+Add `let replaced = clone.with_extension(HostAlpha(8));` and assert lookup
+returns `HostAlpha(8)` in `replaced` while `snapshot` remains `HostAlpha(7)`.
+This pins replacement semantics while retaining immutable sharing for clones
+not changed by the builder.
+
 ### 7. Move context configuration into harness
 
 **Files:** `crates/tinyagents-harness/src/config/context.rs`,
