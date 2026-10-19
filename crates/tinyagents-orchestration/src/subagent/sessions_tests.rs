@@ -113,6 +113,68 @@ async fn scoped_session_store_rejects_other_parent_identity() {
     assert!(scoped.upsert_running(foreign).await.is_err());
 }
 
+#[tokio::test]
+async fn scoped_session_close_notifies_only_after_current_owner_cas_wins() {
+    let backend = MemoryStorage::new();
+    let docs = Arc::clone(backend.for_scope(&Scope::local()).unwrap().documents());
+    let driver = Arc::new(DriverSubagentSessionStore::new(docs).unwrap());
+    let lifecycle_key = key("close-me");
+    let (session, _) = driver
+        .upsert_running(upsert("close-me", lifecycle_key.clone()))
+        .await
+        .unwrap();
+    let callbacks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let callback_log = Arc::clone(&callbacks);
+    let scoped = ScopedSubagentSessionStore::with_close_callback(
+        Arc::clone(&driver),
+        "parent-session",
+        Some("thread".into()),
+        move |session_id, task_id, key| {
+            callback_log.lock().unwrap().push((
+                session_id.to_owned(),
+                task_id.to_owned(),
+                key.clone(),
+            ));
+        },
+    );
+
+    assert!(
+        !scoped
+            .close_if_current(
+                &session.subagent_session_id,
+                "foreign-task",
+                &lifecycle_key,
+                "parent-session",
+                Some("thread"),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(callbacks.lock().unwrap().is_empty());
+    assert!(
+        !scoped
+            .close_if_current(
+                &session.subagent_session_id,
+                "close-me",
+                &lifecycle_key,
+                "other-parent",
+                Some("thread"),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(callbacks.lock().unwrap().is_empty());
+    assert!(scoped.close(&session.subagent_session_id).await.unwrap());
+    assert_eq!(
+        callbacks.lock().unwrap().as_slice(),
+        &[(
+            session.subagent_session_id.clone(),
+            "close-me".to_owned(),
+            lifecycle_key,
+        )]
+    );
+}
+
 #[test]
 fn durable_session_decodes_legacy_transcript_message_history() {
     let value = serde_json::json!({
