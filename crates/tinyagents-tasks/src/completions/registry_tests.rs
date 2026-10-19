@@ -187,6 +187,49 @@ async fn evicting_one_key_preserves_other_cached_routers_and_held_claims() {
     );
 }
 
+#[tokio::test]
+async fn pool_release_all_releases_claims_from_every_cached_router() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let shared = Arc::clone(&store);
+    let pool = CompletionRouterPool::new(move |_| {
+        Arc::new(CompletionRouter::new(shared.clone()))
+    });
+    let first = pool.get_or_open(&"workspace-a").unwrap();
+    let second = pool.get_or_open(&"workspace-b").unwrap();
+    first
+        .record(
+            CompletionRecord::new(
+                "first",
+                "parent-a",
+                "worker",
+                crate::completions::CompletionStatus::Success,
+                crate::completions::CompletionResult::text("one"),
+            ),
+        )
+        .await
+        .unwrap();
+    second
+        .record(
+            CompletionRecord::new(
+                "second",
+                "parent-b",
+                "worker",
+                crate::completions::CompletionStatus::Success,
+                crate::completions::CompletionResult::text("two"),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.claim_pending("parent-a", 1).unwrap().len(), 1);
+    assert_eq!(second.claim_pending("parent-b", 1).unwrap().len(), 1);
+
+    assert_eq!(pool.release_all().unwrap(), 2);
+
+    let restarted = CompletionRouter::new(store);
+    assert_eq!(restarted.claim_pending("parent-a", 1).unwrap().len(), 1);
+    assert_eq!(restarted.claim_pending("parent-b", 1).unwrap().len(), 1);
+}
+
 #[test]
 fn concurrent_fallback_replacements_have_one_winner_and_keep_other_keys_isolated() {
     let pool = Arc::new(CompletionRouterPool::new(|_| {
