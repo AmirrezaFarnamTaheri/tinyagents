@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use tinyagents_harness::run_queue::{QueueAdmission, QueueAdmissionError};
+use tinyagents_harness::run_queue::{
+    QueueAdmission, QueueAdmissionError, QueueAdmissionPermit,
+};
 
 use super::{CompletionRecord, CompletionRouter};
 
@@ -40,11 +42,12 @@ impl CompletionAdmission {
 }
 
 impl QueueAdmission for CompletionAdmission {
-    fn validate(&self) -> Result<(), QueueAdmissionError> {
+    fn acquire(&self) -> Result<Box<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         self.router
-            .parent_generation_admitted(&self.parent_key, self.parent_epoch)
-            .unwrap_or(false)
-            .then_some(())
+            .acquire_parent_generation(&self.parent_key, self.parent_epoch)
+            .ok()
+            .flatten()
+            .map(|permit| Box::new(permit) as Box<dyn QueueAdmissionPermit>)
             .ok_or(QueueAdmissionError)
     }
 }
