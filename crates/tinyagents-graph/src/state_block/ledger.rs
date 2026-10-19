@@ -14,7 +14,7 @@ use super::types::{CallRecord, Failure, RunLedger};
 /// Failures kept, newest last.
 pub(super) const MAX_FAILURES: usize = 3;
 /// A failure older than this many rounds is dropped.
-pub(super) const FAILURE_HORIZON_ROUNDS: usize = 12;
+pub(super) const FAILURE_HORIZON_ROUNDS: usize = 4;
 /// Written paths kept, most recent last.
 pub(super) const MAX_FILES: usize = 6;
 /// Longest argument summary, in characters.
@@ -58,6 +58,9 @@ pub(super) fn record_result(
     output: &str,
 ) {
     let round = ledger.round;
+    if is_error && is_search_miss(&call, output) {
+        return;
+    }
     if is_error {
         for name in missing_executables(output) {
             if !ledger.missing.iter().any(|(known, _)| known == &name) {
@@ -90,6 +93,28 @@ pub(super) fn record_result(
             ledger.files.remove(0);
         }
     }
+}
+
+/// Commands whose exit code 1 or 2 usually means "nothing matched", not a
+/// failure.
+const SEARCH_COMMANDS: &[&str] = &[
+    "grep", "egrep", "fgrep", "rg", "find", "test", "[", "diff", "cmp", "which",
+];
+
+/// Whether an error is an exploration miss rather than a failure: exit code 1
+/// or 2 from a search command, or from a compound command (`;`, `&&`, `|`)
+/// whose last step is usually such a probe. Those are not worth a line in the
+/// block; a real failure (a crash, 127, a non-search command) still is.
+fn is_search_miss(call: &CallRecord, output: &str) -> bool {
+    let Some(command) = call.command.as_deref() else {
+        return false;
+    };
+    if !matches!(exit_code(output), Some(1 | 2)) {
+        return false;
+    }
+    let compound = command.contains(';') || command.contains("&&") || command.contains('|');
+    let first = command.split_whitespace().next().map(executable_name);
+    compound || first.is_some_and(|word| SEARCH_COMMANDS.contains(&word.as_str()))
 }
 
 /// Drops failures older than the horizon.

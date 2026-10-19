@@ -32,8 +32,17 @@ impl StateBlockMiddleware {
     pub fn new(store: Arc<dyn Store>) -> Self {
         Self {
             store,
+            fallback_thread: None,
             runs: Mutex::default(),
         }
+    }
+
+    /// Reads the goal and plan under `key` for a run that has no thread id.
+    /// Pass the scope the host's `todo` tool uses in that case, so a headless
+    /// run (no chat thread) still sees the plan it wrote.
+    pub fn with_fallback_thread(mut self, key: impl Into<String>) -> Self {
+        self.fallback_thread = Some(key.into());
+        self
     }
 
     fn with_run<T>(&self, instance: u64, f: impl FnOnce(&mut RunLedger) -> T) -> T {
@@ -112,7 +121,10 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         _state: &S,
         request: &mut ModelRequest,
     ) -> Result<()> {
-        let thread_id = ctx.thread_id().map(|id| id.as_str().to_owned());
+        let thread_id = ctx
+            .thread_id()
+            .map(|id| id.as_str().to_owned())
+            .or_else(|| self.fallback_thread.clone());
         let goal = self.goal(thread_id.as_deref()).await;
         let items = self.items(thread_id.as_deref()).await;
         let block = self.with_run(ctx.instance_id(), |ledger| {

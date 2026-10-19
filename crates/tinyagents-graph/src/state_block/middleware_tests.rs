@@ -223,3 +223,24 @@ async fn the_ledger_ends_with_the_run() {
         .unwrap();
     assert_eq!(block(&mw, &mut ctx).await, None);
 }
+
+#[tokio::test]
+async fn a_run_without_a_thread_reads_the_fallback_key() {
+    let store: Arc<dyn Store> = Arc::new(InMemoryStore::default());
+    todo_store::replace(
+        &store,
+        "standalone",
+        vec![TodoItem::new("Configure postfix")],
+    )
+    .await
+    .unwrap();
+    let mw = StateBlockMiddleware::new(store.clone());
+    let mut threadless = RunContext::new(RunConfig::new("no-thread"), ());
+    assert_eq!(block(&mw, &mut threadless).await, None, "no key, no plan");
+
+    let mw = StateBlockMiddleware::new(store).with_fallback_thread("standalone");
+    let shown = block(&mw, &mut threadless)
+        .await
+        .expect("the fallback key finds the plan");
+    assert!(shown.contains("[>] 1. Configure postfix"), "{shown}");
+}

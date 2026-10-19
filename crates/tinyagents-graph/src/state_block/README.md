@@ -20,7 +20,7 @@ and the hard facts at the tail of every request.
 |---|---|---|
 | Goal | `goals::store` for the run's thread | One line: status (active with budget left, paused, budget exhausted, complete) and the objective. |
 | Plan | `todos::store` for the run's thread | Every step with its mark (`[x]` `[>]` `[ ]` `[-]`), the step in progress and the tool rounds it has run. At most 20 steps. |
-| Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 12 rounds, or when the same command later succeeds. |
+| Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 4 rounds, or when the same command later succeeds. Exit code 1 or 2 from a search command (`grep`, `find`, `test`, `diff`…) or a compound command (`;`, `&&`, `|`) is an exploration miss and not listed. |
 | Reported not found | Shell wording in error output (`X: command not found`, `sh: 1: X: not found`, `command not found: X`) | Cleared when a later successful command runs `X`. |
 | Files written this run | Path argument of tools whose name contains write/edit/patch/create/replace | The last 6, distinct. |
 
@@ -45,7 +45,9 @@ cached prefix is untouched.
 harness.push_middleware(Arc::new(StateBlockMiddleware::new(todo_store)));
 ```
 
-Pass the store the goal and `todo` tools write (in OpenHuman both live in the
+For a run with no thread id, `with_fallback_thread(key)` names the scope the
+host's `todo` tool falls back to (OpenHuman: the session id), so a headless run
+still sees its plan. Pass the store the goal and `todo` tools write (in OpenHuman both live in the
 session key-value store). Install it on the turns that have
 the `todo` tool; it is an observer, so another middleware's control outcome
 never hides a call from its ledger. Per-run state is keyed by the run

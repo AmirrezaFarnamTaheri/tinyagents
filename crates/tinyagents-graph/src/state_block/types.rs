@@ -12,6 +12,9 @@ use tinyagents_harness::store::Store;
 pub struct StateBlockMiddleware {
     /// The store the `todo` tool writes, read for the thread's plan.
     pub(super) store: Arc<dyn Store>,
+    /// The plan and goal key for a run with no thread id: the scope the host's
+    /// `todo` tool falls back to (for example a session id).
+    pub(super) fallback_thread: Option<String>,
     /// Per-run ledgers, keyed by [`RunContext::instance_id`](tinyagents_harness::context::RunContext::instance_id).
     pub(super) runs: Mutex<HashMap<u64, RunLedger>>,
 }

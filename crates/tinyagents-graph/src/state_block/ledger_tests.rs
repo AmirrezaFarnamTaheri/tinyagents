@@ -129,3 +129,36 @@ fn old_failures_age_out() {
     age_out(&mut ledger);
     assert!(ledger.failures.is_empty());
 }
+
+#[test]
+fn search_misses_are_not_failures() {
+    let mut ledger = RunLedger::default();
+    record_result(
+        &mut ledger,
+        shell("grep -n foo bar.txt"),
+        true,
+        "Command failed (exit code 1)",
+    );
+    record_result(
+        &mut ledger,
+        shell("echo a; postconf -n; grep x y"),
+        true,
+        "Command failed (exit code 2)",
+    );
+    record_result(
+        &mut ledger,
+        shell("ls /nope | head"),
+        true,
+        "Command failed (exit code 2)",
+    );
+    assert!(ledger.failures.is_empty(), "{:?}", ledger.failures);
+    // A crash, a missing executable or a non-search failure still counts.
+    record_result(
+        &mut ledger,
+        shell("make test"),
+        true,
+        "Command failed (exit code 2)",
+    );
+    record_result(&mut ledger, shell("python3 x.py"), true, SHELL_127);
+    assert_eq!(ledger.failures.len(), 2);
+}
