@@ -3,6 +3,7 @@
 pub mod detect_tools;
 pub mod ports;
 pub mod progress;
+pub mod native_backend;
 mod shell_description;
 mod shell_support;
 pub mod timeout;
@@ -13,6 +14,7 @@ pub use ports::{
     ExecRequest, ShellFlavor,
 };
 pub use progress::ExecProgress;
+pub use native_backend::{NativeExecBackend, NativeExecCapability};
 mod tool;
 pub use tool::ExecTool;
 
