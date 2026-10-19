@@ -1540,7 +1540,7 @@ async fn record_with_retries_survives_a_transient_store_failure() {
 
 #[tokio::test]
 async fn record_resilient_uses_local_memory_only_when_explicitly_allowed() {
-    use super::super::registry::CompletionStoreFallback;
+    use crate::completions::CompletionStoreFallback;
     let store = Arc::new(FailingSecondPut {
         inner: InMemoryCompletionStore::new(),
         puts: Default::default(),
