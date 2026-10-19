@@ -53,5 +53,8 @@ fn message_repair_matches_transcript_repair_and_preserves_later_orphans() {
 #[test]
 fn message_repair_borrows_history_without_a_leading_orphan() {
     let history = vec![Message::system("system"), Message::user("user")];
-    assert!(matches!(repair_orphaned_tool_head_messages(&history), Cow::Borrowed(_)));
+    assert!(matches!(
+        repair_orphaned_tool_head_messages(&history),
+        Cow::Borrowed(_)
+    ));
 }

@@ -411,10 +411,7 @@ impl TranscriptLocator for LiveTranscriptLocator {
 /// Each resolved trait object is stable, while its backing stores are replaced
 /// atomically when the owning provider rebinds.
 impl SessionStoreProvider for RebindableSessionStores {
-    fn lease_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    fn lease_for_agent(&self, agent_id: &str) -> Result<SessionStoreLease, SessionStoreLeaseError> {
         self.current().lease_for_agent(agent_id)
     }
 

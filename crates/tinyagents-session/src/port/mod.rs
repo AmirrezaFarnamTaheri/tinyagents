@@ -60,9 +60,9 @@ pub use drivers::{
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
-pub use types::{AgentStores, SessionStoreLease, SessionStoreLeaseError};
 #[cfg(feature = "legacy-import")]
 pub use types::WorkspaceStores;
+pub use types::{AgentStores, SessionStoreLease, SessionStoreLeaseError};
 #[cfg(feature = "legacy-import")]
 pub use workspace::STORE_DIR;
 
@@ -311,10 +311,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
         (**self).try_for_agent(agent_id)
     }
 
-    fn lease_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    fn lease_for_agent(&self, agent_id: &str) -> Result<SessionStoreLease, SessionStoreLeaseError> {
         (**self).lease_for_agent(agent_id)
     }
 

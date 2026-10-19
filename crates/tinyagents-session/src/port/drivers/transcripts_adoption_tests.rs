@@ -132,9 +132,19 @@ fn legacy_root_adoption_does_not_replace_a_child_session() {
     let root = SessionRef::scoped(THREAD, "planner");
     let child = SessionRef::child_of(&root, "delegate:worker");
 
-    assert!(locator.adopt_legacy(&child, THREAD, &meta(THREAD)).unwrap().is_none());
+    assert!(
+        locator
+            .adopt_legacy(&child, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_none()
+    );
     assert!(locator.read_session_transcript(&child).is_none());
-    assert!(locator.adopt_legacy(&root, THREAD, &meta(THREAD)).unwrap().is_some());
+    assert!(
+        locator
+            .adopt_legacy(&root, THREAD, &meta(THREAD))
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(contents(&locator, &root), vec!["root history"]);
     assert!(locator.read_session_transcript(&child).is_none());
 }

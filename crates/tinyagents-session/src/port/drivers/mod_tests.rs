@@ -1,7 +1,6 @@
 use super::*;
 use crate::testkit::conformance::{
-    session_store_conformance, session_store_isolation_conformance,
-    session_store_lease_conformance,
+    session_store_conformance, session_store_isolation_conformance, session_store_lease_conformance,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_core::MemoryStorage;

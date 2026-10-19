@@ -9,8 +9,7 @@ struct NonPinningProvider {
 
 impl SessionStoreProvider for NonPinningProvider {
     fn for_agent(&self, agent_id: &str) -> AgentStores {
-        self.opens
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.stores.for_agent(agent_id)
     }
 }

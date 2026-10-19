@@ -110,14 +110,27 @@ async fn a_workspace_provider_lease_keeps_the_opened_store_alive() {
     let dir = tempfile::tempdir().unwrap();
     let opened = WorkspaceStores::open(dir.path(), "agent").unwrap();
     let lease = opened.provider().lease_for_agent("agent").unwrap();
-    lease.stores().kv.put("lease-test", "key", serde_json::json!("retained"))
-        .await.unwrap();
+    lease
+        .stores()
+        .kv
+        .put("lease-test", "key", serde_json::json!("retained"))
+        .await
+        .unwrap();
     drop(opened);
 
     let reopened = WorkspaceStores::open(dir.path(), "agent").unwrap();
-    assert_eq!(reopened.provider().lease_for_agent("agent").unwrap()
-        .stores().kv.get("lease-test", "key").await.unwrap(),
-        Some(serde_json::json!("retained")));
+    assert_eq!(
+        reopened
+            .provider()
+            .lease_for_agent("agent")
+            .unwrap()
+            .stores()
+            .kv
+            .get("lease-test", "key")
+            .await
+            .unwrap(),
+        Some(serde_json::json!("retained"))
+    );
 }
 
 #[test]

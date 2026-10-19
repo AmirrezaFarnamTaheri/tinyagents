@@ -381,10 +381,7 @@ fn check_tenant(tenant: &Scope) -> Result<(), StorageError> {
 }
 
 impl SessionStoreProvider for DriverSessionStores {
-    fn lease_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> Result<SessionStoreLease, SessionStoreLeaseError> {
+    fn lease_for_agent(&self, agent_id: &str) -> Result<SessionStoreLease, SessionStoreLeaseError> {
         let stores = DriverSessionStores::try_for_agent(self, agent_id)
             .map_err(SessionStoreLeaseError::Open)?;
         Ok(SessionStoreLease::pinned(stores))
