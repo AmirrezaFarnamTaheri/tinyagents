@@ -244,11 +244,18 @@ fn expired(record: &CompletionRecord, now: SystemTime, retain: Duration) -> bool
 }
 
 /// Thread-safe in-memory [`CompletionStore`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct InMemoryCompletionStore {
     inner: Arc<Mutex<HashMap<String, CompletionRecord>>>,
     parent_gates: Arc<Mutex<HashMap<String, MemoryParentGate>>>,
     parent_gate_epochs: Arc<Mutex<HashMap<String, u64>>>,
+    identity: Arc<str>,
+}
+
+impl Default for InMemoryCompletionStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -260,7 +267,12 @@ struct MemoryParentGate {
 impl InMemoryCompletionStore {
     /// An empty store.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: Arc::default(),
+            parent_gates: Arc::default(),
+            parent_gate_epochs: Arc::default(),
+            identity: Arc::from(format!("memory:{}", uuid::Uuid::new_v4().simple())),
+        }
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, CompletionRecord>>> {
@@ -296,6 +308,10 @@ impl InMemoryCompletionStore {
 }
 
 impl CompletionStore for InMemoryCompletionStore {
+    fn coordination_identity(&self) -> Option<String> {
+        Some(self.identity.to_string())
+    }
+
     fn acquire_parent_gate(
         &self,
         parent_key: &str,

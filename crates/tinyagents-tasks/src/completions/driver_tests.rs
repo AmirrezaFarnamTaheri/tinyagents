@@ -4,6 +4,7 @@ use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tinyagents_harness::run_queue::QueueAdmission;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
