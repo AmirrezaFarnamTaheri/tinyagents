@@ -20,6 +20,9 @@ pub struct MediaJobProgress {
 pub type MediaProgressFn = Arc<dyn Fn(&MediaJobProgress) + Send + Sync>;
 type PerCall<T> =
     Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>;
+/// Host-supplied extraction of its provider-assigned call identifier.
+pub type ToolCallIdExtractor =
+    Arc<dyn for<'a> Fn(Option<&'a dyn ToolRunContext>) -> Option<String> + Send + Sync>;
 
 fn progress_label(kind: &MediaArtifactKind) -> &'static str {
     match kind {
@@ -45,6 +48,7 @@ pub struct MediaArtifactTool<T: Tool> {
     inner: T,
     kind: MediaArtifactKind,
     per_call: Option<PerCall<T>>,
+    call_id: Option<ToolCallIdExtractor>,
     filing: Arc<dyn ArtifactFiling>,
 }
 impl<T: Tool> MediaArtifactTool<T> {
@@ -54,12 +58,19 @@ impl<T: Tool> MediaArtifactTool<T> {
             inner,
             kind,
             per_call: None,
+            call_id: None,
             filing,
         }
     }
     #[must_use]
     pub fn with_per_call_inner(mut self, factory: PerCall<T>) -> Self {
         self.per_call = Some(factory);
+        self
+    }
+    /// Let a host extract its call id from its own erased context extension.
+    #[must_use]
+    pub fn with_tool_call_id(mut self, extract: ToolCallIdExtractor) -> Self {
+        self.call_id=Some(extract);
         self
     }
     fn title(args: &Value, index: usize, total: usize) -> String {
@@ -80,6 +91,7 @@ impl<T: Tool> MediaArtifactTool<T> {
     async fn run_with_heartbeat<F: std::future::Future<Output = anyhow::Result<ToolResult>>>(
         &self,
         context: Option<&dyn ToolRunContext>,
+        call_id: Option<&str>,
         status: Arc<std::sync::Mutex<Option<MediaJobProgress>>>,
         run: F,
     ) -> anyhow::Result<ToolResult> {
@@ -144,7 +156,7 @@ impl<T: Tool> MediaArtifactTool<T> {
                     .map(ToOwned::to_owned),
                 bytes: entry.get("bytes").and_then(Value::as_u64),
                 title: Self::title(args, index, total),
-                tool_call_id: None,
+                tool_call_id: call_id.map(ToOwned::to_owned),
             };
             match self.filing.file(generated, context).await {
                 Ok(filed) => {
@@ -256,7 +268,8 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
         if result.is_error {
             return Ok(result);
         }
-        Ok(self.file_entries(result, &args, context).await)
+        let call_id=self.call_id.as_ref().and_then(|extract|extract(context));
+        Ok(self.file_entries(result, &args, context, call_id.as_deref()).await)
     }
 }
 
