@@ -129,9 +129,9 @@ where
                 "system" => Message::system(legacy.content),
                 "user" => Message::user(legacy.content),
                 "tool" => Message::tool(
-                    legacy
-                        .tool_call_id
-                        .ok_or_else(|| serde::de::Error::custom("legacy tool row has no call id"))?,
+                    legacy.tool_call_id.ok_or_else(|| {
+                        serde::de::Error::custom("legacy tool row has no call id")
+                    })?,
                     legacy.content,
                 ),
                 "assistant" => Message::Assistant(AssistantMessage {
@@ -157,7 +157,7 @@ where
             };
             Ok(message)
         })
-        .collect::<Result<Vec<_>, D::Error>()
+        .collect::<Result<Vec<_>, D::Error>>()
         .map(Some)
 }
 
