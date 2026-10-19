@@ -157,6 +157,39 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
 }
 
 #[tokio::test]
+async fn early_exit_appends_typed_question_without_cap_summary() {
+    let mut host = FakeHost {
+        run: Some(Ok(ChildTurnRun {
+            accepted_history: vec!["accepted-native-tool-result".into()],
+            output: "Which account should I use?".into(),
+            model_calls: 3,
+            accounting: ChildTurnAccounting::default(),
+            hit_cap: false,
+            early_exit: true,
+        })),
+        ..FakeHost::default()
+    };
+
+    let result = drive_child_turn(&mut host).await.unwrap();
+
+    assert_eq!(
+        host.events,
+        ["run", "append-final", "persist-success", "after-commit"]
+    );
+    assert_eq!(
+        result.accepted_history,
+        [
+            "accepted-native-tool-result",
+            "native:Which account should I use?"
+        ]
+    );
+    assert!(result.early_exit);
+    assert!(!result.hit_cap);
+    assert_eq!(result.accounting.model_calls, 3);
+    assert_eq!(host.persisted, Some(result));
+}
+
+#[tokio::test]
 async fn failed_turn_persists_only_accepted_history_before_returning_error() {
     let mut host = FakeHost {
         run: Some(Err(ChildTurnFailure {
