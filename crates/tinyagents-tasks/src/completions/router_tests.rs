@@ -1433,7 +1433,15 @@ impl CompletionStore for BlockingTryList {
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.claim_task(task_id, parent_key, parent_epoch, gate, mode, token, visible_after)
+        self.inner.claim_task(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        )
     }
     fn claim_pending(
         &self,
@@ -1445,7 +1453,15 @@ impl CompletionStore for BlockingTryList {
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner.claim_pending(parent_key, parent_epoch, gate, mode, max, token, visible_after)
+        self.inner.claim_pending(
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        )
     }
     fn resolve_claim(
         &self,
@@ -1456,7 +1472,8 @@ impl CompletionStore for BlockingTryList {
         token: &str,
         resolution: ClaimResolution,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner.resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
+        self.inner
+            .resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)

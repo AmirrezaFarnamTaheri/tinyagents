@@ -23,6 +23,7 @@
 mod admission;
 mod delivery;
 mod driver;
+mod durable_lease;
 mod format;
 mod registry;
 mod router;
@@ -35,6 +36,7 @@ pub use delivery::{
     ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
 };
 pub use driver::DriverCompletionStore;
+pub use durable_lease::{DurableThreadDeliveryLease, DurableThreadDeliveryLeases};
 pub use format::{CompletionFormatter, NeutralCompletionFormatter};
 pub use registry::{
     CompletionRouterPool, CompletionRouterPoolError, CompletionRouterReplaceOutcome,
