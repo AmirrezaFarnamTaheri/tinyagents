@@ -165,8 +165,8 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
     let old_admission = CompletionAdmission::for_router(&first, &queued);
     let old_store_alias = CompletionAdmission::for_store(first.store(), &queued);
     assert_eq!(
-        old_admission.batch_key(),
-        old_store_alias.batch_key(),
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&old_admission),
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&old_store_alias),
         "for_store aliases must use the pool-bound lifecycle coordination key"
     );
     let permit = tinyagents_harness::run_queue::QueueAdmission::acquire(&old_admission)
@@ -179,8 +179,8 @@ fn stopped_parent_remains_closed_after_pool_clear_and_reopen() {
     let reopened = pool.get_or_open(&"workspace").unwrap();
     let reopened_store_alias = CompletionAdmission::for_store(reopened.store(), &queued);
     assert_eq!(
-        old_admission.batch_key(),
-        reopened_store_alias.batch_key(),
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&old_admission),
+        tinyagents_harness::run_queue::QueueAdmission::batch_key(&reopened_store_alias),
         "queued handles across clear must preserve the same scoped lifecycle key"
     );
 
