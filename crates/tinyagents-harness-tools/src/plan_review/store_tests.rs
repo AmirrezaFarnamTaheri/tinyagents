@@ -30,6 +30,54 @@ async fn timeout_rejects_and_reports_expired() {
 }
 
 #[tokio::test]
+async fn approve_resolves_the_parked_turn() {
+    let (store, _) = store(Duration::from_secs(60));
+    let task = request(store.clone(), 1, "approve");
+    tokio::task::yield_now().await;
+    assert!(store.decide_by_thread(&1, "approve", PlanReviewResolution::Approve));
+    assert_eq!(task.await.unwrap(), PlanReviewResolution::Approve);
+}
+
+#[tokio::test]
+async fn revise_returns_feedback_to_the_parked_turn() {
+    let (store, _) = store(Duration::from_secs(60));
+    let task = request(store.clone(), 1, "revise");
+    tokio::task::yield_now().await;
+    let resolution = PlanReviewResolution::Revise { feedback: "add tests".into() };
+    assert!(store.decide_by_thread(&1, "revise", resolution.clone()));
+    assert_eq!(task.await.unwrap(), resolution);
+}
+
+#[test]
+fn unknown_request_cannot_be_decided() {
+    let (store, _) = store(Duration::from_secs(60));
+    assert!(!store.decide(&1, "missing", PlanReviewResolution::Approve));
+    assert!(!store.decide_by_thread(&1, "missing", PlanReviewResolution::Approve));
+}
+
+#[tokio::test]
+async fn parked_snapshot_replays_routing_call_id_and_expiry() {
+    let (store, _) = store(Duration::from_secs(60));
+    let parked_store = store.clone();
+    let task = tokio::spawn(async move { parked_store.request_review(1, "replay".into(), Some("client".into()), PlanReviewRequest { summary: "plan".into(), steps: vec!["step".into()], tool_call_id: Some("call".into()) }).await });
+    tokio::task::yield_now().await;
+    let snapshot = store.parked_review_for_thread(&1, "replay").unwrap();
+    assert_eq!(snapshot.client_id.as_deref(), Some("client"));
+    assert_eq!(snapshot.tool_call_id.as_deref(), Some("call"));
+    assert_eq!(snapshot.steps, vec!["step"]);
+    assert!(!snapshot.expires_at.is_empty());
+    assert!(store.decide(&1, &snapshot.request_id, PlanReviewResolution::Approve));
+    assert_eq!(task.await.unwrap(), PlanReviewResolution::Approve);
+    assert!(store.parked_review_for_thread(&1, "replay").is_none());
+}
+
+#[test]
+fn no_snapshot_exists_for_an_unparked_thread() {
+    let (store, _) = store(Duration::from_secs(60));
+    assert!(store.parked_review_for_thread(&1, "missing").is_none());
+}
+
+#[tokio::test]
 async fn dropped_park_reports_cancelled_and_cleans_snapshot() {
     let (store, events) = store(Duration::from_secs(600));
     let task = request(store.clone(), 1, "t");
