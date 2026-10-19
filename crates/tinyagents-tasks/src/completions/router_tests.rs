@@ -1537,3 +1537,26 @@ async fn record_with_retries_survives_a_transient_store_failure() {
     );
     handle.await.unwrap();
 }
+
+#[tokio::test]
+async fn record_resilient_uses_local_memory_only_when_explicitly_allowed() {
+    use super::super::registry::CompletionStoreFallback;
+    let store = Arc::new(FailingSecondPut {
+        inner: InMemoryCompletionStore::new(),
+        puts: Default::default(),
+        fail_from: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let router = CompletionRouter::new(store.clone());
+    assert!(router
+        .record_resilient(record("shared", "p"), 1, CompletionStoreFallback::FailClosed)
+        .await
+        .is_err());
+    assert!(Arc::ptr_eq(&router.store(), &(store.clone() as Arc<dyn CompletionStore>)));
+
+    let outcome = router
+        .record_resilient(record("local", "p"), 1, CompletionStoreFallback::LocalMemory)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
+    assert!(router.store().get("local").is_some());
+}
