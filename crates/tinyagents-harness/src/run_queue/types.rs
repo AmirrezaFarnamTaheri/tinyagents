@@ -23,11 +23,17 @@ pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
     /// closure. Implementations must return an error when the lifecycle no
     /// longer admits the item. The permit is held only while the harness
     /// transfers the item into a turn, never across a provider await.
-    fn acquire(&self) -> Result<Box<dyn QueueAdmissionPermit>, QueueAdmissionError>;
+    fn acquire(&self) -> Result<std::sync::Arc<dyn QueueAdmissionPermit>, QueueAdmissionError>;
+
+    /// Stable identity for capabilities that may share one batch permit.
+    /// `None` means each item requires an independent acquisition.
+    fn batch_key(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Owned authority held across the queue-to-turn transfer.
-pub trait QueueAdmissionPermit: Send {}
+pub trait QueueAdmissionPermit: Send + Sync {}
 
 impl QueueAdmissionPermit for () {}
 

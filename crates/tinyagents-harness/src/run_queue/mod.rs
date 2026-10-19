@@ -166,6 +166,26 @@ impl<T> RunQueue<T> {
         lane: QueueLane,
         mode: QueueMode,
     ) -> Vec<AdmittedQueueItem<T>> {
+        if mode == QueueMode::OneAtATime {
+            let mut permits = std::collections::HashMap::new();
+            loop {
+                let item = {
+                    let mut inner = self.lock();
+                    let items = match lane {
+                        QueueLane::Steer => &mut inner.steers,
+                        QueueLane::Followup => &mut inner.followups,
+                        QueueLane::Collect => &mut inner.collects,
+                    };
+                    if items.is_empty() {
+                        return Vec::new();
+                    }
+                    items.remove(0)
+                };
+                if let Some(item) = Self::admit_item(item, &mut permits) {
+                    return vec![item];
+                }
+            }
+        }
         let queued = {
             let mut inner = self.lock();
             let items = match lane {
@@ -173,28 +193,44 @@ impl<T> RunQueue<T> {
                 QueueLane::Followup => &mut inner.followups,
                 QueueLane::Collect => &mut inner.collects,
             };
-            let count = match mode {
-                QueueMode::All => items.len(),
-                QueueMode::OneAtATime => items.len().min(1),
-            };
-            items.drain(..count).collect::<Vec<_>>()
+            std::mem::take(items)
         };
+        let mut permits = std::collections::HashMap::new();
         queued
             .into_iter()
-            .filter_map(|item| {
-                let permit = match item.admission {
-                    Some(admission) => match admission.acquire() {
-                        Ok(permit) => Some(permit),
-                        Err(_) => return None,
-                    },
-                    None => None,
-                };
-                Some(AdmittedQueueItem {
-                    value: item.value,
-                    _permit: permit,
-                })
-            })
+            .filter_map(|item| Self::admit_item(item, &mut permits))
             .collect()
+    }
+
+    fn admit_item(
+        item: Queued<T>,
+        permits: &mut std::collections::HashMap<
+            String,
+            std::sync::Arc<dyn types::QueueAdmissionPermit>,
+        >,
+    ) -> Option<AdmittedQueueItem<T>> {
+        let permit = match item.admission {
+            Some(admission) => {
+                let key = admission.batch_key();
+                if let Some(key) = key.as_ref() {
+                    match permits.get(key) {
+                        Some(permit) => Some(std::sync::Arc::clone(permit)),
+                        None => {
+                            let permit = admission.acquire().ok()?;
+                            permits.insert(key.clone(), std::sync::Arc::clone(&permit));
+                            Some(permit)
+                        }
+                    }
+                } else {
+                    Some(admission.acquire().ok()?)
+                }
+            }
+            None => None,
+        };
+        Some(AdmittedQueueItem {
+            value: item.value,
+            _permit: permit,
+        })
     }
 
     fn push_entry_now(&self, lane: QueueLane, item: Queued<T>) {

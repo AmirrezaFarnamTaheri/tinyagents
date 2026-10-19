@@ -42,12 +42,21 @@ impl CompletionAdmission {
 }
 
 impl QueueAdmission for CompletionAdmission {
-    fn acquire(&self) -> Result<Box<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+    fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         self.router
             .acquire_parent_generation(&self.parent_key, self.parent_epoch)
             .ok()
             .flatten()
-            .map(|permit| Box::new(permit) as Box<dyn QueueAdmissionPermit>)
+            .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
             .ok_or(QueueAdmissionError)
+    }
+
+    fn batch_key(&self) -> Option<String> {
+        Some(format!(
+            "{:p}:{}:{}",
+            Arc::as_ptr(&self.router),
+            self.parent_key,
+            self.parent_epoch
+        ))
     }
 }
