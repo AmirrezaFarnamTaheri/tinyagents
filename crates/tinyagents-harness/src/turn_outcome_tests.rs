@@ -42,6 +42,37 @@ fn deferred_terminal_failure_emits_failure_before_finalization() {
 }
 
 #[test]
+fn deferred_terminal_failure_uses_content_free_error_and_outcome() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use crate::terminal::{TerminalOutcome, TerminalReason};
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run-failed"),
+        events,
+    }
+    .finish_failed();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0].event,
+        AgentEvent::RunFailed { run_id, error, outcome: Some(outcome) }
+            if run_id.as_str() == "run-failed"
+                && error == "host turn failed after harness completion"
+                && outcome == &TerminalOutcome::new(
+                    TerminalReason::Internal,
+                    "host turn failed after harness completion"
+                )
+    ));
+    assert!(matches!(
+        &events[1].event,
+        AgentEvent::RunFinalized { run_id } if run_id.as_str() == "run-failed"
+    ));
+}
+
+#[test]
 fn tool_call_outcome_equality_covers_every_observed_field() {
     let original = ToolCallOutcome {
         call_id: "call-1".into(),

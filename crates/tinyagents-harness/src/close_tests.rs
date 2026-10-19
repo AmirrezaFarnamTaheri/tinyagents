@@ -73,9 +73,18 @@ fn close_copy_renderers_preserve_custom_literals_and_all_repair_reasons() {
         minimum_quoted_words: 2,
         ..ENGLISH_CLOSE_COPY
     };
-    assert_eq!(checkpoint_with_copy(&copy, 4, "body", true), "checkpoint 4: body");
-    assert_eq!(checkpoint_with_copy(&copy, 4, "", false), "checkpoint 4: empty checkpoint");
-    assert_eq!(final_summary_with_copy(&copy, "body", true), "summary: body");
+    assert_eq!(
+        checkpoint_with_copy(&copy, 4, "body", true),
+        "checkpoint 4: body"
+    );
+    assert_eq!(
+        checkpoint_with_copy(&copy, 4, "", false),
+        "checkpoint 4: empty checkpoint"
+    );
+    assert_eq!(
+        final_summary_with_copy(&copy, "body", true),
+        "summary: body"
+    );
     assert_eq!(final_summary_with_copy(&copy, "", false), "empty summary");
     assert_eq!(
         repair_with_copy(&copy, "write {repair_reason}", CloseViolation::NoReply),
@@ -200,12 +209,24 @@ fn result_renderer_accepts_the_host_block_format_and_charges_rendered_bytes() {
                     .collect::<String>();
                 format!("- `{}` — {status}\n{body}", result.name)
             },
-            omitted_notice: |count| format!("omitted {count}\n"),
+            omitted_notice: |count| {
+                if count == 0 {
+                    String::new()
+                } else {
+                    format!(
+                        "\n_({count} earlier tool result(s) omitted for length — the most recent are shown.)_\n"
+                    )
+                }
+            },
         },
     );
     assert_eq!(
         rendered,
-        "omitted 0\n- `read_file` — ok\n  > first line\n  > second line\n- `write_file` — failed\n  > permission denied\n"
+        "- `read_file` — ok\n  > first line\n  > second line\n- `write_file` — failed\n  > permission denied\n"
+    );
+    assert_eq!(
+        checkpoint_with_copy(&ENGLISH_CLOSE_COPY, 3, &rendered, true,),
+        "I reached the tool-call limit for this turn (3 steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n- `read_file` — ok\n  > first line\n  > second line\n- `write_file` — failed\n  > permission denied\n\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off."
     );
 }
 
@@ -514,6 +535,44 @@ async fn close_source_model_records_one_failure_when_stream_ends_without_termina
     };
     let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
     assert!(stream.next().await.is_none());
+    drop(stream);
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[1].event, AgentEvent::ModelFailed { .. }));
+}
+
+#[tokio::test]
+async fn close_source_model_records_failure_when_consumer_drops_stream_early() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use futures::StreamExt;
+
+    let inner = Arc::new(StreamScriptedModel {
+        responses: Mutex::new(VecDeque::from([vec![ModelStreamItem::Started]])),
+        requests: Mutex::new(Vec::new()),
+    });
+    let source = StaticCloseSource(inner);
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close-drop"),
+        Arc::new(EmptyCloseEnricher),
+    );
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected",
+        temperature: 0.2,
+        thread_id: None,
+        trace: Some(&trace),
+    };
+    let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Started)
+    ));
     drop(stream);
     let events = listener.events();
     assert_eq!(events.len(), 2);
