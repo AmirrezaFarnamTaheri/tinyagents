@@ -172,6 +172,30 @@ impl DurableThreadDeliveryLease {
         self.lease.fence(&self.lease_scope)
     }
 
+    /// Permanently cancels the supplied token if this exact lease tenure is lost.
+    ///
+    /// Hosts pass the token through the full turn/runtime operation. Renewal
+    /// failure closes the token; it never reacquires a lease or restores
+    /// admission on this handle.
+    pub fn cancel_on_loss(
+        &self,
+        cancellation: tinyagents_harness::CancellationToken,
+    ) -> JoinHandle<()> {
+        let mut receiver = self.receiver.clone();
+        tokio::spawn(async move {
+            loop {
+                if !*receiver.borrow() {
+                    cancellation.cancel();
+                    return;
+                }
+                if receiver.changed().await.is_err() {
+                    cancellation.cancel();
+                    return;
+                }
+            }
+        })
+    }
+
     /// Releases this exact holder/epoch and stops renewal. A later holder's
     /// acquisition advances the epoch and fences every retained old writer.
     pub async fn release(mut self) -> Result<bool, StorageError> {
