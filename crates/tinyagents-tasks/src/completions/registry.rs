@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use tinyagents_harness::error::Result as HarnessResult;
 use tinystoragedrivers_core::{Scope, StorageBackend};
 
-use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 use super::lifecycle::ParentLifecycle;
+use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
 
 /// Outcome of replacing one cached router only if it is still current.
 pub enum CompletionRouterReplaceOutcome {

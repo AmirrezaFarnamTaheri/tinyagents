@@ -156,7 +156,8 @@ impl ParentAdmissionPermit {
         parent_epoch: u64,
     ) -> Result<Option<Self>> {
         let gate = ParentGateGuard::acquire(Arc::clone(&store), lifecycle.clone(), parent_key)?;
-        let current = CompletionRouter::parent_lifecycle_status(&store, &lifecycle, gate.local_guard())?;
+        let current =
+            CompletionRouter::parent_lifecycle_status(&store, &lifecycle, gate.local_guard())?;
         let admitted = current == Some(ParentLifecycleStatus::Open(parent_epoch));
         Ok(admitted.then_some(Self { _guard: gate }))
     }
@@ -243,7 +244,8 @@ impl CompletionRouter {
         *self
             .lifecycle
             .lock()
-            .map_err(|_| TinyAgentsError::Graph("router lifecycle lock poisoned".into()))? = lifecycle;
+            .map_err(|_| TinyAgentsError::Graph("router lifecycle lock poisoned".into()))? =
+            lifecycle;
         Ok(())
     }
 
@@ -378,7 +380,13 @@ impl CompletionRouter {
         parents.dedup();
         let _source_gates = parents
             .iter()
-            .map(|parent| ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent))
+            .map(|parent| {
+                ParentGateGuard::acquire(
+                    Arc::clone(&state.store),
+                    Arc::clone(&state.lifecycle),
+                    parent,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
@@ -402,7 +410,11 @@ impl CompletionRouter {
             } else {
                 record.parent_key.clone()
             };
-            let gate = ParentGateGuard::acquire(Arc::clone(&replacement), Arc::clone(&state.lifecycle), &parent_key)?;
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&replacement),
+                Arc::clone(&state.lifecycle),
+                &parent_key,
+            )?;
             replacement.put_fenced(&record, &parent_key, gate.claim())?;
         }
         state.store = Arc::clone(&replacement);
@@ -462,7 +474,11 @@ impl CompletionRouter {
     }
 
     fn release_parent_locked(&self, state: &mut RouterState, parent_key: &str) {
-        let Ok(gate) = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key) else {
+        let Ok(gate) = ParentGateGuard::acquire(
+            Arc::clone(&state.store),
+            Arc::clone(&state.lifecycle),
+            parent_key,
+        ) else {
             return;
         };
         for record in state.store.list(Some(parent_key)) {
@@ -490,9 +506,11 @@ impl CompletionRouter {
                     state.leased.remove(&receipt.task_id);
                     state.active_receipts.remove(&receipt.task_id);
                 }
-                let Ok(gate) =
-                    ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &receipt.parent_key)
-                else {
+                let Ok(gate) = ParentGateGuard::acquire(
+                    Arc::clone(&state.store),
+                    Arc::clone(&state.lifecycle),
+                    &receipt.parent_key,
+                ) else {
                     continue;
                 };
                 let _ = state.store.resolve_claim(ResolveClaimRequest {
@@ -515,7 +533,11 @@ impl CompletionRouter {
         let receipts: Vec<_> = state.active_receipts.values().cloned().collect();
         let mut released = 0;
         for receipt in receipts {
-            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &receipt.parent_key)?;
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&state.store),
+                Arc::clone(&state.lifecycle),
+                &receipt.parent_key,
+            )?;
             let resolved = state.store.resolve_claim(ResolveClaimRequest {
                 task_id: receipt.task_id.clone(),
                 parent_key: receipt.parent_key.clone(),
@@ -579,11 +601,14 @@ impl CompletionRouter {
     pub async fn record(&self, mut record: CompletionRecord) -> Result<RecordOutcome> {
         let (push, gate) = {
             let mut state = self.lock()?;
-            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &record.parent_key)?;
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&state.store),
+                Arc::clone(&state.lifecycle),
+                &record.parent_key,
+            )?;
             let marker_id = Self::parent_marker_id(&record.parent_key);
             let marker_before = state.store.try_get(&marker_id)?;
-            let Some(parent_epoch) =
-                Self::admit_child_locked(&state, &record.parent_key, &gate)?
+            let Some(parent_epoch) = Self::admit_child_locked(&state, &record.parent_key, &gate)?
             else {
                 tracing::debug!(
                     task_id = %record.task_id,
@@ -764,7 +789,11 @@ impl CompletionRouter {
         let outcome = match state.store.get(task_id) {
             Some(mut existing) if existing.state == CompletionState::Pending => {
                 let gate_key = existing.parent_key.clone();
-                let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &gate_key)?;
+                let gate = ParentGateGuard::acquire(
+                    Arc::clone(&state.store),
+                    Arc::clone(&state.lifecycle),
+                    &gate_key,
+                )?;
                 existing.state = CompletionState::Tombstoned;
                 existing.updated_at = SystemTime::now();
                 state.store.put_fenced(&existing, &gate_key, gate.claim())?;
@@ -774,7 +803,11 @@ impl CompletionRouter {
             Some(_) => TombstoneOutcome::AlreadyFinal,
             None => {
                 let gate_key = format!("completion-task:{task_id}");
-                let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &gate_key)?;
+                let gate = ParentGateGuard::acquire(
+                    Arc::clone(&state.store),
+                    Arc::clone(&state.lifecycle),
+                    &gate_key,
+                )?;
                 state.store.put_fenced(
                     &CompletionRecord::tombstone_stub(task_id),
                     &gate_key,
@@ -806,8 +839,13 @@ impl CompletionRouter {
 
     fn close_parent(&self, parent_key: &str, marker_state: CompletionState) -> Result<usize> {
         let mut state = self.lock()?;
-        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-        let current = Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?;
+        let gate = ParentGateGuard::acquire(
+            Arc::clone(&state.store),
+            Arc::clone(&state.lifecycle),
+            parent_key,
+        )?;
+        let current =
+            Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?;
         if marker_state != CompletionState::ParentDeleted
             && matches!(current, Some(ParentLifecycleStatus::Deleted(_)))
         {
@@ -841,20 +879,20 @@ impl CompletionRouter {
     /// [`Self::delete_parent`] cannot be reopened.
     pub fn resume_parent(&self, parent_key: &str) {
         let result = self.lock().and_then(|state| {
-            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-            match Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())? {
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&state.store),
+                Arc::clone(&state.lifecycle),
+                parent_key,
+            )?;
+            match Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?
+            {
                 Some(ParentLifecycleStatus::Open(_)) => Ok(()),
-                Some(ParentLifecycleStatus::Deleted(_)) => {
-                    Err(TinyAgentsError::Graph(format!(
-                        "completion router: deleted parent {parent_key:?} cannot be resumed"
-                    )))
+                Some(ParentLifecycleStatus::Deleted(_)) => Err(TinyAgentsError::Graph(format!(
+                    "completion router: deleted parent {parent_key:?} cannot be resumed"
+                ))),
+                Some(ParentLifecycleStatus::Stopped(_)) | None => {
+                    Self::set_parent_marker(&state, parent_key, CompletionState::Delivered, &gate)
                 }
-                Some(ParentLifecycleStatus::Stopped(_)) | None => Self::set_parent_marker(
-                    &state,
-                    parent_key,
-                    CompletionState::Delivered,
-                    &gate,
-                ),
             }
         });
         if let Err(error) = result {
@@ -888,7 +926,11 @@ impl CompletionRouter {
     /// not at ordinary router or lease handoff.
     pub fn admit_child_generation(&self, parent_key: &str) -> Result<Option<u64>> {
         let state = self.lock()?;
-        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
+        let gate = ParentGateGuard::acquire(
+            Arc::clone(&state.store),
+            Arc::clone(&state.lifecycle),
+            parent_key,
+        )?;
         Self::admit_child_locked(&state, parent_key, &gate)
     }
 
@@ -902,8 +944,10 @@ impl CompletionRouter {
             Arc::clone(&state.lifecycle),
             parent_key,
         )?;
-        Ok(Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?
-            == Some(ParentLifecycleStatus::Open(parent_epoch)))
+        Ok(
+            Self::parent_lifecycle_status(&state.store, &state.lifecycle, gate.local_guard())?
+                == Some(ParentLifecycleStatus::Open(parent_epoch)),
+        )
     }
 
     fn admit_child_locked(
@@ -927,7 +971,9 @@ impl CompletionRouter {
             Some(ParentLifecycleStatus::Stopped(_)) | Some(ParentLifecycleStatus::Deleted(_)) => {
                 if !router.store.is_process_local() && router.store.try_get(&marker_id)?.is_none() {
                     let status = router.lifecycle.status(parent_key)?.ok_or_else(|| {
-                        TinyAgentsError::Graph("completion router: lifecycle marker disappeared".into())
+                        TinyAgentsError::Graph(
+                            "completion router: lifecycle marker disappeared".into(),
+                        )
                     })?;
                     Self::write_parent_marker(router, parent_key, status, gate)?;
                 }
@@ -966,14 +1012,16 @@ impl CompletionRouter {
         let current = router.store.try_get(&marker.task_id)?;
         let local = router.lifecycle.status(parent_key)?;
         let epoch = if router.store.is_process_local() {
-            local.map(status_epoch).or_else(|| current.map(|record| record.parent_epoch))
+            local
+                .map(status_epoch)
+                .or_else(|| current.map(|record| record.parent_epoch))
         } else {
-            current.map(|record| record.parent_epoch).or_else(|| local.map(status_epoch))
+            current
+                .map(|record| record.parent_epoch)
+                .or_else(|| local.map(status_epoch))
         };
         marker.parent_epoch = epoch.map_or(1, |epoch| epoch.saturating_add(1));
-        router
-            .store
-            .put_fenced(&marker, parent_key, gate.claim())?;
+        router.store.put_fenced(&marker, parent_key, gate.claim())?;
         router.lifecycle.set_status(
             gate.local_guard(),
             status_from_marker(state, marker.parent_epoch),
@@ -990,9 +1038,7 @@ impl CompletionRouter {
         marker.parent_key = parent_key.to_owned();
         marker.parent_epoch = status_epoch(status);
         marker.state = marker_state(status);
-        router
-            .store
-            .put_fenced(&marker, parent_key, gate.claim())
+        router.store.put_fenced(&marker, parent_key, gate.claim())
     }
 
     /// Every undelivered completion for `parent_key`, oldest first, in every
@@ -1089,9 +1135,12 @@ impl CompletionRouter {
         mode: CompletionClaimMode,
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
-        let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), parent_key)?;
-        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, &_gate)?
-        else {
+        let _gate = ParentGateGuard::acquire(
+            Arc::clone(&state.store),
+            Arc::clone(&state.lifecycle),
+            parent_key,
+        )?;
+        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, &_gate)? else {
             return Ok(Vec::new());
         };
         let token = uuid::Uuid::new_v4().to_string();
@@ -1130,7 +1179,11 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let mut changed = 0;
         for receipt in receipts {
-            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &receipt.parent_key)?;
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&state.store),
+                Arc::clone(&state.lifecycle),
+                &receipt.parent_key,
+            )?;
             let resolved = state.store.resolve_claim(ResolveClaimRequest {
                 task_id: receipt.task_id.clone(),
                 parent_key: receipt.parent_key.clone(),
@@ -1159,7 +1212,11 @@ impl CompletionRouter {
         let mut state = self.lock()?;
         let mut gave_up = Vec::new();
         for receipt in receipts {
-            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), Arc::clone(&state.lifecycle), &receipt.parent_key)?;
+            let gate = ParentGateGuard::acquire(
+                Arc::clone(&state.store),
+                Arc::clone(&state.lifecycle),
+                &receipt.parent_key,
+            )?;
             let record = state.store.resolve_claim(ResolveClaimRequest {
                 task_id: receipt.task_id.clone(),
                 parent_key: receipt.parent_key.clone(),

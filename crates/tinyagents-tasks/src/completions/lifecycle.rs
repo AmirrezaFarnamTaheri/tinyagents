@@ -68,11 +68,7 @@ impl ParentLifecycle {
                 .wait_timeout(entries, remaining)
                 .map_err(|_| TinyAgentsError::Graph("parent lifecycle lock poisoned".into()))?;
             entries = next;
-            if timeout.timed_out()
-                && entries
-                    .get(parent_key)
-                    .is_some_and(|entry| entry.held)
-            {
+            if timeout.timed_out() && entries.get(parent_key).is_some_and(|entry| entry.held) {
                 return Err(TinyAgentsError::Graph(format!(
                     "completion router: timed out waiting for local parent admission gate `{parent_key}`"
                 )));
