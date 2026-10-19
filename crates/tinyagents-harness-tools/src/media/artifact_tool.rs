@@ -70,7 +70,7 @@ impl<T: Tool> MediaArtifactTool<T> {
     /// Let a host extract its call id from its own erased context extension.
     #[must_use]
     pub fn with_tool_call_id(mut self, extract: ToolCallIdExtractor) -> Self {
-        self.call_id=Some(extract);
+        self.call_id = Some(extract);
         self
     }
     fn title(args: &Value, index: usize, total: usize) -> String {
@@ -268,8 +268,10 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
         if result.is_error {
             return Ok(result);
         }
-        let call_id=self.call_id.as_ref().and_then(|extract|extract(context));
-        Ok(self.file_entries(result, &args, context, call_id.as_deref()).await)
+        let call_id = self.call_id.as_ref().and_then(|extract| extract(context));
+        Ok(self
+            .file_entries(result, &args, context, call_id.as_deref())
+            .await)
     }
 }
 
