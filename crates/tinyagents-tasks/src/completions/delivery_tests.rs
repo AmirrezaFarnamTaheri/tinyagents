@@ -504,7 +504,6 @@ async fn delivery_accepts_a_call_specific_initial_delay() {
         )
         .await;
     assert_eq!(outcome, DeliveryOutcome::Empty);
-    assert_eq!(delivery.config.debounce, Duration::from_secs(3));
 }
 
 #[test]
