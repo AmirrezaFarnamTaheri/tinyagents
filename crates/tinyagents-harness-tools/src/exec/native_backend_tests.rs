@@ -135,7 +135,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
     let command = format!(
-        "sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; printf captured; wait",
+        "/bin/sh -c \"printf '%s\\\\n' \\$\\$ > {}; exec /bin/sleep 30\" & printf captured; wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
@@ -171,7 +171,7 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
     let command = format!(
-        "sleep 30 & child=$!; printf '%s\\n' \"$child\" > {}; wait",
+        "/bin/sh -c \"printf '%s\\\\n' \\$\\$ > {}; exec /bin/sleep 30\" & wait",
         shell_quote(&pidfile),
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
