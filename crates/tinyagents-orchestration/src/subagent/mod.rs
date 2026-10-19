@@ -32,6 +32,10 @@ mod turn_storage;
 mod types;
 
 pub use admission::{SpawnAdmission, SpawnPolicy, SpawnRejection, SpawnReservation};
+pub use child_turn::{
+    ChildTurnAccounting, ChildTurnCapSummary, ChildTurnFailure, ChildTurnHost, ChildTurnResult,
+    ChildTurnRun, drive_child_turn,
+};
 pub use awaiting_user::SubagentAwaitingUser;
 pub use detached::{
     CancelDetachedOutcome, CancelledSubagentMetadata, DETACHED_LEDGER_TIMEOUT_MS,

@@ -31,8 +31,6 @@ pub struct ChildTurnCapSummary {
     pub usage: UsageTotals,
     /// Price resolved by the host for that summary call.
     pub cost: CallCost,
-    /// Calls made while producing this summary.
-    pub model_calls: usize,
 }
 
 /// A successfully executed child turn before optional cap summarization.
@@ -147,10 +145,6 @@ pub async fn drive_child_turn<H: ChildTurnHost>(
         run.accounting.usage.calls = run.accounting.usage.calls.saturating_add(summary.usage.calls);
         run.accounting.usage.usage += summary.usage.usage;
         run.accounting.cost.add(summary.cost);
-        run.accounting.model_calls = run
-            .accounting
-            .model_calls
-            .saturating_add(summary.model_calls);
     }
 
     if (run.hit_cap || run.early_exit) && !run.output.trim().is_empty() {

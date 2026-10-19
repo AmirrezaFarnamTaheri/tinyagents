@@ -112,7 +112,6 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
             text: "resume from checkpoint".into(),
             usage: totals(7, 5, 2, 1, 3),
             cost: CallCost::Estimated(2.25),
-            model_calls: 1,
         }),
         ..FakeHost::default()
     };
@@ -131,7 +130,7 @@ async fn cap_summary_folds_complete_usage_and_runs_after_transcript_commit() {
         ]
     );
     assert_eq!(result.output, "resume from checkpoint");
-    assert_eq!(result.accounting.model_calls, 6);
+    assert_eq!(result.accounting.model_calls, 5);
     assert_eq!(result.accounting.usage.calls, 2);
     assert_eq!(result.accounting.usage.usage.input_tokens, 17);
     assert_eq!(result.accounting.usage.usage.output_tokens, 9);
