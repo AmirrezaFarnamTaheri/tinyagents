@@ -24,12 +24,16 @@ pub enum CompletionRouterReplaceOutcome {
 pub enum CompletionRouterPoolError {
     /// The pool mutex was poisoned by a panic in another task.
     Lock(String),
+    /// A router could not release its active durable claims. Earlier routers
+    /// in the same call may already have released theirs; retry is safe.
+    Release(String),
 }
 
 impl std::fmt::Display for CompletionRouterPoolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Lock(detail) => write!(f, "completion router pool lock poisoned: {detail}"),
+            Self::Release(detail) => write!(f, "completion router pool could not release claims: {detail}"),
         }
     }
 }
@@ -100,6 +104,20 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     pub fn clear(&self) -> Result<(), CompletionRouterPoolError> {
         self.lock()?.clear();
         Ok(())
+    }
+
+    /// Releases all active claims held by cached routers without clearing the
+    /// pool. Each router is snapshotted before store I/O, so the pool mutex is
+    /// not held while a backend is accessed. On failure, earlier routers may
+    /// already have released claims; calling this again is safe.
+    pub fn release_all(&self) -> Result<usize, CompletionRouterPoolError> {
+        let routers: Vec<_> = self.lock()?.values().map(Arc::clone).collect();
+        routers.into_iter().try_fold(0usize, |released, router| {
+            router
+                .release_all()
+                .map(|count| released + count)
+                .map_err(|error| CompletionRouterPoolError::Release(error.to_string()))
+        })
     }
 
     /// Atomically replaces `expected` only while it remains the cached router.

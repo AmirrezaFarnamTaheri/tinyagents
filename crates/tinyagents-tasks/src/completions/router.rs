@@ -326,6 +326,30 @@ impl CompletionRouter {
         }
     }
 
+    /// Releases every receipt currently owned by this router so another
+    /// router can retry the pending records immediately. Store failures leave
+    /// the affected receipt locally owned and are returned to the caller.
+    pub fn release_all(&self) -> Result<usize> {
+        let mut state = self.lock()?;
+        let receipts: Vec<_> = state.active_receipts.values().cloned().collect();
+        let mut released = 0;
+        for receipt in receipts {
+            let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?;
+            state.store.resolve_claim(
+                &receipt.task_id,
+                &receipt.parent_key,
+                receipt.parent_epoch,
+                gate.claim(),
+                &receipt.token,
+                ClaimResolution::Release,
+            )?;
+            state.leased.remove(&receipt.task_id);
+            state.active_receipts.remove(&receipt.task_id);
+            released += 1;
+        }
+        Ok(released)
+    }
+
     /// Records pushed onto `parent_key`'s live queue (or claimed) and not yet
     /// acknowledged, oldest first.
     pub fn in_flight_for(&self, parent_key: &str) -> Vec<CompletionRecord> {
