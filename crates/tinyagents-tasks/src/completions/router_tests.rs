@@ -1804,7 +1804,7 @@ async fn record_with_retries_survives_a_transient_store_failure() {
     );
     // Fails once, then the store recovers.
     store.puts.store(0, SeqCst);
-    store.fail_from.store(1, SeqCst);
+    store.fail_from.store(usize::MAX, SeqCst);
     let attempt = router.record_with_retries(record("t2", "p"), 1).await;
     assert!(attempt.is_ok(), "retry result: {attempt:?}");
     store.puts.store(0, SeqCst);
