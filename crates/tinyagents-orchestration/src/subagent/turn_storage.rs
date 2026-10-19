@@ -126,7 +126,11 @@ impl StorageBackend for FencedSessionBackend {
         self.bind(scope)
     }
 
-    fn for_scope_fenced(&self, scope: &Scope, fence: &Fence) -> Result<ScopedStorage, StorageError> {
+    fn for_scope_fenced(
+        &self,
+        scope: &Scope,
+        fence: &Fence,
+    ) -> Result<ScopedStorage, StorageError> {
         if fence != &self.fence {
             return Err(StorageError::unsupported(
                 Capability::Fencing,

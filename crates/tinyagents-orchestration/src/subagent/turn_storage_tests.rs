@@ -1,15 +1,13 @@
 use super::*;
 
 use serde_json::json;
+use tinyagents_harness::store::SchemaAdmission;
 use tinyagents_session::port::{DriverSessionStores, SessionStoreProvider};
 use tinyagents_session::transcript::{
     SessionRef, TranscriptHistory, TranscriptMessage, TranscriptMeta, TranscriptTurn,
 };
 use tinyagents_tasks::DurableThreadDeliveryLeases;
-use tinyagents_harness::store::SchemaAdmission;
-use tinystoragedrivers_core::{
-    Filter, MemoryStorage, Precondition, Scope, StorageBackend,
-};
+use tinystoragedrivers_core::{Filter, MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn meta(thread_id: &str) -> TranscriptMeta {
     TranscriptMeta {
@@ -81,16 +79,25 @@ fn fenced_session_backend_admits_only_typed_tenant_and_agent_scopes() {
 
     assert!(scoped.for_scope(&tenant).is_ok());
     assert!(scoped.for_scope(&tenant.agent("worker").unwrap()).is_ok());
-    assert!(scoped
-        .for_scope(&Scope::tenant("alice-other").unwrap().agent("worker").unwrap())
-        .is_err());
-    assert!(scoped
-        .for_scope(&tenant.module("module").unwrap())
-        .is_err());
+    assert!(
+        scoped
+            .for_scope(
+                &Scope::tenant("alice-other")
+                    .unwrap()
+                    .agent("worker")
+                    .unwrap()
+            )
+            .is_err()
+    );
+    assert!(scoped.for_scope(&tenant.module("module").unwrap()).is_err());
     assert!(scoped.for_scope(&Scope::cluster()).is_err());
     // Legacy strings that merely share a textual prefix do not inherit the
     // typed tenant's authority.
-    assert!(scoped.for_scope(&Scope::new("u:alice-evil").unwrap()).is_err());
+    assert!(
+        scoped
+            .for_scope(&Scope::new("u:alice-evil").unwrap())
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -117,15 +124,17 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
     )
     .unwrap();
 
-    let lease_a = leases_a.try_acquire(&tenant, "thread-1").await.unwrap().unwrap();
+    let lease_a = leases_a
+        .try_acquire(&tenant, "thread-1")
+        .await
+        .unwrap()
+        .unwrap();
     let actor_a = provider
         .bind_actor_with_schema_admission(
-            Arc::new(FencedSessionBackend::new(
-                Arc::clone(&backend),
-                tenant.clone(),
-                lease_a.fence(),
-            )
-            .unwrap()),
+            Arc::new(
+                FencedSessionBackend::new(Arc::clone(&backend), tenant.clone(), lease_a.fence())
+                    .unwrap(),
+            ),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
@@ -140,18 +149,25 @@ async fn takeover_fences_a_retained_driver_session_transcript_writer() {
     let first = vec![TranscriptMessage::new("assistant", "owner A")];
     append(history_a.as_ref(), &[], &first, &metadata).unwrap();
 
-    assert!(leases_b.try_acquire(&tenant, "thread-1").await.unwrap().is_none());
+    assert!(
+        leases_b
+            .try_acquire(&tenant, "thread-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(lease_a.release().await.unwrap());
-    let lease_b = leases_b.try_acquire(&tenant, "thread-1").await.unwrap().unwrap();
+    let lease_b = leases_b
+        .try_acquire(&tenant, "thread-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert!(lease_b.epoch() > lease_a.epoch());
     let actor_b = provider
         .bind_actor_with_schema_admission(
-            Arc::new(FencedSessionBackend::new(
-                Arc::clone(&backend),
-                tenant,
-                lease_b.fence(),
-            )
-            .unwrap()),
+            Arc::new(
+                FencedSessionBackend::new(Arc::clone(&backend), tenant, lease_b.fence()).unwrap(),
+            ),
             SchemaAdmission::ValidateOnly,
         )
         .unwrap()
