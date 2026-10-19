@@ -112,13 +112,14 @@ delete assistant rows: the historical repair is the leading run of orphan
 tool-result rows only.
 
 This deliberately removes only leading `tool` rows immediately after the
-contiguous system prefix, matching OpenHuman `driver.rs::repair_orphaned_tool_head`
-and `codec.rs::replayable_host_rows`. It does not remove a trailing assistant
+contiguous system prefix, matching OpenHuman
+`driver.rs::repair_orphaned_tool_head` and `codec.rs::replayable_host_rows`.
+It does not remove a trailing assistant
 tool-call round, does not remove later orphan rows, and does not rewrite the
 durable source during resume. Later orphans remain visible to normal strict
 transcript validation and fail there. The return value is a replay view; when
-there are no leading orphans, callers should retain the original slice rather
-than clone it (implement a borrowed `Cow` API if necessary to keep this cheap).
+there are no leading orphans, the helper returns the original slice through
+`Cow::Borrowed` rather than cloning it.
 
 ### Host identity resolution and store leases (`tinyagents-session`,
 `tinyagents-runtime`)
@@ -258,7 +259,12 @@ OpenHuman approvals remain the wrapped host policy. Extract first-wins
 visible-spec deduplication as a separate helper over `Vec<Arc<ToolSpec>>` that
 preserves input order and the winning allocation. Remove synthesized name
 collisions before deduplication so the durable declaration wins. Keep
-`ToolSnapshot::new` conflict rejection unchanged.
+`ToolSnapshot::new` conflict rejection unchanged. Implement the two helpers
+with these signatures: `dedup_visible_tool_specs(Vec<Arc<ToolSpec>>) ->
+Vec<Arc<ToolSpec>>`, which retains the first name and original allocation in
+input order, and `drop_synthesized_name_collisions(&[Arc<ToolSpec>],
+Vec<Arc<ToolSpec>>) -> Vec<Arc<ToolSpec>>`, which removes synthesized specs
+whose names occur in the durable set before the first-wins pass.
 
 Extend the harness-owned `ToolSnapshot` in
 `harness/src/tool/snapshot.rs` with a typed opaque extension carrier rather
@@ -452,6 +458,29 @@ fn repair_removes_only_tool_rows_after_the_leading_system_prefix() {
 }
 ```
 
+Add the corresponding inference-view test in the same test file:
+
+```rust
+#[test]
+fn message_repair_removes_the_same_leading_tool_head() {
+    use tinyinference_llm::message::Message;
+    let history = vec![
+        Message::system("frozen"),
+        Message::tool("orphan", "old result"),
+        Message::user("next"),
+        Message::tool("later", "invalid"),
+    ];
+    let repaired = repair_orphaned_tool_head_messages(&history);
+    assert_eq!(repaired.len(), 3);
+    assert!(matches!(repaired[0], Message::System(_)));
+    assert!(matches!(repaired[1], Message::User(_)));
+    assert!(matches!(repaired[2], Message::Tool(_)));
+    assert_eq!(history.len(), 4);
+}
+```
+
+`Message::tool` takes the call id and result content in that order.
+
 After the runtime red test fails, add the helper implementation to `adoption.rs`, call it on raw rows before codec decoding and on decoded `Message` history before dispatch, and keep `persisted` raw rows unchanged. Add a second test with a later orphan and assert it remains in the returned replay view, plus a no-orphan test asserting `matches!(..., Cow::Borrowed(_))`. Run `cargo test -p tinyagents-runtime orphaned_tool_head` for the red/green behavioral regression, then `cargo test -p tinyagents-session adoption_tests`, and `cargo test -p tinyagents-runtime`.
 
 ### 2. Adopt legacy transcripts into canonical identity without changing old files
@@ -468,8 +497,8 @@ stem fixture via the existing in-memory transcript locator, calls
 `TranscriptLocator::adopt_legacy(&canonical_session, "thread-legacy", &meta)`,
 reads the head with `head_generation`, and asserts the imported messages and
 canonical metadata match while the legacy fixture remains readable and
-unchanged. This test must fail before changing any implementation because it
-pins the missing host-equivalent adoption path. Run
+unchanged. This is a compatibility characterization for adoption; the
+behavioral red test for the missing host identity binding is in step 3. Run
 `cargo test -p tinyagents-session legacy_session_adoption`; then ensure the
 runtime calls adoption only through the already existing `ResumeMode::Session`
 path. Do not add a constructor that claims to map arbitrary old raw filenames
