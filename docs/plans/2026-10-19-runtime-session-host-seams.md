@@ -1662,6 +1662,55 @@ async fn persisted_failure_partial_skips_post_commit_sinks_and_fails_once() {
         .read_session().unwrap().unwrap();
     assert!(transcript.messages.iter().any(|row| row.content == "durable partial"));
 }
+
+struct RejectBeforeCommit;
+
+#[async_trait]
+impl SessionHooks for RejectBeforeCommit {
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> { Ok(TurnPreparation::default()) }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Driver("reject before durable append".into()))
+    }
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> { Ok(()) }
+}
+
+#[tokio::test]
+async fn precommit_error_does_not_call_post_commit_sink() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .hooks(Arc::new(RejectBeforeCommit))
+        .post_commit_sink(Arc::new(CountSink(calls.clone())))
+        .build().unwrap();
+    assert!(session.turn(Message::user("reject"), TurnOptions::default()).await.is_err());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+struct ErrorSink;
+
+#[async_trait]
+impl PostCommitSink for ErrorSink {
+    async fn after_commit(&self, _: &PostCommitObservation) -> Result<(), RuntimeError> {
+        Err(RuntimeError::Driver("sink failed after commit".into()))
+    }
+}
+
+#[tokio::test]
+async fn post_commit_sink_error_does_not_change_successful_turn_result() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-sink-error", "agent");
+    let mut session = SessionBuilder::new(Arc::new(ReplyDriver))
+        .codec(Arc::new(RoleCodec))
+        .post_commit_sink(Arc::new(ErrorSink))
+        .session(locator, session_ref, meta())
+        .build().unwrap();
+    let outcome = session.turn(Message::user("succeed"), TurnOptions::default()).await.unwrap();
+    assert_eq!(outcome.output.as_deref(), Some("committed reply"));
+}
 ```
 
 Capture must live in `TurnDriver::prepare`, not only `execute`: callers may
