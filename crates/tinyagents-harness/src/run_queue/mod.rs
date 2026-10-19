@@ -240,15 +240,15 @@ impl<T> RunQueue<T> {
     ) -> AdmissionDecision<T> {
         let Queued { value, admission } = item;
         let permit = match admission.as_ref() {
-            Some(admission) => {
-                let key = admission.batch_key();
+            Some(capability) => {
+                let key = capability.batch_key();
                 if let Some(key) = key.as_ref() {
                     match permits.get(key) {
                         Some(permit) => Some(std::sync::Arc::clone(permit)),
                         None => {
-                            let permit = match admission.acquire_for(Some(key)) {
+                            let permit = match capability.acquire_for(Some(key)) {
                                 Ok(permit) => permit,
-                                Err(_) if admission.retry_after_rejection(Some(key)) => {
+                                Err(_) if capability.retry_after_rejection(Some(key)) => {
                                     return AdmissionDecision::Retry(Queued { value, admission });
                                 }
                                 Err(_) => return AdmissionDecision::Rejected,
@@ -258,9 +258,9 @@ impl<T> RunQueue<T> {
                         }
                     }
                 } else {
-                    match admission.acquire_for(None) {
+                    match capability.acquire_for(None) {
                         Ok(permit) => Some(permit),
-                        Err(_) if admission.retry_after_rejection(None) => {
+                        Err(_) if capability.retry_after_rejection(None) => {
                             return AdmissionDecision::Retry(Queued { value, admission });
                         }
                         Err(_) => return AdmissionDecision::Rejected,
