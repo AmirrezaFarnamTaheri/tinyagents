@@ -68,12 +68,12 @@ them with their assertions and fixtures, then adapt only test imports and
 host-owned fakes to the new ports. Do not copy OpenHuman security policy,
 `SecurityPolicy`, `AuditLogger`, TinyBox/TinyBus contracts, artifact stores,
 `Production`, SaaS switches, Docker/TinyBox selection, or OpenHuman context
-types into TinyAgents. The generic tool asks its injected ports; OpenHuman's
-later adapter implements those ports. Keep the existing host's approval gate
-and turn routing in the host. The tool must still run `ExecGate::authorize`
-inside `execute` immediately before invoking the backend, so a denied policy
-gate never spawns a process even if the outer approval gate let the call reach
-the tool.
+types into TinyAgents. The generic tool asks its injected ports; OpenHuman's later adapter
+implements those ports. Keep the existing host's approval gate and turn
+routing in the host. The tool runs `ExecGate::authorize` inside `execute`
+immediately before invoking the selected backend. A gate denial or selected
+backend preflight refusal never attempts process creation, even if the outer
+approval gate let the call reach the tool.
 
 ## Contract to establish before porting
 
@@ -87,10 +87,11 @@ the implementation; adapt names only if the inspected current
 
 `ExecGate` decides whether an operation may proceed and owns host audit
 recording. Its authorization call is awaited before backend execution. It
-returns a permit only for an allowed call; a denial is returned to the model
-as a stable `ToolResult::error` and does not call `ExecBackend`. The host can
-use `ToolRunContext::host_extension()` to read its own turn state without
-TinyAgents importing or downcasting to a host type.
+returns a permit only after host policy approval; a denial is returned to the
+model as a stable `ToolResult::error` and does not call `ExecBackend`. The
+selected backend may still refuse before launch after configuration/preflight.
+The host can use `ToolRunContext::host_extension()` to read its own turn state
+without TinyAgents importing or downcasting to a host type.
 
 ```rust
 use std::{any::Any, collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
@@ -230,8 +231,8 @@ more permissive route. OpenHuman retains authority over native/sandbox/Docker/
 TinyBox/SaaS selection. A SaaS-unavailable refusal and Docker configuration or
 preflight refusal are typed `Refused` outcomes before process creation; they
 are not policy denials and are not launch failures. `LaunchFailed` means a
-process-creation attempt failed. Audit exactly once for each call, recording the source approval-required
-proxy (`external_effect_with_args(args)`) separately from authorization and
+process-creation attempt failed. Audit exactly once for each well-formed operation that reaches the gate,
+recording the source approval-required proxy (`external_effect_with_args(args)`) separately from authorization and
 allowed status. Gate denial is
 `authorized=false, allowed=false, process_attempted=false`; backend refusal
 (including SaaS refusal or Docker configuration/preflight failure) is
@@ -367,9 +368,7 @@ all fields and progress heartbeat behavior. Compare it against
 `VideoJobStatus` and the old wrapper's progress tests; do not discard an
 observable status. The wrapper keeps the inner tool's name, description,
 schema, policy, permissions, scope, category, result content, and progress
-behavior. The generic wrapper keeps the inner
-tool's name, description, schema, policy, permissions, scope, category, result
-content, and progress behavior. It parses
+behavior. It parses
 each JSON result's `artifacts` array and invokes the injected `ArtifactFiling`
 port once per recognizable output. It does not store files, create product
 artifact records, or depend on TinyArtifacts/OpenHuman.
@@ -670,16 +669,20 @@ cleanup path; do not claim descendant termination where the platform does not
 provide it. Tests use a temporary executable
 script/process and assert: only the expected argv reaches it; malformed
 package inputs never launch; denied calls have a zero backend count; timeout
-terminates a spawned child and descendant and waits for the child; cancel/drop
-also terminates and reaps; separate stdout/stderr truncation remains Unicode
-safe; and exit status survives. No real package manager or network install is
+does not return until an acknowledgment written by the owned waiter after
+process-group kill, output-pipe drain, and child reap; separate stdout/stderr
+truncation remains Unicode safe; and exit status survives. Cancellation tests
+run the call under `ProcessCleanup::scope`, drop the call future, and assert
+that drop signals the waiter while `ProcessCleanup::wait()` stays pending until
+the waiter has killed, drained, and reaped. Do not assert or imply that `Drop`
+itself waits. No real package manager or network install is
 run.
 
 Port the OpenHuman `install_tool` behavioral tests with fake ports. Write
 behavioral RED first for injection attempts in the package parameter and
-denial-before-spawn, then make the tests green. The process timeout/cancel
-cases must fail if only the direct child is killed or if the child is not
-waited/reaped.
+denial-before-spawn, then make the tests green. The timeout/cancel tests must fail if only the direct child is killed, if
+`output_or_kill` returns before the timeout reaper acknowledgment, or if the
+owner reports cancellation complete before `ProcessCleanup::wait()` resolves.
 
 ### 6. Move parse-once schema utility without the host module tree
 
