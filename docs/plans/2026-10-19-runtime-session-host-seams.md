@@ -668,14 +668,58 @@ pub fn identity_resolver(
 }
 ```
 
-Add `identity: Option<IdentityConfig<C>>` to `SessionBuilder<C>` and
-`identity_config: Option<IdentityConfig<C>>`,
-`established_identity: Option<SessionIdentity>`, and
-`identity: Option<SessionIdentity>` to `Session<C>`. Initialize all three
-options to `None`. Add `identity: Option<&'a SessionIdentity>` to
-`SessionStateView<'a>` and populate it from `established_identity`, not the
-current in-flight resolution. Export `SessionIdentity` and
-`SessionIdentityRequest` from `types` and
+In `builder.rs`, add `identity: Option<IdentityConfig<C>>` to
+`SessionBuilder<C>`, initialize it to `None` in `new`, and add the method
+implementation below. Keep `IdentityConfig<C>` in a private field so the
+existing `.transcript(...)` and `.session(...)` methods remain source
+compatible:
+
+```rust
+pub fn identity_resolver(
+    mut self,
+    session_key: impl Into<String>,
+    meta: TranscriptMeta,
+    resolver: Arc<dyn SessionIdentityResolver<C>>,
+) -> Self {
+    self.identity = Some(IdentityConfig {
+        resolver,
+        session_key: session_key.into(),
+        meta,
+    });
+    self
+}
+```
+
+In `build`, destructure the identity configuration before moving other
+builder fields. Require `TranscriptCodec` if either transcript or identity
+configuration exists, preserve the existing target construction, and pass
+`identity` as the final constructor argument:
+
+```rust
+let identity = self.identity;
+let target = self.transcript.map(|config| crate::TranscriptTarget {
+    locator: config.locator,
+    stem: config.stem,
+    resume_agent: config.resume_agent,
+    session: config.session,
+    meta: config.meta,
+});
+if (target.is_some() || identity.is_some()) && self.codec.is_none() {
+    return Err(RuntimeError::MissingDependency("TranscriptCodec"));
+}
+let mut session = Session::<C>::new(
+    self.driver, self.codec, self.hooks, self.prefix, self.tools, target, identity,
+);
+session.set_retain_recorded_tools(self.retain_recorded_tools);
+Ok(session)
+```
+
+Change `Session::new` to accept `identity_config: Option<IdentityConfig<C>>`
+after `target` and initialize `identity_config`,
+`established_identity: None`, and `identity: None`. Add
+`identity: Option<&'a SessionIdentity>` to `SessionStateView<'a>` and populate
+it from `established_identity` (never the in-flight result). Export
+`SessionIdentity` and `SessionIdentityRequest` from `types` and
 `ResolvedSessionStores`/`SessionIdentityResolver` from `identity` in `lib.rs`.
 
 In `SessionBuilder::build`, require a codec when either transcript or
