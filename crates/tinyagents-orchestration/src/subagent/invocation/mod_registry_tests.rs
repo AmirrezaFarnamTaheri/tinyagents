@@ -259,6 +259,76 @@ async fn settled_driver_jobs_have_bounded_retention_across_all_registry_maps() {
 }
 
 #[tokio::test]
+async fn recent_terminal_driver_jobs_replay_until_oldest_cache_eviction() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (old_key, old_id) = register_driver_job(&jobs, "old-cache-entry");
+    jobs.mark_running(&old_id);
+    jobs.mark_driver_result(
+        &old_id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "old",
+            "old result",
+        )),
+    );
+
+    let (recent_key, recent_id) = register_driver_job(&jobs, "recent-cache-entry");
+    jobs.mark_running(&recent_id);
+    jobs.mark_driver_result(
+        &recent_id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "recent",
+            "replayable result",
+        )),
+    );
+    let waited = jobs
+        .wait_owned(recent_id.as_str(), "owner")
+        .await
+        .expect("terminal result");
+    assert_eq!(waited.output.as_deref(), Some("replayable result"));
+
+    let (replayed_id, _, _, _, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: recent_key.clone(),
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .expect("reuse retained terminal driver job");
+    assert_eq!(replayed_id, recent_id);
+    assert!(!inserted);
+
+    for index in 0..127 {
+        let (_, id) = register_driver_job(&jobs, format!("cache-filler-{index}"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "filler", "done",
+            )),
+        );
+    }
+
+    assert!(jobs.get(old_id.as_str()).is_none());
+    assert_eq!(
+        jobs.get(recent_id.as_str()).unwrap().output.as_deref(),
+        Some("replayable result")
+    );
+    assert_eq!(
+        jobs.driver_job_for_key(&recent_key, "owner"),
+        Some(recent_id)
+    );
+    assert!(jobs.driver_job_for_key(&old_key, "owner").is_none());
+    assert_eq!(jobs.tasks().len().unwrap(), 128);
+    assert_eq!(jobs.controls.lock().unwrap().len(), 128);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), 128);
+}
+
+#[tokio::test]
 async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
     let jobs = SubAgentJobRegistry::new();
     let total = 256;

@@ -266,7 +266,12 @@ impl SubAgentJobRegistry {
                 control.status.borrow().status.is_terminal()
                     && control.waiters.load(Ordering::Acquire) == 0
             })
-            .map(|(id, control)| (control.terminal_sequence.load(Ordering::Acquire), id.clone()))
+            .map(|(id, control)| {
+                (
+                    control.terminal_sequence.load(Ordering::Acquire),
+                    id.clone(),
+                )
+            })
             .collect();
         candidates.sort_by_key(|(sequence, _)| *sequence);
         let mut removed = std::collections::HashSet::with_capacity(candidates.len());
@@ -449,9 +454,7 @@ impl SubAgentJobRegistry {
 
     fn stamp_terminal_sequence(&self, control: &JobControl) {
         if control.terminal_sequence.load(Ordering::Acquire) == 0 {
-            let sequence = self
-                .next_terminal_sequence
-                .fetch_add(1, Ordering::Relaxed);
+            let sequence = self.next_terminal_sequence.fetch_add(1, Ordering::Relaxed);
             let _ = control.terminal_sequence.compare_exchange(
                 0,
                 sequence,
@@ -923,7 +926,7 @@ impl SubAgentJobRegistry {
         let owner = owner.to_string();
         let id = SubAgentJobId(job_id.to_owned());
         let task_id = TaskId::new(job_id);
-        let (mut status, waiters, terminal_observed) = {
+        let (mut status, waiters) = {
             // Pin the control before releasing its lock so cap pruning cannot
             // remove a terminal snapshot between ownership validation and the
             // watch subscription.
@@ -939,32 +942,21 @@ impl SubAgentJobRegistry {
                 .get(&id)
                 .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
             control.waiters.fetch_add(1, Ordering::AcqRel);
-            (
-                control.status.subscribe(),
-                control.waiters.clone(),
-                control.terminal_observed.clone(),
-            )
+            (control.status.subscribe(), control.waiters.clone())
         };
         let waiter_guard = JobWaitGuard {
             jobs: self.clone(),
             waiters,
-            terminal_observed: terminal_observed.clone(),
         };
         loop {
             let snapshot = status.borrow().clone();
             if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
             {
-                if snapshot.status.is_terminal() {
-                    terminal_observed.store(true, Ordering::Release);
-                }
                 drop(waiter_guard);
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {
                 let snapshot = status.borrow().clone();
-                if snapshot.status.is_terminal() {
-                    terminal_observed.store(true, Ordering::Release);
-                }
                 drop(waiter_guard);
                 return Ok(snapshot);
             }
