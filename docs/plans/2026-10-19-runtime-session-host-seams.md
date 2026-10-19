@@ -1027,6 +1027,35 @@ async fn explicit_session_override_cannot_change_resolved_identity() {
     assert_eq!(*calls.lock().unwrap(), 1);
 }
 
+struct FailingIdentityResolver;
+
+impl SessionIdentityResolver<()> for FailingIdentityResolver {
+    fn resolve(
+        &self,
+        _: &SessionIdentityRequest,
+        _: &(),
+    ) -> Result<ResolvedSessionStores, RuntimeError> {
+        Err(RuntimeError::Driver("actor admission denied".into()))
+    }
+}
+
+#[tokio::test]
+async fn resolver_error_does_not_touch_builder_fallback_locator() {
+    let (fallback, history) = locator(None);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .transcript(fallback.clone(), "fallback", meta())
+        .identity_resolver("thread-identity", meta(), Arc::new(FailingIdentityResolver))
+        .build().unwrap();
+    let options = TurnOptions {
+        resume: ResumeMode::LatestForAgent,
+        ..TurnOptions::default()
+    };
+    assert!(matches!(session.resume(&options).await, Err(RuntimeError::Driver(_))));
+    assert!(fallback.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*history.opens.lock().unwrap(), 0);
+}
+
 #[tokio::test]
 async fn later_agent_change_is_rejected_before_second_driver_call() {
     use tinystoragedrivers_core::{MemoryStorage, Scope};
