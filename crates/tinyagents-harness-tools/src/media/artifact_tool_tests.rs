@@ -83,6 +83,7 @@ impl ArtifactFiling for RoutingFiler {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or("missing generated filename")?;
+        let filename = filename.strip_prefix("blob:").unwrap_or(filename);
         Ok(FiledArtifact {
             id: format!("{}-{filename}", identity.0),
             path: format!("/files/{}-{filename}.png", identity.0),
