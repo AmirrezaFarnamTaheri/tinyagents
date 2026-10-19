@@ -313,6 +313,10 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         };
         let mut reservation = reservation.map_err(SubagentError::SpawnRejected)?;
 
+        let turn_fence = request.turn_fence();
+        if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
+            return Err(SubagentError::Cancelled);
+        }
         let mut prepared = self.planner.prepare(request).await?;
         if prepared.task_id != task_id {
             return Err(SubagentError::TaskIdMismatch {
@@ -327,6 +331,9 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
         } else {
             None
         };
+        if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
+            return Err(SubagentError::Cancelled);
+        }
         if cancellation.is_cancelled() {
             let result = self
                 .persist_cancelled(
@@ -368,32 +375,56 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
             prepared,
             task_key: task_key.clone(),
             cancellation: child_token,
+            turn_fence: turn_fence.clone(),
         };
         let mut timed_out = false;
+        let mut turn_lease_lost = false;
         let mut omitted_chars = 0usize;
         let mut token;
         let executed = loop {
+            if turn_fence.as_ref().is_some_and(|fence| !fence.admitted()) {
+                turn_lease_lost = true;
+                break Err(SubagentError::Cancelled);
+            }
             token = execution.cancellation.clone();
             let run = self.executor.execute(execution);
-            let result = match policy.timeout {
-                Some(limit) => match tokio::time::timeout(limit, run).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        token.cancel();
-                        timed_out = true;
-                        tracing::debug!(
-                            "{LOG_PREFIX} timeout task_id={task_id} after_ms={}",
-                            limit.as_millis()
-                        );
-                        break Ok(SubagentOutcome::incomplete(
-                            task_id.clone(),
-                            SubagentIncomplete::new(format!("subagent timed out after {limit:?}"))
-                                .with_kind(IncompleteKind::Timeout),
-                        ));
-                    }
-                },
-                None => run.await,
+            let run = async {
+                match policy.timeout {
+                    Some(limit) => match tokio::time::timeout(limit, run).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            token.cancel();
+                            timed_out = true;
+                            tracing::debug!(
+                                "{LOG_PREFIX} timeout task_id={task_id} after_ms={}",
+                                limit.as_millis()
+                            );
+                            Ok(SubagentOutcome::incomplete(
+                                task_id.clone(),
+                                SubagentIncomplete::new(format!("subagent timed out after {limit:?}"))
+                                    .with_kind(IncompleteKind::Timeout),
+                            ))
+                        }
+                    },
+                    None => run.await,
+                }
             };
+            let result = if let Some(fence) = &turn_fence {
+                tokio::select! {
+                    biased;
+                    _ = fence.lost() => {
+                        token.cancel();
+                        turn_lease_lost = true;
+                        Err(SubagentError::Cancelled)
+                    }
+                    result = run => result,
+                }
+            } else {
+                run.await
+            };
+            if turn_lease_lost {
+                break result;
+            }
             let Err(SubagentError::Transient { message, tools_ran }) = &result else {
                 break result;
             };
@@ -419,12 +450,18 @@ impl<C: Send + 'static, H: Send + 'static> SubagentDriver<C, H> {
                         prepared: next,
                         task_key: task_key.clone(),
                         cancellation: next_token,
+                        turn_fence: turn_fence.clone(),
                     };
                 }
                 Err(error) => break Err(error),
             }
         };
 
+        if turn_lease_lost
+            || turn_fence.as_ref().is_some_and(|fence| !fence.admitted())
+        {
+            return Err(SubagentError::Cancelled);
+        }
         let outcome = match executed {
             Ok(outcome) => {
                 if outcome.task_id != task_id {
