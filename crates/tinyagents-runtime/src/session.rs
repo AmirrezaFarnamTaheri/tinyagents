@@ -34,6 +34,12 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     default_tools: ToolSnapshot,
     history: Vec<Message>,
     persisted: Vec<TranscriptMessage>,
+    /// Lossless rows aligned with the replay history passed to the codec.
+    ///
+    /// This can be shorter than persisted after orphan-head repair. The
+    /// original rows remain the write baseline so a successful turn rolls
+    /// forward into a successor generation without erasing its source.
+    reconcile_prior: Vec<TranscriptMessage>,
     target: Option<TranscriptTarget>,
     transcript: Option<Arc<dyn TranscriptHistory>>,
     committed_turns: usize,
@@ -73,6 +79,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             prefix: prefix.frozen(),
             default_tools,
             persisted: Vec::new(),
+            reconcile_prior: Vec::new(),
             target,
             transcript: None,
             committed_turns: 0,
@@ -124,7 +131,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             ));
         }
         self.history = self.with_prefix(history);
-        self.persisted = raw;
+        self.persisted = raw.clone();
+        self.reconcile_prior = raw;
         Ok(())
     }
 
@@ -322,6 +330,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .ok_or(RuntimeError::MissingDependency("TranscriptCodec"))?;
         let replay_rows =
             tinyagents_session::transcript::repair_orphaned_tool_head(&transcript.messages);
+        let reconcile_prior = replay_rows.as_ref().to_vec();
         let mut decoded = match replay_rows {
             std::borrow::Cow::Borrowed(_) => codec.decode_history(&transcript)?,
             std::borrow::Cow::Owned(messages) => {
@@ -489,6 +498,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .map_or(0, |tools| tools.specs().len())
         );
         self.persisted = transcript.messages;
+        self.reconcile_prior = reconcile_prior;
         // The discovered metadata, not the builder seed, is authoritative for
         // the subsequent append. This keeps resume-only host fields intact.
         if let Some(target) = self.target.as_mut() {
@@ -566,7 +576,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools =
                         Self::decode_recorded_tools(destination_transcript.tools.as_ref());
                     self.persisted_prefix_len = destination_transcript.meta.prefix_message_count;
-                    self.persisted = destination_transcript.messages;
+                    self.persisted = destination_transcript.messages.clone();
+                    self.reconcile_prior = destination_transcript.messages;
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
                     }
@@ -582,6 +593,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.recorded_tools = None;
                     self.persisted_prefix_len = None;
                     self.persisted = Vec::new();
+                    self.reconcile_prior = Vec::new();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = pre_scan_meta;
                         if let Some(session) = target.session.clone() {
@@ -775,7 +787,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                     self.remember_sent_tools(record_tools.as_ref());
                     self.prefix = prefix;
                     self.history = partial_history;
-                    self.persisted = raw;
+                    self.persisted = raw.clone();
+                    self.reconcile_prior = raw;
                     if receipt.is_some() {
                         self.committed_turns += 1;
                     }
@@ -817,7 +830,8 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         self.remember_sent_tools(record_tools.as_ref());
         self.prefix = prefix;
         self.history = committed.history.clone();
-        self.persisted = raw;
+        self.persisted = raw.clone();
+        self.reconcile_prior = raw;
         self.committed_turns += 1;
         // Post-commit hooks may deliver another background message into this
         // session. Do not hold the non-reentrant turn lock while they run.
@@ -1007,7 +1021,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         options: &TranscriptTurnOptions<C>,
     ) -> Result<Vec<TranscriptMessage>, RuntimeError> {
         match &self.codec {
-            Some(codec) => codec.reconcile(&self.persisted, previous, next, options),
+            Some(codec) => codec.reconcile(&self.reconcile_prior, previous, next, options),
             None => Ok(Vec::new()),
         }
     }
@@ -1072,6 +1086,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                 .messages()
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
             self.transcript = Some(handle);
+            self.reconcile_prior = persisted.clone();
             self.persisted = persisted;
         }
 
