@@ -2,7 +2,7 @@
 //! failure-level promotion, health telemetry, and trace-id alignment.
 
 use super::*;
-use crate::observability::GraphObservation;
+use crate::observability::{GraphHealthSummary, GraphObservation};
 use crate::stream::GraphEvent;
 use tinyagents_harness::ids::{CheckpointId, EventId, GraphId, NodeId, RunId, ThreadId};
 
@@ -101,6 +101,194 @@ fn sample_run() -> Vec<GraphObservation> {
             },
         ),
     ]
+}
+
+fn sample_three_step_run() -> Vec<GraphObservation> {
+    let nodes = ["a", "b", "c"].map(NodeId::new);
+    let mut observations = vec![obs(
+        0,
+        0,
+        1_000,
+        GraphEvent::RunStarted {
+            run_id: RunId::new("run-1"),
+        },
+    )];
+    for (index, node) in nodes.iter().enumerate() {
+        let step = index + 1;
+        let base = 1_010 + index as u64 * 30;
+        observations.push(obs(
+            observations.len() as u64,
+            step,
+            base,
+            GraphEvent::StepStarted {
+                step,
+                active: vec![node.clone()],
+            },
+        ));
+        observations.push(obs(
+            observations.len() as u64,
+            step,
+            base + 2,
+            GraphEvent::NodeStarted {
+                node: node.clone(),
+                step,
+            },
+        ));
+        observations.push(obs(
+            observations.len() as u64,
+            step,
+            base + 8,
+            GraphEvent::NodeCompleted {
+                node: node.clone(),
+                step,
+            },
+        ));
+        observations.push(obs(
+            observations.len() as u64,
+            step,
+            base + 10,
+            GraphEvent::StepCompleted { step },
+        ));
+    }
+    observations.push(obs(
+        observations.len() as u64,
+        3,
+        1_100,
+        GraphEvent::RunCompleted {
+            run_id: RunId::new("run-1"),
+            steps: 3,
+        },
+    ));
+    observations
+}
+
+fn graph_span_metadata(
+    observation: &GraphObservation,
+    node: Option<&str>,
+    step: Option<usize>,
+) -> std::collections::BTreeMap<String, Value> {
+    let mut metadata = json!({
+        "run_id": observation.run_id.as_str(),
+        "root_run_id": observation.root_run_id.as_str(),
+        "parent_run_id": observation.parent_run_id.as_ref().map(|id| id.as_str()),
+        "graph_id": observation.graph_id.as_str(),
+        "checkpoint_id": observation.checkpoint_id.as_ref().map(|id| id.as_str()),
+        "namespace": if observation.namespace.is_empty() { Value::Null } else { json!(observation.namespace) },
+        "step": observation.step,
+        "offset": observation.offset,
+        "event": observation.event,
+    });
+    if let Some(node) = node {
+        metadata["langgraph_node"] = json!(node);
+    }
+    if let Some(step) = step {
+        metadata["langgraph_step"] = json!(step);
+    }
+    metadata
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Maps the typed observations independently of the legacy output. This is a
+/// test-only host adapter used to prove that the generic model expresses the
+/// same deterministic three-step trace before comparing serialized payloads.
+fn generic_three_step_trace(
+    observations: &[GraphObservation],
+) -> (
+    LangfuseTraceConfig,
+    Vec<tinyagents_harness::observability::spans::Span>,
+) {
+    use tinyagents_harness::observability::spans::{Span, SpanState};
+
+    let first = &observations[0];
+    let run_id = first.run_id.as_str();
+    let root_run_id = first.root_run_id.as_str();
+    let run_span_id = format!("{root_run_id}:run:{root_run_id}");
+    let health = GraphHealthSummary::from_observations(observations);
+    let trace = LangfuseTraceConfig {
+        trace_id: Some(root_run_id.to_string()),
+        name: Some(first.graph_id.as_str().to_string()),
+        user_id: Some("user-1".to_string()),
+        session_id: first
+            .thread_id
+            .as_ref()
+            .map(|thread| thread.as_str().to_string()),
+        metadata: json!({
+            "graph_id": first.graph_id.as_str(),
+            "root_run_id": root_run_id,
+            "health": health,
+        }),
+        ..Default::default()
+    };
+    let terminal = observations.last().unwrap();
+    let mut spans = vec![
+        Span::new(&run_span_id, run_id, first.graph_id.as_str(), first.ts_ms)
+            .with_root_run_id(root_run_id)
+            .finish(terminal.ts_ms, SpanState::Ok),
+    ];
+    spans[0].metadata = [
+        ("root_run_id".to_string(), json!(root_run_id)),
+        ("graph_id".to_string(), json!(first.graph_id.as_str())),
+    ]
+    .into_iter()
+    .collect();
+
+    for index in 0..3 {
+        let base = 1 + index * 4;
+        let step_start = &observations[base];
+        let node_start = &observations[base + 1];
+        let node_end = &observations[base + 2];
+        let step_end = &observations[base + 3];
+        let step = index + 1;
+        let node = match &node_end.event {
+            GraphEvent::NodeCompleted { node, .. } => node.as_str(),
+            _ => unreachable!(),
+        };
+
+        let mut node_span = Span::new(
+            format!("{root_run_id}:node:{node}:{step}"),
+            run_id,
+            node,
+            node_start.ts_ms,
+        )
+        .with_root_run_id(root_run_id)
+        .with_parent(format!("{root_run_id}:step:{step}"))
+        .with_event_id(node_end.event_id.as_str())
+        .finish(node_end.ts_ms, SpanState::Ok);
+        node_span.metadata = graph_span_metadata(node_end, Some(node), Some(step));
+        spans.push(node_span);
+
+        let mut step_span = Span::new(
+            format!("{root_run_id}:step:{step}"),
+            run_id,
+            format!("step {step}"),
+            step_start.ts_ms,
+        )
+        .with_root_run_id(root_run_id)
+        .with_parent(&run_span_id)
+        .with_event_id(step_end.event_id.as_str())
+        .finish(step_end.ts_ms, SpanState::Ok);
+        step_span.metadata = graph_span_metadata(step_start, None, Some(step));
+        spans.push(step_span);
+    }
+
+    let run_end = terminal;
+    let mut completed = Span::new(
+        run_end.event_id.as_str(),
+        run_id,
+        run_end.event.kind(),
+        run_end.ts_ms,
+    )
+    .with_root_run_id(root_run_id)
+    .with_parent(&run_span_id)
+    .with_event_id(run_end.event_id.as_str());
+    completed.kind = "event-create".to_string();
+    completed.metadata = graph_span_metadata(run_end, None, None);
+    spans.push(completed);
+    (trace, spans)
 }
 
 fn exporter() -> GraphLangfuseExporter {
@@ -275,6 +463,35 @@ fn node_spans_carry_langgraph_agent_graph_view_keys() {
     // Existing coordinate keys are preserved alongside the new ones.
     assert_eq!(node_a["body"]["metadata"]["run_id"], "run-1");
     assert_eq!(node_a["body"]["metadata"]["graph_id"], "demo-graph");
+}
+
+#[test]
+fn generic_span_export_matches_graph_export_for_three_step_run() {
+    use tinyagents_harness::observability::spans::SpanExporter;
+
+    let observations = sample_three_step_run();
+    let (trace, spans) = generic_three_step_trace(&observations);
+    let legacy = exporter()
+        .build_ingestion_batch(trace.clone(), &observations)
+        .unwrap();
+    let generic = SpanExporter::new(exporter().client().clone())
+        .build_ingestion_batch(trace.clone(), &spans)
+        .unwrap();
+    assert_eq!(
+        generic, legacy,
+        "generic exporter must preserve full legacy JSON shape"
+    );
+
+    let old_otlp = exporter()
+        .build_otlp_requests(trace.clone(), &observations, "demo")
+        .unwrap();
+    let new_otlp = SpanExporter::new(exporter().client().clone())
+        .build_otlp_requests(trace, &spans, "demo", "demo.graph")
+        .unwrap();
+    assert_eq!(
+        new_otlp, old_otlp,
+        "generic OTLP projection must match the graph exporter"
+    );
 }
 
 #[test]

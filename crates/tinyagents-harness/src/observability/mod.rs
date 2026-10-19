@@ -34,6 +34,8 @@ mod worker;
 
 pub mod reaper;
 pub mod replay;
+#[cfg(feature = "langfuse")]
+pub mod spans;
 pub mod status;
 pub(crate) mod status_record;
 pub mod trace_export;
