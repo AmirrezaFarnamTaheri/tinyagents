@@ -103,6 +103,146 @@ fn sample_run() -> Vec<GraphObservation> {
     ]
 }
 
+fn sample_three_step_run() -> Vec<GraphObservation> {
+    let nodes = ["a", "b", "c"].map(NodeId::new);
+    let mut observations = vec![obs(
+        0,
+        0,
+        1_000,
+        GraphEvent::RunStarted {
+            run_id: RunId::new("run-1"),
+        },
+    )];
+    for (index, node) in nodes.iter().enumerate() {
+        let step = index + 1;
+        let base = 1_010 + index as u64 * 30;
+        observations.push(obs(
+            observations.len(),
+            step,
+            base,
+            GraphEvent::StepStarted {
+                step,
+                active: vec![node.clone()],
+            },
+        ));
+        observations.push(obs(
+            observations.len(),
+            step,
+            base + 2,
+            GraphEvent::NodeStarted {
+                node: node.clone(),
+                step,
+            },
+        ));
+        observations.push(obs(
+            observations.len(),
+            step,
+            base + 8,
+            GraphEvent::NodeCompleted {
+                node: node.clone(),
+                step,
+            },
+        ));
+        observations.push(obs(
+            observations.len(),
+            step,
+            base + 10,
+            GraphEvent::StepCompleted { step },
+        ));
+    }
+    observations.push(obs(
+        observations.len(),
+        3,
+        1_100,
+        GraphEvent::RunCompleted {
+            run_id: RunId::new("run-1"),
+            steps: 3,
+        },
+    ));
+    observations
+}
+
+fn fixed_iso_to_ms(value: &str) -> u64 {
+    assert!(
+        value.starts_with("2024-01-01T00:00:"),
+        "unexpected baseline timestamp: {value}"
+    );
+    let seconds = value[17..19].parse::<u64>().unwrap();
+    let millis = value[20..23].parse::<u64>().unwrap();
+    BASE + seconds * 1_000 + millis
+}
+
+/// Converts the actual graph export into the generic model, retaining the
+/// exact Langfuse ids, metadata, event order, timings, and trace config.
+fn spans_from_graph_batch(
+    batch: &Value,
+) -> (
+    LangfuseTraceConfig,
+    Vec<tinyagents_harness::observability::spans::Span>,
+) {
+    use tinyagents_harness::observability::spans::{Span, SpanState};
+
+    let events = batch["batch"].as_array().unwrap();
+    let trace = &events[0]["body"];
+    let config = LangfuseTraceConfig {
+        trace_id: trace["id"].as_str().map(str::to_string),
+        name: trace["name"].as_str().map(str::to_string),
+        user_id: trace["userId"].as_str().map(str::to_string),
+        session_id: trace["sessionId"].as_str().map(str::to_string),
+        environment: trace["environment"].as_str().map(str::to_string),
+        release: trace["release"].as_str().map(str::to_string),
+        version: trace["version"].as_str().map(str::to_string),
+        tags: trace["tags"]
+            .as_array()
+            .map(|tags| {
+                tags.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        metadata: trace["metadata"].clone(),
+    };
+    let spans = events[1..]
+        .iter()
+        .map(|event| {
+            let body = &event["body"];
+            let mut span = Span::new(
+                body["id"].as_str().unwrap(),
+                body["metadata"]["run_id"].as_str().unwrap_or("run-1"),
+                body["name"].as_str().unwrap(),
+                fixed_iso_to_ms(body["startTime"].as_str().unwrap()),
+            )
+            .with_root_run_id(body["metadata"]["root_run_id"].as_str().unwrap_or("root-1"))
+            .with_event_id(event["id"].as_str().unwrap());
+            if let Some(parent) = body["parentObservationId"].as_str() {
+                span = span.with_parent(parent);
+            }
+            if let Some(end) = body["endTime"].as_str() {
+                span.end_ms = Some(fixed_iso_to_ms(end));
+            }
+            span.kind = event["type"].as_str().unwrap().to_string();
+            span.status = if body["level"] == "ERROR" {
+                SpanState::Error
+            } else {
+                SpanState::Unset
+            };
+            span.status_message = body["statusMessage"].as_str().map(str::to_string);
+            span.input = body.get("input").cloned();
+            span.output = body.get("output").cloned();
+            span.usage = body.get("usageDetails").cloned();
+            if let Some(metadata) = body["metadata"].as_object() {
+                span.metadata = metadata
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+            }
+            span
+        })
+        .collect();
+    (config, spans)
+}
+
 fn exporter() -> GraphLangfuseExporter {
     GraphLangfuseExporter::new(
         LangfuseClient::proxy("https://backend.test/telemetry/langfuse/ingestion", "tok").unwrap(),
@@ -275,6 +415,39 @@ fn node_spans_carry_langgraph_agent_graph_view_keys() {
     // Existing coordinate keys are preserved alongside the new ones.
     assert_eq!(node_a["body"]["metadata"]["run_id"], "run-1");
     assert_eq!(node_a["body"]["metadata"]["graph_id"], "demo-graph");
+}
+
+#[test]
+fn generic_span_export_matches_graph_export_for_three_step_run() {
+    use tinyagents_harness::observability::spans::SpanExporter;
+
+    let trace = LangfuseTraceConfig {
+        user_id: Some("user-1".to_string()),
+        ..Default::default()
+    };
+    let observations = sample_three_step_run();
+    let legacy = exporter()
+        .build_ingestion_batch(trace.clone(), &observations)
+        .unwrap();
+    let (trace, spans) = spans_from_graph_batch(&legacy);
+    let generic = SpanExporter::new(exporter().client().clone())
+        .build_ingestion_batch(trace.clone(), &spans)
+        .unwrap();
+    assert_eq!(
+        generic, legacy,
+        "generic exporter must preserve full legacy JSON shape"
+    );
+
+    let old_otlp = exporter()
+        .build_otlp_requests(trace, &observations, "demo")
+        .unwrap();
+    let new_otlp = SpanExporter::new(exporter().client().clone())
+        .build_otlp_requests(trace, &spans, "demo", "demo.graph")
+        .unwrap();
+    assert_eq!(
+        new_otlp, old_otlp,
+        "generic OTLP projection must match the graph exporter"
+    );
 }
 
 #[test]

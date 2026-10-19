@@ -38,6 +38,9 @@ pub struct Span {
     pub span_id: String,
     /// Stable run identity that produced this observation.
     pub run_id: String,
+    /// Root ancestor run id, when the host exports nested runs under one trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_run_id: Option<String>,
     /// Optional host-defined step identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
@@ -92,6 +95,7 @@ impl Span {
         Self {
             span_id: span_id.into(),
             run_id: run_id.into(),
+            root_run_id: None,
             step_id: None,
             parent_span_id: None,
             event_id: None,
@@ -111,6 +115,12 @@ impl Span {
     /// Sets the step coordinate.
     pub fn with_step_id(mut self, step_id: impl Into<String>) -> Self {
         self.step_id = Some(step_id.into());
+        self
+    }
+
+    /// Sets the root run identity used when deriving a default trace id.
+    pub fn with_root_run_id(mut self, root_run_id: impl Into<String>) -> Self {
+        self.root_run_id = Some(root_run_id.into());
         self
     }
 
@@ -166,6 +176,7 @@ pub fn build_ingestion_batch(trace: LangfuseTraceConfig, spans: &[Span]) -> Resu
         .trace_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
+        .or(first.root_run_id.as_deref())
         .unwrap_or(&first.run_id);
     let trace_ts = iso_ms(first.start_ms);
     let trace_event = json!({
@@ -197,6 +208,9 @@ pub fn build_ingestion_batch(trace: LangfuseTraceConfig, spans: &[Span]) -> Resu
         };
         let mut metadata = span.metadata.clone();
         metadata.insert("run_id".to_string(), json!(span.run_id));
+        if let Some(root_run_id) = &span.root_run_id {
+            metadata.insert("root_run_id".to_string(), json!(root_run_id));
+        }
         if let Some(step_id) = &span.step_id {
             metadata.insert("step_id".to_string(), json!(step_id));
         }
@@ -257,9 +271,10 @@ impl SpanExporter {
         trace: LangfuseTraceConfig,
         spans: &[Span],
         service: &str,
+        scope: &str,
     ) -> Result<Vec<Value>> {
         let payload = build_ingestion_batch(trace, spans)?;
-        ingestion_batch_otlp_requests(&payload, service, &format!("{service}.spans"))
+        ingestion_batch_otlp_requests(&payload, service, scope)
     }
 
     /// Sends spans through Langfuse v4 OTLP, stopping on the first failure.
@@ -268,9 +283,10 @@ impl SpanExporter {
         trace: LangfuseTraceConfig,
         spans: &[Span],
         service: &str,
+        scope: &str,
     ) -> Result<Vec<Value>> {
         let mut responses = Vec::new();
-        for request in self.build_otlp_requests(trace, spans, service)? {
+        for request in self.build_otlp_requests(trace, spans, service, scope)? {
             responses.push(self.client.send_otlp(request).await?);
         }
         Ok(responses)
