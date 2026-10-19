@@ -416,6 +416,61 @@ async fn native_message_guard_requeues_full_residual_and_leaves_non_user_items()
 }
 
 #[tokio::test]
+async fn native_forwarder_requeues_residual_without_stripping_guarded_queue_items() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use crate::run_queue::{QueueAdmission, QueueAdmissionError, QueueAdmissionPermit};
+
+    #[derive(Debug)]
+    struct Admission(AtomicBool);
+    impl QueueAdmission for Admission {
+        fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
+            self.0
+                .load(Ordering::SeqCst)
+                .then(|| Arc::new(()) as Arc<dyn QueueAdmissionPermit>)
+                .ok_or(QueueAdmissionError)
+        }
+    }
+
+    let queue = Arc::new(RunQueue::<TaMessage>::new());
+    let admission = Arc::new(Admission(AtomicBool::new(true)));
+    queue
+        .push_guarded(
+            QueueLane::Steer,
+            TaMessage::user("lifecycle guarded"),
+            admission,
+        )
+        .await;
+    queue
+        .push(QueueLane::Steer, TaMessage::user("forwarded then restored"))
+        .await;
+    let handle = SteeringHandle::allow_all();
+    let (sink, _) = recorder();
+    let guard = MessageSteeringForwarderGuard::new(
+        handle.clone(),
+        Some(queue.clone()),
+        None,
+        "native".into(),
+        sink.clone(),
+    );
+
+    forward_message_steers(&queue, &handle, "native", &sink).await;
+    drop(guard);
+
+    let mut restored = queue
+        .take_admitted(QueueLane::Steer, crate::run_queue::QueueMode::All)
+        .await
+        .into_iter()
+        .map(|item| item.value.text())
+        .collect::<Vec<_>>();
+    restored.sort_unstable();
+    assert_eq!(
+        restored,
+        vec!["forwarded then restored", "lifecycle guarded"],
+        "legacy forwarding may process ordinary items but must retain guarded payloads and their admission"
+    );
+}
+
+#[tokio::test]
 async fn native_message_residual_round_trips_without_empty_prefix_blocks() {
     let queue = Arc::new(RunQueue::<TaMessage>::new());
     let original = TaMessage::User(tinyinference_llm::message::UserMessage {
