@@ -893,8 +893,7 @@ async fn losing_turn_fence_during_artifact_storage_skips_terminal_and_completion
     })
     .unwrap()
     .with_completion_router(router.clone());
-    let request = request_in_scope("parent-a", "root-a", "thread-a")
-        .with_turn_fence(fence.clone());
+    let request = request_in_scope("parent-a", "root-a", "thread-a").with_turn_fence(fence.clone());
     let turn = tokio::spawn(async move { driver.run(request, CancellationToken::new()).await });
     artifacts.started.notified().await;
 
