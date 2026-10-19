@@ -614,8 +614,11 @@ impl SubAgentJobRegistry {
                 status: control.status.borrow().status,
             });
         }
-        // Controlled ablation: preserve the owner-cancel path while omitting
-        // its durable completion-router reservation.
+        if let Some((completions, task_id)) = completion_tombstone {
+            completions
+                .tombstone(task_id)
+                .map_err(|error| SubAgentJobError::Registry(error.to_string()))?;
+        }
         if control.cancellation_requested {
             if completion_tombstone.is_some() && !control.status.borrow().status.is_terminal() {
                 let task_id = TaskId::new(job_id);
