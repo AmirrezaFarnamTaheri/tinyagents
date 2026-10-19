@@ -1,4 +1,6 @@
 use super::*;
+use async_trait::async_trait;
+use serde_json::{Value, json};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -18,7 +20,7 @@ impl Tool for Inner {
         json!({"type":"object"})
     }
     async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
-        Ok(ToolResult::success_json(
+        Ok(ToolResult::json(
             json!({"artifacts":[{"type":"image","path":"blob:key","bytes":4}]}),
         ))
     }
