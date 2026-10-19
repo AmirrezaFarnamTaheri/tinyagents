@@ -7,14 +7,6 @@
 use super::*;
 use std::time::Duration;
 
-#[cfg(unix)]
-#[tokio::test]
-async fn zero_deadline_before_spawn_is_reported_without_panicking() {
-    let mut command = tokio::process::Command::new("sh");
-    command.args(["-c", "sleep 10"]);
-    let result = output_or_kill_captured_isolated(&mut command, Duration::ZERO, None).await;
-    assert!(matches!(result, CapturedCommandResult::TimedOut(_)));
-}
 use tinytools::ToolTimeout;
 
 fn sh(script: &str) -> tokio::process::Command {

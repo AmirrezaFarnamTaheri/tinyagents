@@ -34,6 +34,11 @@ fn process_is_gone_or_zombie(pid: i32) -> bool {
         .is_some_and(|state| state == "Z")
 }
 
+#[cfg(target_os = "linux")]
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn native_backend_preserves_argv_and_captures_both_streams() {
@@ -131,7 +136,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let pidfile = dir.path().join("child.pid");
     let command = format!(
         "sleep 30 & child=$!; echo $child > {}; printf captured; wait",
-        pidfile.display()
+        shell_quote(&pidfile)
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let outcome = backend
@@ -158,7 +163,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
         .unwrap();
     assert!(
         process_is_gone_or_zombie(pid),
-        "child {pid} was still executing after timeout returned"
+        "descendant {pid} was still executing after timeout returned"
     );
 }
 
@@ -170,7 +175,7 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     let pidfile = dir.path().join("child.pid");
     let command = format!(
         "sleep 30 & child=$!; echo $child > {}; wait",
-        pidfile.display()
+        shell_quote(&pidfile)
     );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = ProcessCleanup::default();
@@ -181,7 +186,14 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
             .await
     });
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !pidfile.exists() {
+        loop {
+            if std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok())
+                .is_some()
+            {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -199,6 +211,6 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
         .unwrap();
     assert!(
         process_is_gone_or_zombie(pid),
-        "child {pid} survived the retained cleanup wait"
+        "descendant {pid} was still executing after cleanup acknowledgment"
     );
 }
