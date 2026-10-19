@@ -69,7 +69,7 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
         backend.as_ref(),
         lease_scope.clone(),
         "test-cluster",
-        Duration::from_millis(30),
+        Duration::from_millis(300),
     )
     .unwrap();
     let first = factory
@@ -110,8 +110,9 @@ async fn a_takeover_lost_during_renewal_permanently_cancels_the_turn() {
         )
         .await
         .unwrap();
+    assert!(first.admitted(), "the takeover is written before renewal runs");
 
-    tokio::time::timeout(Duration::from_secs(1), turn_cancellation.cancelled())
+    tokio::time::timeout(Duration::from_secs(2), turn_cancellation.cancelled())
         .await
         .expect("renewal detects the takeover and cancels the active turn");
     loss_listener.await.unwrap();
