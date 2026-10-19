@@ -108,6 +108,10 @@ pub struct CompletionClaim {
 pub struct CompletionReceipt {
     /// The completion this attempt owns.
     pub task_id: String,
+    /// Parent thread/session whose admission tenure accepted this delivery.
+    pub parent_key: String,
+    /// Durable parent admission epoch carried through host turn admission.
+    pub parent_epoch: u64,
     /// The opaque token for this attempt.
     pub token: String,
 }
@@ -239,6 +243,8 @@ impl CompletionRecord {
     pub fn receipt(&self) -> Option<CompletionReceipt> {
         self.claim.as_ref().map(|claim| CompletionReceipt {
             task_id: self.task_id.clone(),
+            parent_key: self.parent_key.clone(),
+            parent_epoch: self.parent_epoch,
             token: claim.token.clone(),
         })
     }
