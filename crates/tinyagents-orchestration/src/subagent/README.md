@@ -16,6 +16,14 @@ constructs `tinyagents_harness_tools::subagents::SubAgentJobsTool` and
 messages to queued or running jobs. Message delivery is cooperative at the
 child loop's next safe steering checkpoint. The registry is process-local and
 host-owned; durable lifecycle persistence remains the separate surface below.
+The registry retains up to 128 unpinned terminal records. Settling or directly
+cancelling a job prunes the oldest eligible terminal records immediately;
+waiter-pinned results remain available until their wait futures consume or
+drop. Total entries may temporarily exceed 128 while jobs are active or
+terminal jobs have waiters. Queued/running work and `AwaitingInput` sessions
+are never cap-pruned, so the latter remain available for reuse by their scoped
+task key. A completed result remains queryable until retention pressure
+removes it.
 
 The durable lifecycle surface coordinates a host-resolved subagent lifecycle
 without making product-policy decisions. Its dependency direction is:

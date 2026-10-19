@@ -12,6 +12,7 @@
 //! sibling `mod.rs` and its `*_tests.rs` files.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
@@ -314,13 +315,13 @@ pub(crate) struct JobLink {
 /// registry's), registered cooperatively because a job is stopped through its
 /// own cancellation token rather than hard-aborted. The adapter adds only what
 /// is specific to subagent jobs: the lifecycle transitions, the
-/// cancel-then-settle protocol, and retention of settled jobs.
+/// cancel-then-settle protocol, and bounded retention of terminal jobs.
 #[derive(Clone)]
 pub struct SubAgentJobRegistry {
     // Private to `jobs.rs`. Invariant: only cooperative calls (register,
     // cancel_cooperative, release_cancellation, snapshots) may touch it, under
-    // `controls`. Its removing APIs (`cancel`, `wait`, `sweep_terminal`) would
-    // drop settled jobs, which must stay queryable.
+    // `controls`. Adapter cleanup removes from all three maps under the lock
+    // order driver_jobs -> controls -> tasks.
     pub(super) tasks: DetachedTaskRegistry<JobMeta, SubAgentJob>,
     pub(crate) steering: SteeringRegistry,
     /// Status senders and cancel flags. Also the transition gate: every
@@ -328,23 +329,29 @@ pub struct SubAgentJobRegistry {
     pub(crate) controls: Arc<Mutex<HashMap<SubAgentJobId, JobControl>>>,
     /// Scoped bridge from driver task identity to the public job control id.
     pub(crate) driver_jobs: Arc<Mutex<HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>>>,
+    /// Monotonic settlement order for deterministic bounded terminal retention.
+    pub(crate) next_terminal_sequence: Arc<AtomicU64>,
 }
 
 impl Default for SubAgentJobRegistry {
     fn default() -> Self {
         let steering = SteeringRegistry::new();
         Self {
-            // Settled jobs must stay queryable, so the soft cap that makes the
-            // detached registry sweep terminal entries is never reached.
-            tasks: DetachedTaskRegistry::new(steering.clone(), usize::MAX, |job: &SubAgentJob| {
-                job.status.is_terminal()
-            }),
+            tasks: DetachedTaskRegistry::new(
+                steering.clone(),
+                SUBAGENT_JOB_SOFT_CAP,
+                |job: &SubAgentJob| job.status.is_terminal(),
+            ),
             steering,
             controls: Arc::default(),
             driver_jobs: Arc::default(),
+            next_terminal_sequence: Arc::new(AtomicU64::new(1)),
         }
     }
 }
+
+/// Maximum terminal-job retention before a registration prunes old entries.
+pub(super) const SUBAGENT_JOB_SOFT_CAP: usize = 128;
 
 /// Application metadata kept with each job in the detached registry.
 #[derive(Debug, Default)]
@@ -401,6 +408,11 @@ pub(crate) struct JobControl {
     pub run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
     pub(crate) steering: tinyagents_harness::steering::SteeringHandle,
     pub cancellation: CancellationToken,
+    /// Watchers keep a terminal job from cap pruning until they consume its
+    /// final status or drop their wait future.
+    pub(crate) waiters: Arc<AtomicUsize>,
+    /// Settlement order used to evict the oldest unpinned terminal record.
+    pub(crate) terminal_sequence: AtomicU64,
 }
 
 pub struct DriverJobRegistration {

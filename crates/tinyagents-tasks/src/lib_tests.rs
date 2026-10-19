@@ -105,6 +105,39 @@ async fn detached_registry_enforces_owner_and_waits_for_terminal_status() {
 }
 
 #[tokio::test]
+async fn trusted_terminal_pruning_keeps_live_tasks_and_releases_steering() {
+    let steering = SteeringRegistry::new();
+    let registry = DetachedTaskRegistry::new(steering.clone(), 8, |status: &RuntimeStatus| {
+        matches!(status, RuntimeStatus::Completed(_))
+    });
+    let task_id = TaskId::new("trusted-terminal-prune");
+    let (tx, rx, cancellation, join) = detached_handles();
+    registry
+        .register_cooperative(
+            task_id.clone(),
+            "parent",
+            "metadata".to_owned(),
+            rx,
+            cancellation,
+        )
+        .unwrap();
+    steering.register(task_id.clone(), SteeringHandle::allow_all());
+
+    assert_eq!(registry.prune_terminal_trusted(&task_id).unwrap(), None);
+    assert!(registry.snapshot_trusted(&task_id).is_ok());
+    assert!(steering.get(&task_id).is_some());
+
+    tx.send(RuntimeStatus::Completed("done".into())).unwrap();
+    assert_eq!(
+        registry.prune_terminal_trusted(&task_id).unwrap(),
+        Some(RuntimeStatus::Completed("done".into()))
+    );
+    assert!(registry.snapshot_trusted(&task_id).is_err());
+    assert!(steering.get(&task_id).is_none());
+    join.abort();
+}
+
+#[tokio::test]
 async fn batch_wait_preserves_order_and_metadata_when_pruning_terminal_entries() {
     let registry = runtime_registry();
     let ids = [TaskId::new("batch-first"), TaskId::new("batch-second")];

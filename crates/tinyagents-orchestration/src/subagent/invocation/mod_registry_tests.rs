@@ -5,6 +5,34 @@ use super::*;
 use tinyagents_harness::error::TinyAgentsError;
 use tinyagents_harness::ids::TaskId;
 
+fn register_driver_job(
+    jobs: &SubAgentJobRegistry,
+    task_id: impl Into<String>,
+) -> (crate::subagent::SubagentTaskKey, SubAgentJobId) {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let key = crate::subagent::SubagentTaskKey {
+        root_run_id: "root".into(),
+        parent_run_id: "parent".into(),
+        thread_id: Some("thread".into()),
+        task_id: task_id.into(),
+    };
+    let (id, _, _, _, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: key.clone(),
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    assert!(inserted);
+    (key, id)
+}
+
 #[tokio::test]
 async fn jobs_are_registered_in_the_shared_detached_registry() {
     let jobs = SubAgentJobRegistry::new();
@@ -215,18 +243,289 @@ async fn steering_is_reachable_while_live_and_released_when_settled() {
 }
 
 #[tokio::test]
-async fn terminal_jobs_survive_many_registrations() {
-    // The detached registry sweeps terminal entries at its soft cap; the job
-    // registry must never lose a settled job that way.
+async fn settled_driver_jobs_have_bounded_retention_across_all_registry_maps() {
     let jobs = SubAgentJobRegistry::new();
-    let mut ids = Vec::new();
-    for _ in 0..2_000 {
-        let (id, _s) = jobs.create("worker", 1);
-        jobs.mark_result(&id, Err(TinyAgentsError::Cancelled));
-        ids.push(id);
+    let total = 2_000;
+    for index in 0..total {
+        let (_, id) = register_driver_job(&jobs, format!("child-{index}"));
+        jobs.mark_driver_result(&id, Err("finished".into()));
     }
-    assert!(ids.iter().all(|id| jobs.get(id.as_str()).is_some()));
-    assert_eq!(jobs.list().len(), 2_000);
+
+    let retained = jobs.tasks().len().unwrap();
+    assert!(retained < total, "settled tasks retained: {retained}");
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+    assert_eq!(jobs.list().len(), retained);
+}
+
+#[tokio::test]
+async fn recent_terminal_driver_jobs_replay_until_oldest_cache_eviction() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (old_key, old_id) = register_driver_job(&jobs, "old-cache-entry");
+    jobs.mark_running(&old_id);
+    jobs.mark_driver_result(
+        &old_id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "old",
+            "old result",
+        )),
+    );
+
+    let (recent_key, recent_id) = register_driver_job(&jobs, "recent-cache-entry");
+    jobs.mark_running(&recent_id);
+    jobs.mark_driver_result(
+        &recent_id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "recent",
+            "replayable result",
+        )),
+    );
+    let waited = jobs
+        .wait_owned(recent_id.as_str(), "owner")
+        .await
+        .expect("terminal result");
+    assert_eq!(waited.output.as_deref(), Some("replayable result"));
+
+    let (replayed_id, _, _, _, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: recent_key.clone(),
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .expect("reuse retained terminal driver job");
+    assert_eq!(replayed_id, recent_id);
+    assert!(!inserted);
+
+    for index in 0..127 {
+        let (_, id) = register_driver_job(&jobs, format!("cache-filler-{index}"));
+        jobs.mark_driver_result(
+            &id,
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "filler", "done",
+            )),
+        );
+    }
+
+    assert!(jobs.get(old_id.as_str()).is_none());
+    assert_eq!(
+        jobs.get(recent_id.as_str()).unwrap().output.as_deref(),
+        Some("replayable result")
+    );
+    assert_eq!(
+        jobs.driver_job_for_key(&recent_key, "owner"),
+        Some(recent_id)
+    );
+    assert!(jobs.driver_job_for_key(&old_key, "owner").is_none());
+    assert_eq!(jobs.tasks().len().unwrap(), 128);
+    assert_eq!(jobs.controls.lock().unwrap().len(), 128);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), 128);
+}
+
+#[tokio::test]
+async fn settling_many_prestarted_jobs_bounds_terminal_retention() {
+    let jobs = SubAgentJobRegistry::new();
+    let total = 256;
+    let ids: Vec<_> = (0..total)
+        .map(|index| register_driver_job(&jobs, format!("prestarted-{index}")).1)
+        .collect();
+    for id in &ids {
+        jobs.mark_running(id);
+    }
+    for id in &ids {
+        jobs.mark_driver_result(
+            id,
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "prestarted",
+                "done",
+            )),
+        );
+    }
+
+    let retained = jobs.tasks().len().unwrap();
+    assert!(
+        retained <= 128,
+        "terminal tasks retained after a settlement batch: {retained}"
+    );
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+    assert_eq!(jobs.list().len(), retained);
+}
+
+#[tokio::test]
+async fn dropping_terminal_waiters_releases_retention_pins() {
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    let jobs = SubAgentJobRegistry::new();
+    let ids: Vec<_> = (0..132)
+        .map(|index| register_driver_job(&jobs, format!("pinned-{index}")).1)
+        .collect();
+    for id in &ids {
+        jobs.mark_running(id);
+    }
+
+    let mut waiters: Vec<_> = ids
+        .iter()
+        .map(|id| Box::pin(jobs.wait_owned(id.as_str(), "owner")))
+        .collect();
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    for waiter in &mut waiters {
+        assert!(matches!(waiter.as_mut().poll(&mut context), Poll::Pending));
+    }
+
+    for id in &ids {
+        jobs.mark_driver_result(
+            id,
+            Ok(crate::subagent::SubagentOutcome::completed(
+                "pinned", "done",
+            )),
+        );
+    }
+    assert_eq!(jobs.tasks().len().unwrap(), ids.len());
+
+    drop(waiters);
+    let retained = jobs.tasks().len().unwrap();
+    assert!(
+        retained <= 128,
+        "terminal tasks retained after waiter drops: {retained}"
+    );
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+}
+
+#[tokio::test]
+async fn direct_cancellation_keeps_terminal_retention_bounded() {
+    let jobs = SubAgentJobRegistry::new();
+    let ids: Vec<_> = (0..256)
+        .map(|index| register_driver_job(&jobs, format!("cancel-{index}")).1)
+        .collect();
+    for id in &ids {
+        let mut awaiting = crate::subagent::SubagentOutcome::completed("cancel", "paused");
+        awaiting.status =
+            crate::subagent::SubagentOutcomeKind::AwaitingInput(crate::subagent::SubagentPause {
+                reason: "clarification".into(),
+                resume: crate::subagent::SubagentResume::default(),
+            });
+        jobs.mark_driver_result(id, Ok(awaiting));
+    }
+    for id in &ids {
+        jobs.cancel_owned(id.as_str(), "owner").expect("cancel");
+    }
+
+    let retained = jobs.tasks().len().unwrap();
+    assert!(retained <= 128, "cancelled tasks retained: {retained}");
+    assert_eq!(jobs.controls.lock().unwrap().len(), retained);
+    assert_eq!(jobs.driver_jobs.lock().unwrap().len(), retained);
+}
+
+#[tokio::test]
+async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
+    let jobs = SubAgentJobRegistry::new();
+    let (active_key, active_id) = register_driver_job(&jobs, "active");
+    jobs.mark_running(&active_id);
+    let (awaiting_key, awaiting_id) = register_driver_job(&jobs, "awaiting");
+    let mut awaiting = crate::subagent::SubagentOutcome::completed("awaiting", "paused");
+    awaiting.status =
+        crate::subagent::SubagentOutcomeKind::AwaitingInput(crate::subagent::SubagentPause {
+            reason: "clarification".into(),
+            resume: crate::subagent::SubagentResume::default(),
+        });
+    jobs.mark_driver_result(&awaiting_id, Ok(awaiting));
+
+    for index in 0..2_000 {
+        let (_, id) = register_driver_job(&jobs, format!("settled-{index}"));
+        jobs.mark_driver_result(&id, Err("finished".into()));
+    }
+
+    assert!(jobs.tasks().len().unwrap() < 2_002);
+    assert!(jobs.get(active_id.as_str()).is_some());
+    assert_eq!(
+        jobs.get(awaiting_id.as_str()).unwrap().status,
+        SubAgentJobStatus::AwaitingInput
+    );
+    assert_eq!(
+        jobs.driver_job_for_key(&active_key, "owner"),
+        Some(active_id)
+    );
+    assert_eq!(
+        jobs.driver_job_for_key(&awaiting_key, "owner"),
+        Some(awaiting_id.clone())
+    );
+
+    let (resumed_id, _, _, _, should_run) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: awaiting_key,
+            agent: "worker".into(),
+            owner: "owner".into(),
+            workspace: None,
+            cancellation: tinyagents_harness::cancel::CancellationToken::new(),
+            steering: None,
+            run_queue: None,
+            continuing: true,
+        })
+        .unwrap();
+    assert!(should_run);
+    assert_eq!(resumed_id, awaiting_id);
+    assert_eq!(
+        jobs.get(resumed_id.as_str()).unwrap().status,
+        SubAgentJobStatus::Running
+    );
+}
+
+#[tokio::test]
+async fn waiter_keeps_terminal_snapshot_when_pruning_races_its_observation() {
+    use std::future::Future;
+
+    let jobs = SubAgentJobRegistry::new();
+    let (key, id) = register_driver_job(&jobs, "awaited");
+    jobs.mark_running(&id);
+
+    let waiter_jobs = jobs.clone();
+    let waiter_id = id.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(async move {
+        let wait = waiter_jobs.wait_owned(waiter_id.as_str(), "owner");
+        tokio::pin!(wait);
+        let mut started_tx = Some(started_tx);
+        std::future::poll_fn(|cx| {
+            let result = wait.as_mut().poll(cx);
+            if result.is_pending()
+                && let Some(started_tx) = started_tx.take()
+            {
+                let _ = started_tx.send(());
+            }
+            result
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+
+    jobs.mark_driver_result(
+        &id,
+        Ok(crate::subagent::SubagentOutcome::completed(
+            "awaited",
+            "preserved output",
+        )),
+    );
+    for index in 0..2_000 {
+        let (_, pressure_id) = register_driver_job(&jobs, format!("pressure-{index}"));
+        jobs.mark_driver_result(&pressure_id, Err("finished".into()));
+    }
+
+    assert_eq!(jobs.driver_job_for_key(&key, "owner"), Some(id.clone()));
+    let observed = waiter.await.unwrap().unwrap();
+    assert_eq!(observed.id, id);
+    assert_eq!(observed.status, SubAgentJobStatus::Completed);
+    assert_eq!(observed.output.as_deref(), Some("preserved output"));
+    assert!(jobs.driver_job_for_key(&key, "owner").is_none());
 }
 
 #[tokio::test]

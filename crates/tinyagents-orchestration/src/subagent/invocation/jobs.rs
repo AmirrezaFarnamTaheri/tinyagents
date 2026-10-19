@@ -1,6 +1,7 @@
 //! Asynchronous subagent job registry and host-facing control tools.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
@@ -30,6 +31,20 @@ struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
+
+struct JobWaitGuard {
+    jobs: SubAgentJobRegistry,
+    waiters: Arc<AtomicUsize>,
+}
+
+impl Drop for JobWaitGuard {
+    fn drop(&mut self) {
+        let previous = self.waiters.fetch_sub(1, Ordering::AcqRel);
+        if previous == 1 {
+            let _ = self.jobs.prune_terminal_over_cap();
+        }
+    }
 }
 
 /// Settles an inline job if its tool future is dropped (tool timeout, parent
@@ -105,6 +120,10 @@ impl SubAgentJobRegistry {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(error) = self.insert_job(
             id.clone(),
             agent,
@@ -115,6 +134,7 @@ impl SubAgentJobRegistry {
                 steering: steering.clone(),
                 run_queue,
             },
+            &mut driver_jobs,
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
         }
@@ -128,6 +148,10 @@ impl SubAgentJobRegistry {
         owner: String,
         link: JobLink,
         execution: JobExecutionControls,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
+        >,
     ) -> Result<(), SubAgentJobError> {
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
@@ -157,9 +181,10 @@ impl SubAgentJobRegistry {
         if controls.contains_key(&id) {
             return Err(SubAgentJobError::AlreadyExists(id.as_str().to_owned()));
         }
+        self.prune_terminal_before_insert(driver_jobs, &mut controls)?;
         self.steering
             .register(task_id.clone(), execution.steering.clone());
-        if let Err(error) = self.tasks.register_cooperative(
+        if let Err(error) = self.tasks.register_cooperative_managed(
             task_id.clone(),
             owner,
             metadata,
@@ -177,8 +202,94 @@ impl SubAgentJobRegistry {
                 run_queue: execution.run_queue,
                 steering: execution.steering,
                 cancellation: execution.cancellation,
+                waiters: Arc::new(AtomicUsize::new(0)),
+                terminal_sequence: AtomicU64::new(0),
             },
         );
+        Ok(())
+    }
+
+    /// Prunes unobserved terminal jobs before the generic registry reaches its
+    /// finite soft cap. The shared runtime entry, control sender and driver key
+    /// are removed together; live jobs and jobs with current waiters survive.
+    fn prune_terminal_before_insert(
+        &self,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
+        >,
+        controls: &mut std::sync::MutexGuard<
+            '_,
+            std::collections::HashMap<SubAgentJobId, JobControl>,
+        >,
+    ) -> Result<(), SubAgentJobError> {
+        self.prune_terminal_over_cap_locked(driver_jobs, controls)
+    }
+
+    /// Keeps unpinned terminal history within the soft cap while allowing
+    /// live work and terminal jobs pinned by waiters to exceed it temporarily.
+    fn prune_terminal_over_cap(&self) -> Result<(), SubAgentJobError> {
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut controls = self.controls();
+        self.prune_terminal_over_cap_locked(&mut driver_jobs, &mut controls)
+    }
+
+    fn prune_terminal_over_cap_locked(
+        &self,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
+        >,
+        controls: &mut std::sync::MutexGuard<
+            '_,
+            std::collections::HashMap<SubAgentJobId, JobControl>,
+        >,
+    ) -> Result<(), SubAgentJobError> {
+        let terminal_count = controls
+            .values()
+            .filter(|control| {
+                control.status.borrow().status.is_terminal()
+                    && control.waiters.load(Ordering::Acquire) == 0
+            })
+            .count();
+        let excess = terminal_count.saturating_sub(super::types::SUBAGENT_JOB_SOFT_CAP);
+        if excess == 0 {
+            return Ok(());
+        }
+
+        let mut candidates: Vec<_> = controls
+            .iter()
+            .filter(|(_, control)| {
+                control.status.borrow().status.is_terminal()
+                    && control.waiters.load(Ordering::Acquire) == 0
+            })
+            .map(|(id, control)| {
+                (
+                    control.terminal_sequence.load(Ordering::Acquire),
+                    id.clone(),
+                )
+            })
+            .collect();
+        candidates.sort_by_key(|(sequence, _)| *sequence);
+        let mut removed = std::collections::HashSet::with_capacity(candidates.len());
+        for (_, id) in candidates.into_iter().take(excess) {
+            let task_id = TaskId::new(id.as_str());
+            if self
+                .tasks
+                .prune_terminal_trusted(&task_id)
+                .map_err(registry_failure)?
+                .is_some()
+            {
+                controls.remove(&id);
+                removed.insert(id);
+            }
+        }
+        if !removed.is_empty() {
+            driver_jobs.retain(|_, mapped_id| !removed.contains(mapped_id));
+        }
         Ok(())
     }
 
@@ -281,6 +392,7 @@ impl SubAgentJobRegistry {
                 steering: steering.clone(),
                 run_queue: Some(queue.clone()),
             },
+            &mut driver_jobs,
         )?;
         driver_jobs.insert(key, id.clone());
         let token = self
@@ -314,21 +426,42 @@ impl SubAgentJobRegistry {
     /// terminal state wins: a settled job is left untouched and `false` is
     /// returned.
     fn settle(&self, id: &SubAgentJobId, settle: impl FnOnce(&mut SubAgentJob, bool)) -> bool {
-        let controls = self.controls();
-        let Some(control) = controls.get(id) else {
-            return false;
+        let settled = {
+            let controls = self.controls();
+            let Some(control) = controls.get(id) else {
+                return false;
+            };
+            if control.status.borrow().status.is_terminal() {
+                return false;
+            }
+            let task_id = TaskId::new(id.as_str());
+            let _ = self.tasks.release_cancellation_trusted(&task_id);
+            let cancellation_requested = control.cancellation_requested;
+            control
+                .status
+                .send_modify(|job| settle(job, cancellation_requested));
+            if control.status.borrow().status.is_terminal() {
+                self.stamp_terminal_sequence(control);
+            }
+            self.steering.deregister(&task_id);
+            true
         };
-        if control.status.borrow().status.is_terminal() {
-            return false;
+        if settled {
+            let _ = self.prune_terminal_over_cap();
         }
-        let task_id = TaskId::new(id.as_str());
-        let _ = self.tasks.release_cancellation_trusted(&task_id);
-        let cancellation_requested = control.cancellation_requested;
-        control
-            .status
-            .send_modify(|job| settle(job, cancellation_requested));
-        self.steering.deregister(&task_id);
-        true
+        settled
+    }
+
+    fn stamp_terminal_sequence(&self, control: &JobControl) {
+        if control.terminal_sequence.load(Ordering::Acquire) == 0 {
+            let sequence = self.next_terminal_sequence.fetch_add(1, Ordering::Relaxed);
+            let _ = control.terminal_sequence.compare_exchange(
+                0,
+                sequence,
+                Ordering::Release,
+                Ordering::Relaxed,
+            );
+        }
     }
 
     pub(crate) fn mark_result(
@@ -413,7 +546,10 @@ impl SubAgentJobRegistry {
                         job.status = SubAgentJobStatus::Cancelled;
                         job.error = Some(TinyAgentsError::Cancelled.to_string());
                     });
+                    self.stamp_terminal_sequence(control);
                     self.steering.deregister(&task_id);
+                    drop(controls);
+                    let _ = self.prune_terminal_over_cap();
                 } else if let Ok(outcome) = result {
                     control.status.send_modify(|job| {
                         job.output = Some(outcome.output);
@@ -638,8 +774,12 @@ impl SubAgentJobRegistry {
                     job.status = SubAgentJobStatus::Cancelled;
                     job.error = Some(TinyAgentsError::Cancelled.to_string());
                 });
+                self.stamp_terminal_sequence(control);
                 self.steering.deregister(&task_id);
-                return Ok((control.status.borrow().clone(), true));
+                let snapshot = control.status.borrow().clone();
+                drop(controls);
+                let _ = self.prune_terminal_over_cap();
+                return Ok((snapshot, true));
             }
             return Ok((control.status.borrow().clone(), false));
         }
@@ -666,8 +806,12 @@ impl SubAgentJobRegistry {
                 job.status = SubAgentJobStatus::Cancelled;
                 job.error = Some(TinyAgentsError::Cancelled.to_string());
             });
+            self.stamp_terminal_sequence(control);
             self.steering.deregister(&task_id);
-            return Ok((control.status.borrow().clone(), true));
+            let snapshot = control.status.borrow().clone();
+            drop(controls);
+            let _ = self.prune_terminal_over_cap();
+            return Ok((snapshot, true));
         }
         snapshot.error =
             Some("cancellation requested; job will be cancelled when the child unwinds".to_owned());
@@ -779,24 +923,42 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
-        self.try_get_owned(job_id, owner)?
-            .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-        let mut status = {
+        let owner = owner.to_string();
+        let id = SubAgentJobId(job_id.to_owned());
+        let task_id = TaskId::new(job_id);
+        let (mut status, waiters) = {
+            // Pin the control before releasing its lock so cap pruning cannot
+            // remove a terminal snapshot between ownership validation and the
+            // watch subscription.
             let controls = self.controls();
-            controls
-                .get(&SubAgentJobId(job_id.to_owned()))
-                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?
-                .status
-                .subscribe()
+            match self.tasks.snapshot(&task_id, &owner) {
+                Ok(_) => {}
+                Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                    return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+                }
+                Err(error) => return Err(registry_failure(error)),
+            }
+            let control = controls
+                .get(&id)
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+            control.waiters.fetch_add(1, Ordering::AcqRel);
+            (control.status.subscribe(), control.waiters.clone())
+        };
+        let waiter_guard = JobWaitGuard {
+            jobs: self.clone(),
+            waiters,
         };
         loop {
             let snapshot = status.borrow().clone();
             if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
             {
+                drop(waiter_guard);
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {
-                return Ok(status.borrow().clone());
+                let snapshot = status.borrow().clone();
+                drop(waiter_guard);
+                return Ok(snapshot);
             }
         }
     }
