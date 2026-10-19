@@ -787,7 +787,18 @@ In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_reb
 `hooks_tests.rs`, `session_tests.rs`, `turn_driver/driver_tests.rs`.
 
 First add a recording `SessionDriver` returning one `ToolCallOutcome`; assert
-the returned `DriverOutcome.tool_outcomes` equals it. Then add a recording
+the returned `DriverOutcome.tool_outcomes` equals it. Then extend the existing
+`a_split_turn_is_driven_by_the_host_and_settled_by_its_tail` test: after
+`tail.finish(Some(&run))`, assert `report.tool_outcomes.len() == 1`, its name
+is `ask_user`, and its content is the result after `RewriteResult` middleware.
+Add a paired `prepared_run_exposes_the_same_rewritten_tool_outcome` test that
+uses the same scripted tool/model setup but calls `prepared.run().await`; assert
+the same three fields on `TurnRun.report.tool_outcomes`. Put a
+`RewriteResult` middleware after capture in the planner's `TurnPlan.context`
+and assert both public drive paths observe the rewritten text
+`host-enriched final text`. The capture is registered first/outermost; the
+harness runs `after_tool` in reverse order, so capture observes the result
+after each planner rewriter. Then add a recording
 sink test that reads the appended transcript row inside the callback, a
 cancellation test that drops the caller future after durable commit and
 awaits a oneshot sent by the sink, a pre-commit failure test asserting no
@@ -808,14 +819,28 @@ outcomes and must not persist the raw argument/result. Verify with
 `cargo test -p tinyagents-runtime post_commit` and then
 `cargo test -p tinyagents-runtime`.
 
-In `TurnDriver::execute`, construct `let tool_outcomes =
-new_tool_outcome_sink();`, append
-`Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&tool_outcomes)))` to
-the per-turn `TurnPlan.context`, and set
-`DriverOutcome.tool_outcomes = drain_tool_outcomes(&tool_outcomes)` after the
-harness run has settled. The outcome is an in-memory runtime value; initialize
-the field to `Vec::new()` in every
-existing literal for custom drivers.
+Capture must live in `TurnDriver::prepare`, not only `execute`: callers may
+drive `PreparedTurn::split` themselves and never call `execute`. Create the
+sink while preparing, push capture middleware before planner middleware so it
+is outermost and observes rewritten final results, and carry the sink in
+`PreparedTurn` into `TurnTail`. `TurnTail::finish` drains it into a new
+`TurnReport.tool_outcomes` field; `PreparedTurn::run` already settles through
+`TurnTail::finish`, and split callers do the same. `TurnDriver::execute` copies
+the report's outcomes into `DriverOutcome`; `outcome_from_partial` initializes
+custom-driver outcomes to an empty vector. This gives direct `prepare/run`,
+`prepare/split`, and `execute` the same captured result.
+
+In `TurnDriver::prepare`, create `outcome_sink`, push
+`Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&outcome_sink)))` into
+the harness before the `for middleware in context` loop, and place the sink in
+`TurnTail`. In `TurnTail::finish`, call `drain_tool_outcomes(&self.outcomes)`
+and put the result into `TurnReport`. Add `tool_outcomes: Vec<ToolCallOutcome>`
+to `TurnReport`, defaulting empty. In `TurnDriver::execute`, destructure the
+`TurnRun { partial, report, input_len }`, call `outcome_from_partial`, then on
+both `Ok(outcome)` and `Err(failure)` assign the report outcomes to the
+successful outcome or `failure.partial`. The outcome is an in-memory runtime
+value; initialize `DriverOutcome.tool_outcomes` to `Vec::new()` in every
+literal for custom drivers.
 
 Change the owned finalizer to accept the separate observation and sinks, not
 to reconstruct observations from `CommitReceipt`:
