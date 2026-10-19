@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn deferred_terminal_emits_stop_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish(Some(crate::turn_stop::TurnStop::wind_down()), 4);
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[0].event,
+        AgentEvent::TurnStopped { turn: 4, .. }
+    ));
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
+fn deferred_terminal_failure_emits_failure_before_finalization() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    DeferredTurnTerminal {
+        run_id: RunId::new("run"),
+        events,
+    }
+    .finish_cancelled();
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0].event, AgentEvent::RunFailed { error, .. } if error == "turn cancelled after harness completion")
+    );
+    assert!(matches!(events[1].event, AgentEvent::RunFinalized { .. }));
+}
+
+#[test]
 fn tool_call_outcome_equality_covers_every_observed_field() {
     let original = ToolCallOutcome {
         call_id: "call-1".into(),

@@ -28,6 +28,7 @@ mod journal_entry;
 #[cfg(feature = "langfuse")]
 mod langfuse;
 mod profile;
+mod supplemental;
 mod types;
 mod worker;
 
@@ -46,6 +47,7 @@ pub use langfuse::{
     LangfuseAuth, LangfuseClient, LangfuseScore, LangfuseScoreValue, LangfuseTraceConfig,
 };
 pub use profile::{ProcessProfile, ProcessProfiler, ProcessSnapshot};
+pub use supplemental::{SupplementalCallGuard, SupplementalCallTrace, SupplementalEnricher};
 // Shared Langfuse payload helpers reused by the graph observability exporter so
 // ISO-8601 timestamp formatting and null-field pruning live in one place.
 #[cfg(feature = "langfuse")]

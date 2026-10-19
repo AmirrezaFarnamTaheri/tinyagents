@@ -1,5 +1,50 @@
 use super::*;
 
+#[test]
+fn stop_summary_with_copy_preserves_placeholder_shaped_values() {
+    let groups = [StopSummaryGroup {
+        name: "tool_{count}_{error}".to_owned(),
+        success: false,
+        error: Some("failed {name}".to_owned()),
+        count: 3,
+    }];
+    let copy = StopCopy {
+        opening_template: "reason: {reason}\n",
+        failure_template: "- `{name}` failed{count}{error}",
+        ..ENGLISH_STOP_COPY
+    };
+    assert_eq!(
+        render_stop_summary_with_copy("reason {count}", &groups, &copy),
+        "reason: reason {count}\n\n**What happened**\n- `tool_{count}_{error}` failed 3 times: failed {name}\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
+#[test]
+fn english_stop_copy_keeps_transient_summary_golden() {
+    let groups = [
+        StopSummaryGroup {
+            name: "get_profile".into(),
+            success: true,
+            error: None,
+            count: 1,
+        },
+        StopSummaryGroup {
+            name: "use_skill".into(),
+            success: false,
+            error: Some("tool `use_skill` timed out after 30000 ms".into()),
+            count: 3,
+        },
+    ];
+    assert_eq!(
+        render_stop_summary_with_copy(
+            english_stop_reason("turn_stop.transient"),
+            &groups,
+            &ENGLISH_STOP_COPY
+        ),
+        "I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- `get_profile` succeeded\n- `use_skill` failed 3 times: tool `use_skill` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
 fn fallback(note: &str) -> &'static str {
     if note.contains("in a row failed") {
         "turn_stop.varied_failures"

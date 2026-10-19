@@ -9,6 +9,67 @@ use std::sync::{Arc, Mutex};
 
 use tinyinference_llm::model::ModelResponse;
 
+/// Event-only terminal token for hosts that finish post-run close work before
+/// committing durable session status.
+#[derive(Clone)]
+pub struct DeferredTurnTerminal {
+    pub run_id: crate::ids::RunId,
+    pub events: crate::events::EventSink,
+}
+
+impl std::fmt::Debug for DeferredTurnTerminal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeferredTurnTerminal")
+            .finish_non_exhaustive()
+    }
+}
+
+impl DeferredTurnTerminal {
+    /// Emit the optional stop and successful terminal events in order.
+    pub fn finish(self, stop: Option<crate::turn_stop::TurnStop>, turn: u32) {
+        if let Some(stop) = stop {
+            self.events
+                .emit(crate::events::AgentEvent::TurnStopped { turn, stop });
+        }
+        self.events.emit(crate::events::AgentEvent::RunFinalized {
+            run_id: self.run_id,
+        });
+    }
+
+    /// Emit content-free cancellation and finalization events.
+    pub fn finish_cancelled(self) {
+        use crate::terminal::{TerminalOutcome, TerminalReason};
+        self.events.emit(crate::events::AgentEvent::RunFailed {
+            run_id: self.run_id.clone(),
+            error: "turn cancelled after harness completion".into(),
+            outcome: Some(TerminalOutcome::new(
+                TerminalReason::Cancelled,
+                "turn cancelled after harness completion",
+            )),
+        });
+        self.events.emit(crate::events::AgentEvent::RunFinalized {
+            run_id: self.run_id,
+        });
+    }
+
+    /// Emit a generic failure and finalization without leaking runtime error text.
+    pub fn finish_failed(self) {
+        use crate::terminal::{TerminalOutcome, TerminalReason};
+        self.events.emit(crate::events::AgentEvent::RunFailed {
+            run_id: self.run_id.clone(),
+            error: "host turn failed after harness completion".into(),
+            outcome: Some(TerminalOutcome::new(
+                TerminalReason::Internal,
+                "host turn failed after harness completion",
+            )),
+        });
+        self.events.emit(crate::events::AgentEvent::RunFinalized {
+            run_id: self.run_id,
+        });
+    }
+}
+
 /// Whether a run's final response is a reply that ran out of output tokens
 /// before producing anything: `finish_reason = length`, no visible text and no
 /// tool call.

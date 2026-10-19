@@ -1,5 +1,151 @@
 use super::*;
 
+#[test]
+fn deterministic_templates_do_not_rescan_inserted_placeholder_text() {
+    let checkpoint = deterministic_checkpoint(
+        "{steps}|{results}",
+        3,
+        &[CloseToolResult {
+            name: "tool_{steps}".to_owned(),
+            success: true,
+            content: "result {results}".to_owned(),
+        }],
+        100,
+    );
+    assert_eq!(checkpoint, "3|- `tool_{steps}` (ok): result {results}");
+
+    let summary = deterministic_final_summary(
+        "{stop_reason}|{results}",
+        &[CloseToolResult {
+            name: "tool_{results}".to_owned(),
+            success: false,
+            content: "failed {stop_reason}".to_owned(),
+        }],
+        Some("halt {results}"),
+        100,
+    );
+    assert_eq!(
+        summary,
+        "halt {results}|- `tool_{results}` (failed): failed {stop_reason}"
+    );
+}
+
+#[test]
+fn close_copy_prompts_preserve_placeholder_shaped_content() {
+    let copy = CloseCopy {
+        verification_prompt_template: "request={user_request};records={records};reply={reply}",
+        repair_template: "{repair_reason}|{instruction}",
+        ..ENGLISH_CLOSE_COPY
+    };
+    assert_eq!(
+        verification_prompt(
+            &copy,
+            "Explain {records}",
+            "record {reply}",
+            "reply {user_request}",
+            200
+        ),
+        "request=Explain {records};records=record {reply};reply=reply {user_request}"
+    );
+    assert_eq!(
+        repair_with_copy(&copy, "try {repair_reason}", CloseViolation::NoReply),
+        "Your previous reply was empty or tried to call a tool. No tools will run: write the message itself.|try {repair_reason}"
+    );
+}
+
+#[test]
+fn english_verification_prompt_uses_no_tool_fallback_for_empty_records() {
+    let expected = "You are checking a reply before it is shown to a user. Below are the user's request, the records of the tool calls made while handling it, and the reply.\n\nAnswer REJECT if any of these is true:\n1. The reply only says what the assistant will do or is about to do, instead of reporting what happened.\n2. The reply states something the tool records contradict, for example that something does not exist or did not work when a record shows it succeeded, or that something succeeded when its record shows it failed.\n3. The request was not completed, a failed record gives the reason, and the reply does not pass that reason on.\n4. The reply narrates the assistant's own deliberation — thinking aloud, correcting itself part way through, or weighing what to do — rather than stating the outcome. Reporting what a tool call returned is not deliberation.\n5. The reply recites or enumerates the tools the assistant has, instead of reporting what this turn's tool calls produced. Naming a tool the reply actually used, or answering a request that asked what the assistant can do, is not a violation.\n\nOtherwise answer ACCEPT. Reply with the single word ACCEPT or REJECT.\n\n<user_request>\nstatus?\n</user_request>\n\n<tool_records>\n(no tool calls completed)\n</tool_records>\n\n<reply>\nNothing ran.\n</reply>";
+    assert_eq!(
+        verification_prompt(&ENGLISH_CLOSE_COPY, "status?", "", "Nothing ran.", 200),
+        expected
+    );
+    assert_eq!(
+        verification_prompt(
+            &ENGLISH_CLOSE_COPY,
+            "status?",
+            " \n\t ",
+            "Nothing ran.",
+            200
+        ),
+        expected
+    );
+}
+
+#[test]
+fn close_copy_builders_match_english_checkpoint_and_empty_summary() {
+    assert_eq!(
+        checkpoint_with_copy(
+            &ENGLISH_CLOSE_COPY,
+            2,
+            "- `read_file` — ok\n  > data\n",
+            true
+        ),
+        "I reached the tool-call limit for this turn (2 steps), so I paused here before I could write up what I found.\n\n**Raw results from this turn**\n- `read_file` — ok\n  > data\n\n**Next steps:** I'll continue from here — just reply (e.g. \"continue\") and I'll pick up where I left off."
+    );
+    assert_eq!(
+        final_summary_with_copy(&ENGLISH_CLOSE_COPY, "", false),
+        ENGLISH_CLOSE_COPY.empty_final_summary
+    );
+}
+
+#[test]
+fn close_usage_counts_attempts_and_excludes_verifier_from_context_tokens() {
+    let mut usage = CloseUsage::for_model("close-model");
+    let generation = Usage {
+        input_tokens: 11,
+        output_tokens: 4,
+        cache_read_tokens: 3,
+        ..Default::default()
+    };
+    usage.record(CloseRequestKind::Generation, Some(&generation), true);
+    let verification = Usage {
+        input_tokens: 50,
+        output_tokens: 2,
+        cache_read_tokens: 0,
+        ..Default::default()
+    };
+    usage.record(CloseRequestKind::Verification, Some(&verification), false);
+    usage.record(CloseRequestKind::RequiredOutputRepair, None, true);
+    assert_eq!(usage.model_calls, 3);
+    assert_eq!(
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cached_input_tokens
+        ),
+        (61, 6, 3)
+    );
+    assert_eq!(
+        (usage.last_call_input_tokens, usage.last_call_output_tokens),
+        (11, 4)
+    );
+    assert_eq!(usage.pricing_model, "close-model");
+}
+
+#[test]
+fn classified_halt_close_builds_only_for_classified_reason() {
+    let mut built = false;
+    let result = classified_halt_close(
+        Some("halt"),
+        |reason| reason == "halt",
+        || {
+            built = true;
+            42
+        },
+    );
+    assert_eq!(result, Some(42));
+    assert!(built);
+    assert_eq!(
+        classified_halt_close::<()>(Some("ordinary"), |_| false, || ()),
+        None
+    );
+    assert_eq!(
+        classified_halt_close::<()>(None, |_| panic!("no reason"), || panic!("no close")),
+        None
+    );
+}
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -78,6 +224,177 @@ fn scripted_model(answers: &[&str]) -> ScriptedModel {
         answers: Arc::new(Mutex::new(answers.iter().map(|s| s.to_string()).collect())),
         requests: Arc::new(Mutex::new(Vec::new())),
     }
+}
+
+struct StaticCloseSource(Arc<dyn ChatModel<()>>);
+
+impl CloseModelSource for StaticCloseSource {
+    fn build_summarizer(
+        &self,
+        _model: &str,
+        _temperature: f64,
+        _thread_id: Option<&str>,
+    ) -> Result<Arc<dyn ChatModel<()>>, String> {
+        Ok(Arc::clone(&self.0))
+    }
+}
+
+struct EmptyCloseEnricher;
+
+impl crate::observability::SupplementalEnricher for EmptyCloseEnricher {
+    fn enrich(
+        &self,
+        _model: &str,
+        _response: &ModelResponse,
+    ) -> (Option<String>, crate::events::GenerationEnrichment) {
+        (None, Default::default())
+    }
+}
+
+struct InvokeFailureModel;
+
+#[async_trait]
+impl ChatModel<()> for InvokeFailureModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        Err(tinyinference_llm::Error::Model(
+            "synthetic provider failure".into(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn close_source_model_stamps_request_and_traces_completion() {
+    use crate::events::{EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+
+    let inner = Arc::new(scripted_model(&["answer"]));
+    let source = StaticCloseSource(inner.clone());
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close"),
+        Arc::new(EmptyCloseEnricher),
+    );
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected",
+        temperature: 0.2,
+        thread_id: Some("thread"),
+        trace: Some(&trace),
+    };
+    close
+        .invoke(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+
+    let requests = inner.requests.lock().unwrap();
+    let correlation = requests[0].correlation.as_ref().unwrap();
+    assert_eq!(correlation.run_id, "run-close");
+    assert!(correlation.call_id.ends_with("-host-supplemental-1"));
+    let events = listener.events();
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        events[0].event,
+        crate::events::AgentEvent::ModelStarted { .. }
+    ));
+    assert!(matches!(
+        events[1].event,
+        crate::events::AgentEvent::UsageRecorded { .. }
+    ));
+    assert!(matches!(
+        events[2].event,
+        crate::events::AgentEvent::ModelCompleted { .. }
+    ));
+}
+
+#[tokio::test]
+async fn close_source_model_records_one_failure_when_stream_ends_without_terminal_item() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use futures::StreamExt;
+
+    let inner = Arc::new(StreamScriptedModel {
+        responses: Mutex::new(VecDeque::from([Vec::new()])),
+        requests: Mutex::new(Vec::new()),
+    });
+    let source = StaticCloseSource(inner);
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close"),
+        Arc::new(EmptyCloseEnricher),
+    );
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected",
+        temperature: 0.2,
+        thread_id: None,
+        trace: Some(&trace),
+    };
+    let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
+    assert!(stream.next().await.is_none());
+    drop(stream);
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[1].event, AgentEvent::ModelFailed { .. }));
+}
+
+#[tokio::test]
+async fn close_source_model_records_invoke_and_stream_failures_once() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use futures::StreamExt;
+
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close-failures"),
+        Arc::new(EmptyCloseEnricher),
+    );
+    let source = StaticCloseSource(Arc::new(InvokeFailureModel));
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected",
+        temperature: 0.0,
+        thread_id: None,
+        trace: Some(&trace),
+    };
+    assert!(close.invoke(&(), ModelRequest::default()).await.is_err());
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[1].event, AgentEvent::ModelFailed { .. }));
+
+    let stream_source = StaticCloseSource(Arc::new(StreamScriptedModel {
+        responses: Mutex::new(VecDeque::from([vec![ModelStreamItem::Failed(
+            "synthetic stream failure".into(),
+        )]])),
+        requests: Mutex::new(Vec::new()),
+    }));
+    let stream_close = CloseSourceModel {
+        source: &stream_source,
+        ..close
+    };
+    let mut stream = stream_close
+        .stream(&(), ModelRequest::default())
+        .await
+        .unwrap();
+    assert!(matches!(
+        stream.next().await,
+        Some(ModelStreamItem::Failed(_))
+    ));
+    drop(stream);
+    let events = listener.events();
+    assert_eq!(events.len(), 4);
+    assert!(matches!(events[2].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[3].event, AgentEvent::ModelFailed { .. }));
 }
 
 #[test]
