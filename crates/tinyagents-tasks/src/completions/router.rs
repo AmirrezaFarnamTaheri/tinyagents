@@ -632,6 +632,17 @@ impl CompletionRouter {
         Ok(admitted.then_some(ParentAdmissionPermit { _guard: gate }))
     }
 
+    /// Returns a process-local coalescing key for queue batches. Durable
+    /// drivers use backend identity plus tenant scope, so independent router
+    /// instances sharing one lease domain reuse one held parent permit.
+    pub fn parent_admission_batch_key(&self, parent_key: &str, parent_epoch: u64) -> Result<String> {
+        let state = self.lock()?;
+        let identity = state.store.coordination_identity().unwrap_or_else(|| {
+            format!("store:{:p}", Arc::as_ptr(&state.store))
+        });
+        Ok(format!("{identity}:{parent_key}:{parent_epoch}"))
+    }
+
     fn admit_child_locked(
         router: &RouterState,
         parent_key: &str,

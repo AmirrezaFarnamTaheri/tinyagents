@@ -20,6 +20,13 @@ fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
 /// must perform atomically. Synchronous on purpose, like
 /// [`TaskStore`](crate::TaskStore).
 pub trait CompletionStore: Send + Sync {
+    /// Identity shared by separately opened stores coordinating through the
+    /// same durable backend and tenant scope. `None` falls back to this store
+    /// object's identity, suitable for deliberately shared in-memory stores.
+    fn coordination_identity(&self) -> Option<String> {
+        None
+    }
+
     /// Acquires the cross-router parent admission gate. Shared durable stores
     /// must implement this with a backend lease; the default fails closed.
     fn acquire_parent_gate(

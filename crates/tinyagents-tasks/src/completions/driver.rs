@@ -179,6 +179,14 @@ impl DriverCompletionStore {
 }
 
 impl CompletionStore for DriverCompletionStore {
+    fn coordination_identity(&self) -> Option<String> {
+        Some(format!(
+            "driver:{:p}:{}",
+            Arc::as_ptr(&self.backend),
+            self.scope
+        ))
+    }
+
     fn acquire_parent_gate(
         &self,
         parent_key: &str,

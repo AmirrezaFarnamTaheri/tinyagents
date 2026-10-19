@@ -52,11 +52,8 @@ impl QueueAdmission for CompletionAdmission {
     }
 
     fn batch_key(&self) -> Option<String> {
-        Some(format!(
-            "{:p}:{}:{}",
-            Arc::as_ptr(&self.router),
-            self.parent_key,
-            self.parent_epoch
-        ))
+        self.router
+            .parent_admission_batch_key(&self.parent_key, self.parent_epoch)
+            .ok()
     }
 }
