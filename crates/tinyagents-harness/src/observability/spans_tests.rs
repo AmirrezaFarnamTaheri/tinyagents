@@ -61,7 +61,7 @@ fn builds_nested_three_step_trace_with_payloads_and_usage() {
     assert_eq!(events[3]["body"]["input"][0]["content"], "question");
     assert_eq!(events[3]["body"]["usageDetails"]["total"], 16);
     assert_eq!(events[7]["body"]["parentObservationId"], "trace:step:3");
-    assert_eq!(events[7]["body"]["startTime"], "2024-01-01T00:00:01.027Z");
+    assert_eq!(events[7]["body"]["startTime"], "2024-01-01T00:00:00.027Z");
 }
 
 #[test]

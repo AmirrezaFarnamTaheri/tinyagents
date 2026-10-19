@@ -185,7 +185,12 @@ fn graph_span_metadata(
         metadata["langgraph_step"] = json!(step);
     }
     let cleaned = clean_nulls(metadata);
-    cleaned.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    cleaned
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// Maps the typed observations independently of the legacy output. This is a
@@ -193,7 +198,10 @@ fn graph_span_metadata(
 /// same deterministic three-step trace before comparing serialized payloads.
 fn generic_three_step_trace(
     observations: &[GraphObservation],
-) -> (LangfuseTraceConfig, Vec<tinyagents_harness::observability::spans::Span>) {
+) -> (
+    LangfuseTraceConfig,
+    Vec<tinyagents_harness::observability::spans::Span>,
+) {
     use tinyagents_harness::observability::spans::{Span, SpanState};
 
     let first = &observations[0];
@@ -205,7 +213,10 @@ fn generic_three_step_trace(
         trace_id: Some(root_run_id.to_string()),
         name: Some(first.graph_id.as_str().to_string()),
         user_id: Some("user-1".to_string()),
-        session_id: first.thread_id.as_ref().map(|thread| thread.as_str().to_string()),
+        session_id: first
+            .thread_id
+            .as_ref()
+            .map(|thread| thread.as_str().to_string()),
         metadata: json!({
             "graph_id": first.graph_id.as_str(),
             "root_run_id": root_run_id,
@@ -214,14 +225,11 @@ fn generic_three_step_trace(
         ..Default::default()
     };
     let terminal = observations.last().unwrap();
-    let mut spans = vec![Span::new(
-        &run_span_id,
-        run_id,
-        first.graph_id.as_str(),
-        first.ts_ms,
-    )
-    .with_root_run_id(root_run_id)
-    .finish(terminal.ts_ms, SpanState::Ok)];
+    let mut spans = vec![
+        Span::new(&run_span_id, run_id, first.graph_id.as_str(), first.ts_ms)
+            .with_root_run_id(root_run_id)
+            .finish(terminal.ts_ms, SpanState::Ok),
+    ];
     spans[0].metadata = [
         ("root_run_id".to_string(), json!(root_run_id)),
         ("graph_id".to_string(), json!(first.graph_id.as_str())),
