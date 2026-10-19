@@ -354,11 +354,6 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .iter()
             .take_while(|message| matches!(message, Message::Tool(_)))
             .count();
-        if decoded_orphan_count != 0 && reconcile_prior.len() == decoded.len() {
-            reconcile_prior.drain(
-                decoded_system_prefix..decoded_system_prefix + decoded_orphan_count,
-            );
-        }
         decoded = tinyagents_session::transcript::repair_orphaned_tool_head_messages(&decoded)
             .into_owned();
         // A compacted head can start with a System summary immediately after
@@ -602,20 +597,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .as_ref()
                         .map(|session| target.locator.head_generation(session))
                         .and_then(|head| target.locator.read_session_transcript(&head));
-                    let same_source = destination_transcript
-                        .meta
-                        .session_id
-                        .as_deref()
-                        .is_some_and(|session_id| {
-                            scanned_session_id.as_deref() == Some(session_id)
-                        })
-                        || destination_transcript.messages == scanned_messages
-                        || destination
-                            .as_ref()
-                            .is_some_and(|destination| destination.path() == read.path());
-                    if !same_source {
-                        self.reconcile_prior = destination_transcript.messages.clone();
-                    }
+                    self.reconcile_prior = destination_transcript.messages.clone();
                     if let Some(target) = self.target.as_mut() {
                         target.meta = destination_transcript.meta;
                     }
