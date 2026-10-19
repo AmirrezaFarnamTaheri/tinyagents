@@ -148,7 +148,7 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
                     None,
                     None,
                 )
-                .await,
+                ,
         )
         .await;
     cleanup.wait().await;
