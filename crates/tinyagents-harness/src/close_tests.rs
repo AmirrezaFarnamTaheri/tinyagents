@@ -116,7 +116,7 @@ fn result_renderer_accepts_the_host_block_format_and_charges_rendered_bytes() {
             per_result_cap: 100,
             truncation_marker: "…",
             total_budget: 200,
-            render_block: |result| {
+            render_block: |result: &CloseToolResult| {
                 let status = if result.success { "ok" } else { "failed" };
                 let body = result
                     .content
