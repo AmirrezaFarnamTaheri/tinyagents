@@ -292,7 +292,7 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
         Some(awaiting_id.clone())
     );
 
-    let (resumed_id, _, _, _, inserted) = jobs
+    let (resumed_id, _, _, _, should_run) = jobs
         .register_driver_job(DriverJobRegistration {
             key: awaiting_key,
             agent: "worker".into(),
@@ -304,7 +304,7 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
             continuing: true,
         })
         .unwrap();
-    assert!(!inserted);
+    assert!(should_run);
     assert_eq!(resumed_id, awaiting_id);
     assert_eq!(
         jobs.get(resumed_id.as_str()).unwrap().status,
