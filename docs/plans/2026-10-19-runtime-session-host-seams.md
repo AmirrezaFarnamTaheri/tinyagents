@@ -853,9 +853,13 @@ it from `established_identity` (never the in-flight result). Export
 `SessionIdentity`, `SessionIdentityRequest`, and `ResolvedSessionStores` from
 `types`; export `SessionIdentityResolver` from `identity` in `lib.rs`. Define
 `IdentityConfig`, `SessionIdentityResolver`, and `same_admission` in
-`identity.rs`; import request/result types from `crate::types`. Because
-`session.rs` calls it, declare `same_admission` `pub(crate)` and import it as
-`crate::identity::same_admission`.
+`identity.rs`; import `SessionIdentityRequest`, `ResolvedSessionStores`, and
+`SessionIdentity` from `crate::types`, `RuntimeError` from `crate::error`, and
+`Arc` from `std::sync`. Because `session.rs` calls the comparison helper,
+declare `same_admission` `pub(crate)` and import it as
+`crate::identity::same_admission`. Keep `identity` private in `lib.rs` and
+add `pub use identity::SessionIdentityResolver;` plus
+`pub use types::{ResolvedSessionStores, SessionIdentity, SessionIdentityRequest};`.
 
 In `SessionBuilder::build`, require a codec when either transcript or
 identity config is present, then pass the identity config into `Session::new`.
