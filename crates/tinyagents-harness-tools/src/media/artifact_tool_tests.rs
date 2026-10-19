@@ -59,13 +59,14 @@ struct RoutingFiler;
 impl ArtifactFiling for RoutingFiler {
     async fn file(
         &self,
-        _: GeneratedArtifact,
+        generated: GeneratedArtifact,
         context: Option<&dyn ToolRunContext>,
     ) -> Result<FiledArtifact, String> {
         let identity = context
             .and_then(|context| context.host_extension())
             .and_then(|extension| extension.downcast_ref::<CallIdentity>())
             .ok_or("missing call identity")?;
+        assert_eq!(generated.tool_call_id, Some(identity.0.to_owned()));
         Ok(FiledArtifact {
             id: identity.0.to_owned(),
             path: format!("/files/{}.png", identity.0),
@@ -99,7 +100,13 @@ async fn wrapper_keeps_metadata_and_files_each_artifact() {
 
 #[tokio::test]
 async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_results() {
-    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, Arc::new(RoutingFiler));
+    let tool = MediaArtifactTool::new(Inner, MediaArtifactKind::Image, Arc::new(RoutingFiler))
+        .with_tool_call_id(Arc::new(|context| {
+            context
+                .and_then(|context| context.host_extension())
+                .and_then(|extension| extension.downcast_ref::<CallIdentity>())
+                .map(|identity| identity.0.to_owned())
+        }));
     let first = Context(CallIdentity("first"));
     let second = Context(CallIdentity("second"));
     let (left, right) = tokio::join!(

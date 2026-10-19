@@ -136,7 +136,12 @@ async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let outcome = backend
         .execute(
-            request("sh", &["-c", &command], Some(Duration::from_millis(100)), true),
+            request(
+                "sh",
+                &["-c", &command],
+                Some(Duration::from_millis(100)),
+                true,
+            ),
             None,
             None,
         )
@@ -163,7 +168,10 @@ async fn cancellation_waits_for_native_process_tree_reaping() {
     use crate::exec::{ExecBackend, ShellFlavor, timeout::ProcessCleanup};
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("child.pid");
-    let command = format!("sleep 30 & child=$!; echo $child > {}; wait", pidfile.display());
+    let command = format!(
+        "sleep 30 & child=$!; echo $child > {}; wait",
+        pidfile.display()
+    );
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
     let cleanup = ProcessCleanup::default();
     let turn_cleanup = cleanup.clone();
