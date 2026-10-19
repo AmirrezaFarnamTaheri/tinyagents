@@ -172,7 +172,11 @@ separate observation alongside the receipt. Add this exact value in
 #[derive(Clone, Debug)]
 pub struct PostCommitObservation<C: Clone + Send + Sync + 'static = ()> {
     pub receipt: CommitReceipt<C>,
+    pub input: tinyinference_llm::message::Message,
+    pub usage: Option<tinyagents_session::transcript::TurnUsage>,
     pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
+    pub thread_id: Option<String>,
+    pub agent_id: Option<String>,
 }
 ```
 
@@ -191,7 +195,7 @@ Add `PostCommitSink<C>` next to `SessionHooks` in `runtime/hooks.rs`:
 ```rust
 #[async_trait]
 pub trait PostCommitSink<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
-    async fn after_commit(&self, observation: PostCommitObservation<C>)
+    async fn after_commit(&self, observation: &PostCommitObservation<C>)
         -> Result<(), RuntimeError>;
 }
 ```
