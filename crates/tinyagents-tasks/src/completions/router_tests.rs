@@ -1361,6 +1361,7 @@ struct BlockingTryList {
     inner: InMemoryCompletionStore,
     entered: Arc<std::sync::Barrier>,
     resume: Arc<std::sync::Barrier>,
+    gate_wait: Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>,
 }
 
 impl CompletionStore for BlockingTryList {
@@ -1370,6 +1371,15 @@ impl CompletionStore for BlockingTryList {
         holder: &str,
         ttl: std::time::Duration,
     ) -> tinyagents_harness::error::Result<Option<ParentGateClaim>> {
+        let wait = self
+            .gate_wait
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some((entered, resume)) = wait {
+            entered.send(()).expect("test observer remains connected");
+            resume.recv().expect("test releases blocked gate acquisition");
+        }
         self.inner.acquire_parent_gate(parent_key, holder, ttl)
     }
     fn renew_parent_gate(
@@ -1514,6 +1524,7 @@ fn a_record_racing_store_migration_is_not_lost() {
         inner: InMemoryCompletionStore::new(),
         entered: Arc::new(std::sync::Barrier::new(2)),
         resume: Arc::new(std::sync::Barrier::new(2)),
+        gate_wait: Arc::new(Mutex::new(None)),
     });
     let source_port: Arc<dyn CompletionStore> = source.clone();
     let router = Arc::new(CompletionRouter::new(source_port.clone()));
