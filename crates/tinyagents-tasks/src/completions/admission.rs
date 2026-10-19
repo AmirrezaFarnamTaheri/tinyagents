@@ -7,6 +7,7 @@ use tinyagents_harness::run_queue::{
 };
 
 use super::{CompletionRecord, CompletionRouter};
+use super::CompletionStore;
 
 /// Retained admission capability for one queued completion message.
 ///
@@ -15,7 +16,7 @@ use super::{CompletionRecord, CompletionRouter};
 /// durable generation and rejects messages queued under an older generation.
 #[derive(Clone)]
 pub struct CompletionAdmission {
-    router: Arc<CompletionRouter>,
+    store: Arc<dyn CompletionStore>,
     parent_key: String,
     parent_epoch: u64,
 }
@@ -33,8 +34,13 @@ impl std::fmt::Debug for CompletionAdmission {
 impl CompletionAdmission {
     /// Binds a queued completion to the lifecycle generation that recorded it.
     pub fn for_record(router: Arc<CompletionRouter>, record: &CompletionRecord) -> Self {
+        Self::for_store(router.store(), record)
+    }
+
+    /// Binds a queued completion directly to its durable store and lifecycle.
+    pub fn for_store(store: Arc<dyn CompletionStore>, record: &CompletionRecord) -> Self {
         Self {
-            router,
+            store,
             parent_key: record.parent_key.clone(),
             parent_epoch: record.parent_epoch,
         }
@@ -43,16 +49,21 @@ impl CompletionAdmission {
 
 impl QueueAdmission for CompletionAdmission {
     fn acquire(&self) -> Result<Arc<dyn QueueAdmissionPermit>, QueueAdmissionError> {
-        self.router
-            .acquire_parent_generation(&self.parent_key, self.parent_epoch)
+        super::router::ParentAdmissionPermit::acquire(
+            Arc::clone(&self.store),
+            &self.parent_key,
+            self.parent_epoch,
+        )
             .ok()
             .flatten()
+            .map(|permit| Arc::new(permit) as Arc<dyn QueueAdmissionPermit>)
             .ok_or(QueueAdmissionError)
     }
 
     fn batch_key(&self) -> Option<String> {
-        self.router
-            .parent_admission_batch_key(&self.parent_key, self.parent_epoch)
-            .ok()
+        let identity = self.store.coordination_identity().unwrap_or_else(|| {
+            format!("store:{:p}", Arc::as_ptr(&self.store))
+        });
+        Some(format!("{identity}:{}:{}", self.parent_key, self.parent_epoch))
     }
 }

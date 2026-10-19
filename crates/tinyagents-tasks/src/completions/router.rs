@@ -108,8 +108,24 @@ impl std::fmt::Debug for ParentAdmissionPermit {
     }
 }
 
+impl ParentAdmissionPermit {
+    pub(crate) fn acquire(
+        store: Arc<dyn CompletionStore>,
+        parent_key: &str,
+        parent_epoch: u64,
+    ) -> Result<Option<Self>> {
+        let gate = ParentGateGuard::acquire(Arc::clone(&store), parent_key)?;
+        let marker_id = format!("\u{1}parent-cancelled:{parent_key}");
+        let current = store.try_get(&marker_id)?;
+        let admitted = current.is_some_and(|marker| {
+            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
+        });
+        Ok(admitted.then_some(Self { _guard: gate }))
+    }
+}
+
 impl ParentGateGuard {
-    fn acquire(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
+    pub(crate) fn acquire(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
         let holder = uuid::Uuid::new_v4().to_string();
         let started = std::time::Instant::now();
         loop {
@@ -623,15 +639,9 @@ impl CompletionRouter {
         parent_key: &str,
         parent_epoch: u64,
     ) -> Result<Option<Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>>> {
-        let state = self.lock()?;
-        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        let current = state.store.try_get(&Self::parent_marker_id(parent_key))?;
-        let admitted = current.is_some_and(|marker| {
-            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
-        });
-        Ok(admitted.then(|| {
-            Arc::new(ParentAdmissionPermit { _guard: gate })
-                as Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>
+        let store = self.store();
+        Ok(ParentAdmissionPermit::acquire(store, parent_key, parent_epoch)?.map(|permit| {
+            Arc::new(permit) as Arc<dyn tinyagents_harness::run_queue::QueueAdmissionPermit>
         }))
     }
 
