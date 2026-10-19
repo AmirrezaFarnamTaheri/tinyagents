@@ -258,6 +258,7 @@ impl CompletionRouter {
                 let _ = state.store.resolve_claim(
                     &record.task_id,
                     parent_key,
+                    receipt.parent_epoch,
                     gate.claim(),
                     &receipt.token,
                     ClaimResolution::Release,
@@ -284,6 +285,7 @@ impl CompletionRouter {
                 let _ = state.store.resolve_claim(
                     &receipt.task_id,
                     &receipt.parent_key,
+                    receipt.parent_epoch,
                     gate.claim(),
                     &receipt.token,
                     ClaimResolution::Release,
@@ -391,6 +393,7 @@ impl CompletionRouter {
                     let Some(claimed) = state.store.claim_task(
                         &record.task_id,
                         &record.parent_key,
+                        record.parent_epoch,
                         gate.claim(),
                         CompletionClaimMode::Followup,
                         &token,
@@ -663,13 +666,14 @@ impl CompletionRouter {
     ) -> Result<Vec<CompletionRecord>> {
         let mut state = self.lock()?;
         let _gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        if Self::parent_cancelled(&state, parent_key) {
+        let Some(parent_epoch) = Self::admit_child_locked(&state, parent_key, _gate.claim())? else {
             return Ok(Vec::new());
-        }
+        };
         let token = uuid::Uuid::new_v4().to_string();
         let visible_after = SystemTime::now() + CLAIM_VISIBILITY;
         let mut candidates = state.store.claim_pending(
             parent_key,
+            parent_epoch,
             _gate.claim(),
             mode,
             max,
@@ -704,6 +708,7 @@ impl CompletionRouter {
             let resolved = state.store.resolve_claim(
                 &receipt.task_id,
                 &receipt.parent_key,
+                receipt.parent_epoch,
                 ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
                 &receipt.token,
                 ClaimResolution::Delivered,
@@ -731,6 +736,7 @@ impl CompletionRouter {
             let record = state.store.resolve_claim(
                 &receipt.task_id,
                 &receipt.parent_key,
+                receipt.parent_epoch,
                 ParentGateGuard::acquire(Arc::clone(&state.store), &receipt.parent_key)?.claim(),
                 &receipt.token,
                 ClaimResolution::Failed {
