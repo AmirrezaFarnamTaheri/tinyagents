@@ -600,9 +600,16 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
                         .as_ref()
                         .map(|session| target.locator.head_generation(session))
                         .and_then(|head| target.locator.read_session_transcript(&head));
-                    let same_source = destination
-                        .as_ref()
-                        .is_some_and(|destination| destination.path() == read.path());
+                    let same_source = destination_transcript
+                        .meta
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| {
+                            transcript.meta.session_id.as_deref() == Some(session_id)
+                        })
+                        || destination
+                            .as_ref()
+                            .is_some_and(|destination| destination.path() == read.path());
                     if !same_source {
                         self.reconcile_prior = destination_transcript.messages.clone();
                     }
