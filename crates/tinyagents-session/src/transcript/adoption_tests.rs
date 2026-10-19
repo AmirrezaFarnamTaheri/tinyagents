@@ -17,7 +17,7 @@ fn repair_removes_only_the_leading_tool_run_after_system_prefix() {
     assert_eq!(repaired.len(), 3);
     assert_eq!(repaired[0].role, "system");
     assert_eq!(repaired[1].content, "keep");
-    assert_eq!(repaired[2].tool_call_id.as_deref(), Some("later"));
+    assert_eq!(repaired[2].id.as_deref(), Some("later"));
     assert_eq!(rows.len(), 5);
     assert_eq!(rows[1].tool_call_id.as_deref(), Some("one"));
 }
@@ -44,8 +44,9 @@ fn message_repair_matches_transcript_repair_and_preserves_later_orphans() {
     let repaired = repair_orphaned_tool_head_messages(&history);
     assert!(matches!(repaired, Cow::Owned(_)));
     assert_eq!(repaired.len(), 3);
-    assert!(matches!(repaired[0], Message::User(_)));
-    assert!(matches!(repaired[1], Message::Tool(_)));
+    assert!(matches!(repaired[0], Message::System(_)));
+    assert!(matches!(repaired[1], Message::User(_)));
+    assert!(matches!(repaired[2], Message::Tool(_)));
     assert_eq!(history.len(), 5);
 }
 
