@@ -608,9 +608,8 @@ impl SubAgentJobRegistry {
         let control = controls
             .get_mut(&id)
             .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-        if completion_tombstone.is_some()
-            && control.status.borrow().status.is_terminal()
-            && !control.cancellation_requested
+        if control.status.borrow().status.is_terminal()
+            && (completion_tombstone.is_none() || !control.cancellation_requested)
         {
             return Err(SubAgentJobError::Terminal {
                 job_id: job_id.to_owned(),
