@@ -28,6 +28,19 @@ fn progress_label(kind: &MediaArtifactKind) -> &'static str {
     }
 }
 
+fn heartbeat_message(label: &str, elapsed: Duration, job_state: Option<&str>) -> String {
+    let seconds = elapsed.as_secs();
+    let elapsed = if seconds >= 60 {
+        format!("{}m {:02}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{seconds}s")
+    };
+    match job_state {
+        Some(state) => format!("{label} — {elapsed} elapsed (job {state})"),
+        None => format!("{label} — {elapsed} elapsed"),
+    }
+}
+
 pub struct MediaArtifactTool<T: Tool> {
     inner: T,
     kind: MediaArtifactKind,
@@ -85,10 +98,7 @@ impl<T: Tool> MediaArtifactTool<T> {
                 result=&mut run => return result,
                 _=ticker.tick()=>{
                     let state=status.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-                    let message=match state {
-                        Some(state)=>format!("{label} · {} · {} output(s)",state.state,state.outputs),
-                        None=>format!("{label} · running {}s",start.elapsed().as_secs()),
-                    };
+                    let message=heartbeat_message(label,start.elapsed(),state.as_ref().map(|state|state.state.as_str()));
                     context.report_progress(ToolProgress::message(message));
                 }
             }

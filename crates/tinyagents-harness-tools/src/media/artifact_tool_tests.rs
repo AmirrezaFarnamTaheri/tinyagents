@@ -137,3 +137,23 @@ fn configured_media_kinds_keep_their_exact_heartbeat_labels() {
         "Generating video"
     );
 }
+
+#[test]
+fn heartbeat_keeps_elapsed_duration_when_job_state_is_present() {
+    assert_eq!(
+        heartbeat_message(
+            "Generating video",
+            std::time::Duration::from_secs(17),
+            Some("processing")
+        ),
+        "Generating video — 17s elapsed (job processing)"
+    );
+    assert_eq!(
+        heartbeat_message(
+            "Generating image",
+            std::time::Duration::from_secs(125),
+            None
+        ),
+        "Generating image — 2m 05s elapsed"
+    );
+}
