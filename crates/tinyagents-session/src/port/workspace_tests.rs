@@ -1,5 +1,6 @@
 use super::*;
 use crate::legacy::OnceOutcome;
+use crate::port::SessionStoreProvider;
 use crate::transcript::{
     SessionRef, TranscriptMessage, TranscriptMeta, TranscriptTurn, session_stem, write_transcript,
 };
