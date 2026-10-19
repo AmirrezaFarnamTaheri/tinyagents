@@ -93,6 +93,7 @@ pub struct CompletionRouter {
     max_attempts: u32,
     state: Mutex<RouterState>,
     admission_store: Arc<Mutex<AdmissionStoreSlot>>,
+    lifecycle: Mutex<Arc<ParentLifecycle>>,
 }
 
 pub(super) struct AdmissionStoreSlot {
@@ -150,15 +151,13 @@ impl std::fmt::Debug for ParentAdmissionPermit {
 impl ParentAdmissionPermit {
     pub(crate) fn acquire(
         store: Arc<dyn CompletionStore>,
+        lifecycle: Arc<ParentLifecycle>,
         parent_key: &str,
         parent_epoch: u64,
     ) -> Result<Option<Self>> {
-        let gate = ParentGateGuard::acquire(Arc::clone(&store), parent_key)?;
-        let marker_id = format!("\u{1}parent-cancelled:{parent_key}");
-        let current = store.try_get(&marker_id)?;
-        let admitted = current.is_some_and(|marker| {
-            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
-        });
+        let gate = ParentGateGuard::acquire(Arc::clone(&store), lifecycle.clone(), parent_key)?;
+        let current = CompletionRouter::parent_lifecycle_status(&store, &lifecycle, gate.local_guard())?;
+        let admitted = current == Some(ParentLifecycleStatus::Open(parent_epoch));
         Ok(admitted.then_some(Self { _guard: gate }))
     }
 }
