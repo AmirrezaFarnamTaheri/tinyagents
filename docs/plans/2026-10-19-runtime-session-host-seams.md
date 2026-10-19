@@ -1024,18 +1024,34 @@ private; the only structural change inside it is to remove the old early
 return for absent `self.target` when identity config is active, because
 `resolve_and_bind` has already installed the admitted target.
 
-The request has logical naming inputs only; there is no caller-provided
-agent/tenant scope field. The resolver uses `options.run_context.data` to
-authorize the actor, choose the resolved agent id, and open a tenant-scoped
-lease. Map `SessionStoreLeaseError::Unsupported` or `Open(_)` into
+The request carries logical naming inputs only: root key or parent plus child
+key, and the optional conversation `thread_id`. It never carries an agent or
+tenant selector. The host configures the parent/child seed when it builds the
+session; that seed determines `SessionRef` lineage and is not authorization.
+The resolver uses `options.run_context.data` to authorize the actor, choose
+the resolved agent id, and open a tenant-scoped lease. Map
+`SessionStoreLeaseError::Unsupported` or `Open(_)` into
 `RuntimeError::InvalidSessionState(error.to_string())`; host resolver errors
-remain the host's `RuntimeError`. Runtime constructs a root
-`SessionRef::scoped(request.session_key, resolved.agent_id)`. Runtime binds
-the target locator from `resolved.stores.stores().transcripts`, sets
-`meta.agent_id`, `meta.session_id`, `meta.parent_session_id`, and canonical
-stem, then continues to resume. Resolver failure returns immediately without
-touching the current or fallback locator. A session-bound target may keep its
-own fixed locator only when no resolver is installed.
+remain the host's `RuntimeError`. Runtime constructs a root with
+`SessionRef::scoped(request.session_key, resolved.agent_id)` or a child with
+`SessionRef::child_of(request.parent, request.child_key)`. It binds the target
+locator from `resolved.stores.stores().transcripts`; `for_session` stamps
+`agent_id`, `session_id`, `parent_session_id`, and the canonical stem. A child
+must never be replaced with a root merely because the resolver returns an
+agent id: child lineage is preserved in the child `SessionRef` and its stem.
+Resolver failure returns immediately without touching the current or fallback
+locator. A session-bound target may keep its own fixed locator only when no
+resolver is installed.
+
+On re-admission, compare the new logical first generation, resolved agent and
+lease destination to the established identity, then retain the current
+`self.target.session` generation if its `first_generation()` matches. Use
+that current generation to construct the new target and identity. In
+`ResumeMode::Never`, do not call `head_generation` just to discover a known
+head: preserve the already-bound generation, then let normal commit/compaction
+advance it. This keeps the sealed generation immutable and ensures the next
+turn still appends to the current head. The first admission starts from
+generation zero. Re-admission does not reset a compacted root or child to zero.
 
 Put the last established binding in `SessionStateView` as
 `Option<&SessionIdentity>` for diagnostics and hook decisions; it is not
@@ -1298,6 +1314,8 @@ impl crate::SessionIdentityResolver<()> for FixedIdentityResolver {
         _: &(),
     ) -> Result<crate::ResolvedSessionStores, RuntimeError> {
         assert_eq!(request.session_key, "thread-identity");
+        assert!(request.parent.is_none());
+        assert!(request.child_key.is_none());
         *self.calls.lock().unwrap() += 1;
         let agent_id = self.agent_id.lock().unwrap().clone();
         let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
@@ -1327,6 +1345,90 @@ async fn direct_resume_resolves_and_uses_the_admitted_lease() {
     options.resume = ResumeMode::Session;
     assert!(!session.resume(&options).await.unwrap().loaded);
     assert_eq!(*calls.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn child_identity_resolution_keeps_parent_lineage_and_does_not_adopt_as_root() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(
+        tinyagents_session::port::DriverSessionStores::new(
+            Arc::new(MemoryStorage::new()), Scope::local(),
+        ).unwrap(),
+    );
+    let parent = SessionRef::scoped("root-thread", "parent-agent");
+    let child = SessionRef::child_of(&parent, "delegate:worker");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("worker-agent".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![Ok(outcome(vec![
+        Message::user("child task"), Message::assistant("child result"),
+    ]))]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .child_identity_resolver(
+            parent.clone(), "delegate:worker", meta(), resolver,
+        )
+        .build().unwrap();
+    session.turn(
+        Message::user("child task"),
+        TurnOptions { resume: ResumeMode::Session, thread_id: Some("root-thread".into()), ..TurnOptions::default() },
+    ).await.unwrap();
+
+    let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "worker-agent",
+    ).unwrap();
+    let transcripts = &stores.stores().transcripts;
+    assert_eq!(session_stem(&child), session_stem(&child.first_generation()));
+    assert!(session_stem(&child).starts_with(&format!("{}__", session_stem(&parent))));
+    assert!(transcripts.read_session_transcript(&child).unwrap().read_session().unwrap().is_some());
+    assert!(transcripts.read_session_transcript(&parent).unwrap().read_session().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn admitted_identity_keeps_compacted_head_on_following_never_resume_turn() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(tinyagents_session::port::DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let session_ref = SessionRef::scoped("thread-identity-compact", "agent-resolved");
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider: provider.clone(),
+        calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let driver = Arc::new(Driver::new(vec![
+        Ok(outcome(vec![
+            Message::user("one"), Message::assistant("first"),
+            Message::user("two"), Message::assistant("second"),
+        ])),
+        Ok(outcome(vec![Message::user("three"), Message::assistant("third")])),
+    ]));
+    let mut session = SessionBuilder::new(driver)
+        .codec(Arc::new(Codec::default()))
+        .identity_resolver("thread-identity-compact", meta(), resolver)
+        .build().unwrap();
+    session.turn(
+        Message::user("one"),
+        session_turn_options(ResumeMode::Session, "thread-identity-compact"),
+    ).await.unwrap();
+    let stores = tinyagents_session::port::SessionStoreProvider::lease_for_agent(
+        provider.as_ref(), "agent-resolved",
+    ).unwrap();
+    let locator = &stores.stores().transcripts;
+    let sealed = locator.read_session_transcript(&session_ref).unwrap();
+    let sealed_bytes = fingerprint(sealed.as_ref());
+
+    session.turn(
+        Message::user("three"),
+        session_turn_options(ResumeMode::Never, "thread-identity-compact"),
+    ).await.unwrap();
+
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+    assert_eq!(fingerprint(sealed.as_ref()), sealed_bytes,
+        "a later ResumeMode::Never admission must not reset or rewrite generation zero");
+    assert!(locator.read_session_transcript(&session_ref.next_generation()).unwrap().is_some());
 }
 ```
 
