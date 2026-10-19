@@ -830,6 +830,45 @@ private reader performs no hook, resolver, lock, or target-selection work.
 Validate `TurnOptions::session` and any hook-selected target before the lock
 or any locator operation.
 
+Use this complete public wrapper (the old locator-reading match moves intact
+to `resume_admitted`):
+
+```rust
+pub async fn resume(
+    &mut self,
+    options: &TurnOptions<C>,
+) -> Result<SessionResume, RuntimeError> {
+    if options.cancellation.is_cancelled() {
+        return Err(RuntimeError::Cancelled);
+    }
+    self.resolve_and_bind(options, None)?;
+    self.resume_admitted(options).await
+}
+```
+
+The relevant `turn_inner` sequence is:
+
+```rust
+let resume_preparation = cancelable(
+    &cancellation,
+    self.hooks.before_resume(request, options, self.state_view(false)),
+).await?;
+self.apply_resume_preparation(resume_preparation)?;
+self.resolve_and_bind(options, self.target.as_ref())?;
+let _turn_lock = cancelable(&cancellation, async { Ok(self.lock_turn(options).await) }).await?;
+let resumed = if options.resume == ResumeMode::Never {
+    false
+} else {
+    self.resume_admitted(options).await?.loaded
+};
+```
+
+Keep the existing cancellation check immediately following the resume call.
+`resume_admitted` is the old locator-reading body verbatim, renamed and made
+private; the only structural change inside it is to remove the old early
+return for absent `self.target` when identity config is active, because
+`resolve_and_bind` has already installed the admitted target.
+
 The request has logical naming inputs only; there is no caller-provided
 agent/tenant scope field. The resolver uses `options.run_context.data` to
 authorize the actor, choose the resolved agent id, and open a tenant-scoped
