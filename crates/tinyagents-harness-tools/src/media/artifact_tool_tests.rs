@@ -1,4 +1,5 @@
 use super::*;
+use crate::media::FiledArtifact;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use std::{

@@ -121,6 +121,7 @@ impl<T: Tool> MediaArtifactTool<T> {
         mut result: ToolResult,
         args: &Value,
         context: Option<&dyn ToolRunContext>,
+        call_id: Option<&str>,
     ) -> ToolResult {
         let Some(data) = result.content.iter_mut().find_map(|block| {
             if let ToolContent::Json { data } = block {
@@ -264,7 +265,7 @@ impl<T: Tool> Tool for MediaArtifactTool<T> {
                 }
             }
         };
-        let result = self.run_with_heartbeat(context, status, run).await?;
+        let result = self.run_with_heartbeat(context, None, status, run).await?;
         if result.is_error {
             return Ok(result);
         }
