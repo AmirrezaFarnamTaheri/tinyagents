@@ -20,8 +20,11 @@ pub struct ParentRosterEntry {
 }
 
 /// Builds a stable roster from the actual subagent-job registry and sessions
-/// already read through the exact parent-scoped session store. Sessions with
-/// another parent thread are excluded; the owner string scopes live jobs.
+/// already read through a [`ScopedSubagentSessionStore`][crate::subagent::ScopedSubagentSessionStore]
+/// bound to the same authenticated parent/workspace. Session summaries do not
+/// carry workspace ownership, so callers must not pass summaries from a global
+/// store or another workspace. Sessions with another parent thread are still
+/// excluded here; the owner and workspace/thread scope live jobs.
 pub fn parent_roster_for_owner(
     jobs: &crate::subagent::SubAgentJobRegistry,
     owner: &str,
