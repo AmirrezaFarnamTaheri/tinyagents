@@ -335,6 +335,7 @@ impl CompletionStore for DriverCompletionStore {
             let rows = docs
                 .query_all(
                     COMPLETIONS,
+                    COMPLETIONS,
                     &Query::filter(Filter::eq("parent_key", parent_key.as_str())),
                 )
                 .await
