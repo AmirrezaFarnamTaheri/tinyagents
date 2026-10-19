@@ -23,7 +23,7 @@ mod settings;
 
 pub use command_environment::CommandEnvironment;
 pub use output::{
-    kill_process_group, output_or_kill, output_or_kill_captured_isolated,
+    CapturedCommandResult, kill_process_group, output_or_kill, output_or_kill_captured_isolated,
     output_or_kill_with_progress, output_or_kill_with_progress_isolated, output_unbounded,
     output_unbounded_with_progress, output_unbounded_with_progress_isolated, output_with_input,
     output_with_input_and_progress, own_process_group, set_task_wrapper,
