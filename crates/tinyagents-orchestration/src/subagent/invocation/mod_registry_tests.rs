@@ -81,6 +81,40 @@ async fn thread_and_global_cancellation_select_jobs_by_retained_metadata() {
 }
 
 #[tokio::test]
+async fn thread_cancellation_is_scoped_to_workspace() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let workspace_a = tinytools::WorkspaceDescriptor::new("/workspace/a");
+    let workspace_b = tinytools::WorkspaceDescriptor::new("/workspace/b");
+    let token_a = CancellationToken::new();
+    let token_b = CancellationToken::new();
+    for (token, workspace) in [
+        (token_a.clone(), workspace_a.clone()),
+        (token_b.clone(), workspace_b),
+    ] {
+        jobs.create_with_cancellation(
+            "worker",
+            7,
+            token,
+            JobLink {
+                parent_thread_id: Some("same-thread".into()),
+                workspace: Some(workspace),
+                ..JobLink::default()
+            },
+        );
+    }
+
+    assert_eq!(
+        jobs.cancel_for_thread(&ParentJobScope::new(workspace_a, "same-thread"))
+            .unwrap(),
+        1
+    );
+    assert!(token_a.is_cancelled());
+    assert!(!token_b.is_cancelled());
+}
+
+#[tokio::test]
 async fn steering_is_reachable_while_live_and_released_when_settled() {
     let jobs = SubAgentJobRegistry::new();
     let (job_id, _steering) = jobs.create("worker", 1);
