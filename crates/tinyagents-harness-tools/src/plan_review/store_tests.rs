@@ -91,7 +91,7 @@ async fn revise_returns_feedback_to_the_parked_turn() {
 
 #[test]
 fn unknown_request_cannot_be_decided() {
-    let (store, events) = store(Duration::from_secs(60));
+    let (store, _) = store(Duration::from_secs(60));
     assert!(!store.decide(&1, "missing", PlanReviewResolution::Approve));
     assert!(!store.decide_by_thread(&1, "missing", PlanReviewResolution::Approve));
 }
