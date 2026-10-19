@@ -301,13 +301,13 @@ async fn losing_turn_fence_cancels_host_work_and_skips_persistence() {
         ..FakeHost::default()
     };
 
-    let outcome = {
-        let running = drive_child_turn(&mut host, control);
-        tokio::pin!(running);
-        started_rx.await.unwrap();
-        fence.revoke();
-        running.await
-    };
+    let (outcome, ()) = tokio::join!(
+        drive_child_turn(&mut host, control),
+        async {
+            started_rx.await.unwrap();
+            fence.revoke();
+        }
+    );
 
     assert_eq!(outcome, Err(ChildTurnError::LeaseLost));
     assert!(cancellation.is_cancelled());
