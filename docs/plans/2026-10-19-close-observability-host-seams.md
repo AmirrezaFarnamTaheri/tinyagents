@@ -111,10 +111,28 @@ pub fn final_answer_instruction(copy: &CloseCopy, stop_reason: Option<&str>, tru
 }
 
 pub fn verification_prompt(copy: &CloseCopy, request: &str, records: &str, reply: &str, request_char_cap: usize) -> String {
-    copy.verification_prompt_template
-        .replace("{user_request}", &truncate_chars(request, request_char_cap))
-        .replace("{records}", records.trim())
-        .replace("{reply}", reply.trim())
+    let records = if records.trim().is_empty() { copy.no_tool_calls } else { records.trim() };
+    interpolate_once(copy.verification_prompt_template, &[
+        ("{user_request}", &truncate_chars(request, request_char_cap)),
+        ("{records}", records),
+        ("{reply}", reply.trim()),
+    ])
+}
+
+// Scan only the template. Inserted values are copied verbatim and never rescanned.
+fn interpolate_once(template: &str, fields: &[(&str, &str)]) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut remaining = template;
+    while let Some((index, key, value)) = fields.iter()
+        .filter_map(|(key, value)| remaining.find(key).map(|index| (index, *key, *value)))
+        .min_by_key(|(index, _, _)| *index)
+    {
+        output.push_str(&remaining[..index]);
+        output.push_str(value);
+        remaining = &remaining[index + key.len()..];
+    }
+    output.push_str(remaining);
+    output
 }
 
 pub fn instruction_needles(copy: &CloseCopy, stop_reason: Option<&str>) -> Vec<String> {
@@ -129,7 +147,7 @@ pub fn repair_with_copy(copy: &CloseCopy, instruction: &str, violation: CloseVio
         CloseViolation::QuotedInstruction => copy.repair_quoted_instruction,
         CloseViolation::Unverified => copy.repair_unverified,
     };
-    copy.repair_template.replace("{repair_reason}", reason).replace("{instruction}", instruction)
+    interpolate_once(copy.repair_template, &[("{repair_reason}", reason), ("{instruction}", instruction)])
 }
 
 // turn_stop.rs
@@ -192,7 +210,7 @@ where F: FnMut(&str) -> String {
 
 pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], copy: &StopCopy) -> String {
     use std::fmt::Write as _;
-    let mut out = copy.opening_template.replace("{reason}", reason);
+    let mut out = interpolate_once(copy.opening_template, &[("{reason}", reason)]);
     if !groups.is_empty() {
         out.push_str(copy.what_happened_heading);
         let shown_from = groups.len().saturating_sub(8);
@@ -200,16 +218,17 @@ pub fn render_stop_summary_with_copy(reason: &str, groups: &[StopSummaryGroup], 
             let name = truncate_with_ellipsis(&group.name, 60);
             let count = if group.count == 1 { String::new() } else { format!(" {} times", group.count) };
             let line = if group.success {
-                copy.success_template.replace("{name}", &name).replace("{count}", &count)
+                interpolate_once(copy.success_template, &[("{name}", &name), ("{count}", &count)])
             } else {
-                copy.failure_template.replace("{name}", &name).replace("{count}", &count)
-                    .replace("{error}", &group.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default())
+                let error = group.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default();
+                interpolate_once(copy.failure_template, &[("{name}", &name), ("{count}", &count), ("{error}", &error)])
             };
             let _ = writeln!(out, "{line}");
         }
         let hidden: usize = groups.iter().take(shown_from).map(|group| group.count).sum();
         if hidden > 0 {
-            let _ = writeln!(out, "{}", copy.hidden_calls_template.replace("{count}", &hidden.to_string()));
+            let hidden = hidden.to_string();
+            let _ = writeln!(out, "{}", interpolate_once(copy.hidden_calls_template, &[("{count}", &hidden)]));
         }
     }
     out.push_str(copy.proceed_prompt);
@@ -256,6 +275,13 @@ Files: `crates/tinyagents-harness/src/close.rs`, `close_tests.rs`, `turn_stop.rs
    Add a whole-string assertion for the production three-timeout case with the transient English copy: `I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- \`get_profile\` succeeded\n- \`use_skill\` failed 3 times: tool \`use_skill\` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again.` The existing component assertions remain too.
 3. First add/run the output behavior tests against existing functions. The OpenHuman block-format golden is a real behavioral gap against the harness's current default renderer; it fails because the harness defaults to inline `- \`name\` (ok):` instead of OpenHuman's quoted multiline block. Do not count adding a new API's compile failure as a behavioral RED. After the algorithmic output test is red, add the sentinel copy test with every field, then implement the new copy API and confirm both pass.
 4. Make the red test fail on a real behavior mismatch, then implement. No host migration occurs in #64. Confirm existing APIs and tests still pass unchanged.
+5. Add a full-string verifier golden for empty records and repeat it with whitespace-only records. Both calls must equal this exact output (including the no-tools fallback):
+   ```rust
+   let expected = "You are checking a reply before it is shown to a user. Below are the user's request, the records of the tool calls made while handling it, and the reply.\n\nAnswer REJECT if any of these is true:\n1. The reply only says what the assistant will do or is about to do, instead of reporting what happened.\n2. The reply states something the tool records contradict, for example that something does not exist or did not work when a record shows it succeeded, or that something succeeded when its record shows it failed.\n3. The request was not completed, a failed record gives the reason, and the reply does not pass that reason on.\n4. The reply narrates the assistant's own deliberation — thinking aloud, correcting itself part way through, or weighing what to do — rather than stating the outcome. Reporting what a tool call returned is not deliberation.\n5. The reply recites or enumerates the tools the assistant has, instead of reporting what this turn's tool calls produced. Naming a tool the reply actually used, or answering a request that asked what the assistant can do, is not a violation.\n\nOtherwise answer ACCEPT. Reply with the single word ACCEPT or REJECT.\n\n<user_request>\nstatus?\n</user_request>\n\n<tool_records>\n(no tool calls completed)\n</tool_records>\n\n<reply>\nNothing ran.\n</reply>";
+   assert_eq!(verification_prompt(&ENGLISH_CLOSE_COPY, "status?", "", "Nothing ran.", 200), expected);
+   assert_eq!(verification_prompt(&ENGLISH_CLOSE_COPY, "status?", " \n\t ", "Nothing ran.", 200), expected);
+   ```
+6. Add `verification_prompt_does_not_rescan_placeholder_shaped_user_content`: pass request `Explain {records}`, records `record contains {reply} and {user_request}`, and reply `reply contains {records}`; assert the full result retains each of those braces and token strings literally in its corresponding XML section. Add `stop_summary_preserves_placeholder_shaped_tool_names_and_errors`: use one failed group with name `tool_{count}_{error}` and scrubbed error `failed {name}`; assert the exact line is `- `tool_{count}_{error}` failed: failed {name}`. These tests pin single-pass interpolation: scan template tokens only and append inserted values verbatim.
 
 ### 2. Consolidate checkpoint and grounded close
 
@@ -263,7 +289,7 @@ Files: `close.rs`, `close_tests.rs`; public paths remain `tinyagents_harness::cl
 
 1. Inventory existing `close.rs` entry points before editing: `CloseToolResult`, `results_from_tool_outcomes`, truncation/rendering, deterministic builders, `CloseViolation`, repair config/options and usage callbacks, required-output repair, grounded close and fallback. Extend those APIs rather than creating parallel algorithms.
 2. Add focused tests for both checkpoint and final close with custom copy and byte equality against OpenHuman goldens. Preserve the cases in host `grounded_close_tests.rs`: classified halt with no provider usage; selected model and verifier excluded from final-context gauge; failed close request counted without usage; correlated native start/completion events; EOF and timeout traces without timeout usage; all required-output placement variants; truncated and capped turns; timeout repair retains completed-call usage; cache event clears provider charge; free-route catalog rates are zero. Assert output bytes, request sequence, model/temperature/output cap, tool-less calls, callback kind/response presence, token gauges, and event correlation.
-3. Move `SummarizerSourceModel` to harness as `CloseSourceModel<'a> { source: &'a dyn CloseModelSource, model: &'a str, temperature: f64, thread_id: Option<&'a str> }`, implementing `ChatModel<()>` by obtaining the per-call model and forwarding request/invoke/stream unchanged. Define `pub trait CloseModelSource: Send + Sync { fn build_summarizer(&self, model: &str, temperature: f64, thread_id: Option<&str>) -> Result<Arc<dyn ChatModel<()>>, String>; }`. Map the `String` error to `tinyinference_llm::Error::Model`; OpenHuman implements the source port by delegating to `TurnModelSource`. Keep the supplemental trace wrapper separate in the following step.
+3. Move `SummarizerSourceModel` to harness as `CloseSourceModel<'a> { source: &'a dyn CloseModelSource, model: &'a str, temperature: f64, thread_id: Option<&'a str>, trace: Option<&'a SupplementalCallTrace> }`. Define `pub trait CloseModelSource: Send + Sync { fn build_summarizer(&self, model: &str, temperature: f64, thread_id: Option<&str>) -> Result<Arc<dyn ChatModel<()>>, String>; }`. Its `ChatModel<()>` implementation obtains the per-call model and forwards request, invoke, and stream. In `invoke`, call `trace.begin(model, request)` before provider invocation; on success call `guard.complete(response)`, while `?` propagation on failure drops the guard and emits one failure. In `stream`, begin before opening the provider stream, then retain the guard in the mapped stream: terminal `Completed` calls `complete` once, `Failed`/`ProviderFailed` drops it once, and EOF or consumer drop before a terminal item drops it as an incomplete failure. This keeps the source model and trace composition connected at construction, with both borrowed lifetimes explicit. Map the source's `String` build error to `tinyinference_llm::Error::Model`; OpenHuman implements the source port by delegating to `TurnModelSource`.
 4. Move `RepairUsage`'s generic fields and accumulation into harness `CloseUsage`: `model_calls`, `input_tokens`, `output_tokens`, `cached_input_tokens`, `last_call_input_tokens`, `last_call_output_tokens`, plus `cost: CostTally` and `pricing_model: String` (both types already belong to harness/inference contracts). Implement `for_model(model)`, `record(kind, Option<&Usage>, measures_context)`, and `record_close_call(kind, Option<&ModelResponse>)`. Preserve exact rules from source lines 45-98: count each attempted request; add usage totals only when present; record final context tokens only for non-verification requests; a successful close/repair with context tokens supersedes the loop's final call. Keep the callback seam so OpenHuman's `BilledUsage` conversion and catalog pricing call `CostTally::add(CallCost)` without importing OpenHuman types upstream. Existing `grounded_close_tests.rs` covers callback complete/fail/timeout paths.
 5. Move `classified_halt_close` into harness as a generic selector with exact contract `pub fn classified_halt_close<T>(stop_reason: Option<&str>, is_classified_halt: impl FnOnce(&str) -> bool, build_close: impl FnOnce() -> T) -> Option<T>`. Its complete implementation is: `let reason = stop_reason?; is_classified_halt(reason).then(build_close)`. Host predicate is `|reason| reason.starts_with("Stopping after ")`; its fallback closure renders the host `StopCopy` summary from tool outcomes. This keeps the product marker and classification host-side while moving the generic short-circuit. Port `classified_halt_returns_partial_work_without_provider_usage`; assert no model request/usage, partial successes listed, success payload omitted, and failed line retained.
 6. `repair_required_output` already exists in harness at `close.rs:559-698`; consolidate the host call to it rather than porting a duplicate. Preserve host construction of `RequiredOutput`, selected repair instruction, `Prepend` placement and post-repair progress delta. Port its exact behavior assertions from `required_output_repair_preserves_all_host_output_placements` and retain model-repaired vs deterministic fallback results.
@@ -282,7 +308,7 @@ Files: `observability/mod.rs` and its existing `mod_journal_tests.rs` only for c
 
 1. Do not add/move `TurnJournal` into harness. The inspected type at host lines 123-225 includes `DriverStatusStore`, `HarnessRunStatus`, sealing, and host logging. The generic event path already uses `StoreEventJournal`, `JournalSink`, and `HarnessEventJournal`.
 2. Keep attachment, status lifecycle and `merge_run_observations` on the host. `journal_tests.rs` only tests that the request/run map stays scoped to the registering `DispatchCtx`; keep it there. Existing harness observability tests cover generic append/read/offset/lineage behavior; add no duplicate tests.
-3. Move `SupplementalTrace` call lifecycle into `harness::observability::SupplementalCallTrace`. Exact public port: `pub trait SupplementalEnricher: Send + Sync { fn enrich(&self, model: &str, response: &ModelResponse) -> (Option<String>, GenerationEnrichment); }`. The harness trace owns `EventSink`, `RunId`, `AtomicUsize`, `Mutex<Option<String>>` actual model, and `AtomicBool` cache flag; methods retain current signatures `new(events, run_id, enricher)`, `begin(model)->(CallId,u64)`, `failed(call_id,model,started_at_ms)`, `completed(call_id,model,started_at_ms,input,response)`, `actual_model()`, `is_cache_hit()`, and `run_id()`. The host enricher reproduces lines 101-148: actual-route model fallback, provider id validation, provider pricing, `usage_info_from_response`, and estimate suppression for cached/reported charges. Preserve event order: started; on failure only generic ModelFailed; on success cached marker (and clear charged amount), UsageRecorded, ModelCompleted with input/output, then GenerationEnriched when nonempty. Move `SupplementalCall` RAII and stream item completion/failure handling from `grounded_close.rs:124-225` too. Test cached response, zero-price route, failure and stream-drop paths; no external calls.
+3. Move `SupplementalTrace` call lifecycle into `harness::observability::SupplementalCallTrace`, with concrete request correlation and RAII guard API. Define `pub trait SupplementalEnricher: Send + Sync { fn enrich(&self, model: &str, response: &ModelResponse) -> (Option<String>, GenerationEnrichment); }`; the trace owns `EventSink`, `RunId`, `AtomicUsize`, `Mutex<Option<String>>` actual model, `AtomicBool` cache flag, and `Arc<dyn SupplementalEnricher>`. Its constructors/accessors are `new(events: EventSink, run_id: RunId, enricher: Arc<dyn SupplementalEnricher>) -> Self`, `run_id(&self) -> RunId`, `actual_model(&self) -> Option<String>`, and `is_cache_hit(&self) -> bool`. `begin(&self, model: &str, request: &mut ModelRequest) -> SupplementalCallGuard` allocates the next `CallId`, captures `now_ms()`, serializes request messages into the call's input value, sets `request.correlation = Some(ModelCallCorrelation::new(self.run_id, call_id))`, emits `ModelStarted`, and returns a guard owning the call id, model, start time, input, trace reference, and `completed: false`. `SupplementalCallGuard::complete(&mut self, response: &ModelResponse)` records actual route/model and cache status; for cache hits clear `response.usage.charged_amount` before emitting `UsageRecorded`, then emit `ModelCompleted` with captured input/output and `GenerationEnriched` only when nonempty, and set `completed = true`. Its `Drop` emits exactly one generic `ModelFailed` if incomplete, including invoke error, stream error, EOF, or consumer drop. `CloseSourceModel` owns the optional trace borrow and uses this guard for invoke and stream as specified in Step 2.3, preserving correlation through the whole call. The host enricher reproduces `supplemental_trace.rs:101-148`: actual-route model fallback, provider id validation, provider pricing, `usage_info_from_response`, and estimate suppression for cached/reported charges. Move `SupplementalCall` RAII lifecycle from `grounded_close.rs:124-225`. Test success correlation and event order, invoke failure, stream error, EOF, and consumer drop; each failure path must emit one `ModelFailed`, and a completed stream must emit one completion only. Retain cached-response charge clearing and zero-price route tests; no external calls.
 4. Keep all persistence through `AppendStore` and the existing journal ports. No database/storage dependencies may be added to `tinyagents-harness`.
 
 ### 5. Move capture middleware and repeated-failure ladder core
