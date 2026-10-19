@@ -262,7 +262,10 @@ pub trait PostCommitSink<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 }
 ```
 
-The finalization owner already spawns a task after durable append and awaits
+Add imports for `PostCommitObservation` and the trait-object `Arc`. Store
+`Vec<Arc<dyn PostCommitSink<C>>>` on `SessionBuilder` and `Session`, default
+empty, and add `.post_commit_sink(Arc<dyn PostCommitSink<C>>) -> Self` that
+appends in registration order. The finalization owner already spawns a task after durable append and awaits
 its `JoinHandle` without observing cancellation (`runtime/session.rs`, commit
 path). Invoke sinks inside that same owned task so dropping the caller future
 cannot cancel a durable transition's finalization. Do not put additional
@@ -274,6 +277,77 @@ from the same task; do not replace it or introduce an independently
 cancellable second tail. Add the `TurnSummary` adapter as a helper that
 consumes `PostCommitObservation`, while hosts continue to supply product
 progress/memory/learning sinks.
+
+The existing `TerminalGuard::finalize_commit` owns terminal delivery. Change
+its signature to
+`finalize_commit(receipt, observation, sinks) -> JoinHandle<()>`, where
+`observation: PostCommitObservation<C>` and `sinks` is the already-cloned
+ordered sink vector. Inside the spawned task, preserve this order exactly:
+`hooks.after_commit(receipt.clone())`, each `sink.after_commit(&observation)`
+in vector order, `hooks.on_terminal_outcome(outcome)`, then
+`hooks.on_terminal(terminal)`. Ignore/log each postcommit error without
+short-circuiting. The existing call site after durable append constructs the
+observation and immediately stores/awaits the returned join handle; add no
+await between the successful append and spawning the owner task.
+
+Construct summary metadata using only captured facts. Convert input/output to
+their message text; hash `serde_json::to_vec(&call.arguments)` with SHA-256;
+classify failure text only when `success == false`; copy measured duration.
+Never invent a duration, success flag, thread id, agent id, or usage value.
+Because `TurnSummary` requires a thread, its adapter returns `None` when
+`thread_id` is absent or empty. For usage, map captured input/output/cache
+token counts and context window; leave charge absent unless an explicit
+provider charge was captured.
+
+Implement that adapter as this pure function in `runtime/summary.rs`:
+
+```rust
+pub fn turn_summary<C: Clone + Send + Sync + 'static>(
+    observation: &PostCommitObservation<C>,
+) -> Option<tinyagents_harness::host::TurnSummary> {
+    use sha2::{Digest, Sha256};
+    let thread = observation.thread_id.as_deref()?.trim();
+    if thread.is_empty() { return None; }
+    let usage = observation.usage.as_ref().map_or_else(Default::default, |usage| {
+        tinyinference_llm::usage::Usage {
+            input_tokens: usage.usage.input,
+            output_tokens: usage.usage.output,
+            cache_read_tokens: usage.usage.cached_input,
+            context_window_tokens: (usage.usage.context_window > 0)
+                .then_some(usage.usage.context_window),
+            ..Default::default()
+        }
+    });
+    let mut summary = tinyagents_harness::host::TurnSummary::new(
+        tinyagents_harness::ids::ThreadId::from(thread),
+        observation.agent_id.as_deref()?,
+    ).with_text(
+        observation.input.text(),
+        observation.receipt.outcome.output.clone().unwrap_or_default(),
+    ).with_usage(usage);
+    for call in &observation.tool_outcomes {
+        let bytes = serde_json::to_vec(&call.arguments).ok()?;
+        let digest = Sha256::digest(bytes);
+        let args_digest = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        summary.record_tool_outcome(tinyagents_harness::host::ToolOutcomeRecord {
+            name: call.name.clone(),
+            args_digest,
+            success: call.success,
+            failure_class: (!call.success).then(|| {
+                tinyagents_harness::host::classify_tool_failure(&call.content).to_owned()
+            }),
+            duration_ms: call.duration_ms,
+        });
+    }
+    Some(summary)
+}
+```
+
+Add `sha2` as a normal runtime dependency only if it is not already present in
+the runtime manifest. Test missing/blank identity returns `None`, a failed
+tool gets a digest and failure class without storing arguments/content, a
+successful tool has no failure class, and the captured usage fields map
+exactly.
 
 ### Tool surface policy and durable extensions (`tinyagents-runtime`,
 `tinyagents-harness`)
