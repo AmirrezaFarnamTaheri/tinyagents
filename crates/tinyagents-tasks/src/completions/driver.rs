@@ -29,7 +29,8 @@ use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinystoragedrivers_core::primitives::LEASES;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, IndexSpec, Leases,
-    Precondition, Query, Repo, StorageError, UPDATED_FIELD, Versioned, WriteOptions,
+    Precondition, Query, Repo, Scope, StorageBackend, StorageError, UPDATED_FIELD, Versioned,
+    WriteOptions,
 };
 use tokio::sync::OnceCell;
 
@@ -72,6 +73,8 @@ fn decode_strict(row: Versioned<serde_json::Value>) -> Result<CompletionRecord> 
 /// A durable [`CompletionStore`] stored in a driver [`DocumentStore`].
 #[derive(Debug, Clone)]
 pub struct DriverCompletionStore {
+    backend: Arc<dyn StorageBackend>,
+    scope: Scope,
     docs: Arc<dyn DocumentStore>,
     bridge: Blocking,
     repo: Repo<CompletionDoc>,
@@ -84,8 +87,11 @@ impl DriverCompletionStore {
     /// # Errors
     ///
     /// When the bridge's runtime thread cannot start.
-    pub fn new(docs: Arc<dyn DocumentStore>) -> std::result::Result<Self, StorageError> {
-        Ok(Self::with_bridge(docs, Blocking::new()?))
+    pub fn new(
+        backend: Arc<dyn StorageBackend>,
+        scope: Scope,
+    ) -> std::result::Result<Self, StorageError> {
+        Self::with_bridge(backend, scope, Blocking::new()?)
     }
 
     /// Store completions in `tasks.completions`, running the synchronous trait
@@ -95,15 +101,23 @@ impl DriverCompletionStore {
     ///
     /// Never: the collection name is a valid constant.
     #[allow(clippy::expect_used, reason = "the collection name is a constant")]
-    pub fn with_bridge(docs: Arc<dyn DocumentStore>, bridge: Blocking) -> Self {
-        Self {
+    pub fn with_bridge(
+        backend: Arc<dyn StorageBackend>,
+        scope: Scope,
+        bridge: Blocking,
+    ) -> std::result::Result<Self, StorageError> {
+        let scoped = backend.for_scope(&scope)?;
+        let docs = scoped.documents().clone();
+        Ok(Self {
             repo: Repo::new(&docs, COMPLETIONS)
                 .expect("tasks.completions is a valid collection")
                 .with_options(WriteOptions::new().schema(SCHEMA_VERSION)),
             docs,
+            backend,
+            scope,
             bridge,
             declared: Arc::new(OnceCell::new()),
-        }
+        })
     }
 
     /// The declaration a store using `collection` needs.
