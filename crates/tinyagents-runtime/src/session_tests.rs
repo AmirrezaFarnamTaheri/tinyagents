@@ -373,6 +373,7 @@ async fn successful_replay_repairs_same_source_for_thread_and_latest_modes() {
         seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
         let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
             .codec(Arc::new(NativeReplayCodec))
+            .resume_agent("agent")
             .session(locator.clone(), session_ref.clone(), meta())
             .build()
             .unwrap();
@@ -396,7 +397,6 @@ async fn successful_replay_repairs_same_source_for_thread_and_latest_modes() {
             .read_session()
             .unwrap()
             .unwrap();
-        eprintln!("mode={resume:?} active_ref={active_ref:?} source={:?}", active.messages);
         assert_eq!(active_ref.generation, 1, "{resume:?}");
         assert_eq!(
             active.messages.iter().map(|row| (row.role.as_str(), row.content.as_str())).collect::<Vec<_>>(),
