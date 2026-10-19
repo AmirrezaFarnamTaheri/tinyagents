@@ -848,9 +848,11 @@ async fn queue_admission_does_not_deadlock_with_store_migration_waiting_for_pare
     // holding the slot lock while waiting for that same parent gate.
     let queue_for_take = Arc::clone(&q);
     let take = tokio::task::spawn_blocking(move || {
-        futures::executor::block_on(
-            queue_for_take.take_admitted(QueueLane::Followup, QueueMode::All),
-        )
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(queue_for_take.take_admitted(QueueLane::Followup, QueueMode::All))
     });
     let deferred = tokio::time::timeout(Duration::from_secs(2), take)
         .await
@@ -878,7 +880,12 @@ fn admission_rejects_a_stale_batch_key_when_store_changes_during_acquire() {
     let source_port: Arc<dyn CompletionStore> = source.clone();
     let router = Arc::new(CompletionRouter::new(source_port.clone()));
     let queued = record("queued", "p");
-    futures::executor::block_on(router.record(queued.clone())).unwrap();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(router.record(queued.clone()))
+        .unwrap();
     let queued = source.get("queued").unwrap();
     let admission = Arc::new(crate::completions::CompletionAdmission::for_router(
         &router, &queued,
