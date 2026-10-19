@@ -24,6 +24,16 @@ fn request(
     }
 }
 
+#[cfg(target_os = "linux")]
+fn process_is_gone_or_zombie(pid: i32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return true;
+    };
+    stat.rsplit_once(')')
+        .and_then(|(_, tail)| tail.split_whitespace().next())
+        .is_some_and(|state| state == "Z")
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn native_backend_preserves_argv_and_captures_both_streams() {
@@ -111,4 +121,76 @@ async fn native_backend_timeout_kills_the_process_group_before_returning() {
     };
     assert!(output.timed_out);
     assert_eq!(output.stdout, b"partial");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_timeout_returns_after_descendant_and_pipes_are_cleaned() {
+    use crate::exec::{ExecBackend, ExecBackendOutcome, ShellFlavor};
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("child.pid");
+    let command = format!(
+        "sleep 30 & child=$!; echo $child > {}; printf captured; wait",
+        pidfile.display()
+    );
+    let backend = NativeExecBackend::new(ShellFlavor::Posix);
+    let outcome = backend
+        .execute(
+            request("sh", &["-c", &command], Some(Duration::from_millis(100)), true),
+            None,
+            None,
+        )
+        .await;
+    let ExecBackendOutcome::Completed(output) = outcome else {
+        panic!("expected timeout completion")
+    };
+    assert!(output.timed_out);
+    assert_eq!(output.stdout, b"captured");
+    let pid: i32 = std::fs::read_to_string(pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        process_is_gone_or_zombie(pid),
+        "child {pid} was still executing after timeout returned"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn cancellation_waits_for_native_process_tree_reaping() {
+    use crate::exec::{ExecBackend, ShellFlavor, timeout::ProcessCleanup};
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("child.pid");
+    let command = format!("sleep 30 & child=$!; echo $child > {}; wait", pidfile.display());
+    let backend = NativeExecBackend::new(ShellFlavor::Posix);
+    let cleanup = ProcessCleanup::default();
+    let turn_cleanup = cleanup.clone();
+    let turn = tokio::spawn(async move {
+        turn_cleanup
+            .scope(backend.execute(request("sh", &["-c", &command], None, true), None, None))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !pidfile.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("native child began before cancellation");
+    turn.abort();
+    let _ = turn.await;
+    tokio::time::timeout(Duration::from_secs(3), cleanup.wait())
+        .await
+        .expect("native process reaped before cancellation acknowledgment");
+    let pid: i32 = std::fs::read_to_string(pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        process_is_gone_or_zombie(pid),
+        "child {pid} survived the retained cleanup wait"
+    );
 }
