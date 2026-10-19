@@ -31,9 +31,10 @@ fn tool(
     let handle = modes.handle_for_thread(&1, "thread");
     (PlanExitTool::new(Arc::new(Host), modes, reviews), handle)
 }
-struct NoopReviews;
+#[derive(Default)]
+struct NoopReviews(tokio::sync::Notify);
 impl crate::plan_review::PlanReviewNotifier<u8> for NoopReviews {
-    fn requested(&self, _: &crate::plan_review::ParkedReview<u8>) {}
+    fn requested(&self, _: &crate::plan_review::ParkedReview<u8>) { self.0.notify_one(); }
     fn decided(
         &self,
         _: &crate::plan_review::ParkedReview<u8>,
@@ -67,7 +68,8 @@ async fn plan_exit_switches_mode_through_notifying_store_and_keeps_marker() {
 
 #[tokio::test]
 async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
-    let reviews = Arc::new(PlanReviewStore::new(Arc::new(NoopReviews)));
+    let notifier = Arc::new(NoopReviews::default());
+    let reviews = Arc::new(PlanReviewStore::new(notifier.clone()));
     let waiter_store = reviews.clone();
     let parked = tokio::spawn(async move {
         waiter_store
@@ -83,7 +85,7 @@ async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
             )
             .await
     });
-    tokio::task::yield_now().await;
+    notifier.0.notified().await;
     let changes = Arc::new(Changes::default());
     let (tool, mode) = tool(RunMode::Plan, Some(reviews.clone()), changes.clone());
     let parent = RunContext::new(RunConfig::new("plan-run"), ());
