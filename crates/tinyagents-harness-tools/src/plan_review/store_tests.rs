@@ -61,10 +61,10 @@ async fn timeout_rejects_and_reports_expired() {
     assert!(store.parked_review_for_thread(&1, "t").is_some());
     tokio::time::advance(Duration::from_secs(600)).await;
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(
-        events.decisions.lock().unwrap()[0].1,
-        PlanReviewReason::Expired
-    );
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].1, PlanReviewReason::Expired);
+    drop(decisions);
     assert!(!store.has_parked_review(&1, "t"));
 }
 
@@ -75,6 +75,9 @@ async fn approve_resolves_the_parked_turn() {
     events.requested.notified().await;
     assert!(store.decide_by_thread(&1, "approve", PlanReviewResolution::Approve));
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Approve);
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].1, PlanReviewReason::Approved);
 }
 
 #[tokio::test]
@@ -87,6 +90,9 @@ async fn revise_returns_feedback_to_the_parked_turn() {
     };
     assert!(store.decide_by_thread(&1, "revise", resolution.clone()));
     assert_eq!(task.await.unwrap(), resolution);
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].1, PlanReviewReason::Revised);
 }
 
 #[test]
@@ -139,10 +145,9 @@ async fn dropped_park_reports_cancelled_and_cleans_snapshot() {
     task.abort();
     let _ = task.await;
     assert!(!store.has_parked_review(&1, "t"));
-    assert_eq!(
-        events.decisions.lock().unwrap()[0].1,
-        PlanReviewReason::Cancelled
-    );
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].1, PlanReviewReason::Cancelled);
 }
 
 #[tokio::test]
@@ -153,10 +158,9 @@ async fn dropped_sender_is_cancelled_not_expired() {
     let id = store.parked_review_for_thread(&1, "t").unwrap().request_id;
     assert!(store.cancel(&1, &id));
     assert_eq!(task.await.unwrap(), PlanReviewResolution::Reject);
-    assert_eq!(
-        events.decisions.lock().unwrap()[0].1,
-        PlanReviewReason::Cancelled
-    );
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].1, PlanReviewReason::Cancelled);
 }
 
 #[tokio::test]
@@ -175,4 +179,20 @@ async fn decisions_are_scope_isolated_and_newest_review_is_replayed() {
     assert_eq!(two.await.unwrap(), PlanReviewResolution::Approve);
     assert!(!store.decide(&1, &old.request_id, PlanReviewResolution::Reject));
     assert_eq!(one.await.unwrap(), PlanReviewResolution::Reject);
+    let decisions = events.decisions.lock().unwrap();
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|(_, reason)| *reason == PlanReviewReason::Cancelled)
+            .count(),
+        1
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|(_, reason)| *reason == PlanReviewReason::Approved)
+            .count(),
+        1
+    );
 }
