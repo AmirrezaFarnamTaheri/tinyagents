@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use tinyinference_llm::message::Message;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
+use tinyinference_llm::tool::ToolCall;
 use tinystoragedrivers_core::{
     Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Precondition, Query,
 };
@@ -78,12 +80,85 @@ pub struct DurableSubagentSession {
     pub current_task_id: Option<String>,
     pub status: DurableSubagentStatus,
     pub reusable: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_session_history"
+    )]
     pub latest_history: Option<Vec<Message>>,
     pub latest_error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_used_at: String,
+}
+
+#[derive(Deserialize)]
+struct LegacyTranscriptMessage {
+    role: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Vec<LegacyTranscriptToolCall>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LegacyTranscriptToolCall {
+    id: String,
+    name: String,
+    #[serde(default)]
+    arguments: String,
+}
+
+fn deserialize_session_history<'de, D>(deserializer: D) -> Result<Option<Vec<Message>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(rows) = Option::<Vec<Value>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    rows.into_iter()
+        .map(|row| {
+            if let Ok(message) = serde_json::from_value::<Message>(row.clone()) {
+                return Ok(message);
+            }
+            let legacy: LegacyTranscriptMessage =
+                serde_json::from_value(row).map_err(serde::de::Error::custom)?;
+            let message = match legacy.role.as_str() {
+                "system" => Message::system(legacy.content),
+                "user" => Message::user(legacy.content),
+                "tool" => Message::tool(
+                    legacy
+                        .tool_call_id
+                        .ok_or_else(|| serde::de::Error::custom("legacy tool row has no call id"))?,
+                    legacy.content,
+                ),
+                "assistant" => Message::Assistant(AssistantMessage {
+                    id: None,
+                    content: vec![ContentBlock::Text(legacy.content)],
+                    tool_calls: legacy
+                        .tool_calls
+                        .into_iter()
+                        .map(|call| match serde_json::from_str(&call.arguments) {
+                            Ok(arguments) => ToolCall::new(call.id, call.name, arguments),
+                            Err(error) => ToolCall::invalid(
+                                call.id,
+                                call.name,
+                                call.arguments,
+                                error.to_string(),
+                            ),
+                        })
+                        .collect(),
+                    usage: None,
+                    origin: None,
+                }),
+                _ => return Err(serde::de::Error::custom("unknown legacy transcript role")),
+            };
+            Ok(message)
+        })
+        .collect::<Result<Vec<_>, D::Error>()
+        .map(Some)
 }
 
 impl DurableSubagentSession {

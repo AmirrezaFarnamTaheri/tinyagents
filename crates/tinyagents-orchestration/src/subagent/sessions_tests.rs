@@ -92,3 +92,47 @@ async fn scoped_session_store_rejects_other_parent_identity() {
     );
     assert!(scoped.get("not-owned").await.unwrap().is_none());
 }
+
+#[test]
+fn durable_session_decodes_legacy_transcript_message_history() {
+    let value = serde_json::json!({
+        "subagentSessionId": "session",
+        "parentSession": "parent",
+        "parentThreadId": "thread",
+        "workerThreadId": null,
+        "agentId": "worker",
+        "displayName": null,
+        "model": null,
+        "sandboxMode": "none",
+        "actionRoot": null,
+        "taskKey": "research",
+        "taskTitle": "research",
+        "currentTaskId": "task",
+        "status": "awaiting_user",
+        "reusable": true,
+        "latestHistory": [
+            { "role": "user", "content": "need help" },
+            {
+                "role": "assistant",
+                "content": "checking",
+                "tool_calls": [{ "id": "call-1", "name": "lookup", "arguments": "{\"q\":\"x\"}" }]
+            },
+            { "role": "tool", "content": "found", "tool_call_id": "call-1" }
+        ],
+        "latestError": null,
+        "createdAt": "now",
+        "updatedAt": "now",
+        "lastUsedAt": "now"
+    });
+
+    let session: DurableSubagentSession = serde_json::from_value(value).unwrap();
+    let history = session.latest_history.unwrap();
+    assert_eq!(history[0], Message::user("need help"));
+    assert_eq!(history[1].text(), "checking");
+    assert_eq!(history[2], Message::tool("call-1", "found"));
+    let Message::Assistant(assistant) = &history[1] else {
+        panic!("legacy assistant row must remain an assistant message")
+    };
+    assert_eq!(assistant.tool_calls.len(), 1);
+    assert_eq!(assistant.tool_calls[0].name, "lookup");
+}
