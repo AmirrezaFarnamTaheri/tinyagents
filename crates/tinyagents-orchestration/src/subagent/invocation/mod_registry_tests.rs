@@ -61,7 +61,7 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
         "child",
         "thread",
         "worker",
-        CompletionStatus::Completed,
+        CompletionStatus::Success,
         CompletionResult::text("late output"),
     );
     assert!(matches!(
