@@ -88,6 +88,60 @@ fn stop_summary_groups_scrubbed_failures_and_keeps_the_newest_eight_rows() {
     assert!(output.contains("- `repeat` failed 2 times: credential redacted"));
 }
 
+#[test]
+fn stop_summary_reproduces_the_production_repeated_timeout_golden() {
+    let results = [
+        CloseToolResult {
+            name: "get_profile".into(),
+            success: true,
+            content: "profile loaded".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+        CloseToolResult {
+            name: "use_skill".into(),
+            success: false,
+            content: "tool `use_skill` timed out after 30000 ms".into(),
+        },
+    ];
+    let groups = group_stop_results(&results, str::to_owned);
+    assert_eq!(
+        render_stop_summary_with_copy(
+            "a service I needed kept timing out or was temporarily unavailable",
+            &groups,
+            &ENGLISH_STOP_COPY,
+        ),
+        "I stopped this turn early because a service I needed kept timing out or was temporarily unavailable.\n\n**What happened**\n- `get_profile` succeeded\n- `use_skill` failed 3 times: tool `use_skill` timed out after 30000 ms\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+}
+
+#[test]
+fn successful_repeats_are_reported_without_a_failure_claim() {
+    let results = (0..3)
+        .map(|_| CloseToolResult {
+            name: "list_items".into(),
+            success: true,
+            content: "three items".into(),
+        })
+        .collect::<Vec<_>>();
+    let groups = group_stop_results(&results, str::to_owned);
+    let output = render_stop_summary_with_copy("the same step repeated", &groups, &ENGLISH_STOP_COPY);
+    assert_eq!(
+        output,
+        "I stopped this turn early because the same step repeated.\n\n**What happened**\n- `list_items` succeeded 3 times\n\nTell me how you'd like to proceed, or ask me to try again."
+    );
+    assert!(!output.to_lowercase().contains("failed"));
+    assert!(!output.contains("three items"));
+}
+
 fn fallback(note: &str) -> &'static str {
     if note.contains("in a row failed") {
         "turn_stop.varied_failures"
