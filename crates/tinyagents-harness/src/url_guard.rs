@@ -26,9 +26,9 @@
 //! Hostname validation alone is insufficient: an attacker can register a
 //! domain that alternates DNS responses between a public IP (passing the
 //! allowlist) and a private IP (e.g. 127.0.0.1).
-//! [`validate_url_with_dns_check`] resolves the hostname, vets every
-//! resolved IP, and returns them in a [`ValidatedUrl`]. That closes the gap
-//! **only if the caller connects to [`ValidatedUrl::addrs`]** — for example
+//! [`crate::url_guard::validate_url_with_dns_check`] resolves the hostname, vets every
+//! resolved IP, and returns them in a [`crate::url_guard::ValidatedUrl`]. That closes the gap
+//! **only if the caller connects to [`crate::url_guard::ValidatedUrl::addrs`]** — for example
 //! via `reqwest::ClientBuilder::resolve_to_addrs` — rather than letting its
 //! HTTP client resolve the hostname a second time. This crate carries no
 //! HTTP client, so the pinning is the caller's responsibility. This utility
