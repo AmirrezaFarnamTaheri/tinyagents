@@ -263,8 +263,8 @@ impl CsvExportTool {
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod test;
+mod tests;
 
 #[cfg(test)]
 #[path = "extra_tests.rs"]
-mod extra_test;
+mod extra_tests;

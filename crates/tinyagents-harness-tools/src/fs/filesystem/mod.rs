@@ -46,7 +46,7 @@ mod workspace_state;
 
 #[cfg(test)]
 #[path = "gate_tests.rs"]
-mod gate_test;
+mod gate_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -70,4 +70,4 @@ pub use workspace_state::WorkspaceStateTool;
 
 #[cfg(test)]
 #[path = "contract_tests.rs"]
-mod contract_test;
+mod contract_tests;

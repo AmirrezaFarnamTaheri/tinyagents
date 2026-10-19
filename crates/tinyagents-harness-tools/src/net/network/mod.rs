@@ -39,7 +39,7 @@ pub mod web_fetch;
 
 #[cfg(test)]
 #[path = "contract_tests.rs"]
-mod contract_test;
+mod contract_tests;
 #[cfg(test)]
 mod test_support;
 

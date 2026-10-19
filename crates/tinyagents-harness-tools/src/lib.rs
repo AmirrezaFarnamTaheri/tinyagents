@@ -15,6 +15,16 @@ mod time_parse;
 
 #[cfg(feature = "goals")]
 pub mod goals;
+#[cfg(feature = "exec")]
+pub mod exec;
+#[cfg(feature = "fs")]
+pub mod fs;
+#[cfg(feature = "media")]
+pub mod media;
+#[cfg(feature = "net")]
+pub mod net;
+#[cfg(feature = "plan-review")]
+pub mod plan_review;
 #[cfg(feature = "skills")]
 pub mod skills;
 #[cfg(feature = "subagents")]

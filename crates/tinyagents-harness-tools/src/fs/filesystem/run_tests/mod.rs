@@ -197,4 +197,4 @@ impl Tool for RunTestsTool {
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod test;
+mod tests;

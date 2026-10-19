@@ -644,13 +644,13 @@ impl GitOperationsTool {
 
 #[cfg(test)]
 #[path = "config_tests.rs"]
-mod config_test;
+mod config_tests;
 #[cfg(test)]
 #[path = "ops_tests.rs"]
-mod ops_test;
+mod ops_tests;
 #[cfg(test)]
 #[path = "render_tests.rs"]
-mod render_test;
+mod render_tests;
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod test;
+mod tests;

@@ -471,4 +471,4 @@ struct FileBuffer {
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod test;
+mod tests;

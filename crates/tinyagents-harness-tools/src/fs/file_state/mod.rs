@@ -28,4 +28,5 @@ pub use ops::{
 pub use types::{FileStateCoordinator, ReadStamp};
 
 #[cfg(test)]
-mod test;
+#[path = "file_state_tests.rs"]
+mod tests;

@@ -208,4 +208,4 @@ impl Tool for ImageInfoTool {
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]
-mod test;
+mod tests;

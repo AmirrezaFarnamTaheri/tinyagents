@@ -20,5 +20,5 @@ pub(super) fn truncate_at_byte_boundary(s: &str, max_bytes: usize) -> String {
 }
 
 #[cfg(test)]
-#[path = "text_test_tests.rs"]
-mod test;
+#[path = "text_tests.rs"]
+mod tests;

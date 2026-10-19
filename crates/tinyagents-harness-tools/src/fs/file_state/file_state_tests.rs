@@ -1,6 +1,6 @@
-//! Tests for the task-local file-state agent identity.
+//! Tests for file-state scoping, tracking, staleness checks, and path locks.
 
-use crate::fs::file_state::{current_file_state_agent_id, with_file_state_agent_id};
+use super::*;
 
 #[tokio::test]
 async fn returns_none_outside_scope() {
@@ -35,9 +35,7 @@ async fn nested_scope_overrides_outer() {
     })
     .await;
 }
-//! Tests for read/write tracking, staleness checks, and path locks.
-
-use crate::fs::file_state::{FileStateCoordinator, ReadStamp};
+// Tests for read/write tracking, staleness checks, and path locks.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -181,7 +179,7 @@ async fn path_lock_serialises_access() {
 
 #[tokio::test]
 async fn global_api_tracks_reads_writes_and_locks() -> anyhow::Result<()> {
-    use crate::fs::file_state::{
+    use super::{
         acquire_path_lock, check_partial_read, check_stale_read, init_global, parent_stale_files,
         record_read, record_write, try_global,
     };
