@@ -465,7 +465,7 @@ async fn cancelling_an_async_purge_callback_does_not_process_the_next_row() {
     let purge = tokio::spawn(async move {
         store
             .purge_threads_with_async(move |thread_id| {
-                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
                 callback_tx
                     .send((thread_id, release_tx))
                     .expect("test is waiting for the callback");
