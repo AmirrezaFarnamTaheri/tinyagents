@@ -235,9 +235,10 @@ impl SubAgentJobRegistry {
     /// Keeps unobserved terminal history within the soft cap while allowing
     /// live work and terminal jobs pinned by waiters to exceed it temporarily.
     fn prune_terminal_over_cap(&self) -> Result<(), SubAgentJobError> {
-        let mut driver_jobs = self.driver_jobs.lock().unwrap_or_else(
-            std::sync::PoisonError::into_inner,
-        );
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut controls = self.controls();
         self.prune_terminal_over_cap_locked(&mut driver_jobs, &mut controls)
     }
@@ -248,7 +249,10 @@ impl SubAgentJobRegistry {
             '_,
             std::collections::HashMap<crate::subagent::SubagentTaskKey, SubAgentJobId>,
         >,
-        controls: &mut std::sync::MutexGuard<'_, std::collections::HashMap<SubAgentJobId, JobControl>>,
+        controls: &mut std::sync::MutexGuard<
+            '_,
+            std::collections::HashMap<SubAgentJobId, JobControl>,
+        >,
     ) -> Result<(), SubAgentJobError> {
         let terminal_count = controls
             .values()
