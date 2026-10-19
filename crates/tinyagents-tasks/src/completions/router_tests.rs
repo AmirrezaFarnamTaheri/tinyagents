@@ -1286,6 +1286,25 @@ struct FailingList {
     inner: InMemoryCompletionStore,
 }
 
+#[test]
+fn parent_cancellation_propagates_pending_enumeration_failure() {
+    let store = Arc::new(FailingList {
+        inner: InMemoryCompletionStore::new(),
+    });
+    let router = CompletionRouter::new(store.clone());
+
+    assert!(router.cancel_parent("parent").is_err());
+    assert_eq!(
+        store
+            .try_get("\u{1}parent-cancelled:parent")
+            .unwrap()
+            .unwrap()
+            .state,
+        CompletionState::Tombstoned,
+        "the durable closed marker is written before enumeration and remains fail-closed"
+    );
+}
+
 struct BlockingTryList {
     inner: InMemoryCompletionStore,
     entered: Arc<std::sync::Barrier>,
