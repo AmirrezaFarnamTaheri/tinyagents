@@ -35,7 +35,7 @@ pub mod subagents;
 pub mod todos;
 
 pub use ask_clarification::AskClarificationTool;
-pub use plan_exit::{PLAN_EXIT_MARKER, PlanExitHost, PlanExitTool};
+pub use plan_exit::{ParkedPlanReviewLookup, PLAN_EXIT_MARKER, PlanExitHost, PlanExitTool};
 pub use time::{CurrentTimeTool, ResolveTimeTool, register_time_tools, time_tools};
 
 #[cfg(test)]

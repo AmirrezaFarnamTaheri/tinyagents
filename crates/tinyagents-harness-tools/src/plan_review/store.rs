@@ -55,6 +55,11 @@ pub struct PlanReviewStore<S> {
     notifier: Arc<dyn PlanReviewNotifier<S>>,
 }
 
+impl<S> crate::plan_exit::ParkedPlanReviewLookup<S> for PlanReviewStore<S>
+where S: Clone + Eq + Hash + Send + Sync + 'static {
+    fn has_parked_review(&self, scope: &S, thread_id: &str) -> bool { PlanReviewStore::has_parked_review(self, scope, thread_id) }
+}
+
 impl<S> PlanReviewStore<S>
 where
     S: Clone + Eq + Hash + Send + Sync + 'static,

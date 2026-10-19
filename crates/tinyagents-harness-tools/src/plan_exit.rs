@@ -2,7 +2,7 @@
 
 use std::{hash::Hash, sync::Arc};
 
-use crate::{plan_review::PlanReviewStore, run_mode::RunModeStore};
+use crate::run_mode::RunModeStore;
 use async_trait::async_trait;
 use serde_json::json;
 use tinyagents_harness::middleware::library::RunMode;
@@ -17,11 +17,16 @@ pub trait PlanExitHost: Send + Sync {
     fn scope_and_thread(&self, context: &dyn ToolRunContext) -> (Self::Scope, String);
 }
 
+/// Optional host-supplied lookup for a pending review in the resolved scope.
+pub trait ParkedPlanReviewLookup<S>: Send + Sync {
+    fn has_parked_review(&self, scope: &S, thread_id: &str) -> bool;
+}
+
 /// Tool that returns a plan and switches its host-selected run mode to Build.
 pub struct PlanExitTool<S> {
     host: Arc<dyn PlanExitHost<Scope = S>>,
     run_modes: Arc<dyn RunModeStore<S>>,
-    reviews: Option<Arc<PlanReviewStore<S>>>,
+    reviews: Option<Arc<dyn ParkedPlanReviewLookup<S>>>,
 }
 
 impl<S: Clone + Eq + Hash + Send + Sync + 'static> PlanExitTool<S> {
@@ -36,7 +41,7 @@ impl<S: Clone + Eq + Hash + Send + Sync + 'static> PlanExitTool<S> {
     pub fn new(
         host: Arc<dyn PlanExitHost<Scope = S>>,
         run_modes: Arc<dyn RunModeStore<S>>,
-        reviews: Option<Arc<PlanReviewStore<S>>>,
+        reviews: Option<Arc<dyn ParkedPlanReviewLookup<S>>>,
     ) -> Self {
         Self {
             host,
