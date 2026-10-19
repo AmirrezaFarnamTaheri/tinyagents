@@ -23,7 +23,7 @@ impl crate::run_mode::ModeChangeNotifier<u8> for Changes {
 }
 fn tool(
     mode: RunMode,
-    reviews: Option<Arc<PlanReviewStore<u8>>>,
+    reviews: Option<Arc<dyn ParkedPlanReviewLookup<u8>>>,
     changes: Arc<Changes>,
 ) -> (PlanExitTool<u8>, RunModeHandle) {
     let modes = Arc::new(crate::run_mode::InMemoryRunModeStore::new(changes));
@@ -87,7 +87,8 @@ async fn plan_exit_refuses_while_review_is_parked_and_leaves_mode_unchanged() {
     });
     notifier.0.notified().await;
     let changes = Arc::new(Changes::default());
-    let (tool, mode) = tool(RunMode::Plan, Some(reviews.clone()), changes.clone());
+    let review_lookup: Arc<dyn ParkedPlanReviewLookup<u8>> = reviews.clone();
+    let (tool, mode) = tool(RunMode::Plan, Some(review_lookup), changes.clone());
     let parent = RunContext::new(RunConfig::new("plan-run"), ());
     let context = ToolExecutionContext::from_run_context(&parent, CallId::new("call-2"));
     let result = tool
