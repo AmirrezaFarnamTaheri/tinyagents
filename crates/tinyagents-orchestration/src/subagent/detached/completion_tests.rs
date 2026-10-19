@@ -278,7 +278,16 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
             question: "new question".into(),
         })
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    for _ in 0..100 {
+        if router
+            .pending_for("p")
+            .iter()
+            .any(|record| record.task_id.starts_with(&pause_record_prefix("new-child")))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     new_tx
         .send(DetachedSubagentStatus::Completed {
             output: "new answer".into(),
