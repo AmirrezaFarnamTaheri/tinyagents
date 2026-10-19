@@ -873,8 +873,11 @@ async fn cancel_parent_drops_pending_and_late_completions() {
     );
     assert!(router.pending_for("p").is_empty());
     router.resume_parent("p");
+    let generation = router.admit_child_generation("p").unwrap().unwrap();
+    let mut next = record("t3", "p");
+    next.parent_epoch = generation;
     assert!(matches!(
-        router.record(record("t3", "p")).await.unwrap(),
+        router.record(next).await.unwrap(),
         RecordOutcome::Recorded { .. }
     ));
 }

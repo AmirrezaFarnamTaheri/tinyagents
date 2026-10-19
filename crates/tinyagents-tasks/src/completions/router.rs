@@ -369,6 +369,8 @@ impl CompletionRouter {
         let (push, gate) = {
             let mut state = self.lock()?;
             let gate = ParentGateGuard::acquire(Arc::clone(&state.store), &record.parent_key)?;
+            let marker_id = Self::parent_marker_id(&record.parent_key);
+            let marker_before = state.store.try_get(&marker_id)?;
             let Some(parent_epoch) =
                 Self::admit_child_locked(&state, &record.parent_key, gate.claim())?
             else {
@@ -381,6 +383,19 @@ impl CompletionRouter {
             };
             if let Some(existing) = state.store.get(&record.task_id) {
                 return Ok(Self::classify_existing(&existing, &record));
+            }
+            if (record.parent_epoch != 0 && record.parent_epoch != parent_epoch)
+                || (record.parent_epoch == 0
+                    && marker_before.is_some_and(|marker| marker.parent_epoch > 1))
+            {
+                tracing::debug!(
+                    task_id = %record.task_id,
+                    parent_key = %record.parent_key,
+                    supplied_epoch = record.parent_epoch,
+                    current_epoch = parent_epoch,
+                    "{LOG_PREFIX} suppressed completion from a stale or unversioned child"
+                );
+                return Ok(RecordOutcome::Suppressed);
             }
             record.state = CompletionState::Pending;
             record.parent_epoch = parent_epoch;
@@ -628,9 +643,17 @@ impl CompletionRouter {
     /// marker currently admits child completions. Closed parents are never
     /// reopened implicitly.
     pub fn admit_child(&self, parent_key: &str) -> Result<bool> {
+        Ok(self.admit_child_generation(parent_key)?.is_some())
+    }
+
+    /// Admits a child into the currently open durable lifecycle and returns
+    /// the generation it must carry when it later records its completion.
+    /// The generation changes only at an explicit parent stop/delete/resume,
+    /// not at ordinary router or lease handoff.
+    pub fn admit_child_generation(&self, parent_key: &str) -> Result<Option<u64>> {
         let state = self.lock()?;
         let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
-        Ok(Self::admit_child_locked(&state, parent_key, gate.claim())?.is_some())
+        Self::admit_child_locked(&state, parent_key, gate.claim())
     }
 
     /// Whether a generation carried by a queued completion still belongs to

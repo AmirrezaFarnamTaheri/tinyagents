@@ -251,18 +251,21 @@ async fn queued_completion_generation_is_rejected_after_cross_router_close_and_r
             .unwrap(),
         0
     );
+    let current_generation = delivery_router
+        .admit_child_generation("parent")
+        .unwrap()
+        .unwrap();
+    let mut new_generation = record("new-generation", "parent");
+    new_generation.parent_epoch = current_generation;
     assert_eq!(
-        delivery_router
-            .record(record("new-generation", "parent"))
-            .await
-            .unwrap(),
+        delivery_router.record(new_generation).await.unwrap(),
         RecordOutcome::Recorded {
             lane: None,
             receipt: None
         }
     );
     assert!(delivery_router.pending_for("parent").iter().any(|item| {
-        item.task_id == "new-generation" && item.parent_epoch > stale_receipt.parent_epoch
+        item.task_id == "new-generation" && item.parent_epoch == current_generation
     }));
 }
 
