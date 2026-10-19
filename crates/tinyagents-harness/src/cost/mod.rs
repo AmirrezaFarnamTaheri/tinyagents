@@ -10,6 +10,7 @@
 //! a run can roll up cost across many calls.
 
 mod gateway_charge;
+mod dispatch_admission;
 mod model_budget;
 mod turn_cost;
 mod types;
@@ -17,6 +18,9 @@ mod types;
 use std::ops::{Add, AddAssign};
 
 pub use gateway_charge::GatewayChargeModel;
+pub use dispatch_admission::{
+    DispatchRefusal, DispatchRefusalReason, PhysicalDispatchAdmission, PhysicalDispatchPermit,
+};
 pub(crate) use gateway_charge::has_authoritative_billing_source;
 pub(crate) use gateway_charge::provider_cost_usd;
 pub use model_budget::ModelBudget;
