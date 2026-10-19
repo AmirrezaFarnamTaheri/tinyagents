@@ -1,0 +1,27 @@
+{
+  "description": "GET a URL and read the page. HTML returns as Markdown (links kept, scripts dropped); `raw: true` for the body as sent. For POST or custom headers use `http_request`.",
+  "exposure": "Direct",
+  "name": "web_fetch",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "max_bytes": {
+        "description": "Cap the returned text at this many bytes (default 1_000_000). Bounds the OUTPUT — the extracted markdown, or the raw body with raw:true — never the markup the extractor reads, so lowering it cannot cost you content the page actually had.",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "raw": {
+        "description": "Return the body as sent.",
+        "type": "boolean"
+      },
+      "url": {
+        "description": "Absolute http(s) URL.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  }
+}

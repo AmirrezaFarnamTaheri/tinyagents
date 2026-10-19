@@ -1,0 +1,66 @@
+{
+  "description": "Perform structured Git operations (status, diff, log, branch, commit, add, checkout, stash). Provides parsed JSON output and integrates with security policy for autonomy controls.",
+  "exposure": "Direct",
+  "name": "git_operations",
+  "permission_level": "ReadOnly",
+  "schema": {
+    "properties": {
+      "action": {
+        "description": "Stash action (for 'stash' operation)",
+        "enum": [
+          "push",
+          "pop",
+          "list",
+          "drop"
+        ],
+        "type": "string"
+      },
+      "branch": {
+        "description": "Branch name (for 'checkout' operation)",
+        "type": "string"
+      },
+      "cached": {
+        "description": "Show staged changes (for 'diff' operation)",
+        "type": "boolean"
+      },
+      "files": {
+        "description": "File or path to diff (for 'diff' operation, default: '.')",
+        "type": "string"
+      },
+      "index": {
+        "description": "Stash index (for 'stash' with 'drop' action)",
+        "type": "integer"
+      },
+      "limit": {
+        "description": "Number of log entries (for 'log' operation, default: 10)",
+        "type": "integer"
+      },
+      "message": {
+        "description": "Commit message (for 'commit' operation)",
+        "type": "string"
+      },
+      "operation": {
+        "description": "Git operation to perform",
+        "enum": [
+          "status",
+          "diff",
+          "log",
+          "branch",
+          "commit",
+          "add",
+          "checkout",
+          "stash"
+        ],
+        "type": "string"
+      },
+      "paths": {
+        "description": "File paths to stage (for 'add' operation)",
+        "type": "string"
+      }
+    },
+    "required": [
+      "operation"
+    ],
+    "type": "object"
+  }
+}

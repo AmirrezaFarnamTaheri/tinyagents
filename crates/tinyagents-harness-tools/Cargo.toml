@@ -12,6 +12,16 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = "0.10"
+base64 = { version = "0.23", optional = true }
+futures-util = { version = "0.3", default-features = false, optional = true }
+fs2 = { version = "0.4", optional = true }
+glob = { version = "0.3", optional = true }
+libc = { version = "0.2", optional = true }
+log = { version = "0.4", optional = true }
+parking_lot = { version = "0.12", optional = true }
+regex = { version = "1", optional = true }
+reqwest = { workspace = true, features = ["stream", "multipart"], optional = true }
+sha2 = { version = "0.11", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tinyagents-harness = { path = "../tinyagents-harness", version = "2.2.0", default-features = false }
@@ -21,6 +31,13 @@ tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0
 tinyagents-orchestration = { path = "../tinyagents-orchestration", version = "2.2.0", default-features = false, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "macros", "rt", "rt-multi-thread"] }
 tracing = { workspace = true }
+walkdir = { version = "2", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, optional = true, features = ["process"] }
+
+[target.'cfg(not(unix))'.dependencies]
+rustix = { version = "1", default-features = false, optional = true, features = ["fs", "process"] }
 
 [features]
 default = ["todos", "goals", "skills"]
@@ -28,6 +45,11 @@ todos = []
 goals = []
 skills = []
 subagents = ["dep:tinyagents-orchestration", "dep:tinyagents-tasks", "dep:tinyinference-llm"]
+fs = ["dep:base64", "dep:fs2", "dep:glob", "dep:libc", "dep:log", "dep:parking_lot", "dep:regex", "dep:walkdir", "tokio/fs", "tokio/io-util"]
+net = ["dep:futures-util", "dep:log", "dep:reqwest", "dep:sha2", "tokio/fs", "tokio/io-util"]
+exec = ["dep:rustix", "tokio/fs", "tokio/io-util", "tokio/process"]
+media = []
+plan-review = []
 
 [dev-dependencies]
 tempfile = { workspace = true }

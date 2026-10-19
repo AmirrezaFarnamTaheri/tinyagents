@@ -1,0 +1,33 @@
+{
+  "description": "Edit a file by exact string replacement. By default `old_string` must match exactly once. Set `replace_all` to true to replace every match.",
+  "exposure": "Deferred",
+  "name": "edit",
+  "permission_level": "Write",
+  "schema": {
+    "properties": {
+      "new_string": {
+        "description": "Replacement text.",
+        "type": "string"
+      },
+      "old_string": {
+        "description": "Text to find. Must match exactly.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Workspace-relative file path.",
+        "type": "string"
+      },
+      "replace_all": {
+        "default": false,
+        "description": "If true, replace every occurrence (default false).",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "path",
+      "old_string",
+      "new_string"
+    ],
+    "type": "object"
+  }
+}
