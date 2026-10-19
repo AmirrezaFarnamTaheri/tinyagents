@@ -213,6 +213,7 @@ fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
 
 struct BlockingFirstReadStore {
     inner: InMemoryCompletionStore,
+    blocked_task: &'static str,
     reads: std::sync::atomic::AtomicUsize,
     entered: std::sync::Barrier,
     resume: std::sync::Barrier,
@@ -221,7 +222,9 @@ struct BlockingFirstReadStore {
 impl CompletionStore for BlockingFirstReadStore {
     fn get(&self, task_id: &str) -> Option<CompletionRecord> {
         let observed = self.inner.get(task_id);
-        if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        if task_id == self.blocked_task
+            && self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+        {
             self.entered.wait();
             self.resume.wait();
         }
@@ -268,9 +271,10 @@ impl CompletionStore for BlockingFirstReadStore {
     }
 }
 
-fn blocking_first_read_store() -> Arc<BlockingFirstReadStore> {
+fn blocking_first_read_store(blocked_task: &'static str) -> Arc<BlockingFirstReadStore> {
     Arc::new(BlockingFirstReadStore {
         inner: InMemoryCompletionStore::new(),
+        blocked_task,
         reads: std::sync::atomic::AtomicUsize::new(0),
         entered: std::sync::Barrier::new(2),
         resume: std::sync::Barrier::new(2),
@@ -279,7 +283,7 @@ fn blocking_first_read_store() -> Arc<BlockingFirstReadStore> {
 
 #[tokio::test]
 async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
-    let store = blocking_first_read_store();
+    let store = blocking_first_read_store("racing");
     let first = Arc::new(CompletionRouter::new(store.clone()));
     let second = CompletionRouter::new(store.clone());
     let first_queue = queue();
@@ -314,7 +318,7 @@ async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
 
 #[tokio::test]
 async fn concurrent_tombstone_wins_over_a_first_completion_write() {
-    let store = blocking_first_read_store();
+    let store = blocking_first_read_store("deleted");
     let router = Arc::new(CompletionRouter::new(store.clone()));
     let tombstoner = CompletionRouter::new(store.clone());
     let writer_router = Arc::clone(&router);
