@@ -743,6 +743,10 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         .take_admitted(QueueLane::Followup, tinyagents_harness::run_queue::QueueMode::All)
         .await;
     assert!(format!("{:?}", pushed[0].value).contains("t1"));
+    // Taking the item models the queue-to-turn handoff. Once the turn has
+    // accepted the message, the short admission gate must be released before
+    // the router can settle or reclaim its delivery claim.
+    drop(pushed);
     // Pushed but not acknowledged: still pending, leased, not claimable.
     assert_eq!(router.in_flight_for("p").len(), 1);
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
