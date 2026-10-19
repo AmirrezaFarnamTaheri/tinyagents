@@ -363,3 +363,43 @@ async fn purge_callback_skips_a_delete_reported_as_not_removed() {
     assert_eq!(docs.thread_deletes.load(Ordering::SeqCst), 1);
     assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn async_purge_callback_is_awaited_before_the_next_document_delete() {
+    let (store, docs) = probed_store(None, None, None).await;
+    for id in ["logical/one", "logical/two"] {
+        store.ensure_thread(request(id)).await.unwrap();
+    }
+
+    let (callback_tx, mut callback_rx) = tokio::sync::mpsc::unbounded_channel();
+    let purge = tokio::spawn(async move {
+        store
+            .purge_threads_with_async(move |thread_id| {
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                callback_tx
+                    .send((thread_id, release_tx))
+                    .expect("test is waiting for every callback");
+                async move {
+                    release_rx
+                        .await
+                        .expect("test releases each callback before finishing");
+                }
+            })
+            .await
+    });
+
+    let (first_id, release_first) = callback_rx.recv().await.unwrap();
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
+    assert!(callback_rx.try_recv().is_err());
+    release_first.send(()).unwrap();
+
+    let (second_id, release_second) = callback_rx.recv().await.unwrap();
+    assert_ne!(first_id, second_id);
+    assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 2);
+    assert!(callback_rx.try_recv().is_err());
+    release_second.send(()).unwrap();
+
+    let stats = purge.await.unwrap().unwrap();
+    assert_eq!((stats.thread_count, stats.message_count), (2, 0));
+    assert_eq!(docs.inner.count(COLLECTION, &Filter::All).await.unwrap(), 0);
+}
