@@ -1010,7 +1010,6 @@ async fn direct_resume_resolves_and_uses_the_admitted_lease() {
     });
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(Arc::new(Codec::default()))
-        .transcript(foreign.clone(), "foreign-fallback", meta())
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
     let mut options = TurnOptions::default();
@@ -1077,6 +1076,39 @@ async fn hook_cannot_replace_the_identity_locator() {
 }
 
 #[tokio::test]
+async fn hook_cannot_override_the_resolved_session_option() {
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    use tinyagents_session::port::DriverSessionStores;
+    let provider = Arc::new(DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let (target_locator, target_history) = locator(None);
+    let (foreign_locator, foreign_history) = locator(None);
+    let driver = Arc::new(Driver::new(vec![]));
+    let mut session = SessionBuilder::new(driver.clone())
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ReplaceTargetHook {
+            target: target_locator.clone(),
+            session_override: Some(SessionRef::scoped("foreign-thread", "agent-resolved")),
+        }))
+        .transcript(foreign_locator.clone(), "fallback", meta())
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    assert!(matches!(session.turn(Message::user("next"), options).await,
+        Err(RuntimeError::InvalidSessionState(_))));
+    assert!(driver.requests.lock().unwrap().is_empty());
+    assert!(target_locator.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*target_history.opens.lock().unwrap(), 0);
+    assert!(foreign_locator.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*foreign_history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn public_resume_rejects_foreign_session_before_locator_access() {
     use tinyagents_session::port::DriverSessionStores;
     use tinystoragedrivers_core::{MemoryStorage, Scope};
@@ -1090,6 +1122,7 @@ async fn public_resume_rejects_foreign_session_before_locator_access() {
     let (foreign, foreign_history) = locator(None);
     let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
         .codec(Arc::new(Codec::default()))
+        .transcript(foreign.clone(), "foreign-fallback", meta())
         .identity_resolver("thread-identity", meta(), resolver)
         .build().unwrap();
     let mut options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
