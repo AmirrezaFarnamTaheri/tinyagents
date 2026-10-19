@@ -183,6 +183,36 @@ async fn closed_parent_markers_survive_compaction_and_a_router_restart() {
 }
 
 #[tokio::test]
+async fn resuming_an_open_parent_preserves_its_generation_and_pending_work() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let router = CompletionRouter::new(store.clone());
+    router.record(record("pending", "parent")).await.unwrap();
+    let before = store.get("pending").unwrap().parent_epoch;
+
+    router.resume_parent("parent");
+
+    assert!(router.parent_generation_admitted("parent", before).unwrap());
+    assert_eq!(router.claim_pending("parent", 1).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn deleted_parent_cannot_be_reopened_by_resume() {
+    let router = CompletionRouter::new(Arc::new(InMemoryCompletionStore::new()));
+    router.delete_parent("deleted").unwrap();
+
+    router.resume_parent("deleted");
+
+    assert!(!router.admit_child("deleted").unwrap());
+    assert_eq!(
+        router
+            .record(record("after-delete", "deleted"))
+            .await
+            .unwrap(),
+        RecordOutcome::Suppressed
+    );
+}
+
+#[tokio::test]
 async fn queued_completion_generation_is_rejected_after_cross_router_close_and_reopen() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let open = || {
