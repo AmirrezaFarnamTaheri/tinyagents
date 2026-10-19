@@ -2110,6 +2110,61 @@ fn typed_extensions_survive_snapshot_copies_without_changing_json() {
 }
 ```
 
+Add these policy tests to `tool_registration_tests.rs`. They call the exact
+runtime policy trait directly and prove both deny-before-host and delegation:
+
+```rust
+struct CountingPolicy(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinyagents_harness::middleware::ToolCallPolicy<()> for CountingPolicy {
+    fn name(&self) -> &str { "counting-host" }
+
+    async fn check(
+        &self,
+        _: &tinyagents_harness::context::RunContext<()>,
+        _: &tinyinference_llm::tool::ToolCall,
+    ) -> tinyagents_harness::middleware::PolicyDecision {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        tinyagents_harness::middleware::PolicyDecision::Allow
+    }
+}
+
+fn policy_call(name: &str) -> tinyinference_llm::tool::ToolCall {
+    tinyinference_llm::tool::ToolCall {
+        id: "call-1".into(),
+        name: name.into(),
+        arguments: serde_json::json!({}),
+        invalid: None,
+    }
+}
+
+#[tokio::test]
+async fn host_only_policy_denies_before_delegating_and_allows_named_calls() {
+    use tinyagents_harness::middleware::{PolicyDecision, ToolCallPolicy};
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let policy = HostOnlyToolPolicy::new(
+        ["read_file".to_owned()],
+        Some(Arc::new(CountingPolicy(calls.clone()))),
+    );
+    let context = tinyagents_harness::context::RunContext::new(
+        tinyagents_harness::context::RunConfig::new("host-only-test"),
+        (),
+    );
+    let denied = policy.check(&context, &policy_call("write_file")).await;
+    assert!(matches!(denied, PolicyDecision::Deny { .. }));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    assert_eq!(policy.check(&context, &policy_call("read_file")).await,
+        PolicyDecision::Allow);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let empty = HostOnlyToolPolicy::new(Vec::<String>::new(), None);
+    assert!(matches!(empty.check(&context, &policy_call("read_file")).await,
+        PolicyDecision::Deny { .. }));
+}
+```
+
 ### 7. Move context configuration into harness
 
 **Files:** `crates/tinyagents-harness/src/config/context.rs`,
