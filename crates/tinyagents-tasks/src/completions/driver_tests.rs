@@ -301,6 +301,7 @@ fn driver_claims_choose_oldest_before_task_id_tiebreaking() {
     let claimed = store
         .claim_pending(
             "p",
+            0,
             &gate,
             CompletionClaimMode::Followup,
             1,
@@ -331,6 +332,7 @@ fn conditional_driver_create_preserves_an_existing_claim() {
         .claim_task(
             "claim-owner",
             "parent",
+            0,
             &gate,
             CompletionClaimMode::Followup,
             "owner-token",
@@ -356,6 +358,7 @@ fn conditional_driver_create_preserves_an_existing_claim() {
             .resolve_claim(
                 &receipt.task_id,
                 "parent",
+                receipt.parent_epoch,
                 &gate,
                 &receipt.token,
                 ClaimResolution::Delivered,
@@ -403,6 +406,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     let first_claim = first
         .claim_pending(
             "parent",
+            0,
             &first_gate,
             CompletionClaimMode::Followup,
             1,
@@ -420,6 +424,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
             .resolve_claim(
                 "lease-task",
                 "parent",
+                first_claim.parent_epoch,
                 &second_gate,
                 &first_token,
                 ClaimResolution::Delivered,
@@ -431,6 +436,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
     let second_claim = second
         .claim_pending(
             "parent",
+            0,
             &second_gate,
             CompletionClaimMode::Followup,
             1,
@@ -450,6 +456,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
             .resolve_claim(
                 "lease-task",
                 "parent",
+                first_claim.parent_epoch,
                 &second_gate,
                 &first_token,
                 ClaimResolution::Delivered,
@@ -461,6 +468,7 @@ async fn expired_claim_can_be_reclaimed_and_stale_owner_cannot_settle_it() {
         .resolve_claim(
             "lease-task",
             "parent",
+            second_claim[0].parent_epoch,
             &second_gate,
             &second_token,
             ClaimResolution::Delivered,
