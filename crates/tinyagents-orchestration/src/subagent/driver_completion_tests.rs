@@ -808,7 +808,7 @@ async fn generic_child_driver_cancels_dispatch_and_skips_persistence_when_turn_f
             started: started.clone(),
             observed_cancellation: observed_cancellation.clone(),
         })),
-        persistence: persistence.clone(),
+        persistence: Some(persistence.clone()),
     })
     .unwrap();
     let request = request_in_scope("parent-a", "root-a", "thread-a")
