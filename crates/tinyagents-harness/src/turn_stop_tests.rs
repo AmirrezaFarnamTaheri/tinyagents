@@ -72,7 +72,9 @@ fn stop_summary_groups_scrubbed_failures_and_keeps_the_newest_eight_rows() {
         },
     ]);
     let groups = group_stop_results(&results, |content| {
-        content.replace("credential: hidden", "credential redacted")
+        content
+            .replace("credential: hidden", "credential redacted")
+            .replace("secret-", "redacted-")
     });
     assert_eq!(groups.last().unwrap().count, 2);
     assert_eq!(
@@ -82,7 +84,7 @@ fn stop_summary_groups_scrubbed_failures_and_keeps_the_newest_eight_rows() {
     let output = render_stop_summary_with_copy("reason", &groups, &ENGLISH_STOP_COPY);
     assert!(!output.contains("oldest"));
     assert!(!output.contains("secret-"));
-    assert!(output.contains("- …and 1 more tool call(s)"));
+    assert!(output.contains("- …and 2 more tool call(s)"));
     assert!(output.contains("- `repeat` failed 2 times: credential redacted"));
 }
 
