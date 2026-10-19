@@ -64,6 +64,9 @@ mod types;
 mod test;
 
 pub use types::WorkloadRoute;
+pub use types::{
+    CloudFallbackRole, DefaultModelRoute, FallbackDiagnostics, FallbackReason, RouteSource,
+};
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::retry::FallbackPolicy;
@@ -219,6 +222,110 @@ impl WorkloadRouter {
             .map(|r| r.requires.clone())
     }
 
+    /// Resolve a role through the host's configured route inputs.
+    ///
+    /// The host supplies configuration facts through [`RouteSource`]; this
+    /// method owns the shared role behavior and explicit-default eligibility.
+    /// Empty and `cloud` role routes use an eligible explicit default model or
+    /// the host-resolved primary cloud route. No sibling route is inherited.
+    pub fn provider_for_role(&self, role: &str, source: &(impl RouteSource + ?Sized)) -> String {
+        let configured = source.configured_route_for_role(role).unwrap_or("").trim();
+        if !configured.is_empty() && configured != "cloud" {
+            return configured.to_owned();
+        }
+
+        if let Some(model) = explicit_default_model_route(role, source) {
+            return model.to_owned();
+        }
+        source.primary_cloud_route().trim().to_owned()
+    }
+
+    /// Resolve a canonical `hint:*` route, host-retired tier alias, or concrete
+    /// model. The result is `None` only when a managed route was selected but
+    /// the host has no managed default model available.
+    pub fn resolve_model_for_hint(
+        &self,
+        hint_or_tier: &str,
+        source: &(impl RouteSource + ?Sized),
+    ) -> Option<String> {
+        let trimmed = hint_or_tier.trim();
+        let Some(role) = canonical_hint_role(trimmed)
+            .map(str::to_owned)
+            .or_else(|| source.legacy_tier_role(trimmed).map(str::to_owned))
+        else {
+            return Some(trimmed.to_owned());
+        };
+
+        let route = self.provider_for_role(&role, source);
+        if source.is_managed_route(&route) {
+            return source.managed_default_model().map(str::to_owned);
+        }
+        if let Some((_, model)) = route.split_once(':') {
+            return Some(tinyinference_providers::route::split_model_and_temperature(model).0);
+        }
+        Some(route)
+    }
+
+    /// Return the workload role named by a canonical hint or host-retired tier
+    /// alias. Unknown names preserve the historical `chat` fallback.
+    pub fn role_for_model_tier(
+        &self,
+        hint_or_tier: &str,
+        source: &(impl RouteSource + ?Sized),
+    ) -> String {
+        let trimmed = hint_or_tier.trim();
+        canonical_hint_role(trimmed)
+            .map(str::to_owned)
+            .or_else(|| source.legacy_tier_role(trimmed).map(str::to_owned))
+            .unwrap_or_else(|| "chat".to_owned())
+    }
+
+    /// Whether a non-empty model identifier is a concrete passthrough rather
+    /// than a canonical hint or host-retired tier alias.
+    pub fn is_raw_passthrough_model(
+        &self,
+        model: &str,
+        source: &(impl RouteSource + ?Sized),
+    ) -> bool {
+        let trimmed = model.trim();
+        !trimmed.is_empty()
+            && canonical_hint_role(trimmed).is_none()
+            && source.legacy_tier_role(trimmed).is_none()
+            && !trimmed.starts_with("hint:")
+    }
+
+    /// Typed metadata explaining that a background role will use the host's
+    /// primary cloud route because its own route is unset or `cloud`.
+    pub fn fallback_diagnostics(
+        &self,
+        role: &str,
+        source: &(impl RouteSource + ?Sized),
+    ) -> Option<FallbackDiagnostics> {
+        let metadata = cloud_fallback_role(role)?;
+        let requested = source.configured_route_for_role(role).map(str::trim);
+        if requested.is_some_and(|route| !route.is_empty() && route != "cloud") {
+            return None;
+        }
+        if explicit_default_model_route(role, source).is_some() {
+            return None;
+        }
+        Some(FallbackDiagnostics {
+            role: metadata.role.to_owned(),
+            requested_route: requested
+                .filter(|route| !route.is_empty())
+                .map(str::to_owned),
+            fallback_route: source.primary_cloud_route().trim().to_owned(),
+            reason: FallbackReason::ImplicitCloudFallback,
+            override_role: metadata.override_role.to_owned(),
+        })
+    }
+
+    /// Metadata describing roles whose unset route can use the primary cloud
+    /// route, including the host setting name that overrides that fallback.
+    pub fn cloud_fallback_role(&self, role: &str) -> Option<CloudFallbackRole> {
+        cloud_fallback_role(role)
+    }
+
     /// Insert-or-overwrite by alias (last write wins), preserving the original
     /// position on overwrite so builder order stays stable.
     fn upsert(&mut self, route: WorkloadRoute) {
@@ -228,6 +335,53 @@ impl WorkloadRouter {
             self.routes.push(route);
         }
     }
+}
+
+fn canonical_hint_role(hint: &str) -> Option<&'static str> {
+    let name = hint.strip_prefix("hint:")?;
+    tinyinference_llm::model::workload::WORKLOAD_ROUTE_TIERS
+        .iter()
+        .find_map(|route| {
+            route
+                .strip_prefix("hint:")
+                .filter(|route_name| *route_name == name)
+        })
+}
+
+fn default_model_eligible_for_role(role: &str) -> bool {
+    matches!(
+        role.trim(),
+        "chat" | "reasoning" | "agentic" | "coding" | "burst"
+    )
+}
+
+fn explicit_default_model_route<'a>(
+    role: &str,
+    source: &'a (impl RouteSource + ?Sized),
+) -> Option<&'a str> {
+    let model = source.default_model()?.trim();
+    (default_model_eligible_for_role(role)
+        && !model.is_empty()
+        && !model.starts_with("hint:")
+        && source.legacy_tier_role(model).is_none()
+        && source.classify_default_model_route(model) == DefaultModelRoute::ExplicitProvider)
+        .then_some(model)
+}
+
+fn cloud_fallback_role(role: &str) -> Option<CloudFallbackRole> {
+    let (role, override_role) = match role.trim() {
+        "vision" => ("vision", "vision"),
+        "embeddings" => ("embeddings", "embeddings"),
+        "memory" => ("memory", "memory"),
+        "agentic" => ("agentic", "agentic"),
+        "burst" => ("burst", "agentic"),
+        "summarization" => ("summarization", "memory"),
+        _ => return None,
+    };
+    Some(CloudFallbackRole {
+        role,
+        override_role,
+    })
 }
 
 /// Deprecated alias for [`WorkloadRouter`]. `ModelRouter` routes workload

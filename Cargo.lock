@@ -2198,6 +2198,7 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-harness",
  "tinyinference-llm",
+ "tinyinference-providers",
  "tinytools",
  "tokio",
 ]
