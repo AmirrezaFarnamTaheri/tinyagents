@@ -670,12 +670,14 @@ provide it. Tests use a temporary executable
 script/process and assert: only the expected argv reaches it; malformed
 package inputs never launch; denied calls have a zero backend count; timeout
 does not return until an acknowledgment written by the owned waiter after
-process-group kill, output-pipe drain, and child reap; separate stdout/stderr
-truncation remains Unicode safe; and exit status survives. Cancellation tests
-run the call under `ProcessCleanup::scope`, drop the call future, and assert
-that drop signals the waiter while `ProcessCleanup::wait()` stays pending until
-the waiter has killed, drained, and reaped. Do not assert or imply that `Drop`
-itself waits. No real package manager or network install is
+process-group kill, output-pipe drain, and child reap; assert on return that neither the child nor its descendant
+remains alive and that captured pipes are closed. Separate stdout/stderr
+truncation remains Unicode safe; exit status survives. Cancellation tests run
+the call under `ProcessCleanup::scope`, drop the call future, then await
+`ProcessCleanup::wait()` and assert the child and descendant are gone. The
+cleanup acknowledgement is the `wait()` completion after the owned waiter has
+killed, drained, and reaped; do not add a public test-only hook to observe it.
+Do not assert or imply that `Drop` itself waits. No real package manager or network install is
 run.
 
 Port the OpenHuman `install_tool` behavioral tests with fake ports. Write
