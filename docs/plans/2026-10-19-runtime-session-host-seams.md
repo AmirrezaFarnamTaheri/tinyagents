@@ -1097,6 +1097,79 @@ and `cargo test -p tinyagents-runtime identity`, then the runtime crate suite.
 
 In `rebound_tests.rs`, add `a_lease_keeps_its_backend_while_new_opens_follow_rebind`: open a lease over `MemoryStorage`, write a transcript row, rebind to fresh storage, and assert the lease still uses the old backend while a new ordinary open follows rebind. Add `actor_bound_driver_provider_can_open_a_pinned_lease`: call `bind_actor(admitted_backend)`, then open a lease from the returned provider and assert its tenant-scoped stores access the admitted backend. Add `unsupported_provider_cannot_issue_a_pinned_lease` for a provider implementing only `for_agent`; assert `Unsupported` and no attempted handle open. Add two-tenant isolation coverage with distinct `Scope`s. Implement the preceding `SessionStoreLease { stores }` exactly, with private construction and a read-only `stores()` accessor. The `SessionStoreProvider` default returns `Err(Unsupported)`; `DriverSessionStores::lease_for_agent` opens immutable, direct handles, and `RebindableSessionStores::lease_for_agent` delegates to `self.current()` so a live forwarding handle never escapes. Map open errors to `Open(error)`. Do not change the host-admitted `bind_actor` contract; test unsupported providers return `Ok(None)` and do not silently borrow another actor. Retain the existing live-handle rebind test unchanged. Run focused lease tests, `cargo test -p tinyagents-session port::drivers::rebound`, then the crate suite.
 
+Use the existing `rebound_tests.rs` fixture imports and these exact bodies:
+
+```rust
+#[tokio::test]
+async fn a_lease_keeps_its_backend_while_new_opens_follow_rebind() {
+    let registry = SessionStoreRegistry::default();
+    let old_backend = Arc::new(MemoryStorage::new());
+    let provider = RebindableSessionStores::new_in(&registry, old_backend.clone(), false).unwrap();
+    let lease = provider.lease_for_agent("agent-one").unwrap();
+    lease.stores().kv.put("prefs", "key", serde_json::json!("leased"))
+        .await.unwrap();
+    let new_backend = Arc::new(MemoryStorage::new());
+    assert_eq!(registry.rebind(new_backend.clone()).unwrap(), 1);
+    assert_eq!(lease.stores().kv.get("prefs", "key").await.unwrap(),
+        Some(serde_json::json!("leased")));
+    let new_lease = provider.lease_for_agent("agent-one").unwrap();
+    assert_eq!(new_lease.stores().kv.get("prefs", "key").await.unwrap(), None);
+    new_lease.stores().kv.put("prefs", "key", serde_json::json!("new"))
+        .await.unwrap();
+    let old = DriverSessionStores::new(old_backend, Scope::local()).unwrap()
+        .try_for_agent("agent-one").unwrap();
+    assert_eq!(old.kv.get("prefs", "key").await.unwrap(), Some(serde_json::json!("leased")));
+}
+
+#[tokio::test]
+async fn actor_bound_driver_provider_can_open_a_pinned_lease() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let root = DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::tenant("alice").unwrap()).unwrap();
+    let actor = root.bind_actor(Arc::clone(&backend)).unwrap().unwrap();
+    let lease = actor.lease_for_agent("agent").unwrap();
+    lease.stores().kv.put("prefs", "key", serde_json::json!("actor"))
+        .await.unwrap();
+    let direct = DriverSessionStores::new(backend, Scope::tenant("alice").unwrap()).unwrap()
+        .try_for_agent("agent").unwrap();
+    assert_eq!(direct.kv.get("prefs", "key").await.unwrap(), Some(serde_json::json!("actor")));
+}
+
+#[tokio::test]
+async fn leases_keep_tenant_scope_and_agent_isolation() {
+    let backend = Arc::new(MemoryStorage::new());
+    let alice = DriverSessionStores::new(backend.clone(), Scope::tenant("alice").unwrap()).unwrap();
+    let bob = DriverSessionStores::new(backend, Scope::tenant("bob").unwrap()).unwrap();
+    let alice_lease = alice.lease_for_agent("agent").unwrap();
+    let bob_lease = bob.lease_for_agent("agent").unwrap();
+    alice_lease.stores().kv.put("prefs", "key", serde_json::json!("alice"))
+        .await.unwrap();
+    assert_eq!(bob_lease.stores().kv.get("prefs", "key").await.unwrap(), None);
+}
+```
+
+Add this default-provider negative test in `port/mod_tests.rs`:
+
+```rust
+struct NonPinningProvider(InMemorySessionStores);
+
+impl SessionStoreProvider for NonPinningProvider {
+    fn for_agent(&self, agent_id: &str) -> AgentStores {
+        self.0.for_agent(agent_id)
+    }
+}
+
+#[test]
+fn providers_without_a_pin_contract_fail_closed() {
+    let provider = NonPinningProvider(InMemorySessionStores::new());
+    assert!(matches!(provider.lease_for_agent("agent"),
+        Err(SessionStoreLeaseError::Unsupported)));
+}
+```
+
+Keep `retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes`
+unchanged; the new test proves leases pin while that test proves ordinary
+handles continue to follow rebind.
+
 ### 5. Capture tool observations and route post-commit sinks in the owned finalizer
 
 **Files:** `crates/tinyagents-runtime/src/{driver.rs,hooks.rs,session.rs,types.rs}`,
@@ -1126,9 +1199,9 @@ derive and preserve the `DriverOutcome` derive and its existing assertions.
 Add a value test comparing call id, name, structured arguments, success,
 content, and duration. Extend `DriverOutcome`
 with `Vec<ToolCallOutcome>` defaulted empty; have `TurnDriver` build a shared
-`ToolOutcomeSink`, install `ToolOutcomeCaptureMiddleware` into its per-turn
-middleware chain, drain it into the outcome, and keep custom drivers' empty
-default. Add the sink list to `SessionBuilder`, pass it to `Session`, and
+`ToolOutcomeSink` during `prepare` and carry it through `PreparedTurn` into
+`TurnTail`, which drains it for both `run` and `split`. Keep custom drivers'
+empty default. Add the sink list to `SessionBuilder`, pass it to `Session`, and
 invoke each sink in registration order from the existing owned
 `terminal_guard.finalize_commit(receipt)` task. Keep `SessionHooks::after_commit`
 in that task and in its current position. The `TurnSummary` adapter consumes
@@ -1146,6 +1219,30 @@ is outermost and observes rewritten final results, and carry the sink in
 the report's outcomes into `DriverOutcome`; `outcome_from_partial` initializes
 custom-driver outcomes to an empty vector. This gives direct `prepare/run`,
 `prepare/split`, and `execute` the same captured result.
+
+Make these exact structural edits in `turn_driver/types.rs` and
+`turn_driver/driver.rs`:
+
+```rust
+// TurnTail
+pub outcomes: tinyagents_harness::turn_outcome::ToolOutcomeSink,
+
+// TurnReport
+pub tool_outcomes: Vec<tinyagents_harness::turn_outcome::ToolCallOutcome>,
+
+// In TurnDriver::prepare, before pushing planner middleware:
+let outcome_sink = tinyagents_harness::turn_outcome::new_tool_outcome_sink();
+harness.push_middleware(Arc::new(
+    tinyagents_harness::middleware::ToolOutcomeCaptureMiddleware::new(
+        Arc::clone(&outcome_sink),
+    ),
+));
+
+// Add `outcomes: outcome_sink` to the TurnTail initializer.
+
+// In TurnTail::finish, add to the TurnReport literal:
+tool_outcomes: tinyagents_harness::turn_outcome::drain_tool_outcomes(&self.outcomes),
+```
 
 In `TurnDriver::prepare`, create `outcome_sink`, push
 `Arc::new(ToolOutcomeCaptureMiddleware::new(Arc::clone(&outcome_sink)))` into
