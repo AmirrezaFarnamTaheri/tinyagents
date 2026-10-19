@@ -1560,3 +1560,22 @@ async fn record_resilient_uses_local_memory_only_when_explicitly_allowed() {
     assert!(matches!(outcome, RecordOutcome::Recorded { .. }));
     assert!(router.store().get("local").is_some());
 }
+
+#[tokio::test]
+async fn release_all_counts_only_the_claim_receipts_it_still_owns() {
+    let store = Arc::new(InMemoryCompletionStore::new());
+    let first = CompletionRouter::new(store.clone());
+    let second = CompletionRouter::new(store.clone());
+    first.record(record("task", "p")).await.unwrap();
+    let stale = first.claim_pending("p", 1).unwrap()[0].receipt().unwrap();
+    second.mark_failed(std::slice::from_ref(&stale)).unwrap();
+    let current = second.claim_pending("p", 1).unwrap()[0].receipt().unwrap();
+
+    assert_eq!(first.release_all().unwrap(), 0);
+    assert_eq!(second.mark_delivered(std::slice::from_ref(&current)).unwrap(), 1);
+
+    second.record(record("next", "p")).await.unwrap();
+    assert_eq!(second.claim_pending("p", 1).unwrap().len(), 1);
+    assert_eq!(second.release_all().unwrap(), 1);
+    assert_eq!(first.claim_pending("p", 1).unwrap().len(), 1);
+}
