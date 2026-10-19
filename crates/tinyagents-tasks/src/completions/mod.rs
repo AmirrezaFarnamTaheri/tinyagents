@@ -32,6 +32,8 @@ mod store;
 mod types;
 
 pub use admission::CompletionAdmission;
+#[doc(hidden)]
+pub use lifecycle::ParentLifecycle;
 pub use delivery::{
     CompletionDelivery, CompletionDeliveryConfig, DeliveryFence, DeliveryOutcome, DeliveryTarget,
     ParentBusyGate, ParentBusyLease, TenantThreadKey, ThreadDeliveryLeases,
