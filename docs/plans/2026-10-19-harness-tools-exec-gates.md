@@ -93,8 +93,9 @@ use `ToolRunContext::host_extension()` to read its own turn state without
 TinyAgents importing or downcasting to a host type.
 
 ```rust
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, time::Duration};
+use std::{any::Any, collections::BTreeMap, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 use async_trait::async_trait;
+use serde_json::Value;
 use tinytools::ToolRunContext;
 use crate::exec::ExecProgress;
 
@@ -110,32 +111,48 @@ pub struct ExecAuthorizationRequest {
     pub timeout: Option<Duration>,
 }
 
-#[derive(Debug, Clone)]
+/// Opaque host-owned data selected during authorization. TinyAgents can carry
+/// it unchanged but cannot interpret or construct a host policy type.
+#[derive(Clone)]
+pub struct ExecBackendCapability(Arc<dyn Any + Send + Sync>);
+impl ExecBackendCapability {
+    pub fn new<T: Any + Send + Sync>(value: T) -> Self { Self(Arc::new(value)) }
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> { self.0.as_ref().downcast_ref() }
+}
+
+#[derive(Clone)]
 pub struct ExecPermit {
     pub action_dir: PathBuf,
     pub environment: BTreeMap<OsString, OsString>,
+    pub backend_selection: String,
+    pub backend_capability: ExecBackendCapability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecDenied(pub String);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecRefusalKind { BackendUnavailable, Configuration, Preflight }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecAuditOutcome {
+    GateDenied,
+    BackendRefused { kind: ExecRefusalKind },
+    LaunchFailed,
+    Completed { success: bool, timed_out: bool },
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecAuditEvent {
     pub operation: ExecOperation,
-    pub allowed: bool,
-    pub success: bool,
+    /// True only after host authorization produced a permit.
+    pub authorized: bool,
+    pub backend_selection: Option<String>,
+    /// False for policy denial and backend/preflight refusal; true only when
+    /// the backend actually attempted to create a process.
+    pub process_attempted: bool,
+    pub outcome: ExecAuditOutcome,
     pub duration: Duration,
-}
-
-#[async_trait]
-pub trait ExecGate: Send + Sync {
-    async fn authorize(
-        &self,
-        request: &ExecAuthorizationRequest,
-        context: Option<&dyn ToolRunContext>,
-    ) -> Result<ExecPermit, ExecDenied>;
-
-    fn record(&self, event: ExecAuditEvent);
 }
 
 #[derive(Debug, Clone)]
@@ -146,67 +163,93 @@ pub struct ExecRequest {
     pub environment: BTreeMap<OsString, OsString>,
     pub timeout: Option<Duration>,
     pub shell_command: Option<String>,
+    pub backend_selection: String,
+    pub backend_capability: ExecBackendCapability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecOutput {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub exit_code: Option<i32>,
-    pub timed_out: bool,
+    pub stdout: Vec<u8>, pub stderr: Vec<u8>,
+    pub exit_code: Option<i32>, pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecBackendOutcome {
+    /// A selected backend declined before process creation (for example a
+    /// SaaS backend is disabled, or Docker configuration/preflight failed).
+    Refused { kind: ExecRefusalKind, reason: String },
+    /// Process creation was attempted and failed.
+    LaunchFailed { error: String },
+    /// A process ran to completion or timed out and was cleaned up.
+    Completed(ExecOutput),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShellFlavor {
-    Posix,
-    Cmd,
+pub enum ShellFlavor { Posix, Cmd }
+
+#[async_trait]
+pub trait ExecGate: Send + Sync {
+    /// Exact TinyTools `Tool` authorization-preparation hook. The host may
+    /// return serialized command analysis for its outer approval flow.
+    async fn prepare_authorization(&self, args: &Value) -> anyhow::Result<Option<Value>>;
+    /// Exact argument-aware external-effect hook; retain the source shell's
+    /// conservative classification for every nonempty command.
+    fn external_effect_with_args(&self, args: &Value) -> bool;
+    /// Revalidate and authorize immediately before backend dispatch.
+    async fn authorize(&self, request: &ExecAuthorizationRequest,
+        context: Option<&dyn ToolRunContext>) -> Result<ExecPermit, ExecDenied>;
+    fn record(&self, event: ExecAuditEvent);
 }
 
 #[async_trait]
 pub trait ExecBackend: Send + Sync {
     fn shell_flavor(&self) -> ShellFlavor;
-
-    async fn execute(
-        &self,
-        request: ExecRequest,
-        context: Option<&dyn ToolRunContext>,
-        progress: Option<ExecProgress>,
-    ) -> anyhow::Result<ExecOutput>;
+    async fn execute(&self, request: ExecRequest,
+        context: Option<&dyn ToolRunContext>, progress: Option<ExecProgress>) -> ExecBackendOutcome;
 }
 ```
 
-`ExecOperation` is input to authorization/audit. `ExecRequest` is the
-backend-neutral launched process request. `shell_command` is only populated
-for the shell operation, where the backend chooses the host's configured shell;
-install always uses `program` plus separate `args`, with no shell interpolation.
-`ExecBackend::shell_flavor` supplies the model-facing shell description and
-parameter text. The permit supplies the authorized working directory and
-environment. The backend receives the original tool context so the host
-implementation can select native, sandbox, Docker, TinyBox, or SaaS execution
-using its own existing rules. `ExecProgress` is the cloneable generic output meter, not a
-host type; it provides `record(&[u8])` and `snapshot() -> (u64, Option<String>)`.
-The adapter feeds it for both stdout and stderr chunks. A denied operation is
-recorded once with `allowed = false` before returning; a permitted operation
-is recorded once after completion with `allowed = true` and the final success
-flag. Process launch failures are audited as unsuccessful.
+These signatures are the actual `tinytools::Tool` hooks to implement and
+forward: `prepare_authorization(&Value) -> anyhow::Result<Option<Value>>` and
+`external_effect_with_args(&Value) -> bool`. Do not invent a second authorization
+hook or narrow classification to a command prefix. `ExecTool` and
+`InstallTool` delegate those hooks to the injected gate; the host adapter
+reuses TinyBox analysis for `prepare_authorization` and returns its JSON
+analysis exactly as the source shell does. `authorize` is a separate final
+revalidation and must occur immediately before dispatch.
 
-The shell result conversion must preserve the current behavior: output is
-decoded lossily as UTF-8; each stdout/stderr stream is capped at 1 MiB at a
-valid UTF-8 boundary with the existing truncation marker; the tool's
-`max_result_size_chars` remains 30,000; successful stderr is appended as
-`[stderr]`; nonzero/signal exit uses the current `tinytools::command_failure`
-mapping; exit 124 adds the existing “command's own timeout” note; and an
-explicit tool timeout produces the current timeout message including captured
-stdout and stderr. Docker/module output uses the same conversion. The existing
-Python UTF-8 environment defaults and caller overrides remain unchanged.
+The host gate returns a permit only after its approval, autonomy, rate,
+workspace, and other policy checks succeed. The permit carries the authorized
+backend selection and opaque capability through `ExecRequest`; the backend
+must use that selection and capability rather than independently choosing a
+more permissive route. OpenHuman retains authority over native/sandbox/Docker/
+TinyBox/SaaS selection. A SaaS-unavailable refusal and Docker configuration or
+preflight refusal are typed `Refused` outcomes before process creation; they
+are not policy denials and are not launch failures. `LaunchFailed` means a
+process-creation attempt failed. Audit exactly once for each call, recording
+gate denials as `authorized=false, process_attempted=false`, backend refusals
+as authorized but not attempted, launch failures as attempted, and completed
+processes with exit/timeout-derived success. Include the selected backend when
+a permit exists. Never represent a backend refusal as an allowed successful
+execution.
 
-The built-in process backend must own child cleanup. Every timeout, dropped
-execution future, and cancellation path kills the entire process group and
-reaps the child before returning/dropping. Keep the existing `timeout`
-settings and `output_or_kill` semantics. The generic `ExecBackend` may be
-host-provided, but the crate's native backend tests must prove descendants do
-not survive timeout or cancellation. The authorization denial test uses a fake
-backend with an invocation counter and asserts zero calls after denial.
+The shell result conversion preserves current behavior: decode output lossily
+as UTF-8; cap each stream at 1 MiB at a valid UTF-8 boundary with the existing
+truncation marker; retain `max_result_size_chars = 30_000`; append successful
+stderr as `[stderr]`; use the current `tinytools::command_failure` mapping for
+nonzero/signal exits; append the source “command's own timeout” note for exit
+124; and retain explicit timeout text including captured stdout/stderr.
+`ExecBackendOutcome::Refused` maps to the matching existing source refusal
+text; launch failure maps to the stable sandbox-execution failure text. The
+Python UTF-8 defaults and caller overrides remain unchanged.
+
+The authorization tests assert a denied gate produces one denial audit event,
+zero backend calls, and no `process_attempted`; separate fake-backend tests
+assert SaaS refusal and Docker config/preflight refusal are typed refusals and
+never launches, launch failure is attempted/unsuccessful, and completed
+success records the chosen backend, attempted=true, and success=true. Preserve
+shell-analysis preparation and `external_effect_with_args` tests using source
+arguments, including empty and nonempty commands.
 
 ### Plan-review port
 
