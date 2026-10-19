@@ -87,6 +87,87 @@ async fn tombstone_before_the_completion_drops_it() {
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_fences_a_completion_that_observed_the_old_parent_state() {
+    let inner = InMemoryCompletionStore::new();
+    let observed = Arc::new(std::sync::Barrier::new(2));
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    let store = Arc::new(BlockingParentMarkerRead {
+        inner: inner.clone(),
+        marker_id: "\u{1}parent-cancelled:p".to_owned(),
+        observed: Arc::clone(&observed),
+        resume: Arc::clone(&resume),
+    });
+    let router = Arc::new(CompletionRouter::new(store));
+    let cancel_router = CompletionRouter::new(Arc::new(inner));
+    let q = queue();
+    router.attach_parent("p", q.clone());
+
+    let recording = {
+        let router = Arc::clone(&router);
+        tokio::spawn(async move { router.record(record("late", "p")).await })
+    };
+    observed.wait();
+    cancel_router.cancel_parent("p").unwrap();
+    resume.wait();
+    let outcome = recording.await.unwrap().unwrap();
+    assert_eq!(outcome, RecordOutcome::Suppressed);
+    assert!(router.pending_for("p").is_empty());
+    assert_eq!(q.status().await.total, 0);
+}
+
+struct BlockingParentMarkerRead {
+    inner: InMemoryCompletionStore,
+    marker_id: String,
+    observed: Arc<std::sync::Barrier>,
+    resume: Arc<std::sync::Barrier>,
+}
+
+impl CompletionStore for BlockingParentMarkerRead {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        let record = self.inner.get(task_id);
+        if task_id == self.marker_id {
+            self.observed.wait();
+            self.resume.wait();
+        }
+        record
+    }
+
+    fn try_get(
+        &self,
+        task_id: &str,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        Ok(self.get(task_id))
+    }
+
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+
+    fn insert_if_absent(
+        &self,
+        record: &CompletionRecord,
+    ) -> tinyagents_harness::error::Result<bool> {
+        self.inner.insert_if_absent(record)
+    }
+
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner
+            .claim_task(task_id, parent_key, mode, token, visible_after)
+    }
+
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+}
+
 #[tokio::test]
 async fn tombstone_never_reaches_a_live_parent_queue() {
     let router = router();
