@@ -603,7 +603,16 @@ impl SubAgentJobRegistry {
         owner: impl ToString,
         completion_tombstone: Option<(&tinyagents_tasks::CompletionRouter, &str)>,
     ) -> Result<(SubAgentJob, bool), SubAgentJobError> {
+        let owner = owner.to_string();
         let id = SubAgentJobId(job_id.to_owned());
+        let task_id = TaskId::new(job_id);
+        match self.tasks.snapshot(&task_id, &owner) {
+            Ok(_) => {}
+            Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+            }
+            Err(error) => return Err(registry_failure(error)),
+        }
         let mut controls = self.controls();
         let control = controls
             .get_mut(&id)
@@ -634,8 +643,7 @@ impl SubAgentJobRegistry {
             }
             return Ok((control.status.borrow().clone(), false));
         }
-        let task_id = TaskId::new(job_id);
-        let mut snapshot = match self.tasks.cancel_cooperative(&task_id, &owner.to_string()) {
+        let mut snapshot = match self.tasks.cancel_cooperative(&task_id, &owner) {
             Ok(snapshot) => snapshot.status,
             Err(DetachedTaskRegistryError::AlreadyDone) => {
                 return Err(SubAgentJobError::Terminal {
