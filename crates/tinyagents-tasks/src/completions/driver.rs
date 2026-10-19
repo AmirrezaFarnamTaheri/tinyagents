@@ -470,16 +470,21 @@ impl CompletionStore for DriverCompletionStore {
     fn resolve_claim(
         &self,
         task_id: &str,
+        parent_key: &str,
+        gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> Result<Option<CompletionRecord>> {
         let this = self.clone();
         let task_id = task_id.to_owned();
+        let parent_key = parent_key.to_owned();
+        let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
             this.declare().await?;
+            let docs = this.fenced_docs(&parent_key, &gate).await?;
             let id = task_id_key(&task_id).map_err(map_error)?;
-            let Some(row) = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
+            let Some(row) = docs.get(COMPLETIONS, &id).await.map_err(map_error)? else {
                 return Ok(None);
             };
             let mut record = decode_strict(row.clone())?;
@@ -502,8 +507,7 @@ impl CompletionStore for DriverCompletionStore {
                 ClaimResolution::Failed { .. } | ClaimResolution::Release => {}
             }
             let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
-            match this
-                .docs
+            match docs
                 .put_with(
                     COMPLETIONS,
                     &id,
