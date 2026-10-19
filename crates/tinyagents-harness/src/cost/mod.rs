@@ -19,7 +19,8 @@ use std::ops::{Add, AddAssign};
 
 pub use gateway_charge::GatewayChargeModel;
 pub use dispatch_admission::{
-    DispatchRefusal, DispatchRefusalReason, PhysicalDispatchAdmission, PhysicalDispatchPermit,
+    ControlledDispatchError, DispatchModelOptions, DispatchRefusal, DispatchRefusalReason,
+    PhysicalDispatchAdmission, PhysicalDispatchPermit,
 };
 pub(crate) use gateway_charge::has_authoritative_billing_source;
 pub(crate) use gateway_charge::provider_cost_usd;
@@ -30,6 +31,10 @@ pub use turn_cost::{
     estimate_call_cost_usd,
 };
 pub use types::*;
+
+#[cfg(test)]
+#[path = "dispatch_admission_tests.rs"]
+mod dispatch_admission_tests;
 
 impl CostTotals {
     /// Creates an empty cost accumulator.
