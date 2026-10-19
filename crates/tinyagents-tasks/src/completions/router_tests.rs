@@ -235,6 +235,10 @@ impl CompletionStore for BlockingFirstReadStore {
         self.inner.put(record)
     }
 
+    fn insert_if_absent(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<bool> {
+        self.inner.insert_if_absent(record)
+    }
+
     fn claim_pending(
         &self,
         parent_key: &str,
@@ -311,7 +315,44 @@ async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
 
     assert_eq!(first_outcome, RecordOutcome::IdCollision);
     assert_eq!(store.inner.get("racing").unwrap().parent_key, "parent-b");
-    assert_eq!(store.inner.get("racing").unwrap().receipt(), Some(second_receipt.clone()));
+    let winner = store.inner.get("racing").unwrap();
+    assert_eq!(winner.receipt(), Some(second_receipt.clone()));
+    assert_eq!(winner.attempts, 1, "the losing create must not reset attempt state");
+    assert_eq!(first_queue.status().await.total, 0);
+    assert_eq!(second_queue.status().await.total, 1);
+}
+
+#[tokio::test]
+async fn concurrent_duplicate_record_cannot_erase_the_first_claim_or_push_twice() {
+    let store = blocking_first_read_store("same-parent");
+    let first = Arc::new(CompletionRouter::new(store.clone()));
+    let second = CompletionRouter::new(store.clone());
+    let first_queue = queue();
+    let second_queue = queue();
+    first.attach_parent("parent", first_queue.clone());
+    second.attach_parent("parent", second_queue.clone());
+
+    let first_router = Arc::clone(&first);
+    let first_writer = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(first_router.record(record("same-parent", "parent")))
+    });
+    store.entered.wait();
+
+    let second_outcome = second.record(record("same-parent", "parent")).await.unwrap();
+    let second_receipt = match second_outcome {
+        RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt,
+        other => panic!("first conditional create should win: {other:?}"),
+    };
+    store.resume.wait();
+    assert_eq!(first_writer.join().unwrap().unwrap(), RecordOutcome::Duplicate);
+
+    let winner = store.inner.get("same-parent").unwrap();
+    assert_eq!(winner.receipt(), Some(second_receipt));
+    assert_eq!(winner.attempts, 1);
     assert_eq!(first_queue.status().await.total, 0);
     assert_eq!(second_queue.status().await.total, 1);
 }

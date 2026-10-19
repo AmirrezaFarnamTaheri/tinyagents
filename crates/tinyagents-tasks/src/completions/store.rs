@@ -23,8 +23,20 @@ pub trait CompletionStore: Send + Sync {
     /// The latest record for `task_id`.
     fn get(&self, task_id: &str) -> Option<CompletionRecord>;
 
+    /// Fallible read used to classify a conflicting conditional create.
+    fn try_get(&self, task_id: &str) -> Result<Option<CompletionRecord>> {
+        Ok(self.get(task_id))
+    }
+
     /// Upserts a record. Durable stores persist it before returning.
     fn put(&self, record: &CompletionRecord) -> Result<()>;
+
+    /// Creates a record only if its key is absent. Shared stores must make the
+    /// absence check and write atomic; unsupported stores fail closed.
+    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
+        let _ = record;
+        Err(store_err("conditional create", "store does not support atomic create"))
+    }
 
     /// Atomically leases matching pending completions until `visible_after`.
     /// Implementations shared across processes must use backend CAS/claim
@@ -160,6 +172,15 @@ impl CompletionStore for InMemoryCompletionStore {
     fn put(&self, record: &CompletionRecord) -> Result<()> {
         self.lock()?.insert(record.task_id.clone(), record.clone());
         Ok(())
+    }
+
+    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
+        let mut records = self.lock()?;
+        if records.contains_key(&record.task_id) {
+            return Ok(false);
+        }
+        records.insert(record.task_id.clone(), record.clone());
+        Ok(true)
     }
 
     fn claim_pending(

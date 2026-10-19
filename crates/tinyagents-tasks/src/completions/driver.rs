@@ -155,6 +155,17 @@ impl CompletionStore for DriverCompletionStore {
         .flatten()
     }
 
+    fn try_get(&self, task_id: &str) -> Result<Option<CompletionRecord>> {
+        let this = self.clone();
+        let task_id = task_id.to_owned();
+        self.run(async move {
+            this.declare().await?;
+            let id = task_id_key(&task_id).map_err(map_error)?;
+            let found = this.docs.get(COMPLETIONS, &id).await.map_err(map_error)?;
+            found.map(decode_strict).transpose()
+        })
+    }
+
     fn put(&self, record: &CompletionRecord) -> Result<()> {
         let this = self.clone();
         let record = record.clone();
@@ -166,6 +177,31 @@ impl CompletionStore for DriverCompletionStore {
                 .await
                 .map(|_| ())
                 .map_err(map_error)
+        })
+    }
+
+    fn insert_if_absent(&self, record: &CompletionRecord) -> Result<bool> {
+        let this = self.clone();
+        let record = record.clone();
+        self.run(async move {
+            this.declare().await?;
+            let id = task_id_key(&record.task_id).map_err(map_error)?;
+            let body = serde_json::to_value(CompletionDoc::from_record(&record))?;
+            match this
+                .docs
+                .put_with(
+                    COMPLETIONS,
+                    &id,
+                    body,
+                    Precondition::Absent,
+                    WriteOptions::new().schema(SCHEMA_VERSION),
+                )
+                .await
+            {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == tinystoragedrivers_core::ErrorKind::Conflict => Ok(false),
+                Err(error) => Err(map_error(error)),
+            }
         })
     }
 
