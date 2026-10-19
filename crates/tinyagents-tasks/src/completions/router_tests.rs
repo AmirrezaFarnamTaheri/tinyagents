@@ -28,6 +28,10 @@ fn ids(records: &[CompletionRecord]) -> Vec<&str> {
     records.iter().map(|r| r.task_id.as_str()).collect()
 }
 
+fn receipts(records: &[CompletionRecord]) -> Vec<CompletionReceipt> {
+    records.iter().filter_map(CompletionRecord::receipt).collect()
+}
+
 #[tokio::test]
 async fn recording_twice_stores_once() {
     let router = router();
@@ -48,7 +52,7 @@ async fn a_delivered_task_is_not_recorded_again() {
     let router = router();
     router.record(record("t1", "p")).await.unwrap();
     let claimed = router.claim_pending("p", 10).unwrap();
-    router.mark_delivered(&["t1"]).unwrap();
+    router.mark_delivered(&receipts(&claimed)).unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(
         router.record(record("t1", "p")).await.unwrap(),
@@ -94,8 +98,8 @@ async fn tombstone_never_reaches_a_live_parent_queue() {
 async fn tombstone_after_delivery_changes_nothing() {
     let router = router();
     router.record(record("t1", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
-    router.mark_delivered(&["t1"]).unwrap();
+    let claimed = router.claim_pending("p", 1).unwrap();
+    router.mark_delivered(&receipts(&claimed)).unwrap();
     assert_eq!(
         router.tombstone("t1").unwrap(),
         TombstoneOutcome::AlreadyFinal
@@ -121,10 +125,11 @@ async fn another_router_cannot_ack_or_fail_an_active_claim_by_task_id() {
     let stranger = CompletionRouter::new(store);
     owner.record(record("owned", "p")).await.unwrap();
     let claimed = owner.claim_pending("p", 1).unwrap();
-    assert_eq!(stranger.mark_delivered(&["owned"]).unwrap(), 0);
-    assert_eq!(stranger.mark_failed(&["owned"]).unwrap().len(), 0);
+    let forged = CompletionReceipt { task_id: "owned".into(), token: "not-the-owner".into() };
+    assert_eq!(stranger.mark_delivered(std::slice::from_ref(&forged)).unwrap(), 0);
+    assert_eq!(stranger.mark_failed(&[forged]).unwrap().len(), 0);
     assert_eq!(owner.pending_for("p").len(), 1);
-    assert_eq!(owner.mark_delivered(&["owned"]).unwrap(), 1);
+    assert_eq!(owner.mark_delivered(&receipts(&claimed)).unwrap(), 1);
     assert_eq!(claimed.len(), 1);
 }
 
@@ -146,7 +151,9 @@ async fn an_old_claim_receipt_cannot_settle_a_reclaimed_attempt() {
         )
         .unwrap();
 
-    assert_eq!(router.mark_delivered(&[old.task_id.as_str()]).unwrap(), 0);
+    let old_receipt = old.receipt().unwrap();
+    assert_eq!(router.mark_delivered(std::slice::from_ref(&old_receipt)).unwrap(), 0);
+    assert_eq!(router.mark_delivered(&[old_receipt]).unwrap(), 0);
     assert_eq!(router.pending_for("p").len(), 1);
 }
 
@@ -211,11 +218,11 @@ async fn failed_attempts_move_to_gave_up_at_max_attempts() {
     for attempt in 1..=2 {
         let batch = router.claim_pending("p", 1).unwrap();
         assert_eq!(batch[0].attempts, attempt);
-        assert!(router.mark_failed(&["t1"]).unwrap().is_empty());
+        assert!(router.mark_failed(&receipts(&batch)).unwrap().is_empty());
     }
     let batch = router.claim_pending("p", 1).unwrap();
     assert_eq!(batch[0].attempts, 3);
-    let gave_up = router.mark_failed(&["t1"]).unwrap();
+    let gave_up = router.mark_failed(&receipts(&batch)).unwrap();
     assert_eq!(ids(&gave_up), ["t1"]);
     assert_eq!(gave_up[0].state, CompletionState::GaveUp);
     assert_eq!(gave_up[0].result.text, "result of t1");
@@ -229,20 +236,20 @@ async fn default_max_attempts_is_five() {
     let router = router();
     router.record(record("t1", "p")).await.unwrap();
     for _ in 0..4 {
-        router.claim_pending("p", 1).unwrap();
-        assert!(router.mark_failed(&["t1"]).unwrap().is_empty());
+        let batch = router.claim_pending("p", 1).unwrap();
+        assert!(router.mark_failed(&receipts(&batch)).unwrap().is_empty());
     }
-    router.claim_pending("p", 1).unwrap();
-    assert_eq!(router.mark_failed(&["t1"]).unwrap().len(), 1);
+    let batch = router.claim_pending("p", 1).unwrap();
+    assert_eq!(router.mark_failed(&receipts(&batch)).unwrap().len(), 1);
 }
 
 #[tokio::test]
 async fn mark_failed_on_a_settled_record_is_ignored() {
     let router = router();
     router.record(record("t1", "p")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
-    router.mark_delivered(&["t1"]).unwrap();
-    assert!(router.mark_failed(&["t1", "unknown"]).unwrap().is_empty());
+    let batch = router.claim_pending("p", 1).unwrap();
+    router.mark_delivered(&receipts(&batch)).unwrap();
+    assert!(router.mark_failed(&receipts(&batch)).unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -254,12 +261,8 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Followup))
         .await
         .unwrap();
-    assert_eq!(
-        outcome,
-        RecordOutcome::Recorded {
-            lane: Some(QueueLane::Followup)
-        }
-    );
+    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(QueueLane::Followup), receipt: Some(_) }));
+    let receipt = match outcome { RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt, _ => unreachable!() };
     let status = q.status().await;
     assert_eq!(
         (status.followups, status.collects, status.steers),
@@ -270,7 +273,7 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
     // Pushed but not acknowledged: still pending, leased, not claimable.
     assert_eq!(router.in_flight_for("p").len(), 1);
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
-    router.mark_delivered(&["t1"]).unwrap();
+    router.mark_delivered(&[receipt]).unwrap();
     assert!(router.pending_for("p").is_empty());
     assert!(router.in_flight_for("p").is_empty());
 }
@@ -284,12 +287,7 @@ async fn collect_mode_pushes_onto_the_collect_lane() {
         .record(record("t1", "p").with_notify_mode(NotifyMode::Collect))
         .await
         .unwrap();
-    assert_eq!(
-        outcome,
-        RecordOutcome::Recorded {
-            lane: Some(QueueLane::Collect)
-        }
-    );
+    assert!(matches!(outcome, RecordOutcome::Recorded { lane: Some(QueueLane::Collect), receipt: Some(_) }));
     let status = q.status().await;
     assert_eq!((status.followups, status.collects), (0, 1));
 }
@@ -331,7 +329,7 @@ async fn hold_mode_waits_for_the_next_turn() {
     let released = router.begin_turn("p").unwrap();
     assert_eq!(ids(&released), ["t1"]);
     assert_eq!(released[0].attempts, 1);
-    router.mark_delivered(&["t1"]).unwrap();
+    router.mark_delivered(&receipts(&released)).unwrap();
     assert!(router.begin_turn("p").unwrap().is_empty());
 }
 
@@ -386,7 +384,7 @@ async fn pending_for_lists_only_undelivered_records_of_the_parent() {
     router.record(record("t1", "p")).await.unwrap();
     router.record(record("t2", "p")).await.unwrap();
     router.record(record("t3", "other")).await.unwrap();
-    router.claim_pending("p", 1).unwrap();
+    let first = router.claim_pending("p", 1).unwrap();
     router.mark_delivered(&["t1"]).unwrap();
     assert_eq!(ids(&router.pending_for("p")), ["t2"]);
 }
@@ -442,7 +440,7 @@ async fn release_makes_an_abandoned_claim_claimable_again() {
     router.record(record("t1", "p")).await.unwrap();
     router.claim_pending("p", 1).unwrap();
     assert!(router.claim_pending("p", 1).unwrap().is_empty());
-    router.release(&["t1"]);
+    router.release(&receipts(&first));
     assert_eq!(router.claim_pending("p", 1).unwrap().len(), 1);
 }
 
@@ -469,7 +467,7 @@ async fn replacing_a_router_preserves_its_leases_and_claim_acknowledgements() {
     ));
 
     let duplicate_claim = source_router.pull("p", 1).unwrap();
-    let old_ack = source_router.mark_delivered(&["leased"]).unwrap();
+    let old_ack = source_router.mark_delivered(&receipts(&claimed)).unwrap();
     let replacement_record = replacement_store.get("leased").unwrap();
     assert!(
         duplicate_claim.is_empty(),
@@ -493,13 +491,13 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
     source
         .put(&record("pending", "p").with_notify_mode(NotifyMode::Off))
         .unwrap();
-    router.pull("p", 1).unwrap();
+    let delivered = router.pull("p", 1).unwrap();
 
     source
         .put(&record("delivered", "p").with_notify_mode(NotifyMode::Off))
         .unwrap();
     router.pull("p", 1).unwrap();
-    router.mark_delivered(&["delivered"]).unwrap();
+    router.mark_delivered(&receipts(&delivered)).unwrap();
 
     source
         .put(&record("tombstoned", "p").with_notify_mode(NotifyMode::Off))
@@ -509,10 +507,10 @@ fn store_migration_copies_all_states_and_keeps_router_policy() {
     source
         .put(&record("gave-up", "p").with_notify_mode(NotifyMode::Off))
         .unwrap();
-    router.pull("p", 1).unwrap();
-    router.release(&["gave-up"]);
-    router.pull("p", 1).unwrap();
-    router.mark_failed(&["gave-up"]).unwrap();
+    let attempt = router.pull("p", 1).unwrap();
+    router.release(&receipts(&attempt));
+    let attempt = router.pull("p", 1).unwrap();
+    router.mark_failed(&receipts(&attempt)).unwrap();
     router.cancel_parent("q").unwrap();
 
     let destination = Arc::new(InMemoryCompletionStore::new());
