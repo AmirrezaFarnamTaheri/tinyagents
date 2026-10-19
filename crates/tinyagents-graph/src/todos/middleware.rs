@@ -75,6 +75,8 @@ struct RunState {
 pub struct TodoSequenceMiddleware {
     store: Arc<dyn Store>,
     reminder_rounds: usize,
+    /// The plan key for a run with no thread id (see `with_fallback_thread`).
+    fallback_thread: Option<String>,
     runs: Mutex<HashMap<u64, RunState>>,
 }
 
@@ -85,8 +87,17 @@ impl TodoSequenceMiddleware {
         Self {
             store,
             reminder_rounds: DEFAULT_REMINDER_ROUNDS,
+            fallback_thread: None,
             runs: Mutex::default(),
         }
+    }
+
+    /// Reads the plan under `key` for a run that has no thread id. Pass the
+    /// scope the host's `todo` tool falls back to in that case (OpenHuman: the
+    /// session id); without it a headless run's rules never see its plan.
+    pub fn with_fallback_thread(mut self, key: impl Into<String>) -> Self {
+        self.fallback_thread = Some(key.into());
+        self
     }
 
     /// Remind after `rounds` tool rounds on one step (at least 1).
@@ -187,10 +198,14 @@ impl TodoSequenceMiddleware {
     }
 }
 
-/// The run's thread id, owned so no context borrow crosses an `.await`.
-fn thread_of<C>(ctx: &RunContext<C>) -> Option<String> {
-    ctx.thread_id()
-        .map(|thread_id| thread_id.as_str().to_owned())
+impl TodoSequenceMiddleware {
+    /// The run's plan key, owned so no context borrow crosses an `.await`: its
+    /// thread id, else the fallback key.
+    fn thread_of<C>(&self, ctx: &RunContext<C>) -> Option<String> {
+        ctx.thread_id()
+            .map(|thread_id| thread_id.as_str().to_owned())
+            .or_else(|| self.fallback_thread.clone())
+    }
 }
 
 /// The instruction that holds a final answer while steps are open.
@@ -252,7 +267,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for TodoSequenceMiddleware
                  todo {{}} if you are still on it, then retry."
             )));
         }
-        let thread_id = thread_of(ctx);
+        let thread_id = self.thread_of(ctx);
         let items = self.items(thread_id.as_deref()).await;
         if items
             .iter()
@@ -284,7 +299,7 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for TodoSequenceMiddleware
         response: &mut ModelResponse,
     ) -> Result<()> {
         let instance = ctx.instance_id();
-        let thread_id = thread_of(ctx);
+        let thread_id = self.thread_of(ctx);
         let calls = response.tool_calls();
         if !calls.is_empty() {
             let ticked = calls.iter().any(|call| call.name == TODO_TOOL_NAME);
