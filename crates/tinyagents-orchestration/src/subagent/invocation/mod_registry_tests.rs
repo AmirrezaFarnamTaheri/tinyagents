@@ -21,6 +21,61 @@ async fn jobs_are_registered_in_the_shared_detached_registry() {
 }
 
 #[tokio::test]
+async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
+    use tinyagents_harness::cancel::CancellationToken;
+
+    let jobs = SubAgentJobRegistry::new();
+    let key = crate::subagent::SubagentTaskKey {
+        root_run_id: "root".into(),
+        parent_run_id: "parent".into(),
+        thread_id: Some("thread".into()),
+        task_id: "child".into(),
+    };
+    let token = CancellationToken::new();
+    let (id, _, _, registered_token, inserted) = jobs
+        .register_driver_job(DriverJobRegistration {
+            key: key.clone(),
+            agent: "worker".into(),
+            owner: "owner-a".into(),
+            workspace: Some(tinytools::WorkspaceDescriptor::new("/workspace/a")),
+            cancellation: token.clone(),
+            steering: None,
+            run_queue: None,
+            continuing: false,
+        })
+        .unwrap();
+    assert!(inserted);
+    assert!(Arc::ptr_eq(&token, &registered_token));
+
+    assert!(jobs
+        .cancel_key_owned_and_tombstone(&key, "owner-b")
+        .is_err());
+    assert!(!token.is_cancelled());
+    let canceled = jobs
+        .cancel_key_owned_and_tombstone(&key, "owner-a")
+        .unwrap();
+    assert!(token.is_cancelled());
+    assert_eq!(canceled.status, SubAgentJobStatus::Cancelled);
+
+    jobs.mark_driver_result(
+        &id,
+        Ok(crate::subagent::SubagentOutcome {
+            status: crate::subagent::SubagentOutcomeKind::Completed,
+            output: "late output".into(),
+            worker_thread_id: None,
+            task_id: "child".into(),
+            extensions: Default::default(),
+            artifacts: Vec::new(),
+            schema_error: None,
+            artifact_error: None,
+        }),
+    );
+    let retained = jobs.get_owned(id.as_str(), "owner-a").unwrap();
+    assert_eq!(retained.status, SubAgentJobStatus::Cancelled);
+    assert_eq!(retained.output, None);
+}
+
+#[tokio::test]
 async fn live_job_metadata_retains_parent_thread_and_workspace() {
     let jobs = SubAgentJobRegistry::new();
     let workspace = tinytools::WorkspaceDescriptor::new("/workspace/project");

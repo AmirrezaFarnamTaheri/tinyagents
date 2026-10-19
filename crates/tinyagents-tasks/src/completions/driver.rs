@@ -34,7 +34,10 @@ use tinystoragedrivers_core::{
 };
 use tokio::sync::OnceCell;
 
-use super::store::{ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim};
+use super::store::{
+    ClaimResolution, CompletionClaimMode, CompletionStore, ParentGateClaim, PendingClaimRequest,
+    ResolveClaimRequest, TaskClaimRequest,
+};
 use super::types::{CompletionRecord, CompletionState};
 use crate::storage::{
     COMPLETIONS, CompletionDoc, SCHEMA_VERSION, completions_spec, task_id_key, to_ms,
@@ -383,20 +386,17 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
-    fn claim_pending(
-        &self,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        max: usize,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Vec<CompletionRecord>> {
+    fn claim_pending(&self, request: PendingClaimRequest) -> Result<Vec<CompletionRecord>> {
         let this = self.clone();
-        let parent_key = parent_key.to_owned();
-        let gate = gate.clone();
-        let token = token.to_owned();
+        let PendingClaimRequest {
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        } = request;
         self.run(async move {
             this.declare().await?;
             let docs = this.fenced_docs(&parent_key, &gate).await?;
@@ -454,21 +454,17 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
-    fn claim_task(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        mode: CompletionClaimMode,
-        token: &str,
-        visible_after: SystemTime,
-    ) -> Result<Option<CompletionRecord>> {
+    fn claim_task(&self, request: TaskClaimRequest) -> Result<Option<CompletionRecord>> {
         let this = self.clone();
-        let task_id = task_id.to_owned();
-        let parent_key = parent_key.to_owned();
-        let gate = gate.clone();
-        let token = token.to_owned();
+        let TaskClaimRequest {
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        } = request;
         self.run(async move {
             this.declare().await?;
             let docs = this.fenced_docs(&parent_key, &gate).await?;
@@ -515,20 +511,16 @@ impl CompletionStore for DriverCompletionStore {
         })
     }
 
-    fn resolve_claim(
-        &self,
-        task_id: &str,
-        parent_key: &str,
-        parent_epoch: u64,
-        gate: &ParentGateClaim,
-        token: &str,
-        resolution: ClaimResolution,
-    ) -> Result<Option<CompletionRecord>> {
+    fn resolve_claim(&self, request: ResolveClaimRequest) -> Result<Option<CompletionRecord>> {
         let this = self.clone();
-        let task_id = task_id.to_owned();
-        let parent_key = parent_key.to_owned();
-        let gate = gate.clone();
-        let token = token.to_owned();
+        let ResolveClaimRequest {
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            token,
+            resolution,
+        } = request;
         self.run(async move {
             this.declare().await?;
             let docs = this.fenced_docs(&parent_key, &gate).await?;
