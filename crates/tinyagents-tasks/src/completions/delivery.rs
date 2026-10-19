@@ -622,10 +622,10 @@ impl ThreadDeliveryLeases {
 
 impl Drop for ThreadDeliveryLease {
     fn drop(&mut self) {
-        if let Ok(mut leases) = self.leases.0.lock() {
-            if leases.get(&self.key) == Some(&self.id) {
-                leases.remove(&self.key);
-            }
+        if let Ok(mut leases) = self.leases.0.lock()
+            && leases.get(&self.key) == Some(&self.id)
+        {
+            leases.remove(&self.key);
         }
     }
 }

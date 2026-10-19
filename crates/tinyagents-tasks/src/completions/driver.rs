@@ -395,7 +395,6 @@ impl CompletionStore for DriverCompletionStore {
     ) -> Result<Vec<CompletionRecord>> {
         let this = self.clone();
         let parent_key = parent_key.to_owned();
-        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
@@ -468,7 +467,6 @@ impl CompletionStore for DriverCompletionStore {
         let this = self.clone();
         let task_id = task_id.to_owned();
         let parent_key = parent_key.to_owned();
-        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {
@@ -529,7 +527,6 @@ impl CompletionStore for DriverCompletionStore {
         let this = self.clone();
         let task_id = task_id.to_owned();
         let parent_key = parent_key.to_owned();
-        let parent_epoch = parent_epoch;
         let gate = gate.clone();
         let token = token.to_owned();
         self.run(async move {

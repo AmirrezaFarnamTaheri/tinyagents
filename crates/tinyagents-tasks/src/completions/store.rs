@@ -105,6 +105,9 @@ pub trait CompletionStore: Send + Sync {
     /// Atomically leases matching pending completions until `visible_after`.
     /// Implementations shared across processes must use backend CAS/claim
     /// semantics; the default fails closed rather than emulating a local lock.
+    // These are independent claim predicates and fencing inputs, not one
+    // loosely-related options bag.
+    #[allow(clippy::too_many_arguments)]
     fn claim_pending(
         &self,
         parent_key: &str,
@@ -132,6 +135,9 @@ pub trait CompletionStore: Send + Sync {
 
     /// Atomically claims one pending record for a live push. The default fails
     /// closed; a process-local lock is not a substitute for backend ownership.
+    // These are independent claim predicates and fencing inputs, not one
+    // loosely-related options bag.
+    #[allow(clippy::too_many_arguments)]
     fn claim_task(
         &self,
         task_id: &str,
@@ -326,14 +332,14 @@ impl CompletionStore for InMemoryCompletionStore {
             .parent_gates
             .lock()
             .map_err(|_| store_err("parent gate", "lock poisoned"))?;
-        if let Some(existing) = gates.get(parent_key) {
-            if existing.expires_at > now {
-                return if existing.claim.holder == holder {
-                    Ok(Some(existing.claim.clone()))
-                } else {
-                    Ok(None)
-                };
-            }
+        if let Some(existing) = gates.get(parent_key)
+            && existing.expires_at > now
+        {
+            return if existing.claim.holder == holder {
+                Ok(Some(existing.claim.clone()))
+            } else {
+                Ok(None)
+            };
         }
         let mut epochs = self
             .parent_gate_epochs
