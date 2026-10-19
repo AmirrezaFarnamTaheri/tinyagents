@@ -248,10 +248,12 @@ impl<T> RunQueue<T> {
                         None => {
                             let permit = match capability.acquire_for(Some(key)) {
                                 Ok(permit) => permit,
-                                Err(_) if capability.retry_after_rejection(Some(key)) => {
+                                Err(types::QueueAdmissionError::Retry) => {
                                     return AdmissionDecision::Retry(Queued { value, admission });
                                 }
-                                Err(_) => return AdmissionDecision::Rejected,
+                                Err(types::QueueAdmissionError::Rejected) => {
+                                    return AdmissionDecision::Rejected;
+                                }
                             };
                             permits.insert(key.clone(), std::sync::Arc::clone(&permit));
                             Some(permit)
@@ -260,10 +262,12 @@ impl<T> RunQueue<T> {
                 } else {
                     match capability.acquire_for(None) {
                         Ok(permit) => Some(permit),
-                        Err(_) if capability.retry_after_rejection(None) => {
+                        Err(types::QueueAdmissionError::Retry) => {
                             return AdmissionDecision::Retry(Queued { value, admission });
                         }
-                        Err(_) => return AdmissionDecision::Rejected,
+                        Err(types::QueueAdmissionError::Rejected) => {
+                            return AdmissionDecision::Rejected;
+                        }
                     }
                 }
             }

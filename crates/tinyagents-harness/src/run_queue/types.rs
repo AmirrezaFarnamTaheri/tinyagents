@@ -35,12 +35,6 @@ pub trait QueueAdmission: std::fmt::Debug + Send + Sync {
         self.acquire()
     }
 
-    /// Whether a failed acquisition is temporary and the item should remain
-    /// queued for a later attempt. Lifecycle rejection is permanent by default.
-    fn retry_after_rejection(&self, _expected_key: Option<&str>) -> bool {
-        false
-    }
-
     /// Stable identity for capabilities that may share one batch permit.
     /// `None` means each item requires an independent acquisition.
     fn batch_key(&self) -> Option<String> {
@@ -53,9 +47,14 @@ pub trait QueueAdmissionPermit: Send + Sync {}
 
 impl QueueAdmissionPermit for () {}
 
-/// The queued item's admission capability is no longer valid.
+/// Why a queued item could not acquire its admission capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueAdmissionError;
+pub enum QueueAdmissionError {
+    /// A binding is changing; retain the item for a later queue boundary.
+    Retry,
+    /// The lifecycle permanently revoked this item; discard it.
+    Rejected,
+}
 
 /// A queue lane consumed by the agent runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
