@@ -12,6 +12,7 @@
 mod admission;
 mod awaiting_user;
 mod completion;
+mod child_turn;
 mod detached;
 mod document_persistence;
 mod driver;
