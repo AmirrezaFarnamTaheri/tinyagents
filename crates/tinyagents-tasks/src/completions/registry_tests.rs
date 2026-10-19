@@ -314,6 +314,21 @@ async fn pool_release_all_releases_claims_from_every_cached_router() {
     let pool = CompletionRouterPool::new(move |_| Arc::new(CompletionRouter::new(shared.clone())));
     let first = pool.get_or_open(&"workspace-a").unwrap();
     let second = pool.get_or_open(&"workspace-b").unwrap();
+    let ambiguous_alias = CompletionAdmission::for_store(
+        store.clone(),
+        &CompletionRecord::new(
+            "ambiguous",
+            "parent-a",
+            "worker",
+            crate::completions::CompletionStatus::Success,
+            crate::completions::CompletionResult::default(),
+        ),
+    );
+    assert!(tinyagents_harness::run_queue::QueueAdmission::batch_key(&ambiguous_alias).is_none());
+    assert!(matches!(
+        tinyagents_harness::run_queue::QueueAdmission::acquire(&ambiguous_alias),
+        Err(tinyagents_harness::run_queue::QueueAdmissionError::Retry)
+    ));
     first
         .record(CompletionRecord::new(
             "first",
