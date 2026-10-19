@@ -49,8 +49,8 @@ pub use router::{
     TombstoneOutcome,
 };
 pub use store::{
-    ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore, ParentGateClaim,
-    PendingClaimRequest, ResolveClaimRequest, TaskClaimRequest,
+    ClaimResolution, CompletionClaimMode, CompletionStore, InMemoryCompletionStore,
+    ParentGateClaim, PendingClaimRequest, ResolveClaimRequest, TaskClaimRequest,
 };
 pub use types::{
     CompletionArtifact, CompletionClaim, CompletionReceipt, CompletionRecord, CompletionResult,

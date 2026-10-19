@@ -48,9 +48,9 @@ pub use ops::{
     wait_detached_or_durable, wait_detached_or_durable_with_owners,
 };
 pub use roster::{
-    format_parent_roster_for_owner, format_roster_for_owner, parent_roster_for_owner,
-    resume_ref_for_task, resume_ref_from_record, snapshot_for_owner, task_id_for_session,
-    task_id_for_session_in_records, ParentRosterEntry,
+    ParentRosterEntry, format_parent_roster_for_owner, format_roster_for_owner,
+    parent_roster_for_owner, resume_ref_for_task, resume_ref_from_record, snapshot_for_owner,
+    task_id_for_session, task_id_for_session_in_records,
 };
 pub use status::{wait_detached, wait_error_from_registry};
 pub use types::{

@@ -467,7 +467,8 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
         let Some(lifecycle_key) = session.lifecycle_key.as_ref() else {
             return Ok(false);
         };
-        let closed = self.inner
+        let closed = self
+            .inner
             .close_if_current(
                 id,
                 task_id,
@@ -496,13 +497,13 @@ impl<S: SubagentSessionStore + 'static> SubagentSessionStore for ScopedSubagentS
             return Ok(false);
         }
         self.close_if_current(
-                id,
-                task_id,
-                lifecycle_key,
-                &self.parent_session,
-                self.parent_thread_id.as_deref(),
-            )
-            .await
+            id,
+            task_id,
+            lifecycle_key,
+            &self.parent_session,
+            self.parent_thread_id.as_deref(),
+        )
+        .await
     }
 
     async fn mark_finished(

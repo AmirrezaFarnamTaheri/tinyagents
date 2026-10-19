@@ -1,11 +1,11 @@
 use super::*;
+use serde_json::Value;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tinystoragedrivers_core::{
     CollectionSpec, DocumentStore, MemoryStorage, Page, Precondition, Query, Scope, StorageBackend,
     Version, Versioned,
 };
-use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 fn key(task_id: &str) -> SubagentTaskKey {
     SubagentTaskKey {
@@ -455,7 +455,10 @@ impl DocumentStore for PauseAfterSelectorRead {
         self.inner.capabilities()
     }
 
-    async fn ensure_collection(&self, spec: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+    async fn ensure_collection(
+        &self,
+        spec: &CollectionSpec,
+    ) -> tinystoragedrivers_core::Result<()> {
         self.inner.ensure_collection(spec).await
     }
 
@@ -552,11 +555,7 @@ async fn stale_reuse_selection_cannot_overwrite_a_newer_session_owner() {
     let selector_read = gate.entered.notified();
     let stale_attempt = {
         let store = Arc::clone(&stale_store);
-        tokio::spawn(async move {
-            store
-                .upsert_running(upsert("task-old", old_key))
-                .await
-        })
+        tokio::spawn(async move { store.upsert_running(upsert("task-old", old_key)).await })
     };
     selector_read.await;
 

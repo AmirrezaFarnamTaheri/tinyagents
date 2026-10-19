@@ -47,9 +47,10 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     assert!(inserted);
     assert!(!registered_token.is_cancelled());
 
-    assert!(jobs
-        .cancel_key_owned_and_tombstone(&key, "owner-b")
-        .is_err());
+    assert!(
+        jobs.cancel_key_owned_and_tombstone(&key, "owner-b")
+            .is_err()
+    );
     assert!(!token.is_cancelled());
     let canceled = jobs
         .cancel_key_owned_and_tombstone(&key, "owner-a")

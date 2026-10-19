@@ -1404,9 +1404,8 @@ fn parent_cancellation_propagates_pending_enumeration_failure() {
     );
 }
 
-type GateWait = Arc<
-    std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
->;
+type GateWait =
+    Arc<std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>>;
 
 struct BlockingTryList {
     inner: Arc<InMemoryCompletionStore>,
