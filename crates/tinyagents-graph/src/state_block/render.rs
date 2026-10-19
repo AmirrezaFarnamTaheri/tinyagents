@@ -1,5 +1,6 @@
-//! Rendering the run-state block from the plan and the ledger.
+//! Rendering the run-state block from the goal, the plan and the ledger.
 
+use crate::goals::{ThreadGoal, ThreadGoalStatus};
 use crate::todos::{TodoItem, TodoStatus};
 
 use super::ledger::one_line;
@@ -7,15 +8,24 @@ use super::types::RunLedger;
 
 /// First line of every block; also how tests and logs recognise one.
 pub const STATE_BLOCK_HEADER: &str = "[run state]";
+/// Longest goal objective shown, in characters.
+const MAX_OBJECTIVE_CHARS: usize = 300;
 /// Longest plan step shown, in characters.
 const MAX_STEP_CHARS: usize = 160;
 /// Plan steps shown before the rest are summarised as a count.
 const MAX_STEPS_SHOWN: usize = 20;
 
-/// The block for this request, or `None` when there is neither a plan nor a
-/// fact to show.
-pub(super) fn render(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
+/// The block for this request, or `None` when there is no goal, plan or fact
+/// to show.
+pub(super) fn render(
+    goal: Option<&ThreadGoal>,
+    items: &[TodoItem],
+    ledger: &RunLedger,
+) -> Option<String> {
     let mut sections = Vec::new();
+    if let Some(goal) = goal {
+        sections.push(goal_line(goal));
+    }
     if let Some(plan) = plan_section(items, ledger) {
         sections.push(plan);
     }
@@ -50,10 +60,27 @@ pub(super) fn render(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {
         return None;
     }
     Some(format!(
-        "{STATE_BLOCK_HEADER} Rebuilt by the harness for this call from your plan and your tool \
-         results; it is not part of the conversation.\n{}",
+        "{STATE_BLOCK_HEADER} Rebuilt by the harness for this call from your goal, plan and \
+         tool results; it is not part of the conversation.\n{}",
         sections.join("\n")
     ))
+}
+
+/// The thread goal on one line, with its status and any budget left.
+fn goal_line(goal: &ThreadGoal) -> String {
+    let status = match goal.status {
+        ThreadGoalStatus::Active => match goal.budget_remaining() {
+            Some(remaining) => format!("active, ~{remaining} tokens of budget left"),
+            None => "active".to_string(),
+        },
+        ThreadGoalStatus::Paused => "paused".to_string(),
+        ThreadGoalStatus::BudgetLimited => "budget exhausted: summarise and stop".to_string(),
+        ThreadGoalStatus::Complete => "complete".to_string(),
+    };
+    format!(
+        "Goal ({status}): {}",
+        one_line(&goal.objective, MAX_OBJECTIVE_CHARS)
+    )
 }
 
 fn plan_section(items: &[TodoItem], ledger: &RunLedger) -> Option<String> {

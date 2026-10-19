@@ -95,6 +95,16 @@ async fn the_block_follows_the_plan_and_the_tool_results() {
 
     let first = block(&mw, &mut ctx).await.expect("a plan shows");
     assert!(first.starts_with(STATE_BLOCK_HEADER), "{first}");
+    assert!(!first.contains("Goal"), "no goal set yet: {first}");
+    // A goal set mid-run shows on the next call.
+    goal_store::set(&store, THREAD, "Ship the migration", None)
+        .await
+        .unwrap();
+    let first = block(&mw, &mut ctx).await.unwrap();
+    assert!(
+        first.contains("\nGoal (active): Ship the migration\nPlan:"),
+        "{first}"
+    );
     assert!(
         first.contains("step 1 of 2 in progress (0 tool rounds on it)"),
         "{first}"

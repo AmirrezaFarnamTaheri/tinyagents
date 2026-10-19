@@ -1,8 +1,9 @@
 # `state_block`: the run-state block
 
 `StateBlockMiddleware` adds one short block to every model request: the
-thread's plan (from the `todo` store) and facts the harness derived from the
-run's own tool calls. It never writes to the transcript.
+thread's goal, its plan (from the `todo` store) and facts the harness derived
+from the run's own tool calls. It never writes to the transcript and emits no
+events, so a host UI sees none of it.
 
 ## Why
 
@@ -17,14 +18,15 @@ and the hard facts at the tail of every request.
 
 | Section | Source | Rule |
 |---|---|---|
+| Goal | `goals::store` for the run's thread | One line: status (active with budget left, paused, budget exhausted, complete) and the objective. |
 | Plan | `todos::store` for the run's thread | Every step with its mark (`[x]` `[>]` `[ ]` `[-]`), the step in progress and the tool rounds it has run. At most 20 steps. |
 | Recent failures | `after_tool` results with `is_error` | The last 3, each with its age, tool, command (or argument summary) and the exit code plus first `[stderr]` line. Dropped after 12 rounds, or when the same command later succeeds. |
 | Reported not found | Shell wording in error output (`X: command not found`, `sh: 1: X: not found`, `command not found: X`) | Cleared when a later successful command runs `X`. |
 | Files written this run | Path argument of tools whose name contains write/edit/patch/create/replace | The last 6, distinct. |
 
 No section is ever a model's interpretation, so nothing in the block can be
-wrong in a way the tool results are not. With neither a plan nor a fact, no
-block is added.
+wrong in a way the tool results are not. With no goal, plan or fact, no block
+is added.
 
 ## Placement and caching
 
@@ -43,7 +45,8 @@ cached prefix is untouched.
 harness.push_middleware(Arc::new(StateBlockMiddleware::new(todo_store)));
 ```
 
-Pass the same store the `todo` tool writes. Install it on the turns that have
+Pass the store the goal and `todo` tools write (in OpenHuman both live in the
+session key-value store). Install it on the turns that have
 the `todo` tool; it is an observer, so another middleware's control outcome
 never hides a call from its ledger. Per-run state is keyed by the run
 instance and dropped in `after_agent` / `on_error`.

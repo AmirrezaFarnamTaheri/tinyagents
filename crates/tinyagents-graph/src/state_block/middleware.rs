@@ -13,6 +13,7 @@ use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
 
+use crate::goals::{ThreadGoal, store as goal_store};
 use crate::todos::{TodoItem, TodoStatus, store as todo_store};
 
 use super::ledger;
@@ -26,8 +27,8 @@ const TODO_TOOL_NAME: &str = "todo";
 const MAX_RETAINED_RUNS: usize = 1_024;
 
 impl StateBlockMiddleware {
-    /// A middleware reading each thread's plan from `store` (the store the
-    /// `todo` tool writes).
+    /// A middleware reading each thread's goal and plan from `store` (the
+    /// store the goal and `todo` tools write).
     pub fn new(store: Arc<dyn Store>) -> Self {
         Self {
             store,
@@ -51,6 +52,19 @@ impl StateBlockMiddleware {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&instance);
+    }
+
+    /// The thread's goal; `None` without a thread or a goal, or when the store
+    /// cannot be read.
+    async fn goal(&self, thread_id: Option<&str>) -> Option<ThreadGoal> {
+        let thread_id = thread_id?;
+        match goal_store::get(&self.store, thread_id).await {
+            Ok(goal) => goal,
+            Err(error) => {
+                tracing::debug!(%error, "[tinyagents::mw] state_block: goal unreadable");
+                None
+            }
+        }
     }
 
     /// The thread's plan; empty without a thread or a plan, or when the store
@@ -99,11 +113,12 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         request: &mut ModelRequest,
     ) -> Result<()> {
         let thread_id = ctx.thread_id().map(|id| id.as_str().to_owned());
+        let goal = self.goal(thread_id.as_deref()).await;
         let items = self.items(thread_id.as_deref()).await;
         let block = self.with_run(ctx.instance_id(), |ledger| {
             ledger::age_out(ledger);
             track_step(ledger, &items);
-            ledger.staged = render(&items, ledger);
+            ledger.staged = render(goal.as_ref(), &items, ledger);
             ledger.staged.clone()
         });
         if let Some(block) = block {

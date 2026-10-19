@@ -1,11 +1,14 @@
-//! The **run-state block**: a short, current view of the run's plan and of the
-//! facts its tool calls established, added to every model request.
+//! The **run-state block**: a short, current view of the thread's goal, the
+//! run's plan and the facts its tool calls established, added to every model
+//! request.
 //!
 //! Between `todo` calls a model sees its plan only in an old tool result,
 //! further back with every round, and what its failed calls taught it is
 //! scattered across raw output. [`StateBlockMiddleware`] rebuilds one block
-//! before each model call from two sources that cannot be wrong:
+//! before each model call from sources that cannot be wrong:
 //!
+//! - **the goal**: the thread's goal ([`crate::goals`]) with its status and any
+//!   budget left, so a goal set or completed mid-run shows on the next call;
 //! - **the plan**: the thread's todo list from the store the `todo` tool
 //!   writes ([`crate::todos`]), with the step in progress and how many tool
 //!   rounds it has run;
@@ -17,7 +20,8 @@
 //!   runs a missing executable clears it.
 //!
 //! ```text
-//! [run state] Rebuilt by the harness for this call from your plan and your tool results; …
+//! [run state] Rebuilt by the harness for this call from your goal, plan and tool results; …
+//! Goal (active): Add org_id to the auth schema without downtime
 //! Plan: step 2 of 3 in progress (4 tool rounds on it).
 //!   [x] 1. Dump the schema
 //!   [>] 2. Write the migration
@@ -34,7 +38,10 @@
 //! never written to the transcript: the provider's cached prefix is untouched,
 //! the history holds no stale copies, and the model sees exactly one block,
 //! always the current one, always at the tail. Nothing is added while there is
-//! neither a plan nor a fact.
+//! no goal, plan or fact.
+//!
+//! **Model-only.** The middleware emits no events, so a host UI sees none of
+//! this; what a UI shows of the goal comes from the goal tools as before.
 
 mod ledger;
 mod middleware;
