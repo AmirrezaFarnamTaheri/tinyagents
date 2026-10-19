@@ -211,6 +211,128 @@ fn in_memory_claims_choose_oldest_before_task_id_tiebreaking() {
     assert_eq!(ids(&claimed), ["z-older"]);
 }
 
+struct BlockingFirstReadStore {
+    inner: InMemoryCompletionStore,
+    reads: std::sync::atomic::AtomicUsize,
+    entered: std::sync::Barrier,
+    resume: std::sync::Barrier,
+}
+
+impl CompletionStore for BlockingFirstReadStore {
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        let observed = self.inner.get(task_id);
+        if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            self.entered.wait();
+            self.resume.wait();
+        }
+        observed
+    }
+
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+
+    fn claim_pending(
+        &self,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        max: usize,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
+        self.inner.claim_pending(parent_key, mode, max, token, visible_after)
+    }
+
+    fn claim_task(
+        &self,
+        task_id: &str,
+        parent_key: &str,
+        mode: CompletionClaimMode,
+        token: &str,
+        visible_after: SystemTime,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.claim_task(task_id, parent_key, mode, token, visible_after)
+    }
+
+    fn resolve_claim(
+        &self,
+        task_id: &str,
+        token: &str,
+        resolution: ClaimResolution,
+    ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
+        self.inner.resolve_claim(task_id, token, resolution)
+    }
+
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
+}
+
+fn blocking_first_read_store() -> Arc<BlockingFirstReadStore> {
+    Arc::new(BlockingFirstReadStore {
+        inner: InMemoryCompletionStore::new(),
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        entered: std::sync::Barrier::new(2),
+        resume: std::sync::Barrier::new(2),
+    })
+}
+
+#[tokio::test]
+async fn concurrent_first_record_cannot_replace_another_parent_live_claim() {
+    let store = blocking_first_read_store();
+    let first = Arc::new(CompletionRouter::new(store.clone()));
+    let second = CompletionRouter::new(store.clone());
+    let first_queue = queue();
+    let second_queue = queue();
+    first.attach_parent("parent-a", first_queue.clone());
+    second.attach_parent("parent-b", second_queue.clone());
+
+    let first_router = Arc::clone(&first);
+    let first_writer = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(first_router.record(record("racing", "parent-a")))
+    });
+    store.entered.wait();
+
+    let second_outcome = second.record(record("racing", "parent-b")).await.unwrap();
+    let second_receipt = match second_outcome {
+        RecordOutcome::Recorded { receipt: Some(receipt), .. } => receipt,
+        other => panic!("second writer should win the create: {other:?}"),
+    };
+    store.resume.wait();
+    let first_outcome = first_writer.join().unwrap().unwrap();
+
+    assert_eq!(first_outcome, RecordOutcome::IdCollision);
+    assert_eq!(store.inner.get("racing").unwrap().parent_key, "parent-b");
+    assert_eq!(store.inner.get("racing").unwrap().receipt(), Some(second_receipt.clone()));
+    assert_eq!(first_queue.status().await.total, 0);
+    assert_eq!(second_queue.status().await.total, 1);
+}
+
+#[tokio::test]
+async fn concurrent_tombstone_wins_over_a_first_completion_write() {
+    let store = blocking_first_read_store();
+    let router = Arc::new(CompletionRouter::new(store.clone()));
+    let tombstoner = CompletionRouter::new(store.clone());
+    let writer_router = Arc::clone(&router);
+    let writer = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(writer_router.record(record("deleted", "parent")))
+    });
+    store.entered.wait();
+
+    assert_eq!(tombstoner.tombstone("deleted").unwrap(), TombstoneOutcome::Reserved);
+    store.resume.wait();
+    assert_eq!(writer.join().unwrap().unwrap(), RecordOutcome::Suppressed);
+    assert_eq!(store.inner.get("deleted").unwrap().state, CompletionState::Tombstoned);
+}
+
 #[tokio::test]
 async fn claim_respects_max_and_orders_by_finish_time() {
     let router = router();
