@@ -1,6 +1,7 @@
 //! Asynchronous subagent job registry and host-facing control tools.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tinyagents_harness::cancel::CancellationToken;
 use tinyagents_harness::error::TinyAgentsError;
@@ -30,6 +31,14 @@ struct JobExecutionControls {
     cancellation: CancellationToken,
     steering: SteeringHandle,
     run_queue: Option<tinyagents_harness::run_queue::RunQueueHandle>,
+}
+
+struct JobWaitGuard(Arc<AtomicUsize>);
+
+impl Drop for JobWaitGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 /// Settles an inline job if its tool future is dropped (tool timeout, parent
@@ -105,6 +114,10 @@ impl SubAgentJobRegistry {
         let id = SubAgentJobId(format!("subagent-job-{}", next_seq()));
         let steering =
             SteeringHandle::new(SteeringPolicy::new().allow(SteeringCommandKind::InjectMessage));
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(error) = self.insert_job(
             id.clone(),
             agent,
@@ -115,6 +128,7 @@ impl SubAgentJobRegistry {
                 steering: steering.clone(),
                 run_queue,
             },
+            &mut driver_jobs,
         ) {
             tracing::error!("{LOG_PREFIX} register.failed job_id={id} error={error}");
         }
@@ -128,6 +142,10 @@ impl SubAgentJobRegistry {
         owner: String,
         link: JobLink,
         execution: JobExecutionControls,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
+        >,
     ) -> Result<(), SubAgentJobError> {
         if id.as_str().is_empty() {
             return Err(SubAgentJobError::Registry("empty job id".into()));
@@ -157,9 +175,10 @@ impl SubAgentJobRegistry {
         if controls.contains_key(&id) {
             return Err(SubAgentJobError::AlreadyExists(id.as_str().to_owned()));
         }
+        self.prune_terminal_before_insert(driver_jobs, &mut controls)?;
         self.steering
             .register(task_id.clone(), execution.steering.clone());
-        if let Err(error) = self.tasks.register_cooperative(
+        if let Err(error) = self.tasks.register_cooperative_managed(
             task_id.clone(),
             owner,
             metadata,
@@ -177,8 +196,46 @@ impl SubAgentJobRegistry {
                 run_queue: execution.run_queue,
                 steering: execution.steering,
                 cancellation: execution.cancellation,
+                waiters: Arc::new(AtomicUsize::new(0)),
             },
         );
+        Ok(())
+    }
+
+    /// Prunes unobserved terminal jobs before the generic registry reaches its
+    /// finite soft cap. The shared runtime entry, control sender and driver key
+    /// are removed together; live jobs and jobs with current waiters survive.
+    fn prune_terminal_before_insert(
+        &self,
+        driver_jobs: &mut std::collections::HashMap<
+            crate::subagent::SubagentTaskKey,
+            SubAgentJobId,
+        >,
+        controls: &mut std::sync::MutexGuard<
+            '_,
+            std::collections::HashMap<SubAgentJobId, JobControl>,
+        >,
+    ) -> Result<(), SubAgentJobError> {
+        if self.tasks.len().map_err(registry_failure)? < super::types::SUBAGENT_JOB_SOFT_CAP {
+            return Ok(());
+        }
+
+        let terminal_ids: Vec<_> = controls
+            .iter()
+            .filter(|(_, control)| {
+                control.status.borrow().status.is_terminal()
+                    && control.waiters.load(Ordering::Acquire) == 0
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in terminal_ids {
+            let task_id = TaskId::new(id.as_str());
+            self.tasks
+                .prune_terminal_trusted(&task_id)
+                .map_err(registry_failure)?;
+            controls.remove(&id);
+            driver_jobs.retain(|_, mapped_id| mapped_id != &id);
+        }
         Ok(())
     }
 
@@ -281,6 +338,7 @@ impl SubAgentJobRegistry {
                 steering: steering.clone(),
                 run_queue: Some(queue.clone()),
             },
+            &mut driver_jobs,
         )?;
         driver_jobs.insert(key, id.clone());
         let token = self
@@ -779,26 +837,67 @@ impl SubAgentJobRegistry {
         job_id: &str,
         owner: impl ToString,
     ) -> Result<SubAgentJob, SubAgentJobError> {
-        self.try_get_owned(job_id, owner)?
-            .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
-        let mut status = {
+        let owner = owner.to_string();
+        let id = SubAgentJobId(job_id.to_owned());
+        let task_id = TaskId::new(job_id);
+        let (mut status, waiters) = {
+            // Pin the control before releasing its lock so cap pruning cannot
+            // remove a terminal snapshot between ownership validation and the
+            // watch subscription.
             let controls = self.controls();
-            controls
-                .get(&SubAgentJobId(job_id.to_owned()))
-                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?
-                .status
-                .subscribe()
+            match self.tasks.snapshot(&task_id, &owner) {
+                Ok(_) => {}
+                Err(DetachedTaskRegistryError::Unknown | DetachedTaskRegistryError::NotOwned) => {
+                    return Err(SubAgentJobError::NotFound(job_id.to_owned()));
+                }
+                Err(error) => return Err(registry_failure(error)),
+            }
+            let control = controls
+                .get(&id)
+                .ok_or_else(|| SubAgentJobError::NotFound(job_id.to_owned()))?;
+            control.waiters.fetch_add(1, Ordering::AcqRel);
+            (control.status.subscribe(), control.waiters.clone())
         };
+        let waiter_guard = JobWaitGuard(waiters);
         loop {
             let snapshot = status.borrow().clone();
             if snapshot.status.is_terminal() || snapshot.status == SubAgentJobStatus::AwaitingInput
             {
+                drop(waiter_guard);
+                if snapshot.status.is_terminal() {
+                    self.prune_terminal_after_observation(&id)?;
+                }
                 return Ok(snapshot);
             }
             if status.changed().await.is_err() {
-                return Ok(status.borrow().clone());
+                let snapshot = status.borrow().clone();
+                drop(waiter_guard);
+                if snapshot.status.is_terminal() {
+                    self.prune_terminal_after_observation(&id)?;
+                }
+                return Ok(snapshot);
             }
         }
+    }
+
+    fn prune_terminal_after_observation(&self, id: &SubAgentJobId) -> Result<(), SubAgentJobError> {
+        let mut driver_jobs = self
+            .driver_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut controls = self.controls();
+        if controls.get(id).is_some_and(|control| {
+            !control.status.borrow().status.is_terminal()
+                || control.waiters.load(Ordering::Acquire) > 0
+        }) {
+            return Ok(());
+        }
+        self.tasks
+            .prune_terminal_trusted(&TaskId::new(id.as_str()))
+            .map_err(registry_failure)?;
+        controls.remove(id);
+        driver_jobs.retain(|_, mapped_id| mapped_id != id);
+        Ok(())
     }
 
     /// Returns every job for trusted host-side supervision.

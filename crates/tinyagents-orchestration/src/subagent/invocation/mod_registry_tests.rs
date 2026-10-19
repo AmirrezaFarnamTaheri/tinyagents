@@ -265,12 +265,11 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
     jobs.mark_running(&active_id);
     let (awaiting_key, awaiting_id) = register_driver_job(&jobs, "awaiting");
     let mut awaiting = crate::subagent::SubagentOutcome::completed("awaiting", "paused");
-    awaiting.status = crate::subagent::SubagentOutcomeKind::AwaitingInput(
-        crate::subagent::SubagentPause {
+    awaiting.status =
+        crate::subagent::SubagentOutcomeKind::AwaitingInput(crate::subagent::SubagentPause {
             reason: "clarification".into(),
             resume: crate::subagent::SubagentResume::default(),
-        },
-    );
+        });
     jobs.mark_driver_result(&awaiting_id, Ok(awaiting));
 
     for index in 0..2_000 {
@@ -284,7 +283,10 @@ async fn active_and_awaiting_jobs_survive_terminal_retention_pressure() {
         jobs.get(awaiting_id.as_str()).unwrap().status,
         SubAgentJobStatus::AwaitingInput
     );
-    assert_eq!(jobs.driver_job_for_key(&active_key, "owner"), Some(active_id));
+    assert_eq!(
+        jobs.driver_job_for_key(&active_key, "owner"),
+        Some(active_id)
+    );
     assert_eq!(
         jobs.driver_job_for_key(&awaiting_key, "owner"),
         Some(awaiting_id)
