@@ -271,6 +271,18 @@ fn configured_role_is_independent_and_cloud_fallback_metadata_is_typed() {
 }
 
 #[test]
+fn fallback_diagnostics_are_absent_when_explicit_default_route_won() {
+    let routes = TestRoutes {
+        primary: "managed".into(),
+        default: Some("ollama:llama3".into()),
+        ..TestRoutes::default()
+    };
+    let router = router();
+    assert_eq!(router.provider_for_role("agentic", &routes), "ollama:llama3");
+    assert!(router.fallback_diagnostics("agentic", &routes).is_none());
+}
+
+#[test]
 fn model_helpers_preserve_hints_legacy_aliases_and_raw_models() {
     let routes = TestRoutes {
         primary: "managed".into(),

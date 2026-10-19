@@ -306,6 +306,9 @@ impl WorkloadRouter {
         if requested.is_some_and(|route| !route.is_empty() && route != "cloud") {
             return None;
         }
+        if explicit_default_model_route(role, source).is_some() {
+            return None;
+        }
         Some(FallbackDiagnostics {
             role: metadata.role.to_owned(),
             requested_route: requested
