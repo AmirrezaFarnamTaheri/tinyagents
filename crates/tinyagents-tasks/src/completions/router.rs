@@ -307,7 +307,7 @@ impl CompletionRouter {
             .iter()
             .map(|parent| ParentGateGuard::acquire(Arc::clone(&state.store), parent))
             .collect::<Result<Vec<_>>>()?;
-        let records = discovered;
+        let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
         if records.iter().any(|record| {
             let parent = if record.parent_key.is_empty() {
