@@ -9,10 +9,10 @@ use std::sync::Arc;
 struct MutableAdmission(AtomicBool);
 
 impl QueueAdmission for MutableAdmission {
-    fn validate(&self) -> Result<(), QueueAdmissionError> {
+    fn acquire(&self) -> Result<Box<dyn QueueAdmissionPermit>, QueueAdmissionError> {
         self.0
             .load(Ordering::SeqCst)
-            .then_some(())
+            .then(|| Box::new(()) as Box<dyn QueueAdmissionPermit>)
             .ok_or(QueueAdmissionError)
     }
 }

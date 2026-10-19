@@ -94,6 +94,18 @@ struct ParentGateGuard {
     claim: ParentGateClaim,
 }
 
+/// Short-lived durable authority held while a queued completion crosses into
+/// its parent turn. Dropping it releases the parent lifecycle gate.
+pub struct ParentAdmissionPermit {
+    _guard: ParentGateGuard,
+}
+
+impl std::fmt::Debug for ParentAdmissionPermit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("ParentAdmissionPermit").finish_non_exhaustive()
+    }
+}
+
 impl ParentGateGuard {
     fn acquire(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
         let holder = uuid::Uuid::new_v4().to_string();
@@ -598,6 +610,24 @@ impl CompletionRouter {
         Ok(marker.is_some_and(|marker| {
             marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
         }))
+    }
+
+    /// Acquires the durable parent gate and verifies that `parent_epoch` is
+    /// still open. The returned permit orders this queue-to-turn handoff
+    /// against cancellation, deletion, and resume on every router sharing the
+    /// backing store.
+    pub fn acquire_parent_generation(
+        &self,
+        parent_key: &str,
+        parent_epoch: u64,
+    ) -> Result<Option<ParentAdmissionPermit>> {
+        let state = self.lock()?;
+        let gate = ParentGateGuard::acquire(Arc::clone(&state.store), parent_key)?;
+        let current = state.store.try_get(&Self::parent_marker_id(parent_key))?;
+        let admitted = current.is_some_and(|marker| {
+            marker.state == CompletionState::Delivered && marker.parent_epoch == parent_epoch
+        });
+        Ok(admitted.then_some(ParentAdmissionPermit { _guard: gate }))
     }
 
     fn admit_child_locked(
