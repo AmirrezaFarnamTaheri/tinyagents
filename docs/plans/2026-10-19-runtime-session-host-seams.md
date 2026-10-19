@@ -262,10 +262,19 @@ pub trait PostCommitSink<C: Clone + Send + Sync + 'static = ()>: Send + Sync {
 }
 ```
 
-Add imports for `PostCommitObservation` and the trait-object `Arc`. Store
-`Vec<Arc<dyn PostCommitSink<C>>>` on `SessionBuilder` and `Session`, default
-empty, and add `.post_commit_sink(Arc<dyn PostCommitSink<C>>) -> Self` that
-appends in registration order. The finalization owner already spawns a task after durable append and awaits
+Add imports for `PostCommitObservation` and the trait-object `Arc`. Add
+`post_commit_sinks: Vec<Arc<dyn PostCommitSink<C>>>` to `SessionBuilder` and
+`Session`, initializing it with `Vec::new()` in each constructor. Add this
+builder method and move the vector from `build` into `Session::new`:
+
+```rust
+pub fn post_commit_sink(mut self, sink: Arc<dyn PostCommitSink<C>>) -> Self {
+    self.post_commit_sinks.push(sink);
+    self
+}
+```
+
+The finalization owner already spawns a task after durable append and awaits
 its `JoinHandle` without observing cancellation (`runtime/session.rs`, commit
 path). Invoke sinks inside that same owned task so dropping the caller future
 cannot cancel a durable transition's finalization. Do not put additional
@@ -1575,6 +1584,86 @@ async fn owned_post_commit_sink_finishes_after_caller_abort() {
 }
 ```
 
+Add this failure-partial regression in the same test module. It documents that
+the host sink is successful-turn-only while preserving existing durable
+partial-history and terminal behavior:
+
+```rust
+struct CountSink(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait]
+impl PostCommitSink for CountSink {
+    async fn after_commit(&self, _: &PostCommitObservation) -> Result<(), RuntimeError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct FailureTerminalRecorder(Arc<Mutex<Vec<SessionTerminal>>>);
+
+#[async_trait]
+impl SessionHooks for FailureTerminalRecorder {
+    async fn before_turn(
+        &self, _: &mut SessionTurnRequest, _: &mut TurnOptions,
+        _: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        Ok(TurnPreparation::default())
+    }
+    async fn before_commit(
+        &self, _: &SessionTurnOutcome, _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> { Ok(()) }
+    async fn on_terminal(&self, terminal: SessionTerminal) -> Result<(), RuntimeError> {
+        self.0.lock().unwrap().push(terminal);
+        Ok(())
+    }
+}
+
+struct FailingPartialDriver;
+
+#[async_trait]
+impl SessionDriver for FailingPartialDriver {
+    async fn execute(&self, request: DriverRequest) -> Result<DriverOutcome, DriverFailure> {
+        let mut history = request.history;
+        history.push(Message::assistant("durable partial"));
+        Err(DriverFailure {
+            error: RuntimeError::Driver("provider failed".into()),
+            partial: Some(DriverOutcome {
+                history,
+                output: Some("durable partial".into()),
+                partial: None,
+                interrupted: false,
+                outcome: None,
+                tool_outcomes: Vec::new(),
+            }),
+            outcome: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn persisted_failure_partial_skips_post_commit_sinks_and_fails_once() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("thread-failure-partial", "agent");
+    let sink_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let terminals = Arc::new(Mutex::new(Vec::new()));
+    let mut session = SessionBuilder::new(Arc::new(FailingPartialDriver))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(FailureTerminalRecorder(terminals.clone())))
+        .post_commit_sink(Arc::new(CountSink(sink_calls.clone())))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build().unwrap();
+    assert!(session.turn(Message::user("fail"), TurnOptions::default()).await.is_err());
+    assert_eq!(sink_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let terminals = terminals.lock().unwrap();
+    assert_eq!(terminals.len(), 1);
+    assert!(matches!(terminals[0], SessionTerminal::Failed(_)));
+    let head = locator.head_generation(&session_ref);
+    let transcript = locator.read_session_transcript(&head).unwrap()
+        .read_session().unwrap().unwrap();
+    assert!(transcript.messages.iter().any(|row| row.content == "durable partial"));
+}
+```
+
 Capture must live in `TurnDriver::prepare`, not only `execute`: callers may
 drive `PreparedTurn::split` themselves and never call `execute`. Create the
 sink while preparing, push capture middleware before planner middleware so it
@@ -1728,9 +1817,15 @@ let finalization = terminal_guard.finalize_commit(
 let _ = finalization.await;
 ```
 
-Perform no await between successful append and this call. On `DriverFailure`,
-use observations only if a durable partial commit is actually produced;
-pre-commit errors do not invoke sinks.
+Perform no await between successful append and this call. `PostCommitSink` is
+for successful durable turn commits, including normal interrupted outcomes,
+matching the existing `SessionHooks::after_commit` and host committed-turn
+finalizer. A `DriverFailure.partial` may be persisted for history recovery,
+but it does not create a successful `CommitReceipt` and must not invoke these
+sinks. Keep the existing failed-terminal finalizer behavior. Add tests proving
+a persisted failure partial invokes no sink and emits one `Failed` terminal,
+pre-commit failure invokes no sink, and a normal interrupted durable commit
+does invoke sinks.
 
 ### 6. Move tool policy and declaration preservation
 
