@@ -23,8 +23,13 @@ async fn jobs_are_registered_in_the_shared_detached_registry() {
 #[tokio::test]
 async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     use tinyagents_harness::cancel::CancellationToken;
+    use tinyagents_tasks::{
+        CompletionRecord, CompletionResult, CompletionRouter, CompletionStatus,
+        InMemoryCompletionStore, RecordOutcome,
+    };
 
     let jobs = SubAgentJobRegistry::new();
+    let completions = CompletionRouter::new(std::sync::Arc::new(InMemoryCompletionStore::new()));
     let key = crate::subagent::SubagentTaskKey {
         root_run_id: "root".into(),
         parent_run_id: "parent".into(),
@@ -52,6 +57,17 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
             .is_err()
     );
     assert!(!token.is_cancelled());
+    let late_completion = CompletionRecord::new(
+        "child",
+        "thread",
+        "worker",
+        CompletionStatus::Completed,
+        CompletionResult::text("late output"),
+    );
+    assert!(matches!(
+        completions.record(late_completion.clone()).await.unwrap(),
+        RecordOutcome::Recorded { .. }
+    ));
     let canceled = jobs
         .cancel_key_owned_and_tombstone(&key, "owner-a")
         .unwrap();
@@ -74,6 +90,11 @@ async fn owner_cancel_tombstones_a_driver_job_against_late_completion() {
     assert_eq!(
         retained.error,
         Some(TinyAgentsError::Cancelled.to_string())
+    );
+    assert!(completions.pending_for("thread").is_empty());
+    assert_eq!(
+        completions.record(late_completion).await.unwrap(),
+        RecordOutcome::Suppressed
     );
 }
 

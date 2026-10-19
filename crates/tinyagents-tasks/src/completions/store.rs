@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use tinyagents_harness::error::{Result, TinyAgentsError};
 
 use super::types::{CompletionClaim, CompletionRecord, CompletionState, NotifyMode};
+use super::lifecycle::ParentLifecycle;
 
 fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
     TinyAgentsError::Graph(format!("completion store: {what}: {err}"))
@@ -31,6 +32,23 @@ pub trait CompletionStore: Send + Sync {
     /// object's identity, suitable for deliberately shared in-memory stores.
     fn coordination_identity(&self) -> Option<String> {
         None
+    }
+
+    /// Returns the lifecycle authority bound by a router pool, when this
+    /// process-local store belongs to exactly one pool scope.
+    fn parent_lifecycle(&self) -> Option<Arc<ParentLifecycle>> {
+        None
+    }
+
+    /// Binds this store to its pool-owned lifecycle authority. Implementations
+    /// that opt into process-local routing must preserve the binding for all
+    /// handles sharing the same backing store and reject conflicting scopes.
+    fn bind_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
+        let _ = lifecycle;
+        Err(store_err(
+            "parent lifecycle",
+            "store cannot retain a process-local lifecycle binding",
+        ))
     }
 
     /// Acquires the cross-router parent admission gate. Shared durable stores
@@ -249,6 +267,7 @@ pub struct InMemoryCompletionStore {
     parent_gates: Arc<Mutex<HashMap<String, MemoryParentGate>>>,
     parent_gate_epochs: Arc<Mutex<HashMap<String, u64>>>,
     identity: Arc<str>,
+    lifecycle: Arc<Mutex<Option<Arc<ParentLifecycle>>>>,
 }
 
 impl Default for InMemoryCompletionStore {
@@ -271,6 +290,7 @@ impl InMemoryCompletionStore {
             parent_gates: Arc::default(),
             parent_gate_epochs: Arc::default(),
             identity: Arc::from(format!("memory:{}", uuid::Uuid::new_v4().simple())),
+            lifecycle: Arc::default(),
         }
     }
 
@@ -313,6 +333,31 @@ impl CompletionStore for InMemoryCompletionStore {
 
     fn coordination_identity(&self) -> Option<String> {
         Some(self.identity.to_string())
+    }
+
+    fn parent_lifecycle(&self) -> Option<Arc<ParentLifecycle>> {
+        self.lifecycle
+            .lock()
+            .ok()
+            .and_then(|lifecycle| lifecycle.clone())
+    }
+
+    fn bind_parent_lifecycle(&self, lifecycle: Arc<ParentLifecycle>) -> Result<()> {
+        let mut current = self
+            .lifecycle
+            .lock()
+            .map_err(|_| store_err("parent lifecycle", "lock poisoned"))?;
+        if current
+            .as_ref()
+            .is_some_and(|existing| !Arc::ptr_eq(existing, &lifecycle))
+        {
+            return Err(store_err(
+                "parent lifecycle",
+                "store is already bound to a different pool scope",
+            ));
+        }
+        *current = Some(lifecycle);
+        Ok(())
     }
 
     fn acquire_parent_gate(

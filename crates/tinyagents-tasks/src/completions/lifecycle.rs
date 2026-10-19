@@ -23,7 +23,8 @@ struct ParentLifecycleEntry {
 }
 
 /// Scope-owned state that outlives cached routers and their backing stores.
-pub(super) struct ParentLifecycle {
+#[doc(hidden)]
+pub struct ParentLifecycle {
     identity: String,
     entries: Mutex<HashMap<String, ParentLifecycleEntry>>,
     changed: Condvar,
