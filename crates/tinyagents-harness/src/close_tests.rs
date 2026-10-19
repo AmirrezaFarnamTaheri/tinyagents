@@ -594,6 +594,12 @@ async fn close_source_model_records_one_failure_when_stream_ends_without_termina
     };
     let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
     assert!(stream.next().await.is_none());
+    let events_at_eof = listener.events();
+    assert_eq!(events_at_eof.len(), 2);
+    assert!(matches!(
+        events_at_eof[1].event,
+        AgentEvent::ModelFailed { .. }
+    ));
     drop(stream);
     let events = listener.events();
     assert_eq!(events.len(), 2);
@@ -678,6 +684,84 @@ async fn close_source_model_completes_stream_trace_once() {
     assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
     assert!(matches!(events[1].event, AgentEvent::UsageRecorded { .. }));
     assert!(matches!(events[2].event, AgentEvent::ModelCompleted { .. }));
+}
+
+struct RouteRecordingEnricher(
+    Arc<Mutex<Vec<Option<tinyinference_llm::model::ResolvedModelRoute>>>>,
+);
+
+impl crate::observability::SupplementalEnricher for RouteRecordingEnricher {
+    fn enrich(
+        &self,
+        model: &str,
+        response: &ModelResponse,
+    ) -> (Option<String>, crate::events::GenerationEnrichment) {
+        self.0.lock().unwrap().push(response.resolved_route.clone());
+        (Some(model.to_owned()), Default::default())
+    }
+}
+
+struct RoutedStreamModel(tinyinference_llm::model::ResolvedModelRoute);
+
+#[async_trait]
+impl ChatModel<()> for RoutedStreamModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        Err(tinyinference_llm::Error::Unsupported(
+            "stream-only test model".into(),
+        ))
+    }
+
+    async fn stream(
+        &self,
+        _: &(),
+        _: ModelRequest,
+    ) -> tinyinference_llm::Result<tinyinference_llm::model::ModelStream> {
+        Ok(
+            tinyinference_llm::model::ModelStream::new(Box::pin(futures::stream::iter([
+                ModelStreamItem::Completed(ModelResponse::assistant("answer")),
+            ])))
+            .with_resolved_route(self.0.clone()),
+        )
+    }
+}
+
+#[tokio::test]
+async fn close_source_model_enriches_the_fully_projected_stream_response() {
+    use crate::events::{AgentEvent, EventListener, EventSink, RecordingListener};
+    use crate::ids::RunId;
+    use futures::StreamExt;
+    use tinyinference_llm::model::ResolvedModelRoute;
+
+    let route = ResolvedModelRoute::new("provider-x", "actual-model", "fallback-route");
+    let source = StaticCloseSource(Arc::new(RoutedStreamModel(route.clone())));
+    let events = EventSink::new();
+    let listener = Arc::new(RecordingListener::new());
+    events.subscribe(listener.clone() as Arc<dyn EventListener>);
+    let observed_routes = Arc::new(Mutex::new(Vec::new()));
+    let trace = crate::observability::SupplementalCallTrace::new(
+        events,
+        RunId::new("run-close-route"),
+        Arc::new(RouteRecordingEnricher(observed_routes.clone())),
+    );
+    let close = CloseSourceModel {
+        source: &source,
+        model: "selected-model",
+        temperature: 0.2,
+        thread_id: None,
+        trace: Some(&trace),
+    };
+    let mut stream = close.stream(&(), ModelRequest::default()).await.unwrap();
+    assert_eq!(stream.metadata().resolved_route.as_ref(), Some(&route));
+    let response = match stream.next().await {
+        Some(ModelStreamItem::Completed(response)) => response,
+        other => panic!("expected completed response, got {other:?}"),
+    };
+    assert_eq!(response.resolved_route.as_ref(), Some(&route));
+    assert_eq!(observed_routes.lock().unwrap().as_slice(), [Some(route)]);
+    assert!(stream.next().await.is_none());
+    let events = listener.events();
+    assert!(matches!(events[0].event, AgentEvent::ModelStarted { .. }));
+    assert!(matches!(events[1].event, AgentEvent::ModelCompleted { .. }));
 }
 
 #[tokio::test]
