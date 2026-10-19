@@ -54,6 +54,81 @@ fn close_copy_prompts_preserve_placeholder_shaped_content() {
 }
 
 #[test]
+fn close_copy_renderers_preserve_custom_literals_and_all_repair_reasons() {
+    let copy = CloseCopy {
+        checkpoint_template: "checkpoint {steps}: {results}",
+        final_summary_template: "summary: {results}",
+        empty_checkpoint_results: "empty checkpoint",
+        empty_final_summary: "empty summary",
+        repair_template: "reason={repair_reason};instruction={instruction}",
+        final_answer_instruction: "answer copy",
+        truncated_answer_instruction: "truncated copy",
+        stop_note_preamble: "stop preamble",
+        no_tool_calls: "no calls",
+        repair_no_reply: "repair empty",
+        repair_quoted_instruction: "repair quote",
+        repair_unverified: "repair verification",
+        verification_prompt_template: "request={user_request}|records={records}|reply={reply}",
+        instruction_needles: &["custom needle with enough words to match"],
+        minimum_quoted_words: 2,
+        ..ENGLISH_CLOSE_COPY
+    };
+    assert_eq!(checkpoint_with_copy(&copy, 4, "body", true), "checkpoint 4: body");
+    assert_eq!(checkpoint_with_copy(&copy, 4, "", false), "checkpoint 4: empty checkpoint");
+    assert_eq!(final_summary_with_copy(&copy, "body", true), "summary: body");
+    assert_eq!(final_summary_with_copy(&copy, "", false), "empty summary");
+    assert_eq!(
+        repair_with_copy(&copy, "write {repair_reason}", CloseViolation::NoReply),
+        "reason=repair empty;instruction=write {repair_reason}"
+    );
+    assert_eq!(
+        repair_with_copy(&copy, "instruction", CloseViolation::QuotedInstruction),
+        "reason=repair quote;instruction=instruction"
+    );
+    assert_eq!(
+        repair_with_copy(&copy, "instruction", CloseViolation::Unverified),
+        "reason=repair verification;instruction=instruction"
+    );
+    let answer = final_answer_instruction(&copy, Some("halt"), false, "records");
+    assert!(answer.contains("stop preamble\n<stop_note>\nhalt\n</stop_note>"));
+    assert!(answer.contains("answer copy"));
+    let truncated = final_answer_instruction(&copy, None, true, " ");
+    assert!(truncated.contains("truncated copy"));
+    assert!(truncated.contains("<tool_records>\nno calls\n</tool_records>"));
+    assert_eq!(
+        instruction_needles(&copy, None),
+        ["custom needle with enough words to match"]
+    );
+}
+
+#[test]
+fn verification_prompt_does_not_rescan_placeholder_shaped_content() {
+    let copy = CloseCopy {
+        verification_prompt_template: "request=<{user_request}> records=<{records}> reply=<{reply}>",
+        ..ENGLISH_CLOSE_COPY
+    };
+    assert_eq!(
+        verification_prompt(
+            &copy,
+            "Explain {records}",
+            "record contains {reply} and {user_request}",
+            "reply contains {records}",
+            200,
+        ),
+        "request=<Explain {records}> records=<record contains {reply} and {user_request}> reply=<reply contains {records}>"
+    );
+}
+
+#[test]
+fn final_summary_copy_keeps_each_result_status_and_body_byte_for_byte() {
+    let rendered = "\n- `install_item` — failed\n  > no direct download\n";
+    assert_eq!(
+        final_summary_with_copy(&ENGLISH_CLOSE_COPY, rendered, true),
+        "I finished this turn without writing up a result. Here is what each tool call returned:\n\n- `install_item` — failed\n  > no direct download\n\nTell me how you'd like to proceed."
+    );
+}
+
+#[test]
 fn english_verification_prompt_uses_no_tool_fallback_for_empty_records() {
     let expected = "You are checking a reply before it is shown to a user. Below are the user's request, the records of the tool calls made while handling it, and the reply.\n\nAnswer REJECT if any of these is true:\n1. The reply only says what the assistant will do or is about to do, instead of reporting what happened.\n2. The reply states something the tool records contradict, for example that something does not exist or did not work when a record shows it succeeded, or that something succeeded when its record shows it failed.\n3. The request was not completed, a failed record gives the reason, and the reply does not pass that reason on.\n4. The reply narrates the assistant's own deliberation — thinking aloud, correcting itself part way through, or weighing what to do — rather than stating the outcome. Reporting what a tool call returned is not deliberation.\n5. The reply recites or enumerates the tools the assistant has, instead of reporting what this turn's tool calls produced. Naming a tool the reply actually used, or answering a request that asked what the assistant can do, is not a violation.\n\nOtherwise answer ACCEPT. Reply with the single word ACCEPT or REJECT.\n\n<user_request>\nstatus?\n</user_request>\n\n<tool_records>\n(no tool calls completed)\n</tool_records>\n\n<reply>\nNothing ran.\n</reply>";
     assert_eq!(
