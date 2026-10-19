@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, ffi::OsString, time::Duration};
 
 use tinytools::{ToolContent, ToolResult};
 
-use super::{ExecOutput, ports};
+use super::ExecOutput;
 
 pub(super) const MAX_OUTPUT_BYTES: usize = 1_048_576;
 pub(super) const COMMAND_TIMEOUT_EXIT_CODE: i32 = 124;
@@ -79,7 +79,7 @@ pub(super) fn exec_result(output: ExecOutput, explicit_timeout: Option<Duration>
 pub(super) fn python_environment(
     mut environment: BTreeMap<OsString, OsString>,
 ) -> BTreeMap<OsString, OsString> {
-    for (name, value) in python_utf8_env(|name| environment.get(name).cloned()) {
+    for (name, value) in python_utf8_env(|name| environment.get(std::ffi::OsStr::new(name)).cloned()) {
         environment.insert(name.into(), value);
     }
     environment
