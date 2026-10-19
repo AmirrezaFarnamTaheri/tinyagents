@@ -78,9 +78,14 @@ impl ArtifactFiling for RoutingFiler {
             .and_then(|extension| extension.downcast_ref::<CallIdentity>())
             .ok_or("missing call identity")?;
         assert_eq!(generated.tool_call_id, Some(identity.0.to_owned()));
+        let filename = generated
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("missing generated filename")?;
         Ok(FiledArtifact {
-            id: identity.0.to_owned(),
-            path: format!("/files/{}.png", identity.0),
+            id: format!("{}-{filename}", identity.0),
+            path: format!("/files/{}-{filename}.png", identity.0),
         })
     }
 }
@@ -492,19 +497,30 @@ async fn concurrent_calls_keep_each_invocations_context_and_rewrite_separate_res
         let ToolContent::Json { data } = &result.content[0] else {
             panic!("expected JSON result")
         };
-        assert_eq!(data["artifacts"][0]["artifact_id"], identity);
+        assert_eq!(
+            data["artifacts"][0]["artifact_id"],
+            format!("{identity}-{identity}-one")
+        );
         assert_eq!(
             data["artifacts"][0]["path"],
-            format!("/files/{identity}.png")
+            format!("/files/{identity}-{identity}-one.png")
         );
-        assert_eq!(data["artifacts"][1]["artifact_id"], identity);
+        assert_eq!(
+            data["artifacts"][1]["artifact_id"],
+            format!("{identity}-{identity}-two")
+        );
         assert_eq!(
             data["artifacts"][1]["path"],
-            format!("/files/{identity}.png")
+            format!("/files/{identity}-{identity}-two.png")
         );
         assert_eq!(
             result.markdown_formatted.as_deref(),
-            Some(format!("/files/{identity}.png and /files/{identity}.png").as_str())
+            Some(
+                format!(
+                    "/files/{identity}-{identity}-one.png and /files/{identity}-{identity}-two.png"
+                )
+                .as_str()
+            )
         );
     }
     assert_eq!(
