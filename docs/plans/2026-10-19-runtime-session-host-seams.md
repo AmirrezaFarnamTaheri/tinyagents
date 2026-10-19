@@ -1027,6 +1027,30 @@ async fn hook_cannot_replace_the_identity_locator() {
 }
 
 #[tokio::test]
+async fn public_resume_validates_hook_replacement_before_locator_access() {
+    use tinyagents_session::port::DriverSessionStores;
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    let provider = Arc::new(DriverSessionStores::new(
+        Arc::new(MemoryStorage::new()), Scope::local(),
+    ).unwrap());
+    let resolver = Arc::new(FixedIdentityResolver {
+        provider, calls: Arc::new(Mutex::new(0)),
+        agent_id: Arc::new(Mutex::new("agent-resolved".into())),
+    });
+    let (wrong, wrong_history) = locator(None);
+    let mut session = SessionBuilder::new(Arc::new(Driver::new(vec![])))
+        .codec(Arc::new(Codec::default()))
+        .hooks(Arc::new(ReplaceTargetHook(wrong.clone())))
+        .identity_resolver("thread-identity", meta(), resolver)
+        .build().unwrap();
+    let options = TurnOptions { resume: ResumeMode::Session, ..TurnOptions::default() };
+    assert!(matches!(session.resume(&options).await,
+        Err(RuntimeError::InvalidSessionState(_))));
+    assert!(wrong.latest_agents.lock().unwrap().is_empty());
+    assert_eq!(*wrong_history.opens.lock().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn explicit_session_override_cannot_change_resolved_identity() {
     use tinyagents_session::port::DriverSessionStores;
     use tinystoragedrivers_core::{MemoryStorage, Scope};
