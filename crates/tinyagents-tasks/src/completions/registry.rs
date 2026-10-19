@@ -8,6 +8,7 @@ use tinyagents_harness::error::Result as HarnessResult;
 use tinystoragedrivers_core::{Scope, StorageBackend};
 
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore};
+use super::lifecycle::ParentLifecycle;
 
 /// Outcome of replacing one cached router only if it is still current.
 pub enum CompletionRouterReplaceOutcome {
@@ -61,6 +62,7 @@ pub enum CompletionStoreFallback {
 /// Process-local cache of one durable completion router per scope key.
 pub struct CompletionRouterPool<K: Eq + Hash + Clone + Send + Sync> {
     routers: Mutex<HashMap<K, Arc<CompletionRouter>>>,
+    lifecycles: Mutex<HashMap<(K, String), Arc<ParentLifecycle>>>,
     open: Arc<OpenFn<K>>,
 }
 
@@ -69,6 +71,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
     pub fn new(open: impl Fn(&K) -> Arc<CompletionRouter> + Send + Sync + 'static) -> Self {
         Self {
             routers: Mutex::new(HashMap::new()),
+            lifecycles: Mutex::new(HashMap::new()),
             open: Arc::new(open),
         }
     }
@@ -80,6 +83,28 @@ impl<K: Eq + Hash + Clone + Send + Sync> CompletionRouterPool<K> {
             return Ok(Arc::clone(router));
         }
         let router = (self.open)(key);
+        let store = router.store();
+        let domain = if store.is_process_local() {
+            "process-local-memory".to_owned()
+        } else if let Some(identity) = store.coordination_identity() {
+            format!("coordination:{identity}")
+        } else {
+            format!("store:{:p}", Arc::as_ptr(&store))
+        };
+        let lifecycle = {
+            let mut lifecycles = self
+                .lifecycles
+                .lock()
+                .map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))?;
+            Arc::clone(
+                lifecycles
+                    .entry((key.clone(), domain))
+                    .or_insert_with(ParentLifecycle::new),
+            )
+        };
+        router
+            .attach_parent_lifecycle(lifecycle)
+            .map_err(|error| CompletionRouterPoolError::Lock(error.to_string()))?;
         routers.insert(key.clone(), Arc::clone(&router));
         Ok(router)
     }

@@ -25,6 +25,7 @@ mod delivery;
 mod driver;
 mod durable_lease;
 mod format;
+mod lifecycle;
 mod registry;
 mod router;
 mod store;

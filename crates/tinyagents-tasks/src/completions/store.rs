@@ -20,6 +20,12 @@ fn store_err(what: &str, err: impl std::fmt::Display) -> TinyAgentsError {
 /// must perform atomically. Synchronous on purpose, like
 /// [`TaskStore`](crate::TaskStore).
 pub trait CompletionStore: Send + Sync {
+    /// Whether this store is intentionally process-local and may use the
+    /// router pool's retained lifecycle state when a new memory store opens.
+    fn is_process_local(&self) -> bool {
+        false
+    }
+
     /// Identity shared by separately opened stores coordinating through the
     /// same durable backend and tenant scope. `None` falls back to this store
     /// object's identity, suitable for deliberately shared in-memory stores.
@@ -301,6 +307,10 @@ impl InMemoryCompletionStore {
 }
 
 impl CompletionStore for InMemoryCompletionStore {
+    fn is_process_local(&self) -> bool {
+        true
+    }
+
     fn coordination_identity(&self) -> Option<String> {
         Some(self.identity.to_string())
     }
