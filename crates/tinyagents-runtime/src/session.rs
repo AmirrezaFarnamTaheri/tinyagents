@@ -15,6 +15,7 @@ use crate::{
     SessionTurnOutcome, SessionTurnRequest, TranscriptCodec, TranscriptCommitReceipt,
     TranscriptDelta, TranscriptTarget, TranscriptTurnOptions, TurnOptions, TurnPreparation,
 };
+use crate::identity::{IdentityConfig, same_admission};
 
 /// How long a cancelled turn waits for its driver to return the rounds it
 /// completed before the driver is dropped. Short, so Stop still feels instant.
@@ -26,6 +27,9 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
     post_commit_sinks: Vec<Arc<dyn crate::hooks::PostCommitSink<C>>>,
+    identity_config: Option<IdentityConfig<C>>,
+    established_identity: Option<crate::SessionIdentity>,
+    identity: Option<crate::SessionIdentity>,
     prefix: PrefixSnapshot,
     default_tools: ToolSnapshot,
     history: Vec<Message>,
@@ -55,12 +59,16 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         prefix: PrefixSnapshot,
         default_tools: ToolSnapshot,
         target: Option<TranscriptTarget>,
+        identity_config: Option<IdentityConfig<C>>,
     ) -> Self {
         Self {
             driver,
             codec,
             hooks,
             post_commit_sinks,
+            identity_config,
+            established_identity: None,
+            identity: None,
             history: prefix.messages().to_vec(),
             prefix: prefix.frozen(),
             default_tools,
@@ -129,6 +137,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         if options.cancellation.is_cancelled() {
             return Err(RuntimeError::Cancelled);
         }
+        self.resolve_and_bind(options, None)?;
+        self.resume_admitted(options).await
+    }
+
+    async fn resume_admitted(
+        &mut self,
+        options: &TurnOptions<C>,
+    ) -> Result<SessionResume, RuntimeError> {
         let Some(target) = self.target.as_ref() else {
             return Ok(SessionResume {
                 loaded: false,
