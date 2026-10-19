@@ -1,7 +1,9 @@
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use tinyagents_harness::run_queue::{QueueLane, RunQueue, RunQueueHandle};
+use tinyagents_harness::run_queue::{
+    QueueAdmission, QueueLane, QueueMode, RunQueue, RunQueueHandle,
+};
 use tinyinference_llm::message::Message;
 
 use super::*;
@@ -808,6 +810,107 @@ async fn queued_admission_survives_store_replacement_without_cancellation() {
         .await;
     assert_eq!(admitted.len(), 1);
     assert!(format!("{:?}", admitted[0].value).contains("queued"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queue_admission_does_not_deadlock_with_store_migration_waiting_for_parent_gate() {
+    let source = Arc::new(BlockingTryList {
+        inner: Arc::new(InMemoryCompletionStore::new()),
+        entered: Arc::new(std::sync::Barrier::new(2)),
+        resume: Arc::new(std::sync::Barrier::new(2)),
+        pause_list: std::sync::atomic::AtomicBool::new(false),
+        gate_wait: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = Arc::new(CompletionRouter::new(source_port.clone()));
+    let q = queue();
+    router.attach_parent("p", q.clone());
+    router.record(record("queued", "p")).await.unwrap();
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    *source
+        .gate_wait
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((entered_tx, resume_rx));
+    let migration_router = Arc::clone(&router);
+    let migration_source = Arc::clone(&source_port);
+    let destination: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    let migration = std::thread::spawn(move || {
+        migration_router
+            .replace_store_if_current(&migration_source, destination)
+            .unwrap()
+    });
+    entered_rx.recv().unwrap();
+
+    // The migrator is paused inside durable gate acquisition. Queue admission
+    // must see the slot as migrating and return the item to its lane without
+    // holding the slot lock while waiting for that same parent gate.
+    let queue_for_take = Arc::clone(&q);
+    let take = tokio::task::spawn_blocking(move || {
+        futures::executor::block_on(
+            queue_for_take.take_admitted(QueueLane::Followup, QueueMode::All),
+        )
+    });
+    let deferred = tokio::time::timeout(Duration::from_secs(2), take)
+        .await
+        .expect("queue admission must not deadlock with the migrator")
+        .unwrap();
+    assert!(deferred.is_empty());
+    assert_eq!(q.status().await.followups, 1);
+
+    resume_tx.send(()).unwrap();
+    migration.join().unwrap();
+    let delivered = q.take_admitted(QueueLane::Followup, QueueMode::All).await;
+    assert_eq!(delivered.len(), 1);
+    assert!(format!("{:?}", delivered[0].value).contains("queued"));
+}
+
+#[test]
+fn admission_rejects_a_stale_batch_key_when_store_changes_during_acquire() {
+    let source = Arc::new(BlockingTryList {
+        inner: Arc::new(InMemoryCompletionStore::new()),
+        entered: Arc::new(std::sync::Barrier::new(2)),
+        resume: Arc::new(std::sync::Barrier::new(2)),
+        pause_list: std::sync::atomic::AtomicBool::new(false),
+        gate_wait: Arc::new(std::sync::Mutex::new(None)),
+    });
+    let source_port: Arc<dyn CompletionStore> = source.clone();
+    let router = Arc::new(CompletionRouter::new(source_port.clone()));
+    let queued = record("queued", "p");
+    futures::executor::block_on(router.record(queued.clone())).unwrap();
+    let queued = source.get("queued").unwrap();
+    let admission = Arc::new(crate::completions::CompletionAdmission::for_router(
+        &router, &queued,
+    ));
+    let old_key = admission.batch_key().unwrap();
+
+    // Pause after acquire_for has snapshotted the old binding but before it
+    // can obtain the old store's parent gate.
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    *source
+        .gate_wait
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((entered_tx, resume_rx));
+    let acquiring = Arc::clone(&admission);
+    let acquire = std::thread::spawn(move || acquiring.acquire_for(Some(&old_key)));
+    entered_rx.recv().unwrap();
+
+    let migration_router = Arc::clone(&router);
+    let migration_source = Arc::clone(&source_port);
+    let destination: Arc<dyn CompletionStore> = Arc::new(InMemoryCompletionStore::new());
+    let migration = std::thread::spawn(move || {
+        migration_router
+            .replace_store_if_current(&migration_source, destination)
+            .unwrap()
+    });
+    migration.join().unwrap();
+    resume_tx.send(()).unwrap();
+
+    assert!(acquire.join().unwrap().is_err());
+    assert!(admission.retry_after_rejection(Some(&old_key)));
+    assert_ne!(admission.batch_key().as_deref(), Some(old_key.as_str()));
 }
 
 #[tokio::test]
