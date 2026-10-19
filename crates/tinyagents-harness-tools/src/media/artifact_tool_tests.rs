@@ -1,5 +1,9 @@
 use super::*;
-use std::sync::Mutex;
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+use tinytools::{Tool, ToolContent, ToolResult, ToolRunContext};
 
 struct Inner;
 #[async_trait]
@@ -27,9 +31,9 @@ impl ArtifactFiling for Filer {
         &self,
         g: GeneratedArtifact,
         _: Option<&dyn ToolRunContext>,
-    ) -> Result<super::super::FiledArtifact, String> {
+    ) -> Result<FiledArtifact, String> {
         self.0.lock().unwrap().push(g);
-        Ok(super::super::FiledArtifact {
+        Ok(FiledArtifact {
             id: "id1".into(),
             path: "/files/image.png".into(),
         })
