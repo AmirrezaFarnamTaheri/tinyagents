@@ -77,6 +77,20 @@ async fn native_backend_refuses_without_the_host_capability() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn native_backend_does_not_reintroduce_ambient_turn_environment() {
+    use crate::exec::{ExecBackend, ExecBackendOutcome, ShellFlavor, timeout::CommandEnvironment};
+    let backend = NativeExecBackend::new(ShellFlavor::Posix);
+    let authorized =
+        CommandEnvironment::new([("DENIED_FROM_TURN".to_owned(), "secret".to_owned())]);
+    let outcome=authorized.scope(backend.execute(request("sh", &["-c", "if [ -z \"${DENIED_FROM_TURN:-}\" ]; then printf clean; else printf leaked; fi"],None,true),None,None)).await;
+    let ExecBackendOutcome::Completed(output) = outcome else {
+        panic!("expected process output")
+    };
+    assert_eq!(output.stdout, b"clean");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn native_backend_timeout_kills_the_process_group_before_returning() {
     use crate::exec::{ExecBackend, ExecBackendOutcome, ShellFlavor};
     let backend = NativeExecBackend::new(ShellFlavor::Posix);
