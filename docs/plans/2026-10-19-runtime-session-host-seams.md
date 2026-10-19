@@ -1384,19 +1384,28 @@ async fn leases_keep_tenant_scope_and_agent_isolation() {
 Add this default-provider negative test in `port/mod_tests.rs`:
 
 ```rust
-struct NonPinningProvider(InMemorySessionStores);
+struct NonPinningProvider {
+    stores: InMemorySessionStores,
+    opens: Arc<std::sync::atomic::AtomicUsize>,
+}
 
 impl SessionStoreProvider for NonPinningProvider {
     fn for_agent(&self, agent_id: &str) -> AgentStores {
-        self.0.for_agent(agent_id)
+        self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.stores.for_agent(agent_id)
     }
 }
 
 #[test]
 fn providers_without_a_pin_contract_fail_closed() {
-    let provider = NonPinningProvider(InMemorySessionStores::new());
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let provider = NonPinningProvider {
+        stores: InMemorySessionStores::new(),
+        opens: opens.clone(),
+    };
     assert!(matches!(provider.lease_for_agent("agent"),
         Err(SessionStoreLeaseError::Unsupported)));
+    assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 ```
 
