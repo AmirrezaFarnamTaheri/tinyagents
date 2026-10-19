@@ -739,8 +739,10 @@ async fn followup_mode_pushes_onto_the_followup_lane_of_a_live_parent() {
         (status.followups, status.collects, status.steers),
         (1, 0, 0)
     );
-    let pushed = q.drain(QueueLane::Followup).await;
-    assert!(format!("{:?}", pushed[0]).contains("t1"));
+    let pushed = q
+        .take_admitted(QueueLane::Followup, tinyagents_harness::run_queue::QueueMode::All)
+        .await;
+    assert!(format!("{:?}", pushed[0].value).contains("t1"));
     // Pushed but not acknowledged: still pending, leased, not claimable.
     assert_eq!(router.in_flight_for("p").len(), 1);
     assert!(router.claim_pending("p", 10).unwrap().is_empty());
@@ -912,8 +914,10 @@ async fn a_custom_formatter_frames_the_pushed_message() {
     let q = queue();
     router.attach_parent("p", q.clone());
     router.record(record("t1", "p")).await.unwrap();
-    let pushed = q.drain(QueueLane::Followup).await;
-    assert!(format!("{:?}", pushed[0]).contains("background_agent_result count=1"));
+    let pushed = q
+        .take_admitted(QueueLane::Followup, tinyagents_harness::run_queue::QueueMode::All)
+        .await;
+    assert!(format!("{:?}", pushed[0].value).contains("background_agent_result count=1"));
 }
 
 #[tokio::test]
