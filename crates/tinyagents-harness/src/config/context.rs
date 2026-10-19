@@ -7,28 +7,40 @@ pub const DEFAULT_KEEP_RECENT_TOOL_RESULTS: usize = 5;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContextConfig {
+    /// Master switch for context-reduction middleware.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Enables clearing older tool-result payloads before summarization.
     #[serde(default = "default_true")]
     pub microcompact_enabled: bool,
+    /// Enables automatic summarization when context approaches its limit.
     #[serde(default = "default_true")]
     pub autocompact_enabled: bool,
+    /// Number of recent tool results left untouched by microcompaction.
     #[serde(default = "default_microcompact_keep_recent")]
     pub microcompact_keep_recent: usize,
+    /// Maximum bytes retained from one tool result; zero disables the cap.
     #[serde(default = "default_tool_result_budget_bytes")]
     pub tool_result_budget_bytes: usize,
+    /// Payload size at which a host may start a summary operation.
     #[serde(default = "default_summarizer_payload_threshold_tokens", alias = "summarizer_payload_threshold_bytes")]
     pub summarizer_payload_threshold_tokens: usize,
+    /// Maximum payload size passed to a summary operation.
     #[serde(default = "default_summarizer_max_payload_tokens", alias = "summarizer_max_payload_bytes")]
     pub summarizer_max_payload_tokens: usize,
+    /// Optional model hint for hosts that provide summarization.
     #[serde(default)]
     pub summarizer_model: Option<String>,
+    /// Requests markdown tool-result rendering where a tool supports it.
     #[serde(default = "default_true")]
     pub prefer_markdown_tool_output: bool,
+    /// Enables tool-output compaction before the byte-budget cap.
     #[serde(default = "default_true")]
     pub compaction_enabled: bool,
+    /// Optional absolute context-token threshold; zero means no override.
     #[serde(default)]
     pub compaction_trigger_tokens: Option<u64>,
+    /// Checkpoint strategy selected when context compaction runs.
     #[serde(default)]
     pub compaction_strategy: CompactionStrategy,
 }
@@ -36,7 +48,9 @@ pub struct ContextConfig {
 /// Normalized compaction options carried by a turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CompactionSettings {
+    /// Normalized absolute trigger override.
     pub trigger_tokens: Option<u64>,
+    /// Checkpoint strategy.
     pub strategy: CompactionStrategy,
 }
 
@@ -44,8 +58,10 @@ pub struct CompactionSettings {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompactionStrategy {
+    /// Preserve typed task state.
     #[default]
     TaskState,
+    /// Produce a free-form summary.
     Summary,
 }
 
