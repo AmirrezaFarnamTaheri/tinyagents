@@ -297,7 +297,16 @@ async fn watcher_targets_keep_the_admitted_parent_generation() {
             iterations: 1,
         })
         .unwrap();
-    settle(&router, "p").await;
+    for _ in 0..100 {
+        if router
+            .pending_for("p")
+            .iter()
+            .any(|record| record.task_id == "new-child")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let pending = router.pending_for("p");
     assert_eq!(pending.len(), 2);
     assert!(pending.iter().all(|record| record.parent_epoch == new_epoch));
