@@ -93,7 +93,10 @@ impl DocumentStore for DeleteProbeDocs {
                             .put(
                                 COLLECTION,
                                 &key,
-                                serde_json::to_value(thread).expect("fixture thread serializes"),
+                                serde_json::to_value(
+                                    thread.to_dto().expect("fixture thread converts to DTO"),
+                                )
+                                .expect("fixture thread DTO serializes"),
                                 Precondition::Absent,
                             )
                             .await?;
