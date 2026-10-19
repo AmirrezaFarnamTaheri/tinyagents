@@ -169,25 +169,9 @@ impl ParentGateGuard {
         lifecycle: Arc<ParentLifecycle>,
         parent_key: &str,
     ) -> Result<Self> {
-        let local = lifecycle.acquire(parent_key)?;
-        let holder = uuid::Uuid::new_v4().to_string();
-        let started = std::time::Instant::now();
-        loop {
-            if let Some(claim) = store.acquire_parent_gate(parent_key, &holder, PARENT_GATE_TTL)? {
-                return Ok(Self {
-                    store,
-                    _local: Some(local),
-                    parent_key: parent_key.to_owned(),
-                    claim,
-                });
-            }
-            if started.elapsed() >= PARENT_GATE_WAIT {
-                return Err(TinyAgentsError::Graph(format!(
-                    "completion router: timed out waiting for parent admission gate `{parent_key}`"
-                )));
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let mut gate = Self::acquire_native(store, parent_key)?;
+        gate._local = Some(lifecycle.acquire(parent_key)?);
+        Ok(gate)
     }
 
     fn acquire_native(store: Arc<dyn CompletionStore>, parent_key: &str) -> Result<Self> {
@@ -429,13 +413,13 @@ impl CompletionRouter {
             .collect::<Vec<_>>();
         parents.sort();
         parents.dedup();
-        let _local_gates = parents
-            .iter()
-            .map(|parent| state.lifecycle.acquire(parent))
-            .collect::<Result<Vec<_>>>()?;
         let _source_gates = parents
             .iter()
             .map(|parent| ParentGateGuard::acquire_native(Arc::clone(&state.store), parent))
+            .collect::<Result<Vec<_>>>()?;
+        let _local_gates = parents
+            .iter()
+            .map(|parent| state.lifecycle.acquire(parent))
             .collect::<Result<Vec<_>>>()?;
         let records = state.store.try_list(None)?;
         let gated_parents = parents.iter().cloned().collect::<HashSet<_>>();
