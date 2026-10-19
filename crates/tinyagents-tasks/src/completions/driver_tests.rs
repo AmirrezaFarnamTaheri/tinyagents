@@ -385,6 +385,42 @@ async fn router_live_push_reaches_provider_when_parent_remains_open() {
 }
 
 #[tokio::test]
+async fn child_completion_keeps_its_spawn_generation_across_cancel_and_resume() {
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let open = || {
+        CompletionRouter::new(Arc::new(
+            DriverCompletionStore::new(Arc::clone(&backend), Scope::new("shared").unwrap())
+                .unwrap(),
+        ))
+    };
+    let spawned = open();
+    let lifecycle = open();
+    let stale_generation = spawned.admit_child_generation("parent").unwrap().unwrap();
+    lifecycle.cancel_parent("parent").unwrap();
+    lifecycle.resume_parent("parent");
+
+    let mut stale = record("late-child", "parent");
+    stale.parent_epoch = stale_generation;
+    assert_eq!(
+        spawned.record(stale).await.unwrap(),
+        RecordOutcome::Suppressed,
+        "a child finishing under its original lifecycle cannot be relabeled into a later generation"
+    );
+    assert!(spawned.pending_for("parent").is_empty());
+
+    let current_generation = lifecycle.admit_child_generation("parent").unwrap().unwrap();
+    let mut current = record("current-child", "parent");
+    current.parent_epoch = current_generation;
+    assert!(matches!(
+        lifecycle.record(current).await.unwrap(),
+        RecordOutcome::Recorded { .. }
+    ));
+    assert!(lifecycle.pending_for("parent").iter().any(|row| {
+        row.task_id == "current-child" && row.parent_epoch == current_generation
+    }));
+}
+
+#[tokio::test]
 async fn same_parent_batch_across_routers_shares_one_lifecycle_admission_permit() {
     use tinyagents_harness::run_queue::{QueueLane, QueueMode, RunQueue};
     use tinyinference_llm::message::Message;
