@@ -113,9 +113,11 @@ that need asynchronous follow-up work should use the async variant, which awaits
 each callback before continuing. Neither callback can report failure. If a later
 read or delete fails, earlier callback effects remain. Neither purge is
 crash-atomic: a process failure after deletion but before the callback completes
-can leave that obligation unreported, and cancellation may stop an async callback
-before completion. The existing `ConversationPersistence` purge uses the same
-loop with a no-op callback.
+can leave that obligation unreported. Cancelling either variant while a document
+delete is in flight can also leave a backend-completed deletion unreported;
+cancellation may additionally stop the async variant after deletion but before
+its callback completes. The existing `ConversationPersistence` purge uses the
+same loop with a no-op callback.
 
 Plain message append does not authorize distributed agent execution. No
 importer, provider selection or legacy source-ownership grant is added.
