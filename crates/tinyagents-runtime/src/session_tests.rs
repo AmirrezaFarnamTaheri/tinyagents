@@ -373,8 +373,8 @@ async fn successful_replay_repairs_same_source_for_thread_and_latest_modes() {
         seed_replay_transcript(locator.as_ref(), &session_ref, &rows);
         let mut session = SessionBuilder::new(Arc::new(AppendReplyDriver))
             .codec(Arc::new(NativeReplayCodec))
-            .resume_agent("agent")
             .session(locator.clone(), session_ref.clone(), meta())
+            .resume_agent("agent")
             .build()
             .unwrap();
 
