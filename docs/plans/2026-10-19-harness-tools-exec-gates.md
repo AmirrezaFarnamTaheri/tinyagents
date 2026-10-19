@@ -345,6 +345,8 @@ dependency. The media progress callback is a transport-free generic seam:
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaJobProgress {
     pub id: String,
+    /// Exact provider-neutral display state (`JobState::as_str()` in the
+    /// OpenHuman adapter, including provider `Other` values).
     pub state: String,
     pub outputs: usize,
     pub output_indices: Vec<usize>,
@@ -359,9 +361,10 @@ Keep `MediaArtifactTool<T>` generic over `T: tinytools::Tool` and pass the
 own approval/chat extension. The factory accepts
 `(MediaProgressFn, Option<&dyn ToolRunContext>)`; it does not mention
 `ApprovalChatContext` or provider types. The OpenHuman adapter converts the
-provider callback/status into this value, preserving all fields and progress
-heartbeat behavior. Before settling the exact generic fields, compare against
-both `VideoJobStatus` and the old wrapper's progress tests; do not discard any
+provider callback/status into this value (`state.to_string()` preserves
+`JobState::as_str()` including arbitrary provider `Other` values), preserving
+all fields and progress heartbeat behavior. Compare it against
+`VideoJobStatus` and the old wrapper's progress tests; do not discard an
 observable status. The wrapper keeps the inner tool's name, description,
 schema, policy, permissions, scope, category, result content, and progress
 behavior. The generic wrapper keeps the inner
@@ -374,6 +377,8 @@ artifact records, or depend on TinyArtifacts/OpenHuman.
 ```rust
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tinytools::{Tool, ToolRunContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedArtifact {
@@ -394,7 +399,18 @@ pub struct FiledArtifact {
 #[async_trait]
 pub trait ArtifactFiling: Send + Sync {
     async fn file(&self, generated: GeneratedArtifact,
-        context: Option<&dyn tinytools::ToolRunContext>) -> Result<FiledArtifact, String>;
+        context: Option<&dyn ToolRunContext>) -> Result<FiledArtifact, String>;
+}
+
+pub struct MediaArtifactTool<T: Tool> {
+    inner: Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>,
+    filing: Arc<dyn ArtifactFiling>,
+}
+impl<T: Tool> MediaArtifactTool<T> {
+    pub fn new(
+        inner: Arc<dyn for<'a> Fn(MediaProgressFn, Option<&'a dyn ToolRunContext>) -> T + Send + Sync>,
+        filing: Arc<dyn ArtifactFiling>,
+    ) -> Self { Self { inner, filing } }
 }
 ```
 
@@ -537,12 +553,23 @@ resolution per feature with `cargo tree -e features -p tinyagents-harness-tools
 The `media` graph must not introduce `tinyinference-video`,
 `tinyinference-image`, or any media-only dependency edge; do not assert that
 `reqwest` is absent from the full graph if another mandatory dependency already
-brings it in. Compare against `--no-default-features` to attribute any graph
-difference correctly. The `net` graph must show its intended `reqwest` edge.
-Also assert the `media`-only graph has no new `flate2`, `tar`, or `zip` edge
-relative to the no-default baseline. Use a checked-in CI assertion or a
-reviewable shell check over Cargo's resolved feature tree so this is a real
-feature-boundary proof rather than a prose claim.
+brings it in. Compare resolved package trees against `--no-default-features`
+to attribute any graph difference correctly. The `net` graph must show its
+intended `reqwest` edge under the `tinyagents-harness-tools feature "net"`
+path. Also assert the `media`-only graph has no new `flate2`, `tar`, or `zip`
+edge relative to the no-default baseline. Add these checks to a CI assertion
+or a checked-in script; the required shell checks are:
+
+```sh
+diff -u \
+  <(cargo tree -p tinyagents-harness-tools -e normal --no-default-features) \
+  <(cargo tree -p tinyagents-harness-tools -e normal --no-default-features --features media)
+! cargo tree -p tinyagents-harness-tools -e normal --no-default-features --features media \
+  | rg 'tinyinference-(video|image)|(^| )((flate2|tar|zip))($| )'
+cargo tree -p tinyagents-harness-tools -e features -i reqwest --no-default-features --features net \
+  | rg 'tinyagents-harness-tools feature "net"'
+```
+
 
 ### 3. Establish `ExecGate`, backend, result, and progress contract
 
