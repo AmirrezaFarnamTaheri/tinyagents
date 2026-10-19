@@ -927,6 +927,18 @@ impl CompletionStore for LostRenewalGateStore {
     ) -> tinyagents_harness::error::Result<bool> {
         self.inner.release_parent_gate(parent_key, claim)
     }
+
+    fn get(&self, task_id: &str) -> Option<CompletionRecord> {
+        self.inner.get(task_id)
+    }
+
+    fn put(&self, record: &CompletionRecord) -> tinyagents_harness::error::Result<()> {
+        self.inner.put(record)
+    }
+
+    fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
+        self.inner.list(parent_key)
+    }
 }
 
 #[test]
