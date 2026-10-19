@@ -2271,6 +2271,7 @@ dependencies = [
 name = "tinyagents-tasks"
 version = "2.2.0"
 dependencies = [
+ "async-trait",
  "serde",
  "serde_json",
  "tempfile",
