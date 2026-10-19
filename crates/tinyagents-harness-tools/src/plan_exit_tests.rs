@@ -1,4 +1,5 @@
 use super::*;
+use tinyagents_harness::middleware::library::{RunMode, RunModeHandle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 struct Host { parked: bool, changed: AtomicBool, mode: RunModeHandle }

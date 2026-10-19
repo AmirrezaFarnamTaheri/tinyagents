@@ -13,7 +13,8 @@ fn store(ttl: Duration) -> (Arc<PlanReviewStore<u8>>, Arc<Events>) {
     (Arc::new(PlanReviewStore::with_ttl(ttl, events.clone())), events)
 }
 fn request(store: Arc<PlanReviewStore<u8>>, scope: u8, thread: &str) -> tokio::task::JoinHandle<PlanReviewResolution> {
-    tokio::spawn(async move { store.request_review(scope, thread.into(), None, PlanReviewRequest { summary: "plan".into(), steps: vec!["one".into()] }, None).await })
+    let thread = thread.to_owned();
+    tokio::spawn(async move { store.request_review(scope, thread, None, PlanReviewRequest { summary: "plan".into(), steps: vec!["one".into()] }, None).await })
 }
 
 #[tokio::test(start_paused = true)]
