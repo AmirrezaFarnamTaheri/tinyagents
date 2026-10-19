@@ -3,8 +3,10 @@
 /// A subagent pause that needs a user answer before it can resume.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentAwaitingUser {
-    /// Durable task id accepted by the continuation tool.
+    /// Durable task id used for the child operation.
     pub task_id: String,
+    /// Stable session selector used to respawn/reuse the paused child.
+    pub task_key: String,
     /// Host-resolved agent identity accepted by the continuation tool.
     pub agent_id: String,
     /// Worker conversation id, when the host uses a separate worker thread.
@@ -22,6 +24,7 @@ impl SubagentAwaitingUser {
     /// identifier cannot inject a second field or terminate the marker.
     pub fn render(&self) -> String {
         let task_id = encode(&self.task_id);
+        let task_key = encode(&self.task_key);
         let agent_id = encode(&self.agent_id);
         let worker_thread_id = encode(self.worker_thread_id.as_deref().unwrap_or("(none)"));
         let question = encode(&self.question);
@@ -33,6 +36,7 @@ impl SubagentAwaitingUser {
         format!(
             "[SUBAGENT_AWAITING_USER]\n\
              task_id: {task_id}\n\
+             task_key: {task_key}\n\
              agent_id: {agent_id}\n\
              worker_thread_id: {worker_thread_id}\n\
              question: {question}\n\
@@ -62,6 +66,7 @@ impl SubagentAwaitingUser {
             }
         }
         let task_id = decode(take_field(&mut fields, "task_id")?)?;
+        let task_key = decode(take_field(&mut fields, "task_key")?)?;
         let agent_id = decode(take_field(&mut fields, "agent_id")?)?;
         let worker = decode(take_field(&mut fields, "worker_thread_id")?)?;
         let question = decode(take_field(&mut fields, "question")?)?;
@@ -75,6 +80,7 @@ impl SubagentAwaitingUser {
         }
         Ok(Self {
             task_id,
+            task_key,
             agent_id,
             worker_thread_id: (worker != "(none)").then_some(worker),
             question,
