@@ -129,6 +129,43 @@ impl Tool for MultiInner {
     }
 }
 
+struct ProgressInner(MediaProgressFn);
+#[async_trait]
+impl Tool for ProgressInner {
+    fn name(&self) -> &str {
+        "progress"
+    }
+    fn description(&self) -> &str {
+        "progress"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({"type":"object"})
+    }
+    async fn execute(&self, _: Value) -> anyhow::Result<ToolResult> {
+        (self.0)(&MediaJobProgress {
+            id: "job-1".into(),
+            state: "in_progress".into(),
+            outputs: 0,
+            output_indices: Vec::new(),
+            cost_usd: None,
+            error: None,
+        });
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        Ok(ToolResult::success("done"))
+    }
+}
+
+#[derive(Default)]
+struct ProgressRecorder(Mutex<Vec<String>>);
+impl ToolRunContext for ProgressRecorder {
+    fn report_progress(&self, update: tinytools::ToolProgress) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(update.message.unwrap_or_default());
+    }
+}
+
 #[tokio::test]
 async fn wrapper_keeps_metadata_and_files_each_artifact() {
     let filer = Arc::new(Filer::default());
@@ -279,5 +316,25 @@ fn heartbeat_keeps_elapsed_duration_when_job_state_is_present() {
             None
         ),
         "Generating image — 2m 05s elapsed"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn media_heartbeat_reports_per_call_job_state() {
+    let recorder = ProgressRecorder::default();
+    let tool = MediaArtifactTool::new(
+        ProgressInner(Arc::new(|_| {})),
+        MediaArtifactKind::Video,
+        Arc::new(Filer::default()),
+    )
+    .with_per_call_inner(Arc::new(|progress, _context| ProgressInner(progress)));
+    let result = tool
+        .execute_with_context(json!({}), ToolCallOptions::default(), Some(&recorder))
+        .await
+        .unwrap();
+    assert_eq!(result.text(), "done");
+    assert_eq!(
+        *recorder.0.lock().unwrap(),
+        vec!["Generating video — 15s elapsed (job in_progress)"],
     );
 }
