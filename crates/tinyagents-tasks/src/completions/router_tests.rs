@@ -222,13 +222,21 @@ impl CompletionStore for BlockingParentMarkerRead {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner
-            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
+        self.inner.claim_task(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        )
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -435,39 +443,56 @@ impl CompletionStore for BlockingFirstReadStore {
     fn claim_pending(
         &self,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
-        self.inner
-            .claim_pending(parent_key, gate, mode, max, token, visible_after)
+        self.inner.claim_pending(
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        )
     }
 
     fn claim_task(
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
-        self.inner
-            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
+        self.inner.claim_task(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        )
     }
 
     fn resolve_claim(
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         token: &str,
         resolution: ClaimResolution,
     ) -> tinyagents_harness::error::Result<Option<CompletionRecord>> {
         self.inner
-            .resolve_claim(task_id, parent_key, gate, token, resolution)
+            .resolve_claim(task_id, parent_key, parent_epoch, gate, token, resolution)
     }
 
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
@@ -1090,6 +1115,7 @@ impl CompletionStore for FailingSecondPut {
     fn claim_pending(
         &self,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         max: usize,
@@ -1097,9 +1123,15 @@ impl CompletionStore for FailingSecondPut {
         visible_after: SystemTime,
     ) -> tinyagents_harness::error::Result<Vec<CompletionRecord>> {
         use std::sync::atomic::Ordering::SeqCst;
-        let claimed =
-            self.inner
-                .claim_pending(parent_key, gate, mode, max, token, visible_after)?;
+        let claimed = self.inner.claim_pending(
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            max,
+            token,
+            visible_after,
+        )?;
         if (0..claimed.len()).any(|_| self.puts.fetch_add(1, SeqCst) >= self.fail_from.load(SeqCst))
         {
             for record in &claimed {
@@ -1107,6 +1139,7 @@ impl CompletionStore for FailingSecondPut {
                     self.inner.resolve_claim(
                         &receipt.task_id,
                         &receipt.parent_key,
+                        receipt.parent_epoch,
                         gate,
                         &receipt.token,
                         ClaimResolution::Release,
@@ -1123,6 +1156,7 @@ impl CompletionStore for FailingSecondPut {
         &self,
         task_id: &str,
         parent_key: &str,
+        parent_epoch: u64,
         gate: &ParentGateClaim,
         mode: CompletionClaimMode,
         token: &str,
@@ -1134,8 +1168,15 @@ impl CompletionStore for FailingSecondPut {
                 "disk".into(),
             ));
         }
-        self.inner
-            .claim_task(task_id, parent_key, gate, mode, token, visible_after)
+        self.inner.claim_task(
+            task_id,
+            parent_key,
+            parent_epoch,
+            gate,
+            mode,
+            token,
+            visible_after,
+        )
     }
     fn list(&self, parent_key: Option<&str>) -> Vec<CompletionRecord> {
         self.inner.list(parent_key)
