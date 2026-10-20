@@ -295,6 +295,10 @@ pub(crate) struct TurnContext<'a> {
     pub bin_path: PathBuf,
     /// Private runtime directory and the root the macOS Seatbelt jail walls
     /// off from the CLI's own tools. Persistence is host-bound, never file-based.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "workspace path is consumed by the macOS Seatbelt profile")
+    )]
     pub workspace_dir: PathBuf,
     /// The user's project root. Claude Code runs here
     /// (cwd + `--add-dir`) so its file tools act on the user's code, not the
