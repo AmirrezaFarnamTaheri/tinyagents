@@ -500,6 +500,15 @@ async fn streaming_agent_turn_preserves_typed_admission_refusal() {
 
 #[tokio::test]
 async fn lazy_openai_stream_rechecks_committed_admission_before_http_dispatch() {
+    assert_lazy_openai_stream_rechecks_committed_admission(false).await;
+}
+
+#[tokio::test]
+async fn lazy_openai_stream_rechecks_budgeted_admission_before_http_dispatch() {
+    assert_lazy_openai_stream_rechecks_committed_admission(true).await;
+}
+
+async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budget: bool) {
     use tinyinference_llm::providers::openai::OpenAiModel;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -513,9 +522,19 @@ async fn lazy_openai_stream_rechecks_committed_admission_before_http_dispatch() 
         .refuse_recheck
         .store(true, Ordering::SeqCst);
     let provider = Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint));
+    let money_budget = with_money_budget.then(|| {
+        ModelBudget::new(
+            Budget::new(SpendLimits::default()),
+            CallBudget {
+                input_tokens: 1_000,
+                output_tokens: 32,
+                cost_micros: 1,
+            },
+        )
+    });
     let controlled = ControlledChatModel::new(
         provider,
-        options(Some(admission.clone()), None, &counts),
+        options(Some(admission.clone()), money_budget, &counts),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_model("controlled", Arc::new(controlled));
