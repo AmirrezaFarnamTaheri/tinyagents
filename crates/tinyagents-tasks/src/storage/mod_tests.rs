@@ -142,6 +142,55 @@ async fn opening_tasks_storage_runs_its_owner_migrations_before_returning() {
 }
 
 #[tokio::test]
+async fn opening_tasks_storage_migrates_a_v2_9_1_public_store_fixture() {
+    use crate::{DriverTaskStore, TaskStore};
+    use tinyagents_harness::ids::TaskId;
+
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/legacy-v2.9.1-tasks.json")).unwrap();
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("local").unwrap())
+        .unwrap();
+    for collection in ["orchestration_tasks", "orchestration_task_history"] {
+        for row in fixture[collection].as_array().unwrap() {
+            storage
+                .documents()
+                .put(
+                    collection,
+                    row["id"].as_str().unwrap(),
+                    row["doc"].clone(),
+                    Precondition::None,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    let opened = open_storage(storage).await.unwrap();
+    let store = DriverTaskStore::new(std::sync::Arc::clone(opened.documents())).unwrap();
+    let id = TaskId::new("legacy-task-v291");
+    let record = store.get(&id).unwrap();
+    assert_eq!(record.status, crate::OrchestrationTaskStatus::Completed);
+    assert_eq!(
+        record.spec.thread_id.as_ref().map(|id| id.as_str()),
+        Some("thread-fixture")
+    );
+    assert_eq!(
+        record.spec.metadata.get("source").map(String::as_str),
+        Some("v2.9.1-public-writer")
+    );
+    assert_eq!(record.result.unwrap().text.as_deref(), Some("fixture completed"));
+    assert_eq!(
+        store.history(&id).iter().map(|row| row.status).collect::<Vec<_>>(),
+        [
+            crate::OrchestrationTaskStatus::Pending,
+            crate::OrchestrationTaskStatus::Running,
+            crate::OrchestrationTaskStatus::Completed,
+        ]
+    );
+}
+
+#[tokio::test]
 async fn public_store_reads_documents_written_by_pre_migration_31cc_release() {
     use crate::{DriverTaskStore, TaskStore};
     use tinyagents_harness::ids::TaskId;
