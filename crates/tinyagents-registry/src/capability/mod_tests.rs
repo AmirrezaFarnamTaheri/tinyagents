@@ -582,3 +582,18 @@ fn with_router_builder_installs_the_routing_policy() {
     assert!(reg.router().route("chat-v1").is_some());
     assert!(reg.route_workload("chat-v1").is_some());
 }
+
+#[test]
+fn stores_and_looks_up_registry_owned_capability_data() {
+    let capability = Capability::<(), ()>::new("research")
+        .with_instructions("Use research tools.");
+    let mut registry = CapabilityRegistry::new();
+    registry.register_capability(capability).unwrap();
+
+    assert_eq!(
+        registry
+            .capability::<()>("research")
+            .and_then(|capability| capability.instructions.as_deref()),
+        Some("Use research tools.")
+    );
+}
