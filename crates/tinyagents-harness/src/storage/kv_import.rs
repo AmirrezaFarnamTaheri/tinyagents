@@ -14,11 +14,11 @@
 
 use serde_json::Value;
 use tinyagents_storage_kit::{
-    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query, Result,
-    ScopedStorage, Sort, WriteOptions,
+    CollectionSpec, Cursor, ErrorKind, Filter, Migrations, Precondition, Query, Result,
+    ScopedStorage, Sort, WriteOptions, ID_FIELD,
 };
 
-use super::kv::{CACHE_NS_PREFIX, KV, NAMESPACED_NS_PREFIX, kv_body, kv_id};
+use super::kv::{kv_body, kv_id, CACHE_NS_PREFIX, KV, NAMESPACED_NS_PREFIX};
 
 /// Rows read per page while importing.
 const PAGE: usize = 200;
@@ -104,7 +104,7 @@ pub async fn import_legacy_kv(
     legacy_collection: &str,
     kind: LegacyKv,
 ) -> Result<u64> {
-    tinyagents_storage_kit::with_migration_lease(storage, "harness", |lease| async move {
+    tinyagents_storage_kit::with_migration_lease(storage, owner, |lease| async move {
         import_legacy_kv_with_lease(storage, owner, legacy_collection, kind, &lease).await
     })
     .await
