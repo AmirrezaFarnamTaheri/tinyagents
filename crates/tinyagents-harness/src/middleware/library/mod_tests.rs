@@ -1954,7 +1954,13 @@ fn run_mode_schema_and_serde_use_the_wire_discriminants() {
             .into_root_schema_for::<RunMode>(),
     )
     .unwrap();
-    assert_eq!(schema["enum"], json!(["build", "plan"]));
+    let mode_values = schema["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|variant| variant["const"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(mode_values, vec![json!("build"), json!("plan")]);
     assert_eq!(
         serde_json::to_value(RunMode::Build).unwrap(),
         json!("build")

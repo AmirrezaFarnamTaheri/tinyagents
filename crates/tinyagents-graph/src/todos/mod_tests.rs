@@ -39,7 +39,21 @@ fn public_todo_schema_matches_the_serialized_item_shape() {
     assert!(properties.get("content").is_some());
     assert!(properties.get("status").is_some());
     assert!(properties.get("reason").is_some());
-    assert!(properties["status"].is_object());
+    let status_values = properties["status"]["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|variant| variant["const"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        status_values,
+        vec![
+            serde_json::json!("pending"),
+            serde_json::json!("in_progress"),
+            serde_json::json!("completed"),
+            serde_json::json!("cancelled"),
+        ]
+    );
     assert_eq!(
         serde_json::to_value(TodoItem::new("ship it")).unwrap(),
         serde_json::json!({"content": "ship it", "status": "pending"})
