@@ -87,7 +87,7 @@ fn run(dir: &Path, args: &[&str]) {
 }
 
 fn init_repo() -> (TempDir, PathBuf) {
-    let tmp = TempDir::outside_git_repo();
+    let tmp = TempDir::new();
     let root = tmp.path().to_path_buf();
     run(&root, &["init", "-b", "main"]);
     run(&root, &["config", "user.email", "test@example.com"]);
@@ -103,7 +103,7 @@ fn validate_repo_root_rejects_non_repo() {
     if !git_available() {
         return;
     }
-    let tmp = TempDir::new();
+    let tmp = TempDir::outside_git_repo();
     let err = create_git_worktree(tmp.path(), "run-1", GitWorktreeBaseRef::Head).unwrap_err();
     assert!(matches!(err, GitWorktreeError::NotAGitRepo(_)));
 }
