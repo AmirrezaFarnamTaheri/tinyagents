@@ -32,7 +32,7 @@ async fn testkit_backend_passes_the_namespaced_conformance_suite() {
 }
 
 #[tokio::test]
-async fn items_survive_a_reopened_file_with_their_timestamps() {
+async fn items_keep_timestamps_when_the_driver_is_reopened() {
     let storage = MemoryBackend::new();
     let created;
     {

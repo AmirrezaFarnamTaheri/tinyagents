@@ -71,7 +71,7 @@ async fn testkit_backend_round_trips_expires_and_counts() {
 }
 
 #[tokio::test]
-async fn entries_survive_a_dropped_handle_and_a_reopened_file() {
+async fn entries_survive_reopening_the_driver_on_one_backend() {
     let storage = MemoryBackend::new();
     {
         DriverResponseCache::new(docs(&storage, "local"))
