@@ -40,10 +40,10 @@ pub use types::*;
 use std::sync::Arc;
 
 use crate::cache::ResponseCache;
+use crate::host::ModelResolver;
 use crate::middleware::{
     AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
 };
-use crate::host::ModelResolver;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinytools::Tool;
 
@@ -66,7 +66,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         ctx: &crate::context::RunContext<Ctx>,
         request: &tinyinference_llm::model::ModelRequest,
-    ) -> crate::error::Result<(Option<String>, Arc<dyn tinyinference_llm::model::ChatModel<State>>)> {
+    ) -> crate::error::Result<(
+        Option<String>,
+        Arc<dyn tinyinference_llm::model::ChatModel<State>>,
+    )> {
         let binding = self.resolve_local_model(ctx, request).await?;
         Ok((Some(binding.resolved.name), binding.model))
     }
@@ -78,7 +81,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &tinyinference_llm::model::ModelRequest,
     ) -> Option<tinyinference_llm::model::ModelProfile> {
         crate::agent_loop::model_call::preview_local_model_profile(
-            self.model_resolver.as_ref(), self.fixed_model.as_ref(), request,
+            self.model_resolver.as_ref(),
+            self.fixed_model.as_ref(),
+            request,
         )
     }
 
@@ -102,10 +107,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
     /// Supplies the resolver used for direct SDK turns. Hosted invocations
     /// continue to use their invocation-local host resolver.
-    pub fn with_model_resolver(
-        &mut self,
-        resolver: Arc<dyn ModelResolver<State>>,
-    ) -> &mut Self {
+    pub fn with_model_resolver(&mut self, resolver: Arc<dyn ModelResolver<State>>) -> &mut Self {
         self.model_resolver = Some(resolver);
         self
     }

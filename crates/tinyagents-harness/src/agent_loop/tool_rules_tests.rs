@@ -271,11 +271,9 @@ async fn indirect_target_resolution_obeys_run_cancellation() {
     let cancellation = crate::cancel::CancellationToken::new();
     let ctx = RunContext::new(RunConfig::new("cancel-target-resolution"), ())
         .with_cancellation(cancellation.clone());
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![calls(vec![(
-            "target",
-            "blocked_target",
-            json!({}),
-        )])])) as _,)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        ScriptedModel::new(vec![calls(vec![("target", "blocked_target", json!({}))])]),
+    ) as _)));
     let mut run = Box::pin(harness.invoke_in_context(&(), ctx, vec![Message::user("go")]));
 
     tokio::select! {
@@ -308,11 +306,9 @@ async fn indirect_target_resolution_obeys_run_deadline() {
         ] }))),
         ..RunPolicy::default()
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![calls(vec![(
-            "target",
-            "blocked_target",
-            json!({}),
-        )])])) as _,)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        ScriptedModel::new(vec![calls(vec![("target", "blocked_target", json!({}))])]),
+    ) as _)));
     let ctx = RunContext::new(
         RunConfig::new("deadline-target-resolution").with_timeout_ms(500),
         (),

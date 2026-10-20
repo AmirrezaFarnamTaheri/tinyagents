@@ -31,7 +31,12 @@ use tinyinference_llm::providers::MockModel;
 /// Builds a harness whose default model always replies with `reply`.
 fn constant_harness(reply: &str) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("m", Arc::new(MockModel::constant(reply)))));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "m",
+            Arc::new(MockModel::constant(reply)),
+        ),
+    ));
     harness
 }
 

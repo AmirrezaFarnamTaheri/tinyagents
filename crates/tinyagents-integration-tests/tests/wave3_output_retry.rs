@@ -74,8 +74,9 @@ async fn validator_rejects_once_then_accepts() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(scripted))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(scripted)),
+        ))
         .with_output_validator(Arc::new(MinScore { threshold: 50 }))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema("answer", object_schema())),
@@ -142,8 +143,9 @@ async fn exhausting_output_retries_fails_the_run() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(scripted))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(scripted)),
+        ))
         .with_output_validator(validator.clone())
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema("answer", object_schema())),
@@ -174,8 +176,12 @@ async fn exhausting_output_retries_fails_the_run() {
 async fn structured_as_deserializes_the_typed_output() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant(r#"{"score":7}"#)))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::constant(r#"{"score":7}"#)),
+            ),
+        ))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema("answer", object_schema())),
             ..RunPolicy::default()
@@ -193,7 +199,12 @@ async fn structured_as_deserializes_the_typed_output() {
 #[tokio::test]
 async fn structured_as_errors_when_the_run_produced_no_structured_output() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("plain text")))));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("plain text")),
+        ),
+    ));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])

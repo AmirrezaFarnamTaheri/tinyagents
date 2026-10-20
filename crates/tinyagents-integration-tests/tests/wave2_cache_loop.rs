@@ -133,10 +133,13 @@ async fn a_fallback_answer_is_never_cached_under_the_primary_key() {
         "backup answer",
         backup_calls.clone(),
     ));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::PrebuiltModelResolver::new(
-        primary as Arc<dyn ChatModel<()>>,
-        [("backup".to_string(), backup as Arc<dyn ChatModel<()>>)],
-    ).with_primary_name("primary")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::PrebuiltModelResolver::new(
+            primary as Arc<dyn ChatModel<()>>,
+            [("backup".to_string(), backup as Arc<dyn ChatModel<()>>)],
+        )
+        .with_primary_name("primary"),
+    ));
     harness.with_response_cache(cache.clone());
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
@@ -181,7 +184,12 @@ async fn a_cache_hit_is_marked_served_from_cache() {
     let calls = Arc::new(AtomicUsize::new(0));
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(FixedModel::new("id", "answer", calls.clone())),)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "chat",
+            Arc::new(FixedModel::new("id", "answer", calls.clone())),
+        ),
+    ));
     harness.with_response_cache(cache);
 
     let cold = harness
@@ -219,7 +227,12 @@ async fn a_streaming_cache_hit_still_emits_deltas() {
     let calls = Arc::new(AtomicUsize::new(0));
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(FixedModel::new("id", "streamed answer", calls.clone())),)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "chat",
+            Arc::new(FixedModel::new("id", "streamed answer", calls.clone())),
+        ),
+    ));
     harness.with_response_cache(cache);
 
     let cold_events = EventRecorder::new();
@@ -271,7 +284,12 @@ async fn a_streaming_run_does_not_reuse_a_unary_cache_entry() {
     let calls = Arc::new(AtomicUsize::new(0));
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(FixedModel::new("id", "answer", calls.clone())),)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "chat",
+            Arc::new(FixedModel::new("id", "answer", calls.clone())),
+        ),
+    ));
     harness.with_response_cache(cache);
 
     harness
@@ -302,7 +320,12 @@ async fn a_failing_cache_never_fails_the_run() {
     let calls = Arc::new(AtomicUsize::new(0));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(FixedModel::new("id", "answer", calls.clone())),)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "chat",
+            Arc::new(FixedModel::new("id", "answer", calls.clone())),
+        ),
+    ));
     harness.with_response_cache(Arc::new(BrokenCache {
         gets: gets.clone(),
         puts: puts.clone(),
@@ -341,10 +364,13 @@ async fn model_fallback_middleware_actually_switches_models() {
         "backup answer",
         backup_calls.clone(),
     ));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::PrebuiltModelResolver::new(
-        primary as Arc<dyn ChatModel<()>>,
-        [("backup".to_string(), backup as Arc<dyn ChatModel<()>>)],
-    ).with_primary_name("primary")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::PrebuiltModelResolver::new(
+            primary as Arc<dyn ChatModel<()>>,
+            [("backup".to_string(), backup as Arc<dyn ChatModel<()>>)],
+        )
+        .with_primary_name("primary"),
+    ));
     // No harness-level `FallbackPolicy` — the switch must come from the wrap
     // middleware alone, which steers by mutating `request.model`.
     harness.with_policy(RunPolicy {
@@ -385,10 +411,15 @@ async fn an_unresolvable_wrap_override_keeps_the_resolved_binding() {
     let primary_calls = Arc::new(AtomicUsize::new(0));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("primary", Arc::new(AlwaysFailing {
-            identity: "primary-identity",
-            calls: primary_calls.clone(),
-        }),)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "primary",
+            Arc::new(AlwaysFailing {
+                identity: "primary-identity",
+                calls: primary_calls.clone(),
+            }),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)

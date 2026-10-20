@@ -167,7 +167,10 @@ struct Fixture {
 fn fixture(responses: Vec<ModelResponse>) -> Fixture {
     let model = Arc::new(ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     Fixture {
         harness,
         model,

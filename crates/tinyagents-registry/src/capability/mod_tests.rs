@@ -222,7 +222,10 @@ async fn model_aliases_remain_in_the_capability_catalog() {
 
     assert!(reg.model("gpt-4o").is_some());
     assert!(reg.model("default").is_some());
-    assert!(reg.names(ComponentKind::Model).contains(&"gpt-4o".to_string()));
+    assert!(
+        reg.names(ComponentKind::Model)
+            .contains(&"gpt-4o".to_string())
+    );
 
     let tools = reg.to_tool_registry::<()>();
     assert_eq!(tools.names(), vec!["lookup_user"]);
@@ -522,8 +525,7 @@ fn with_router_builder_installs_the_routing_policy() {
 
 #[test]
 fn stores_and_looks_up_registry_owned_capability_data() {
-    let capability = Capability::<(), ()>::new("research")
-        .with_instructions("Use research tools.");
+    let capability = Capability::<(), ()>::new("research").with_instructions("Use research tools.");
     let mut registry = CapabilityRegistry::new();
     registry.register_capability(capability).unwrap();
 

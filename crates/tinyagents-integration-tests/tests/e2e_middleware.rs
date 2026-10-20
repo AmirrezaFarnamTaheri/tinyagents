@@ -211,8 +211,9 @@ async fn stacked_middleware_recovers_redacts_and_traces() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("flaky", Arc::new(model))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("flaky", Arc::new(model)),
+        ))
         .register_tool(Arc::new(FakeTool::returning("search", "tool-output")))
         .push_model_middleware(Arc::new(RetryMiddleware::new(RetryPolicy::default())))
         .push_middleware(Arc::new(ToolAllowlistMiddleware::new(["search"])))
@@ -296,8 +297,9 @@ async fn stacked_middleware_rejects_disallowed_tool() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", Arc::new(scripted))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("scripted", Arc::new(scripted)),
+        ))
         // Register the tool so the *only* reason for failure is the allowlist,
         // not a missing-tool error.
         .register_tool(danger.clone())
@@ -347,8 +349,9 @@ async fn invalid_tool_arguments_are_rejected_before_execution() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", Arc::new(scripted))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("scripted", Arc::new(scripted)),
+        ))
         .register_tool(Arc::new(StrictLookupTool {
             calls: Arc::clone(&calls),
         }));

@@ -379,7 +379,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     Option<String>,
                     Vec<tinyinference_llm::model::ModelHint>,
                     Option<tinyinference_llm::model::CapabilitySet>,
-                crate::agent_loop::ModelBinding<State>,
+                    crate::agent_loop::ModelBinding<State>,
                 )>,
             ));
             // A pending steered model switch decides the model this call
@@ -448,15 +448,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Re-applied after `before_model` (see below).
             let model_before_switch = request.model.clone();
             let switch_candidate = self.steered_model(ctx).and_then(|requested| {
-                resolution_cache.lock().unwrap().as_ref().and_then(|(_, _, _, binding)| {
-                    (binding.resolved.name == requested
-                        && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
                         .then(|| binding.model.clone())
-                })
+                    })
             });
             self.apply_steered_model_switch(
-                ctx, &mut request, &model_before_switch, switch_candidate,
-            ).await?;
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Known tool requirements must shape the hosted profile seen by
             // middleware. The later gate below still catches tools added by
@@ -547,15 +555,23 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // Middleware may have chosen another model or added capability
             // requirements; the steered switch is re-validated and wins.
             let switch_candidate = self.steered_model(ctx).and_then(|requested| {
-                resolution_cache.lock().unwrap().as_ref().and_then(|(_, _, _, binding)| {
-                    (binding.resolved.name == requested
-                        && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
                         .then(|| binding.model.clone())
-                })
+                    })
             });
             self.apply_steered_model_switch(
-                ctx, &mut request, &model_before_switch, switch_candidate,
-            ).await?;
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Safe checkpoint: a control requested from `before_model_control`
             // (for example `BudgetMiddleware` finding the budget already

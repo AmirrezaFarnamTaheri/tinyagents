@@ -89,9 +89,9 @@ async fn streamed_run_against(server: &StreamErrorServer) -> tinyagents_harness:
         .with_base_url(&server.base_url)
         .with_model("test-model");
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("remote", Arc::new(model))))
-        ;
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("remote", Arc::new(model)),
+    ));
     harness
         .invoke_streaming_default(&(), vec![Message::user("go")])
         .await

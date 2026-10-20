@@ -85,9 +85,9 @@ fn build_specialist(
     jobs: SubAgentJobRegistry,
 ) -> SubAgentTool<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", model)))
-        ;
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("model", model),
+    ));
     let subagent = SubAgent::new(spec.name, spec.description, Arc::new(harness))
         .with_system_prompt(spec.system_prompt);
     SubAgentTool::new(
@@ -177,8 +177,9 @@ async fn main() -> Result<()> {
 
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
     orchestrator
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("model", model.clone()),
+        ))
         .with_policy(RunPolicy {
             default_response_format: Some(selection_schema),
             ..RunPolicy::default()
@@ -274,9 +275,9 @@ async fn main() -> Result<()> {
         .join("\n\n");
 
     let mut composer: AgentHarness<()> = AgentHarness::new();
-    composer
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", model)))
-        ;
+    composer.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("model", model),
+    ));
     let composed = composer
         .invoke_default(
             &(),

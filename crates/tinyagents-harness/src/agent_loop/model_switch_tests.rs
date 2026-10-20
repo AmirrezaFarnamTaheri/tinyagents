@@ -4,8 +4,8 @@
 //! fallback chain) belongs to the new model.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -130,7 +130,8 @@ fn two_models(
     let resolver = crate::host::PrebuiltModelResolver::new(
         a.clone(),
         [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
-    ).with_primary_name("a");
+    )
+    .with_primary_name("a");
     harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     (harness, a, b)
@@ -158,7 +159,10 @@ impl crate::host::ModelResolver<()> for CountingResolver {
         self.inner.resolve_named(name).await
     }
 
-    fn preview(&self, request: &crate::host::ModelResolveRequest) -> Option<Arc<dyn ChatModel<()>>> {
+    fn preview(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> Option<Arc<dyn ChatModel<()>>> {
         self.inner.preview(request)
     }
 
@@ -174,7 +178,8 @@ async fn sticky_switch_reuses_the_model_binding_for_unchanged_inputs() {
     let inner = crate::host::PrebuiltModelResolver::new(
         a,
         [("b".to_owned(), b.clone() as Arc<dyn ChatModel<()>>)],
-    ).with_primary_name("a");
+    )
+    .with_primary_name("a");
     let named_calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_model_resolver(Arc::new(CountingResolver {
@@ -185,14 +190,18 @@ async fn sticky_switch_reuses_the_model_binding_for_unchanged_inputs() {
     let handle = SteeringHandle::allow_all_with_model_switch();
     handle.send(switch("b"));
     let recorder = EventRecorder::new();
-    let run = harness.invoke_in_context(
-        &(), context(&handle, &recorder), vec![Message::user("hi")],
-    ).await.expect("the switched model runs");
+    let run = harness
+        .invoke_in_context(&(), context(&handle, &recorder), vec![Message::user("hi")])
+        .await
+        .expect("the switched model runs");
 
     assert_eq!(run.text(), Some("from b".to_owned()));
     assert_eq!(b.requests().len(), 1);
-    assert_eq!(named_calls.load(Ordering::SeqCst), 0,
-        "the eligible binding resolved for this request is reused by both switch checks");
+    assert_eq!(
+        named_calls.load(Ordering::SeqCst),
+        0,
+        "the eligible binding resolved for this request is reused by both switch checks"
+    );
 }
 
 /// Answers from a script and, on its first call, queues `command` on the
@@ -279,7 +288,8 @@ async fn mid_run_switch_applies_to_the_next_call_and_stays_sticky() {
     let resolver = crate::host::PrebuiltModelResolver::new(
         a.clone(),
         [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
-    ).with_primary_name("a");
+    )
+    .with_primary_name("a");
     harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     let recorder = EventRecorder::new();
@@ -520,7 +530,8 @@ fn failover_harness(
         let resolver = crate::host::PrebuiltModelResolver::new(
             primary,
             models.map(|(name, model)| (name.to_string(), model)),
-        ).with_primary_name(primary_name);
+        )
+        .with_primary_name(primary_name);
         harness.with_model_resolver(Arc::new(resolver));
     }
     harness.with_policy(RunPolicy {
@@ -735,7 +746,8 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
             ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
             ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
         ],
-    ).with_primary_name("a");
+    )
+    .with_primary_name("a");
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
@@ -755,7 +767,10 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
     assert_eq!(run.text(), Some("from b".to_string()));
     assert_eq!(model_started(&recorder), vec!["b"]);
     assert_eq!(b.requests().len(), 1);
-    assert!(c.requests().is_empty(), "the switch wins over the available middleware route");
+    assert!(
+        c.requests().is_empty(),
+        "the switch wins over the available middleware route"
+    );
 }
 
 #[tokio::test]
@@ -773,7 +788,8 @@ async fn rejected_switch_keeps_the_model_a_middleware_picked() {
             ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
             ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
         ],
-    ).with_primary_name("a");
+    )
+    .with_primary_name("a");
     harness.with_model_resolver(Arc::new(resolver));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),

@@ -25,7 +25,9 @@ use tinyinference_llm::providers::MockModel;
 fn spinning_harness() -> (AgentHarness<()>, Arc<MockModel>) {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("spin", "again")));
     (harness, model)
 }

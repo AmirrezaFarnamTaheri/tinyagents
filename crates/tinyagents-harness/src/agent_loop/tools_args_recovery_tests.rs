@@ -64,7 +64,9 @@ async fn run_one(name: &str, arguments: Value) -> Outcome {
         text_response("done"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock", model as _,
+    )));
     harness.register_tool(Arc::new(SkillTool {
         received: Arc::clone(&received),
     }));

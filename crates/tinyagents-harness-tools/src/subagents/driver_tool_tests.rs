@@ -287,7 +287,9 @@ async fn model_can_correct_foreign_durable_close_and_continue_to_owned_close() {
         .recover_selector_errors();
     let model = Arc::new(CloseCorrectionModel(std::sync::atomic::AtomicUsize::new(0)));
     let mut harness = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("script", model.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("script", model.clone()),
+    ));
     harness.register_tool_dispatch(Arc::new(jobs));
 
     let run = harness

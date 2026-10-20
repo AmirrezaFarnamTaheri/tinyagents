@@ -362,10 +362,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Registers or overwrites a capability bundle under its own name,
     /// preserving any existing metadata. See [`Self::register_capability`]
     /// for why `Ctx` is a method type parameter.
-    pub fn replace_capability<Ctx>(
-        &mut self,
-        capability: Capability<State, Ctx>,
-    ) -> &mut Self
+    pub fn replace_capability<Ctx>(&mut self, capability: Capability<State, Ctx>) -> &mut Self
     where
         State: 'static,
         Ctx: Send + Sync + 'static,
@@ -383,10 +380,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// when one is registered but under a different `Ctx` than the one
     /// requested here (a caller-programming-error case — a registry is
     /// normally used with one consistent `Ctx` per application).
-    pub fn capability<Ctx>(
-        &self,
-        name: &str,
-    ) -> Option<&Capability<State, Ctx>>
+    pub fn capability<Ctx>(&self, name: &str) -> Option<&Capability<State, Ctx>>
     where
         State: 'static,
         Ctx: Send + Sync + 'static,

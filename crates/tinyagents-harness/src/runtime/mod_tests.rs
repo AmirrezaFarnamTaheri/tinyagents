@@ -584,7 +584,12 @@ impl crate::host::ModelResolver<()> for PendingNamedFallbackResolver {
     }
 
     fn selected_name(&self, request: &crate::host::ModelResolveRequest) -> Option<String> {
-        Some(request.model_pin.clone().unwrap_or_else(|| "primary".to_owned()))
+        Some(
+            request
+                .model_pin
+                .clone()
+                .unwrap_or_else(|| "primary".to_owned()),
+        )
     }
 }
 
@@ -1257,16 +1262,29 @@ async fn pending_named_fallback_resolution_obeys_the_model_call_deadline() {
     }));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(10)),
-        retry: RetryPolicy::default().with_max_attempts(1).with_backoff_sleep(false),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
         fallback: Some(FallbackPolicy::new(["primary", "backup"])),
         ..RunPolicy::default()
     });
 
-    let error = harness.invoke_default(&(), vec![tinyinference_llm::message::Message::user("go")])
-        .await.expect_err("the named fallback resolver remains pending");
-    assert!(matches!(error, crate::error::TinyAgentsError::Timeout(_)
-        | crate::error::TinyAgentsError::CallTimeout(_)), "got {error:?}");
-    assert!(started.notified().now_or_never().is_some(), "fallback lookup was entered");
+    let error = harness
+        .invoke_default(&(), vec![tinyinference_llm::message::Message::user("go")])
+        .await
+        .expect_err("the named fallback resolver remains pending");
+    assert!(
+        matches!(
+            error,
+            crate::error::TinyAgentsError::Timeout(_)
+                | crate::error::TinyAgentsError::CallTimeout(_)
+        ),
+        "got {error:?}"
+    );
+    assert!(
+        started.notified().now_or_never().is_some(),
+        "fallback lookup was entered"
+    );
 }
 
 #[tokio::test]
@@ -1278,7 +1296,9 @@ async fn pending_named_fallback_resolution_is_cancelled_with_the_run() {
         named_started: started.clone(),
     }));
     harness.with_policy(RunPolicy {
-        retry: RetryPolicy::default().with_max_attempts(1).with_backoff_sleep(false),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
         fallback: Some(FallbackPolicy::new(["primary", "backup"])),
         ..RunPolicy::default()
     });
@@ -1299,7 +1319,10 @@ async fn pending_named_fallback_resolution_is_cancelled_with_the_run() {
         }
         result = &mut invocation => panic!("pending named resolver unexpectedly finished: {result:?}"),
     };
-    assert!(matches!(error, crate::error::TinyAgentsError::Cancelled), "got {error:?}");
+    assert!(
+        matches!(error, crate::error::TinyAgentsError::Cancelled),
+        "got {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -1595,7 +1618,9 @@ async fn hosted_model_fallback_rebinds_through_the_host_resolver_not_the_local_r
         resolver.clone(),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("local bypass")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        MockModel::constant("local bypass"),
+    ))));
     harness.push_middleware(Arc::new(FallbackGuidance));
     harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["host-backup"])));
 

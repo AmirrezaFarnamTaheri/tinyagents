@@ -384,17 +384,12 @@ where
         request.model_hints.clone(),
         request.required_capabilities.clone(),
     );
-    let binding = resolution_cache
-        .lock()
-        .unwrap()
-        .take()
-        .and_then(
-            |(cached_model, cached_hints, cached_capabilities, binding)| {
-                (cached_model == key.0 && cached_hints == key.1 && cached_capabilities == key.2)
-                    .then_some(binding)
-            },
-        )
-        ;
+    let binding = resolution_cache.lock().unwrap().take().and_then(
+        |(cached_model, cached_hints, cached_capabilities, binding)| {
+            (cached_model == key.0 && cached_hints == key.1 && cached_capabilities == key.2)
+                .then_some(binding)
+        },
+    );
     let binding = match binding {
         Some(binding) => binding,
         None => harness.resolve_model_for_request(ctx, &request).await?,
@@ -404,7 +399,10 @@ where
         &mut request,
         ctx.model_profile.as_ref(),
     );
-    let model_name = binding.0.clone().unwrap_or_else(|| request.model.clone().unwrap_or_else(|| "<default>".into()));
+    let model_name = binding
+        .0
+        .clone()
+        .unwrap_or_else(|| request.model.clone().unwrap_or_else(|| "<default>".into()));
 
     // Mirror the direct loop: a named effort picks up the resolved model's
     // tuned `thinking_level_map` entry, unless an explicit budget is pinned.

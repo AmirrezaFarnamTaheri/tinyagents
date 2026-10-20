@@ -71,7 +71,9 @@ async fn strict_policy_exposes_only_the_classified_safe_tool() {
         "finished",
     )]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone()),
+    ));
     harness.register_tool(Arc::new(SafeTool));
     harness.register_tool(Arc::new(PaymentTool));
     harness.push_middleware(Arc::new(ToolPolicyMiddleware::strict(

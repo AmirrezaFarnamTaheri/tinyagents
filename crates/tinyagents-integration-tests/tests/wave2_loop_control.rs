@@ -51,7 +51,9 @@ impl Middleware<(), ()> for StopAfterToolMiddleware {
 fn spinning_harness() -> (AgentHarness<()>, Arc<MockModel>) {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let model = Arc::new(MockModel::with_tool_call("spin", json!({})));
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("spin", "again")));
     (harness, model)
 }
@@ -143,7 +145,12 @@ async fn a_steering_pause_is_distinguishable_from_a_clean_finish() {
 #[tokio::test]
 async fn an_unsteered_run_still_reports_completed() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("done")))));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
 
     let result = harness
         .invoke_with_status(&(), (), RunConfig::new("plain"), vec![Message::user("go")])

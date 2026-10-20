@@ -241,8 +241,9 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
         .register_tool(deferred.clone())
         .register_tool(unrelated.clone())
@@ -301,8 +302,9 @@ async fn deferred_tool_is_promoted_after_search_and_restored_on_resume() {
     let resumed_model = RecordingModel::new(vec![text("resumed")]);
     let mut resumed_harness: AgentHarness<()> = AgentHarness::new();
     resumed_harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", resumed_model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", resumed_model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
         .register_tool(Arc::new(ChangedDeferredTool));
     resumed_harness.register_tool(unrelated);
@@ -402,8 +404,9 @@ async fn disabled_discovery_drops_the_bridge_and_keeps_direct_calls_working() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")))
         .register_tool(deferred.clone())
         .with_policy(RunPolicy {
@@ -438,8 +441,9 @@ async fn no_deferred_tools_means_no_bridge() {
     let model = RecordingModel::new(vec![text("done")]);
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(Arc::new(FakeTool::returning("read_file", "contents")));
     harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -468,8 +472,9 @@ async fn tool_searched_query_is_payload_free_by_default() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(deferred)
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -510,8 +515,9 @@ async fn host_registered_tool_search_wins_over_the_intrinsic_bridge() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(deferred.clone())
         .register_tool(host_search.clone());
 
@@ -545,8 +551,9 @@ async fn unknown_tool_corrective_does_not_advertise_a_host_registered_tool_searc
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(deferred)
         .register_tool(host_search)
         .with_policy(RunPolicy {
@@ -598,8 +605,9 @@ async fn hidden_registration_suppresses_the_matching_bridge_schema() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(deferred.clone())
         .register_tool(hidden_search.clone());
 
@@ -634,8 +642,9 @@ async fn tool_schemas_projection_applies_to_wire_and_catalog() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(direct)
         .register_tool(deferred)
         .register_tool(ExposedTool::new(
@@ -711,8 +720,9 @@ async fn a_deferred_event_is_emitted_only_for_a_deferred_tool_called_by_name() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+        ))
         .register_tool(direct.clone())
         .register_tool(deferred.clone())
         .register_tool(hidden.clone())

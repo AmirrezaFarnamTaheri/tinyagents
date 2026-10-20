@@ -25,8 +25,7 @@ use tinyagents_harness::runtime::AgentHarness;
 use tinyagents_harness::testkit::{EventRecorder, FakeTool, ScriptedModel, StreamingMock};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use tinyinference_llm::model::{
-    ChatModel, ModelProfile, ModelRequest, ModelResponse,
-    ModelStreamItem, StreamAccumulator,
+    ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStreamItem, StreamAccumulator,
 };
 use tinyinference_llm::tool::ToolSchema;
 use tinyinference_llm::usage::Usage;
@@ -165,7 +164,9 @@ async fn exposed_tools_at_depth(
     let scripted = Arc::new(ScriptedModel::new(vec![text_response("done")]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("a", "ok")));
     harness.register_tool(Arc::new(FakeTool::returning("b", "ok")));
     harness.register_tool(Arc::new(FakeTool::returning("c", "ok")));
@@ -243,7 +244,9 @@ async fn inheriting_narrows_child_and_emits_tools_filtered_event() {
     let scripted = Arc::new(ScriptedModel::new(vec![text_response("done")]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", scripted.clone()),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("a", "ok")));
     harness.register_tool(Arc::new(FakeTool::returning("b", "ok")));
     harness.register_tool(Arc::new(FakeTool::returning("c", "ok")));
@@ -294,4 +297,3 @@ async fn inheriting_narrows_child_and_emits_tools_filtered_event() {
         "the exposure decision is journaled under the tool.filtered kind"
     );
 }
-

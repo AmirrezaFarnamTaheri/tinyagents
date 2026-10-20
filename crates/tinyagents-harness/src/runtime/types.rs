@@ -23,9 +23,9 @@ use std::sync::Arc;
 
 use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
+use crate::host::ModelResolver;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
-use crate::host::ModelResolver;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};

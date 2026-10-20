@@ -274,7 +274,10 @@ async fn orchestrator_injects_message_mid_run_next_model_call_sees_it() {
     });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        model.clone(),
+    )));
     harness.register_tool(Arc::new(NoopTool));
 
     let ctx: RunContext = RunContext::new(RunConfig::new("run-inject"), ())
@@ -318,7 +321,10 @@ async fn cancel_terminates_the_run() {
     handle.send(SteeringCommand::Cancel);
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("never reached")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::new(MockModel::constant("never reached")),
+    )));
 
     let ctx: RunContext = RunContext::new(RunConfig::new("run-cancel"), ())
         .with_events(recorder.sink())
@@ -349,7 +355,10 @@ async fn disallowed_command_is_skipped_and_the_run_still_completes() {
     handle.send(SteeringCommand::InjectMessage(Message::user("nope")));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("reached")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::new(MockModel::constant("reached")),
+    )));
 
     let ctx: RunContext = RunContext::new(RunConfig::new("run-reject"), ())
         .with_events(recorder.sink())

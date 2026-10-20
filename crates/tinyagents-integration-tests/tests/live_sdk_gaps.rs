@@ -44,7 +44,9 @@ async fn live_budget_blocks_second_call() {
     // 1) Sanity: a normal harness run succeeds against the real model.
     {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", model.clone())));
+        harness.with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("openai", model.clone()),
+        ));
         let run = harness
             .invoke_default(&(), vec![Message::user("Reply with exactly: hi")])
             .await
@@ -68,7 +70,9 @@ async fn live_budget_blocks_second_call() {
     .with_tracker(tracker);
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", model)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("openai", model),
+    ));
     harness.push_middleware(Arc::new(budget));
 
     let err = harness
@@ -143,7 +147,9 @@ async fn live_tool_policy_exposes_classified_tool() {
         Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", model)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("openai", model),
+    ));
     harness.register_tool(Arc::new(AddTool {
         calls: calls.clone(),
     }));

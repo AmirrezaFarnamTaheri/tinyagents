@@ -34,28 +34,32 @@ async fn model_drives_the_todo_tool_and_list_persists_to_the_thread() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
-                // First turn: write the plan via the `todo` tool.
-                tool_call_response(
-                    "call-1",
-                    "todo",
-                    json!({ "todos": [
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![
+                    // First turn: write the plan via the `todo` tool.
+                    tool_call_response(
+                        "call-1",
+                        "todo",
+                        json!({ "todos": [
                         { "content": "Write the integration test", "status": "in_progress" },
                         { "content": "Run it", "status": "pending" }
                     ] }),
-                ),
-                // Second turn: tick the first one off and start the next.
-                tool_call_response(
-                    "call-2",
-                    "todo",
-                    json!({ "todos": [
+                    ),
+                    // Second turn: tick the first one off and start the next.
+                    tool_call_response(
+                        "call-2",
+                        "todo",
+                        json!({ "todos": [
                         { "content": "Write the integration test", "status": "completed" },
                         { "content": "Run it", "status": "in_progress" }
                     ] }),
-                ),
-                text_response("done"),
-            ])),)))
-        
+                    ),
+                    text_response("done"),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(TodoTool::new(store.clone())));
 
     let run = harness

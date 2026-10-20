@@ -13,8 +13,8 @@
 //! up front instead, through the existing
 //! [`AgentEvent::ModelOverrideSkipped`] diagnostic.
 
-use super::*;
 use super::model_call::model_is_eligible;
+use super::*;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// The run's sticky steered model name, when one is pending and the run is
@@ -73,16 +73,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             cached_candidate
         } else if let Some(resolver) = self.model_resolver.as_ref() {
             let (budget, bound) = self.model_call_budget(ctx);
-            match ctx.bounded(budget, resolver.resolve_named(&requested), || {
-                format!("steered model resolution for run `{}` exceeded its {bound}", ctx.run_id())
-            }).await {
+            match ctx
+                .bounded(budget, resolver.resolve_named(&requested), || {
+                    format!(
+                        "steered model resolution for run `{}` exceeded its {bound}",
+                        ctx.run_id()
+                    )
+                })
+                .await
+            {
                 Ok(candidate) => candidate,
-                Err(error @ (TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_))) => return Err(error),
+                Err(
+                    error @ (TinyAgentsError::Cancelled
+                    | TinyAgentsError::Timeout(_)
+                    | TinyAgentsError::CallTimeout(_)),
+                ) => return Err(error),
                 Err(_) => None,
             }
         } else {
-            self.fixed_model.clone().filter(|model| model.profile()
-                .and_then(|profile| profile.model.as_deref()) == Some(requested.as_str()))
+            self.fixed_model.clone().filter(|model| {
+                model.profile().and_then(|profile| profile.model.as_deref())
+                    == Some(requested.as_str())
+            })
         };
         let eligible = candidate.as_ref().is_some_and(|model| {
             model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
@@ -112,13 +124,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             request.model = model_before_switch.clone();
         }
         let resolve = super::model_call::local_resolve_request(request);
-        let resolved = self.model_resolver.as_ref()
+        let resolved = self
+            .model_resolver
+            .as_ref()
             .and_then(|resolver| resolver.selected_name(&resolve))
-            .or_else(|| self.model_resolver.as_ref()
-                .and_then(|resolver| resolver.preview(&resolve))
-                .and_then(|model| model.profile().and_then(|profile| profile.model.clone())))
-            .or_else(|| self.fixed_model.as_ref()
-                .and_then(|model| model.profile().and_then(|profile| profile.model.clone())))
+            .or_else(|| {
+                self.model_resolver
+                    .as_ref()
+                    .and_then(|resolver| resolver.preview(&resolve))
+                    .and_then(|model| model.profile().and_then(|profile| profile.model.clone()))
+            })
+            .or_else(|| {
+                self.fixed_model
+                    .as_ref()
+                    .and_then(|model| model.profile().and_then(|profile| profile.model.clone()))
+            })
             .unwrap_or_else(|| "<default>".to_string());
         tracing::warn!(
             target: "tinyagents::steering",

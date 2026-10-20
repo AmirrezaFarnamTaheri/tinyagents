@@ -275,7 +275,10 @@ impl<State: Send + Sync> FixedModelResolver<State> {
 
     /// Wraps one model while preserving its configured runtime name.
     pub fn named(name: impl Into<String>, model: Arc<dyn ChatModel<State>>) -> Self {
-        Self { model, name: Some(name.into()) }
+        Self {
+            model,
+            name: Some(name.into()),
+        }
     }
 
     /// The wrapped model.
@@ -310,7 +313,11 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
 
     async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
         let matches = self.name.as_deref() == Some(name)
-            || self.model.profile().and_then(|profile| profile.model.as_deref()) == Some(name);
+            || self
+                .model
+                .profile()
+                .and_then(|profile| profile.model.as_deref())
+                == Some(name);
         Ok(matches.then(|| Arc::clone(&self.model)))
     }
 
@@ -319,7 +326,11 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     }
 
     fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
-        self.name.clone().or_else(|| self.model.profile().and_then(|profile| profile.model.clone()))
+        self.name.clone().or_else(|| {
+            self.model
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
     }
 }
 
@@ -403,22 +414,37 @@ impl<State: Send + Sync> ModelResolver<State> for PrebuiltModelResolver<State> {
         if req.is_team_lead {
             return Some(Arc::clone(&self.lead));
         }
-        let hinted_route = req.model_hint.as_deref().map(str::trim)
-            .filter(|hint| !hint.is_empty()).map(|hint| format!("hint:{hint}"));
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
         let route = req.model_pin().or(hinted_route.as_deref());
-        Some(route.and_then(|name| self.routes.get(name)).cloned()
-            .unwrap_or_else(|| Arc::clone(&self.primary)))
+        Some(
+            route
+                .and_then(|name| self.routes.get(name))
+                .cloned()
+                .unwrap_or_else(|| Arc::clone(&self.primary)),
+        )
     }
 
     fn selected_name(&self, req: &ModelResolveRequest) -> Option<String> {
-        let hinted_route = req.model_hint.as_deref().map(str::trim)
-            .filter(|hint| !hint.is_empty()).map(|hint| format!("hint:{hint}"));
+        let hinted_route = req
+            .model_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("hint:{hint}"));
         let route = req.model_pin().or(hinted_route.as_deref());
         if let Some(name) = route.filter(|name| self.routes.contains_key(*name)) {
             return Some(name.to_owned());
         }
-        self.primary_name.clone()
-            .or_else(|| self.primary.profile().and_then(|profile| profile.model.clone()))
+        self.primary_name.clone().or_else(|| {
+            self.primary
+                .profile()
+                .and_then(|profile| profile.model.clone())
+        })
     }
 }
 

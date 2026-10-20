@@ -56,8 +56,9 @@ async fn main() -> Result<()> {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(model))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(model)),
+        ))
         .with_policy(policy);
 
     let review = "Honestly the best purchase I've made all year — works flawlessly!";

@@ -84,7 +84,10 @@ fn tool_call_then_text() -> MockModel {
 
 async fn tool_row_text(policy: RunPolicy) -> String {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(tool_call_then_text()))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::new(tool_call_then_text()),
+    )));
     harness.register_tool(Arc::new(EchoTool));
     harness.with_policy(policy);
     let run = harness

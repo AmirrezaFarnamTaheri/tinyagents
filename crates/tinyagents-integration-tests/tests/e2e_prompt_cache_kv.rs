@@ -142,7 +142,9 @@ impl Tool for LookupTool {
 async fn harness_tool_turns_reuse_the_provider_kv_prompt_prefix() {
     let server = Arc::new(KvCacheMockServer::default());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock-kv", server.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock-kv", server.clone()),
+    ));
     harness.register_tool(Arc::new(LookupTool));
     let mut policy = RunPolicy::default();
     policy.cache.protect_prompt_prefix = true;

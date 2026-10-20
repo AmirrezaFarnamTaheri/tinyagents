@@ -28,7 +28,9 @@ async fn orchestrator_reuses_subagent_with_human_input_between() {
     ]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", model.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("scripted", model.clone()),
+    ));
 
     let subagent = Arc::new(
         SubAgent::new(

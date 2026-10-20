@@ -64,11 +64,15 @@ async fn graph_node_drives_harness_agent_with_tool_loop() {
     // real tool, and attach the usage middleware.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", Arc::new(ScriptedModel::new(vec![
-                tool_call_response("call-1", "lookup_user", json!({ "user_id": "u-1" })),
-                text_response("resolved via lookup", 4, 3),
-            ])),)))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "scripted",
+                Arc::new(ScriptedModel::new(vec![
+                    tool_call_response("call-1", "lookup_user", json!({ "user_id": "u-1" })),
+                    text_response("resolved via lookup", 4, 3),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup_user", "Ada Lovelace")))
         .push_middleware(usage_mw.clone());
     let harness = Arc::new(harness);

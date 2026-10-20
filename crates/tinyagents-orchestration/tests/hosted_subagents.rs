@@ -132,7 +132,9 @@ async fn parent_denial_cannot_fall_back_to_the_child_harness() {
     let parent_model = Arc::new(ScriptedModel::new(vec![delegation_call()]));
     let local_child_model = Arc::new(ScriptedModel::replies(vec!["local bypass"]));
     let mut child_harness = AgentHarness::new();
-    child_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("local", local_child_model.clone())));
+    child_harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("local", local_child_model.clone()),
+    ));
 
     let (runtime, _jobs) = runtime_with_worker(child_harness);
     let error = AgentHarness::new()

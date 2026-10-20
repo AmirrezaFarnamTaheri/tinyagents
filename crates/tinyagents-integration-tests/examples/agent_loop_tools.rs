@@ -78,8 +78,9 @@ async fn main() -> Result<()> {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model))))
-        
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model)),
+        ))
         .register_tool(Arc::new(CalculatorTool));
 
     let run = harness

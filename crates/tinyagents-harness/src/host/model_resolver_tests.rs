@@ -205,7 +205,10 @@ async fn fixed_resolver_ignores_every_routing_field() {
 async fn prebuilt_named_lookup_does_not_substitute_the_primary_for_unknown_names() {
     let resolver = PrebuiltModelResolver::new(
         Arc::new(EchoModel("primary")),
-        [("backup".to_string(), Arc::new(EchoModel("backup")) as Arc<dyn ChatModel<()>>)],
+        [(
+            "backup".to_string(),
+            Arc::new(EchoModel("backup")) as Arc<dyn ChatModel<()>>,
+        )],
     )
     .with_primary_name("primary");
 
@@ -218,11 +221,13 @@ async fn prebuilt_named_lookup_does_not_substitute_the_primary_for_unknown_names
         &backup,
         resolver.routes.get("backup").expect("backup route")
     ));
-    assert!(resolver
-        .resolve_named("unregistered")
-        .await
-        .expect("unknown names are a normal miss")
-        .is_none());
+    assert!(
+        resolver
+            .resolve_named("unregistered")
+            .await
+            .expect("unknown names are a normal miss")
+            .is_none()
+    );
 }
 
 #[tokio::test]
