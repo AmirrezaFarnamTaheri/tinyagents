@@ -175,17 +175,16 @@ async fn interactive_tool_parks_in_the_scoped_store_until_decided() {
     use crate::plan_review::{ParkedReview, PlanReviewNotifier, PlanReviewReason, PlanReviewStore};
     use std::time::Duration;
 
+    type DecisionEvent = (
+        String,
+        PlanReviewResolution,
+        Option<String>,
+        PlanReviewReason,
+    );
     #[derive(Default)]
     struct StoreEvents {
         requested: tokio::sync::Notify,
-        decided: Mutex<
-            Vec<(
-                String,
-                PlanReviewResolution,
-                Option<String>,
-                PlanReviewReason,
-            )>,
-        >,
+        decided: Mutex<Vec<DecisionEvent>>,
     }
     impl PlanReviewNotifier<u8> for StoreEvents {
         fn requested(&self, _: &ParkedReview<u8>) {
