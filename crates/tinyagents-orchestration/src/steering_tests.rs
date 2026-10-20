@@ -87,7 +87,7 @@ fn lane_names_and_commands_are_literal() {
 }
 
 #[tokio::test]
-async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
+async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_request_id() {
     let steering = SteeringRegistry::default();
     let reg = registry(steering.clone());
     let tx = add(&reg, "t1", "p1", None);
@@ -136,28 +136,42 @@ async fn steer_rejects_followup_unknown_unowned_and_falls_back_for_terminal() {
         .unwrap();
     let handle = SteeringHandle::allow_all();
     steering.register(TaskId::new("t1"), handle.clone());
-    let delivered = Arc::new(std::sync::Mutex::new(None));
-    let captured = delivered.clone();
+    let (calls, fb) = counting();
     assert_eq!(
-        steer_detached(
+        steer_detached_with_request_id(
             &reg,
             "t1",
             SteerAccess::Trusted,
             "x".into(),
             QueueLane::Steer,
-            RecordingFallback(captured)
+            Some("req-terminal"),
+            fb,
         )
         .await,
-        Ok(SteerRoute::Fallback)
+        Err(SteerError::Unknown)
     );
-    assert_eq!(
-        *delivered.lock().unwrap(),
-        Some(("researcher".to_string(), QueueLane::Steer, "x".to_string()))
-    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "terminal tasks do not fall back");
     assert!(
         handle.drain().is_empty(),
         "terminal children never use stale handles"
     );
+
+    tx.send(DetachedSubagentStatus::Running).unwrap();
+    let (calls, fb) = counting();
+    let receipt = steer_detached_with_request_id(
+        &reg,
+        "t1",
+        SteerAccess::Owner("p1"),
+        "x".into(),
+        QueueLane::Steer,
+        Some("req-terminal"),
+        fb,
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.route, Some(SteerRoute::Registry));
+    assert!(!receipt.duplicate, "a rejected terminal steer keeps its request id");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
