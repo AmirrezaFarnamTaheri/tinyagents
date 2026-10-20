@@ -13,7 +13,7 @@ use tinyagents_registry::catalog::{
 };
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
-    CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResolutionSource,
+    CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
     ModelResponse, ModelStream, ModelStreamItem, PromptSegment, ProviderError, ResponseFormat,
     SegmentRole, StreamAccumulator, ToolChoice, collect_model_stream,
 };
