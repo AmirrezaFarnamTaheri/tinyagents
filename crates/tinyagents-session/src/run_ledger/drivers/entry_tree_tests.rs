@@ -366,9 +366,8 @@ fn boundary(
     refuse: bool,
     reject_post_commit_reads: bool,
 ) -> ScopedStorage {
-    ScopedStorage::new(
-        native.scope().clone(),
-        "memory",
+    crate::testkit::with_documents(
+        native,
         Arc::new(TreeBoundary {
             inner: native.documents().clone(),
             barrier: barrier.then(|| tokio::sync::Barrier::new(2)),
@@ -377,8 +376,6 @@ fn boundary(
             reject_post_commit_reads,
             committed: AtomicBool::new(false),
         }),
-        native.streams().clone(),
-        native.blobs().clone(),
     )
 }
 

@@ -216,13 +216,7 @@ fn wrap(
         refuse,
         calls: AtomicUsize::new(0),
     });
-    let scoped = ScopedStorage::new(
-        native.scope().clone(),
-        "memory",
-        boundary.clone(),
-        native.streams().clone(),
-        native.blobs().clone(),
-    );
+    let scoped = crate::testkit::with_documents(native, boundary.clone());
     (DriverRunLedger::new(scoped), boundary)
 }
 

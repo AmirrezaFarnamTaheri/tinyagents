@@ -84,8 +84,10 @@ async fn prepared_append(backend: &dyn StorageBackend) {
         .unwrap();
     b.append_message("same", ordinary.clone()).await.unwrap();
 
-    let reopened =
-        DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
+    let reopened = DriverConversationStore::new_validate_only(ScopedStorage::new(
+        backend.for_scope(&alice).unwrap(),
+        alice,
+    ));
     assert_eq!(
         reopened.get_messages("same").await.unwrap(),
         vec![first, channel, ordinary.clone(), ordinary.clone()]

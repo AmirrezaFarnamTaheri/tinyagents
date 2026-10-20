@@ -103,15 +103,13 @@ impl DocumentStore for SignedBsonDocuments {
 }
 
 pub(super) fn wrap(native: ScopedStorage) -> DriverRunLedger {
-    DriverRunLedger::new(ScopedStorage::new(
-        native.scope().clone(),
-        "mongo-bson-fixture",
+    let wrapped = crate::testkit::with_documents(
+        &native,
         Arc::new(SignedBsonDocuments {
             inner: native.documents().clone(),
         }),
-        native.streams().clone(),
-        native.blobs().clone(),
-    ))
+    );
+    DriverRunLedger::new(wrapped)
 }
 
 #[tokio::test]

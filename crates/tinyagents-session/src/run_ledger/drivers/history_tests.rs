@@ -12,7 +12,11 @@ use tinyagents_storage_kit::Precondition;
 use tinystoragedrivers_api::StorageBackend;
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
-    DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
+    let scope = Scope::new(scope).unwrap();
+    DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&scope).unwrap(),
+        scope,
+    ))
 }
 
 fn start(id: &str, agent: &str, name: &str) -> SessionStart {

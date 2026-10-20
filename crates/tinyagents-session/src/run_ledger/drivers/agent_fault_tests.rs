@@ -204,13 +204,7 @@ async fn concurrent_telemetry_change_retries_before_agent_commit_and_returns_val
             telemetry_race: Some(newer),
             raced: AtomicBool::new(false),
         });
-        let ledger = DriverRunLedger::new(ScopedStorage::new(
-            native.scope().clone(),
-            "memory",
-            documents.clone(),
-            native.streams().clone(),
-            native.blobs().clone(),
-        ));
+        let ledger = DriverRunLedger::new(crate::testkit::with_documents(&native, documents.clone()));
         let committed = if transition {
             match ledger
                 .transition_agent_run_status_from(

@@ -273,26 +273,15 @@ async fn conflicting_metadata_edits_reread_version_and_preserve_both_fields() {
         .await
         .unwrap();
     let ports = backend.for_scope(&scope).unwrap();
+    let scoped_ports = ScopedStorage::new(ports, scope.clone());
     let docs = Arc::new(fixtures::ConflictingDocs {
-        inner: ports.documents().clone(),
+        inner: scoped_ports.documents().clone(),
         attempts: AtomicUsize::new(0),
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: false,
     });
-    let a = DriverConversationStore::new(ScopedStorage::new(
-        scope.clone(),
-        "test",
-        docs.clone(),
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
-    let b = DriverConversationStore::new(ScopedStorage::new(
-        scope,
-        "test",
-        docs.clone(),
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
+    let a = DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
+    let b = DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
     let (title, labels) = tokio::join!(
         a.update_thread_title("one", "Changed", "now"),
         b.update_thread_labels("one", vec!["worker".into()], "now")

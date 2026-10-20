@@ -16,9 +16,8 @@ use tinystoragedrivers_api::DocumentStoreExt;
 use tinystoragedrivers_api::StorageBackend;
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
-    backend
-        .for_scope(&Scope::new("local/agent:planner").unwrap())
-        .unwrap()
+    let scope = Scope::new("test-planner-ledger").unwrap();
+    ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope)
 }
 
 /// The v1 document id: a digest of the length-prefixed parts.

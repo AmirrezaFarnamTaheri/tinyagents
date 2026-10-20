@@ -99,7 +99,7 @@ impl Key {
 
 pub use migration_lease::{MigrationLease, with_migration_lease};
 pub use migrations::{MIGRATIONS_COLLECTION, Migrations};
-pub use primitives::{Counters, Kv, Leases, Repo};
+pub use primitives::{Counters, Kv, Leases, Repo, RetryPolicy};
 pub use schema::{
     BlobOutput, BlobStepFn, ComposedRegistry, Expiry, Item, MigrateOptions, MigrationReport, Owner,
     Registry, Schema, SchemaMetadata, ScopeClass, SealPolicy, SealWhen, SourceRecord, Step,

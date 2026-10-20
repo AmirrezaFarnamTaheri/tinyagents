@@ -183,13 +183,7 @@ async fn event_pages_follow_native_cursors_with_the_requested_limit() {
         limits: Default::default(),
         refuse: false,
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "query-budget",
-        documents.clone(),
-        scoped.streams().clone(),
-        scoped.blobs().clone(),
-    ));
+    let actor = DriverRunLedger::new(crate::testkit::with_documents(&scoped, documents.clone()));
     let page = actor
         .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
@@ -216,13 +210,7 @@ async fn zero_limit_event_reads_still_require_native_admission() {
         limits: Default::default(),
         refuse: true,
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "query-budget",
-        documents,
-        scoped.streams().clone(),
-        scoped.blobs().clone(),
-    ));
+    let actor = DriverRunLedger::new(crate::testkit::with_documents(&scoped, documents));
     let error = actor
         .list_recent_run_events(&RunEventListRequest {
             run_id: "run".into(),
@@ -246,12 +234,10 @@ async fn successful_projection_progress_does_not_exhaust_the_contention_budget()
         ledger: receipts,
         generated: std::sync::atomic::AtomicUsize::new(0),
     });
-    let actor = DriverRunLedger::new(ScopedStorage::new(
-        scoped.scope().clone(),
-        "arriving-receipts",
+    let actor = DriverRunLedger::new(crate::testkit::with_documents_and_streams(
+        &scoped,
         scoped.documents().clone(),
         streams,
-        scoped.blobs().clone(),
     ));
     assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 65);
     assert_eq!(actor.reconcile_run_events("run").await.unwrap(), 65);

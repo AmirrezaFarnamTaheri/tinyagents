@@ -10,9 +10,8 @@ use tinyagents_storage_kit::{
 use tinystoragedrivers_api::StorageBackend;
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {
-    backend
-        .for_scope(&Scope::new("local/agent:planner").unwrap())
-        .unwrap()
+    let scope = Scope::new("test-planner-store").unwrap();
+    ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope)
 }
 
 async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value, created: i64) {
