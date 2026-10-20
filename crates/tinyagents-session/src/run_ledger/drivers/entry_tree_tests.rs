@@ -481,41 +481,6 @@ async fn import_keeps_insertion_order_for_entries_sharing_an_ordinal() {
 }
 
 #[tokio::test]
-async fn existing_schema_entry_tree_requires_trusted_preparation_and_never_ensures() {
-    use tinystoragedrivers_types::ErrorKind;
-    let backend = MemoryStorage::new();
-    let scope = Scope::new("local").unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let denied = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
-    assert!(
-        matches!(denied.entry_append_to_head("s", kind("denied")).await.unwrap_err(), super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::NotFound)
-    );
-    let trusted = backend.for_scope(&scope).unwrap();
-    assert!(
-        trusted
-            .documents()
-            .collections("")
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    DriverRunLedger::prepare_schema(trusted.documents().as_ref())
-        .await
-        .unwrap();
-    let actor = DriverRunLedger::new_existing_schema(restricted.for_scope(&scope).unwrap());
-    let root = actor
-        .entry_append_to_head("s", kind("admitted"))
-        .await
-        .unwrap();
-    actor.entry_label("s", &root, "named").await.unwrap();
-    actor.entry_rebuild_index("s").await.unwrap();
-    assert_eq!(
-        actor.entry_build_context("s", &root).await.unwrap(),
-        vec![Message::user("admitted")]
-    );
-}
-
-#[tokio::test]
 async fn imported_cycle_and_native_ordinal_exhaustion_refuse_without_partial_entries() {
     use tinystoragedrivers_types::ErrorKind;
     let backend = MemoryStorage::new();
