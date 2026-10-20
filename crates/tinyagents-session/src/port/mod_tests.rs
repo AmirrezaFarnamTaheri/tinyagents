@@ -253,12 +253,14 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
             Ok((id == "allowed").then(|| self.conversations.clone()))
         }
     }
-    let conversations: Arc<dyn ConversationPersistence> = Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(DriverConversationStore::in_memory()),
-    );
+    let scope = tinyagents_storage_kit::Scope::new("conversation-fixture").unwrap();
+    let scoped = crate::testkit::MemoryStorage::new()
+        .for_scope(&scope)
+        .unwrap();
+    let conversations: Arc<dyn ConversationPersistence> =
+        Arc::new(DriverConversationStore::new(tinyagents_storage_kit::ScopedStorage::new(
+            scoped, scope,
+        )));
     let provider = Arc::new(Provider {
         sessions: InMemorySessionStores::new(),
         conversations: conversations.clone(),
