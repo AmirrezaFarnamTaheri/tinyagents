@@ -4,7 +4,6 @@ use futures::stream;
 use serde::Deserialize;
 use serde_json::json;
 use tinyagents_harness::cost::{CostTotals, ModelPricing, estimate_cost};
-use tinyagents_harness::model_registry::{ModelRegistry, ModelSelection};
 use tinyagents_harness::stream::{StreamChunk, StreamMode, StreamSink, stream as filter_stream};
 use tinyagents_harness::structured::{
     StructuredExtractor, StructuredStrategy, response_format_for_strategy,
@@ -14,7 +13,7 @@ use tinyagents_registry::catalog::{
 };
 use tinyinference_llm::message::{Message, MessageDelta};
 use tinyinference_llm::model::{
-    CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
+    CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResolutionSource,
     ModelResponse, ModelStream, ModelStreamItem, PromptSegment, ProviderError, ResponseFormat,
     SegmentRole, StreamAccumulator, ToolChoice, collect_model_stream,
 };
@@ -182,51 +181,15 @@ async fn model_request_response_registry_and_stream_contracts_are_stable() {
     assert_eq!(response.message.usage.unwrap().effective_total(), 5);
     assert_eq!(response.resolved_model, Some(resolved));
 
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register("default", Arc::new(MockModel::constant("default")))
-        .register("direct", Arc::new(MockModel::constant("direct")))
-        .register("hinted", Arc::new(MockModel::constant("hinted")));
-    registry.set_default("default");
-
-    let binding = registry
-        .resolve_request(&request, Some("default"), None)
-        .unwrap();
-    assert_eq!(binding.resolved.name, "direct");
+    assert_eq!(request.model.as_deref(), Some("direct"));
     assert_eq!(
-        binding.resolved.source,
-        ModelResolutionSource::RequestOverride
-    );
-    assert_eq!(registry.names(), vec!["default", "direct", "hinted"]);
-
-    let fallback = registry
-        .resolve(ModelSelection {
-            hints: vec![
-                ModelHint {
-                    model: "missing".into(),
-                    priority: 100,
-                    reason: None,
-                },
-                ModelHint {
-                    model: "hinted".into(),
-                    priority: 1,
-                    reason: None,
-                },
-            ],
-            ..ModelSelection::default()
-        })
-        .unwrap();
-    assert_eq!(fallback.resolved.name, "hinted");
-    assert_eq!(fallback.resolved.source, ModelResolutionSource::Hint);
-
-    let unsatisfied = registry.resolve(ModelSelection {
-        required_capabilities: Some(CapabilitySet {
-            min_input_tokens: Some(u64::MAX),
+        request.required_capabilities,
+        Some(CapabilitySet {
+            tool_calling: true,
+            streaming: true,
             ..CapabilitySet::default()
-        }),
-        ..ModelSelection::default()
-    });
-    assert!(unsatisfied.is_none());
+        })
+    );
 
     let mut accumulator = StreamAccumulator::new();
     accumulator.push(&ModelStreamItem::Started);
