@@ -56,8 +56,7 @@ use std::sync::Arc;
 
 pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
-    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage,
-    storage_schema,
+    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage, storage_schema,
 };
 #[cfg(any(test, feature = "testkit"))]
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};

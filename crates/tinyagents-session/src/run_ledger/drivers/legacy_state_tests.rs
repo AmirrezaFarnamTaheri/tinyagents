@@ -4,12 +4,11 @@ use crate::run_ledger::types::*;
 use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
 use chrono::{Duration, Utc};
 use serde_json::json;
+use tinyagents_storage_kit::Scope;
 use tinystoragedrivers_api::DocumentStoreExt;
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
 use tinystoragedrivers_types::{Scope, WriteOptions};
-use tinyagents_storage_kit::Scope;
-
 
 fn scoped() -> ScopedStorage {
     let backend = memory_backend();
@@ -180,11 +179,13 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
     let backend = memory_backend();
     let scope = Scope::new("fixture-agent-scope").unwrap();
     let storage = ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope);
-    let fixture: Value = serde_json::from_str(include_str!(
-        "fixtures/legacy-31cc-session.json"
-    ))
-    .unwrap();
-    for collection in ["ledger.workflow_runs", "history.sessions", "history.messages"] {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/legacy-31cc-session.json")).unwrap();
+    for collection in [
+        "ledger.workflow_runs",
+        "history.sessions",
+        "history.messages",
+    ] {
         for row in fixture[collection].as_array().unwrap() {
             put(
                 &storage,
@@ -226,17 +227,27 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
             && row.doc["key"] == "theme"
             && row.doc["value"] == "dark"
     }));
-    assert!(storage
-        .documents()
-        .query_all("session_kv", &Default::default())
+    assert!(
+        storage
+            .documents()
+            .query_all("session_kv", &Default::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let ledger = provider.driver_run_ledger("fixture-agent").unwrap();
+    let workflow = ledger
+        .get_workflow_run("fixture-workflow")
         .await
         .unwrap()
-        .is_empty());
-    let ledger = provider.driver_run_ledger("fixture-agent").unwrap();
-    let workflow = ledger.get_workflow_run("fixture-workflow").await.unwrap().unwrap();
+        .unwrap();
     assert_eq!(workflow.definition_id, "fixture-definition");
     assert_eq!(workflow.parent_thread_id.as_deref(), Some("fixture-thread"));
-    let session = ledger.get_session("fixture-session").await.unwrap().unwrap();
+    let session = ledger
+        .get_session("fixture-session")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(session.agent_definition_id, "fixture-agent");
     assert_eq!(session.agent_definition_name, "Archived fixture");
 }

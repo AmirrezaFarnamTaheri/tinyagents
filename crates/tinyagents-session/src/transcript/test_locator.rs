@@ -1,16 +1,16 @@
 //! Test fixtures: classic `session_raw/*.jsonl` files read into an in-memory
 //! locator. The file reader is used here only to seed view fixtures.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    DisplayRecord, DisplaySessionTranscript, SessionRef, SessionTranscript,
-    ThreadTranscripts, TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptRead,
-    TranscriptTurn, read_transcript_display,
+    DisplayRecord, DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscripts,
+    TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptRead, TranscriptTurn,
+    read_transcript_display,
 };
 use crate::port::SessionStoreProvider;
 
@@ -91,7 +91,10 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
             previous = next;
         }
     }
-    Arc::new(DisplayLocator { inner: locator, displays })
+    Arc::new(DisplayLocator {
+        inner: locator,
+        displays,
+    })
 }
 
 /// [`thread_spend_in`](super::spend::thread_spend_in) over the fixtures

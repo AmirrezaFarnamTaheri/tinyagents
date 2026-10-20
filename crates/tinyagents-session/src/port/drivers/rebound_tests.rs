@@ -296,12 +296,10 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .put("n", "k", serde_json::json!("retained"))
             .await
             .unwrap();
-        let independent = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
-            expected_backend,
-            "new",
-        ))
-        .unwrap()
-        .for_agent("racing-agent");
+        let independent =
+            DriverSessionStores::new(crate::testkit::fixed_scope_factory(expected_backend, "new"))
+                .unwrap()
+                .for_agent("racing-agent");
         assert_eq!(
             independent.kv.get("n", "k").await.unwrap(),
             Some(serde_json::json!("retained"))

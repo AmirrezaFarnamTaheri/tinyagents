@@ -199,8 +199,8 @@ async fn probed_store(
     return_false_after_thread_delete: Option<usize>,
 ) -> (DriverConversationStore, Arc<DeleteProbeDocs>) {
     let backend = crate::testkit::MemoryStorage::new();
-    let scope = tinyagents_storage_kit::Scope::new("purge-callback-probe")
-        .expect("fixture scope is valid");
+    let scope =
+        tinyagents_storage_kit::Scope::new("purge-callback-probe").expect("fixture scope is valid");
     let scoped = backend.for_scope(&scope).expect("memory ports");
     DriverConversationStore::prepare_schema(scoped.documents().as_ref())
         .await
