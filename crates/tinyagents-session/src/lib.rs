@@ -4,11 +4,10 @@
 //! session history (sessions, messages, tool calls, with full-text search), a
 //! [`run_ledger`] for background agent and workflow execution state, the
 //! conversation [`entry_tree`], transcripts, turn-state snapshots and chat
-//! threads. A host opens one storage backend (SQLite on a desktop, MongoDB in
-//! the cloud, memory in tests), hands it to [`DriverSessionStores`], and gets
-//! every agent's stores in that backend, each under its own tenant scope. This
-//! is the runtime's *history* layer: what ran, what it cost, what it called,
-//! and how runs nest.
+//! threads. A host selects its backend and supplies storage already bound to
+//! each authorized agent identity to [`DriverSessionStores`]. This is the
+//! runtime's *history* layer: what ran, what it cost, what it called, and how
+//! runs nest.
 //!
 //! # Why this is a top-level module
 //!

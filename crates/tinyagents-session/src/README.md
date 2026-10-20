@@ -36,8 +36,10 @@ Everything lives wherever the host's storage backend puts it:
 
 ```text
 {host storage backend}                          ← sessions, run ledger, transcripts, chat threads (collections)
-{workspace_dir}/session_raw/{stem}.jsonl        ← classic transcripts: read once by legacy::import_transcripts_once; rewritten in place only by legacy::rewrite_legacy_transcripts
 ```
+
+Classic workspace files are outside this crate's layout. The host owns their
+discovery, import and any rewrite; see the legacy import handoff.
 
 ## Public surface
 
@@ -67,8 +69,8 @@ reachable under `session::`, `session::run_ledger::`, and
   host; see [`docs/legacy-import-handoff.md`](../docs/legacy-import-handoff.md).
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
-  ledger workspace or a `TranscriptHistory` implementation behaves like the
-  bundled ones. Run against the memory and SQLite run ledgers and both the driver-backed and the in-memory
+  ledger or a `TranscriptHistory` implementation behaves like the bundled
+  ones. Run against the testkit memory backend and both the driver-backed and the in-memory
   `testkit::InMemoryTranscriptHistory` double in
   `crates/tinyagents-integration-tests/tests/session_conformance.rs`.
 
