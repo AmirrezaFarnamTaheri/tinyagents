@@ -5,8 +5,8 @@ invocation entry points that sit on top of the default agent loop
 (`crate::agent_loop`).
 
 `AgentHarness<State, Ctx>` is the durable, reusable object a caller builds
-once — it owns the model registry, tool registry, middleware stack, and
-run policy. The agent loop itself (model ⇄ tool) is implemented as inherent
+once — it owns the configured model resolver, tool registry, middleware stack,
+and run policy. The agent loop itself (model ⇄ tool) is implemented as inherent
 methods on `AgentHarness` in the sibling `agent_loop` module; this module
 owns construction/registration (`mod.rs`), the type definitions (`types.rs`),
 and the separate host-driven invocation surface (`agent.rs`) that wires a
@@ -33,7 +33,7 @@ enforcement — only how the turn gets *set up* differs.
 
 | Item | File | Role |
 | --- | --- | --- |
-| `AgentHarness<State, Ctx>` | `types.rs` (impl in `mod.rs`, `agent.rs`) | The builder/facade: registries, middleware, policy, response cache. |
+| `AgentHarness<State, Ctx>` | `types.rs` (impl in `mod.rs`, `agent.rs`) | The builder/facade: model resolver, tools, middleware, policy, response cache. |
 | `RunPolicy` | `types.rs` | Declarative cross-cutting policy: limits, unknown-tool/invalid-args handling, retry, fallback, response format, payload capture, cache policy, empty-response handling. |
 | `UnknownToolPolicy`, `InvalidArgsPolicy` | `types.rs` | How the loop recovers from a hallucinated tool name or schema-invalid arguments. |
 | `PayloadCapture` | `types.rs` | Opt-in capture of model/tool payloads onto observability events. |
@@ -44,7 +44,7 @@ enforcement — only how the turn gets *set up* differs.
 
 | File | Role |
 | --- | --- |
-| `mod.rs` | Builder/registration/accessor methods on `AgentHarness` (`register_model`, `push_agent_middleware`, `push_middleware`, `with_response_cache`, …). |
+| `mod.rs` | Builder/accessor methods on `AgentHarness` (`with_model_resolver`, `with_model`, `register_tool`, `push_agent_middleware`, `push_middleware`, `with_response_cache`, …). |
 | `types.rs` | Public type definitions: `RunPolicy` and its sub-policies, `PayloadCapture`, `AgentHarness`'s fields, `InvocationRuntime`, and the crate-private `HostInvocationBinding`. |
 | `agent.rs` | Host-driven invocation: definition resolution, security screening, context composition, memory/experience recall, the `invoke_agent*` entry points, and post-turn memory/learning/experience finalization. |
 | `mod_tests.rs` | Tests for `AgentHarness` construction/registration and `RunPolicy` defaults. |

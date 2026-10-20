@@ -202,6 +202,30 @@ async fn fixed_resolver_ignores_every_routing_field() {
 }
 
 #[tokio::test]
+async fn prebuilt_named_lookup_does_not_substitute_the_primary_for_unknown_names() {
+    let resolver = PrebuiltModelResolver::new(
+        Arc::new(EchoModel("primary")),
+        [("backup".to_string(), Arc::new(EchoModel("backup")) as Arc<dyn ChatModel<()>>)],
+    )
+    .with_primary_name("primary");
+
+    let backup = resolver
+        .resolve_named("backup")
+        .await
+        .expect("lookup succeeds")
+        .expect("registered named route exists");
+    assert!(Arc::ptr_eq(
+        &backup,
+        resolver.routes.get("backup").expect("backup route")
+    ));
+    assert!(resolver
+        .resolve_named("unregistered")
+        .await
+        .expect("unknown names are a normal miss")
+        .is_none());
+}
+
+#[tokio::test]
 async fn resolved_model_shares_the_wrapped_allocation() {
     // Resolution must hand back a handle to the same long-lived client, not
     // a clone — a per-turn copy would discard its connection pool.
