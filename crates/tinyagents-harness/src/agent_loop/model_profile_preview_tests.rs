@@ -74,6 +74,7 @@ async fn before_model_sees_the_target_model_profile() {
 
 #[tokio::test]
 async fn later_middleware_sees_model_selected_by_earlier_middleware() {
+    use crate::host::{ModelResolver, PrebuiltModelResolver};
     let first_profile = ModelProfile {
         model: Some("first".into()),
         hoists_system_messages: true,
@@ -86,8 +87,17 @@ async fn later_middleware_sees_model_selected_by_earlier_middleware() {
     };
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("first", Arc::new(ScriptedModel::replies(vec!["wrong"]).with_profile(first_profile)),)));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("second", Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(second_profile.clone())),)));
+    let first: Arc<dyn ChatModel<()>> = Arc::new(
+        ScriptedModel::replies(vec!["wrong"]).with_profile(first_profile),
+    );
+    let second: Arc<dyn ChatModel<()>> = Arc::new(
+        ScriptedModel::replies(vec!["done"]).with_profile(second_profile.clone()),
+    );
+    let resolver: Arc<dyn ModelResolver<()>> = Arc::new(
+        PrebuiltModelResolver::new(first, [("second".to_owned(), second)])
+            .with_primary_name("first"),
+    );
+    harness.with_model_resolver(resolver);
     harness.push_middleware(Arc::new(SelectModel("second")));
     harness.push_middleware(Arc::new(SeenProfiles(seen.clone())));
 

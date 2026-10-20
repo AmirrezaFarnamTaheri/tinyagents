@@ -5097,6 +5097,7 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
 async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting() {
     use std::time::Duration;
 
+    use crate::host::PrebuiltModelResolver;
     use crate::testkit::{ScriptedModel, SlowModel};
 
     // Same setup as `per_model_call_ceiling_times_out_a_slow_call_with_run_time_left`,
@@ -5110,12 +5111,11 @@ async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting(
     let slow = Arc::new(SlowModel::new(Duration::from_millis(200), "too late"));
     let fallback = Arc::new(ScriptedModel::replies(vec!["fallback answer"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", slow.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
-    harness.with_policy(RunPolicy {
-        fallback: Some(FallbackPolicy::new(["fallback"])),
-        ..RunPolicy::default()
-    });
+    let resolver = PrebuiltModelResolver::new(
+        slow.clone(),
+        [("fallback".to_string(), fallback.clone())],
+    ).with_primary_name("slow");
+    harness.with_model_resolver(Arc::new(resolver));
 
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(20)),
@@ -5140,6 +5140,7 @@ async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting(
         1,
         "the fallback chain must actually have been consulted and called"
     );
+    assert_eq!(*slow.calls.lock().unwrap(), 1, "the primary must time out first");
 }
 
 #[tokio::test]
@@ -5793,10 +5794,14 @@ async fn skipped_model_override_emits_diagnostic_event() {
 #[tokio::test]
 async fn honored_model_override_emits_no_diagnostic_event() {
     use crate::testkit::EventRecorder;
+    use crate::host::PrebuiltModelResolver;
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("default")))));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("special", Arc::new(MockModel::constant("special answer")))));
+    let resolver = PrebuiltModelResolver::new(
+        Arc::new(MockModel::constant("default")),
+        [("special".to_string(), Arc::new(MockModel::constant("special answer")))],
+    ).with_primary_name("mock");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.push_middleware(Arc::new(OverrideModelMiddleware("special")));
 
     let recorder = EventRecorder::new();
