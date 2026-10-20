@@ -104,12 +104,12 @@ fn profile_preview_uses_the_eligible_default_for_an_ineligible_pin() {
     use crate::host::{ModelResolver, PrebuiltModelResolver};
     use tinyinference_llm::model::{CapabilitySet, ModelRequest};
 
-    let primary = Arc::new(ScriptedModel::replies(vec!["primary"]).with_profile(ModelProfile {
+    let primary: Arc<dyn ChatModel<()>> = Arc::new(ScriptedModel::replies(vec!["primary"]).with_profile(ModelProfile {
         model: Some("primary".into()),
         tool_calling: true,
         ..ModelProfile::default()
     }));
-    let pinned = Arc::new(ScriptedModel::replies(vec!["pinned"]).with_profile(ModelProfile {
+    let pinned: Arc<dyn ChatModel<()>> = Arc::new(ScriptedModel::replies(vec!["pinned"]).with_profile(ModelProfile {
         model: Some("pinned".into()),
         tool_calling: false,
         ..ModelProfile::default()
