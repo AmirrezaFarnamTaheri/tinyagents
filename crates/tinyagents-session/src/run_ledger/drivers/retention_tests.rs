@@ -1,6 +1,7 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use chrono::Duration;
-use tinyagents_storage_kit::{MemoryStorage, Precondition, StorageBackend};
+use tinyagents_storage_kit::{Precondition, StorageBackend};
 
 async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
     let mut row = ledger

@@ -1,3 +1,4 @@
+use crate::testkit::MemoryStorage;
 use super::super::DriverRunLedger;
 use super::*;
 use crate::entry_tree::Entry;
@@ -10,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinystoragedrivers_api::DocumentStoreExt;
 use tinyagents_storage_kit::{
-    Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
+    Item, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
     StorageBackend, WriteOptions,
 };
 

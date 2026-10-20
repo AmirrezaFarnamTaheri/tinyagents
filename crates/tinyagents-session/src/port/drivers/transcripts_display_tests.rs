@@ -1,7 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::{TranscriptMessage, TranscriptTurn};
-use tinyagents_storage_kit::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Blocking, DocumentStore, Scope, StorageBackend};
 
 fn locator() -> DriverTranscriptLocator {
     let storage = MemoryStorage::new();

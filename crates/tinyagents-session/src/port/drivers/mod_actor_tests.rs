@@ -1,7 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::turn_state::TurnState;
 use serde_json::json;
-use tinyagents_storage_kit::{Capabilities, Fence, Filter, MemoryStorage};
+use tinyagents_storage_kit::{Capabilities, Fence, Filter};
 
 #[test]
 fn actor_factory_uses_supplied_backend_with_independent_stable_agent_cache() {

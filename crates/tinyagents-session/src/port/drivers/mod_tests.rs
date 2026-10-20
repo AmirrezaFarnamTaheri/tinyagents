@@ -1,4 +1,5 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_sqlite::SqliteStorage;
@@ -754,7 +755,7 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 
 #[tokio::test]
 async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independently() {
-    let backend = Arc::new(tinystoragedrivers_types::MemoryStorage::new());
+    let backend = Arc::new(MemoryStorage::new());
     let provider =
         DriverSessionStores::new(backend, tinystoragedrivers_types::Scope::local()).unwrap();
     let one = provider.run_ledger_for_agent("alice").unwrap().unwrap();
@@ -779,7 +780,7 @@ async fn native_provider_returns_stable_bound_ledger_and_rebinds_actor_independe
         0
     );
     let actor = provider
-        .bind_actor(Arc::new(tinystoragedrivers_types::MemoryStorage::new()))
+        .bind_actor(Arc::new(MemoryStorage::new()))
         .unwrap()
         .unwrap();
     let rebound = actor.run_ledger_for_agent("alice").unwrap().unwrap();

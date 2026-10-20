@@ -1,5 +1,6 @@
 use super::*;
-use tinyagents_storage_kit::{MemoryStorage, StorageBackend};
+use crate::testkit::MemoryStorage;
+use tinyagents_storage_kit::{StorageBackend};
 
 fn ledger_on(backend: &dyn StorageBackend, scope: &str) -> DriverRunLedger {
     DriverRunLedger::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())

@@ -1,6 +1,7 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinyagents_storage_kit::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Fence, Scope, StorageBackend};
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {

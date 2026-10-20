@@ -1,6 +1,7 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use serde_json::{Value, json};
-use tinyagents_storage_kit::{CollectionSpec, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Scope, StorageBackend};
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
 const PENDING_COLLECTION: &str = "conversations.appends";

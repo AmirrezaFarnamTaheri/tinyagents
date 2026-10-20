@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::*;
 use tinyagents_storage_kit::Scope;
-use tinystoragedrivers_testkit::memory_storage;
 use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_testkit::memory_storage;
 
 // ── Test policies ─────────────────────────────────────────────────────────────
 

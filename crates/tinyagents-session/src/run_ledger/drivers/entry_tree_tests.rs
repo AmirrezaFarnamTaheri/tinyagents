@@ -1,7 +1,8 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use crate::entry_tree::{ForkPosition, ForkScope};
 use crate::transcript::TranscriptMessage;
-use tinyagents_storage_kit::{MemoryStorage, StorageBackend};
+use tinyagents_storage_kit::{StorageBackend};
 
 fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))

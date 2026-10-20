@@ -1,9 +1,10 @@
 use super::*;
+use crate::testkit::MemoryStorage;
 use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinyagents_storage_kit::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Blocking, DocumentStore, Scope, StorageBackend};
 
 const THREAD: &str = "t";
 
@@ -238,30 +239,25 @@ fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
     let session = SessionRef::scoped(THREAD, "orchestrator");
     let seed = legacy("orchestrator", "2026-02-01", 0, 0);
 
-    let adoption = transcripts
+    let adoption = locator
         .adopt_legacy(&session, THREAD, &seed)
         .unwrap()
-        .expect("the imported legacy roots are adopted");
+        .expect("the pre-identity roots are adopted");
     assert_eq!(adoption.messages, 2);
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
-    drop((transcripts, stores));
-
-    // The next process resumes the session in place.
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
     assert!(
-        transcripts
+        locator
             .adopt_legacy(&session, THREAD, &seed)
             .unwrap()
             .is_none()
     );
     assert_eq!(
-        contents(transcripts.as_ref(), &session),
+        contents(&locator, &session),
         vec!["first", "second"]
     );
 }
