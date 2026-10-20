@@ -973,7 +973,6 @@ fn new_harness_is_empty_with_default_policy() {
 }
 
 #[test]
-#[test]
 fn register_tool_and_push_middleware() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.register_tool(Arc::new(NoopTool));
