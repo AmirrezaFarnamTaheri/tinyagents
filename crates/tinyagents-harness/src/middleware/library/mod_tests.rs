@@ -1943,3 +1943,19 @@ async fn run_mode_handle_set_takes_effect_immediately_on_shared_clones() {
         .await
         .expect_err("plan mode now denies the same call");
 }
+
+#[cfg(feature = "json-schema")]
+#[test]
+fn run_mode_schema_and_serde_use_the_wire_discriminants() {
+    let schema = serde_json::to_value(schemars::schema_for!(RunMode)).unwrap();
+    assert_eq!(schema["enum"], json!(["build", "plan"]));
+    assert_eq!(
+        serde_json::to_value(RunMode::Build).unwrap(),
+        json!("build")
+    );
+    assert_eq!(serde_json::to_value(RunMode::Plan).unwrap(), json!("plan"));
+    assert_eq!(
+        serde_json::from_value::<RunMode>(json!("plan")).unwrap(),
+        RunMode::Plan
+    );
+}

@@ -26,6 +26,31 @@ fn status_strings_match_serialized() {
     assert_eq!(ThreadGoalStatus::Complete.as_str(), "complete");
 }
 
+#[cfg(feature = "json-schema")]
+#[test]
+fn public_goal_schema_uses_the_serialized_camel_case_record() {
+    let schema = serde_json::to_value(schemars::schema_for!(ThreadGoal)).unwrap();
+    let properties = &schema["properties"];
+    for field in [
+        "threadId",
+        "goalId",
+        "objective",
+        "status",
+        "tokenBudget",
+        "tokensUsed",
+        "timeUsedSeconds",
+        "createdAtMs",
+        "updatedAtMs",
+        "continuationSuppressed",
+    ] {
+        assert!(properties.get(field).is_some(), "missing {field}: {schema}");
+    }
+    assert_eq!(
+        schema["$defs"]["ThreadGoalStatus"]["enum"],
+        serde_json::json!(["active", "paused", "budget_limited", "complete"])
+    );
+}
+
 #[test]
 fn active_and_terminal_predicates() {
     assert!(ThreadGoalStatus::Active.is_active());
