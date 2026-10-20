@@ -31,7 +31,7 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
         Ok(())
     }
 
-    let locator = Arc::new(crate::port::InMemorySessionStores::new().transcripts);
+    let locator = Arc::new(crate::port::InMemorySessionStores::new().for_agent("fixture").transcripts);
     let raw = workspace.join("session_raw");
     let mut files = Vec::new();
     if raw.exists() {
