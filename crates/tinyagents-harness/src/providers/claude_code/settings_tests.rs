@@ -37,6 +37,8 @@ async fn legacy_settings_import_only_fills_an_empty_target() {
     let old_release_fixture = include_bytes!("fixtures/claude_code_settings.json");
     assert!(import_legacy(&kv, old_release_fixture).await.unwrap());
     assert!(load(&kv).await.unwrap().full_access);
+    assert!(!import_legacy(&kv, old_release_fixture).await.unwrap());
+    assert!(load(&kv).await.unwrap().full_access);
     assert!(
         !import_legacy(&kv, br#"{"full_access":false}"#)
             .await

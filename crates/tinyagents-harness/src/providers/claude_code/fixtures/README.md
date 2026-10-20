@@ -18,3 +18,10 @@ The script extracts those exact source files from the archived commit, builds
 the small generator in `target/`, and copies the resulting old-writer bytes
 back here. The tests import these captured bytes directly; they do not rebuild
 the old schema locally.
+
+Fixture SHA-256 values:
+
+```text
+742e9251ce13e2efc1ec19315b1d717aeed50e62e61a3fea92a48616108cd520  claude-code-sessions.json
+42c3736530ed37f3a0072b863b864e44bca3fe251deaa95c09954c9b2ecf97a6  claude_code_settings.json
+```

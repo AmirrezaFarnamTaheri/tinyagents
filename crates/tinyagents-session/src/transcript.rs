@@ -80,7 +80,6 @@ pub mod legacy;
 mod legacy_md;
 #[cfg(test)]
 mod markdown;
-#[cfg(test)]
 mod paths;
 #[cfg(test)]
 mod reader;
