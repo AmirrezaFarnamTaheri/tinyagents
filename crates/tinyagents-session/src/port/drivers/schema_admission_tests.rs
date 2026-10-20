@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_types::{CollectionSpec, DocumentStore, ErrorKind, MemoryStorage};
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, ErrorKind, MemoryStorage};
 
 #[derive(Debug, Default)]
 struct Observations {

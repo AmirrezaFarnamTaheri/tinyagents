@@ -1,6 +1,6 @@
 //! The session crate's v2 storage declarations: [`storage_schema`].
 
-use tinystoragedrivers_types::{Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
 
 use super::transcripts::{
     self, ENTRIES as ENTRIES_NAME, INDEX as INDEX_NAME, SCHEMA_VERSION as TRANSCRIPT_VERSION,

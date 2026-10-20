@@ -30,7 +30,7 @@
 use std::collections::BTreeSet;
 
 use serde_json::Value;
-use tinystoragedrivers_types::{DocumentStoreExt, Filter, Query, StorageError};
+use tinyagents_storage_kit::{DocumentStoreExt, Filter, Query, StorageError};
 
 use super::{DriverTranscriptLocator, ENTRIES, discovered_seed, is_subagent, reservation, run_on};
 use crate::transcript::{

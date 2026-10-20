@@ -1,6 +1,6 @@
 use super::*;
 use chrono::Duration;
-use tinystoragedrivers_types::{MemoryStorage, Precondition, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Precondition, StorageBackend};
 
 async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
     let mut row = ledger
@@ -107,7 +107,7 @@ async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, ErrorKind, Page, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };
@@ -296,7 +296,7 @@ async fn empty_retention_still_requires_native_admission() {
 
 #[tokio::test]
 async fn retired_generation_cannot_prune_fresh_telemetry() {
-    use tinystoragedrivers_types::{PurgeMode, PurgeRequest};
+    use tinyagents_storage_kit::{PurgeMode, PurgeRequest};
     let backend = MemoryStorage::new();
     let scope = Scope::new("a").unwrap();
     let native = backend.for_scope(&scope).unwrap();

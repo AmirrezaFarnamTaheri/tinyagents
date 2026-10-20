@@ -8,7 +8,7 @@ use crate::entry_tree::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     DocumentStoreExt, ErrorKind, Filter, Precondition, Query, ReadCheck, StorageError, Version,
     WriteOp,
 };

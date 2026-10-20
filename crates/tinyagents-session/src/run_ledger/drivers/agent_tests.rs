@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, StorageBackend};
 
 pub(super) fn run(id: &str) -> AgentRunUpsert {
     AgentRunUpsert {
@@ -392,7 +392,7 @@ async fn native_command_center_controls_use_atomic_status_and_event_receipts() {
 
 #[tokio::test]
 async fn retired_generation_cannot_change_status_allocate_events_or_project_streams() {
-    use tinystoragedrivers_types::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
+    use tinyagents_storage_kit::{ErrorKind, PurgeMode, PurgeRequest, ScopeGeneration};
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let old = DriverRunLedger::new(

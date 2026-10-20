@@ -17,7 +17,7 @@ use super::*;
 use crate::types::{SessionMessage, SessionRecord, SessionStatus, SessionToolCall};
 use serde_json::Value;
 use std::collections::HashSet;
-use tinystoragedrivers_types::{DocumentStoreExt, Precondition, Versioned, WriteOp, WriteResult};
+use tinyagents_storage_kit::{DocumentStoreExt, Precondition, Versioned, WriteOp, WriteResult};
 
 const LOG_PREFIX: &str = "[session_db:retention]";
 

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tinyagents_storage_kit::Blocking;
 use tinystoragedrivers_api::{DocumentStore, StreamStore};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, Result, Sort,
     StorageError, StreamEntry, Version, Versioned,
 };

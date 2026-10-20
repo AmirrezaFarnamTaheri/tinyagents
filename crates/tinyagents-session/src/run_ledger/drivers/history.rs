@@ -24,7 +24,7 @@ use crate::types::{
 };
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     Counters, DocumentStoreExt, ErrorKind, ExpectedDocument, ID_FIELD, Precondition, ReadCheck,
     Versioned, WriteOp,
 };

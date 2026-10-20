@@ -38,7 +38,7 @@ use tinyagents_harness::store::SchemaAdmission;
 use tinyagents_storage_kit::primitives::{Leases, Repo};
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CREATED_FIELD, CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Sort,
     StorageError, WriteOptions,
 };

@@ -1,6 +1,6 @@
 use super::*;
 use crate::testkit::conformance::transcript_history_conformance;
-use tinystoragedrivers_types::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 pub(in crate::port::drivers) fn meta(thread_id: &str) -> TranscriptMeta {
     let mut meta = discovered_seed("planner");

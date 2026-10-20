@@ -16,7 +16,7 @@
 //! use std::sync::Arc;
 //! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
-//! use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
+//! use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 //!
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();

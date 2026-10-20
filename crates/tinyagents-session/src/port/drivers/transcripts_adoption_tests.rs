@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::port::drivers::transcripts::tests::meta;
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_types::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Blocking, DocumentStore, MemoryStorage, Scope, StorageBackend};
 
 const THREAD: &str = "t";
 

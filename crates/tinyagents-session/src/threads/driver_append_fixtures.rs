@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     Capabilities, Page, Query, ReadCheck, Sort, StreamEntry, Version, WriteOp, WriteResult,
 };
 use tokio::sync::{Barrier, Notify};

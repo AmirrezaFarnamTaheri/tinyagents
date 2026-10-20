@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tinyagents_storage_kit::ScopedStorage;
 use tinyagents_storage_kit::primitives::Repo;
 use tinystoragedrivers_api::{DocumentStore, StreamStore};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, ErrorKind, Filter, Key, Precondition, Query, StorageError, Versioned,
     WriteOptions,
 };

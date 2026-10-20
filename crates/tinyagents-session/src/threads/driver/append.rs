@@ -1,7 +1,7 @@
 //! Writer-only reconciliation; a stream row is invisible until metadata publishes it.
 use super::pending::{APPENDS, AppendIntent};
 use super::*;
-use tinystoragedrivers_types::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
+use tinyagents_storage_kit::{Capability, ExpectedDocument, ReadCheck, WriteOp, WriteResult};
 
 impl DriverConversationStore {
     /// Thread metadata plus the companion durable append-intent declaration

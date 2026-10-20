@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };

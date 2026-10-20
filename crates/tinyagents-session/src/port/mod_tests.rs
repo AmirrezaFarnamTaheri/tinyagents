@@ -150,7 +150,7 @@ fn checked_accessor_arc_forwards_native_refusal() {
 #[test]
 fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
     use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
-    use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
     struct LedgerProvider {
         sessions: InMemorySessionStores,
         ledger: Arc<dyn RunLedgerStore>,
@@ -272,7 +272,7 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
 #[test]
 fn optional_conversation_provider_keeps_native_refusal_kind_and_source_through_arc() {
     use crate::threads::{ConversationError, ConversationPersistence, ConversationResult};
-    use tinystoragedrivers_types::{ErrorKind, StorageError};
+    use tinyagents_storage_kit::{ErrorKind, StorageError};
     struct Refused(InMemorySessionStores);
     impl SessionStoreProvider for Refused {
         fn for_agent(&self, id: &str) -> AgentStores {

@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tinyagents_storage_kit::primitives::{self, Repo};
 
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort,
     StorageError, Versioned, WriteOp, WriteOptions,
 };

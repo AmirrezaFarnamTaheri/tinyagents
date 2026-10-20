@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt, Scope, ScopedStorage, StorageBackend};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{CollectionSpec, StorageError};
+use tinyagents_storage_kit::{CollectionSpec, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};
 

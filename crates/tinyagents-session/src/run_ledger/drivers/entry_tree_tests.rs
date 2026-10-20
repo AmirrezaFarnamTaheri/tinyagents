@@ -1,7 +1,7 @@
 use super::*;
 use crate::entry_tree::{ForkPosition, ForkScope};
 use crate::transcript::TranscriptMessage;
-use tinystoragedrivers_types::{MemoryStorage, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, StorageBackend};
 
 fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))
@@ -258,7 +258,7 @@ async fn compaction_and_pinned_context_project_summary_pinned_then_kept_rows() {
 
 #[tokio::test]
 async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
-    use tinystoragedrivers_types::{ErrorKind, PurgeMode, PurgeRequest};
+    use tinyagents_storage_kit::{ErrorKind, PurgeMode, PurgeRequest};
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let scoped = backend.for_scope(&scope).unwrap();
@@ -295,7 +295,7 @@ async fn retired_generation_cannot_read_or_append_fresh_entry_tree() {
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, Page, Precondition, ReadCheck, Version, Versioned, WriteOp,
     WriteResult,
 };

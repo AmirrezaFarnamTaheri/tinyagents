@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinyagents_storage_kit::primitives::{self, LEASES};
 use tinyagents_storage_kit::{Counters, Migrations, ScopedStorage};
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Precondition, Query, Result, Sort,
 };
 

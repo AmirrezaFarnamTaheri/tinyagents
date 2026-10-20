@@ -28,7 +28,7 @@ use storage::{
 };
 use tinyagents_storage_kit::ScopedStorage;
 use tinyagents_storage_kit::primitives::Leases;
-use tinystoragedrivers_types::{Filter, Query, Scope, Sort, StorageError};
+use tinyagents_storage_kit::{Filter, Query, Scope, Sort, StorageError};
 use tokio::sync::OnceCell;
 
 use super::LedgerResult as Result;

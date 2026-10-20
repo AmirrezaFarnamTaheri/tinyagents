@@ -6,7 +6,7 @@ use super::dto::{StreamEvent, stored_as_is};
 use super::storage::{AGENTS, CAS_ATTEMPTS, EVENT_HEADS, EVENTS, event_stream, key, put_op};
 use super::*;
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_types::{ErrorKind, Precondition, Versioned, WriteOp};
+use tinyagents_storage_kit::{ErrorKind, Precondition, Versioned, WriteOp};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct EventHead {

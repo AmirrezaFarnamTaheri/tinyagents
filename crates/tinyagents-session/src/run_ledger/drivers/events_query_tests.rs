@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::Value;
-use tinystoragedrivers_types::{
+use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, ErrorKind, MemoryStorage, Page, Precondition, ReadCheck,
     StorageBackend, Version, Versioned, WriteOp, WriteResult,
 };

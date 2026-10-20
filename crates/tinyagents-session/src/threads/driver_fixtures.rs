@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_types::{CollectionSpec, DocumentStore, Page, Sort};
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, Page, Sort};
 
 #[derive(Debug)]
 pub(super) struct ConflictingDocs {

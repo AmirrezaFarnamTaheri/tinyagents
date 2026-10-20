@@ -2,7 +2,7 @@
 //! function of its input, so a resumed run produces the same output.
 
 use serde_json::Value;
-use tinystoragedrivers_types::{Key, SourceRecord, Step, TargetRecord};
+use tinyagents_storage_kit::{Key, SourceRecord, Step, TargetRecord};
 
 use super::super::turn_states::storage;
 use super::{ENTRIES_NAME, INDEX_NAME, TRANSCRIPT_VERSION, TURN_NAME, TURN_VERSION};

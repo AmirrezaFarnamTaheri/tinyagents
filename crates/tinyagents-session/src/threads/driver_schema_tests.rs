@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_types::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Fence, MemoryStorage, Scope, StorageBackend};
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {

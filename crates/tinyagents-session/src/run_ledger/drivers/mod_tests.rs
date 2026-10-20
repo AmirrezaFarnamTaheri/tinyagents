@@ -2,7 +2,7 @@ use super::*;
 use crate::run_ledger::LedgerError;
 use chrono::Duration;
 use serde_json::json;
-use tinystoragedrivers_types::{ErrorKind, MemoryStorage, StorageBackend};
+use tinyagents_storage_kit::{ErrorKind, MemoryStorage, StorageBackend};
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {
@@ -710,7 +710,7 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
 /// A supplied native fence remains active through the adapter and refusal retains its native error kind.
 #[tokio::test]
 async fn scoped_workflow_writes_preserve_native_owner_fence_refusal() {
-    use tinystoragedrivers_types::{CollectionSpec, Fence, Precondition};
+    use tinyagents_storage_kit::{CollectionSpec, Fence, Precondition};
     let backend = MemoryStorage::new();
     let owner_scope = Scope::new("owners").unwrap();
     let owner = backend.for_scope(&owner_scope).unwrap();

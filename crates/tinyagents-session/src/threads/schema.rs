@@ -35,7 +35,7 @@
 
 use super::schema_steps;
 use tinyagents_storage_kit::{Owner, Schema, ScopeClass};
-use tinystoragedrivers_types::{CollectionSpec, Key, StorageError};
+use tinyagents_storage_kit::{CollectionSpec, Key, StorageError};
 
 /// The owner of the conversation store's collections and streams.
 pub(super) const OWNER: &str = "conversations";
