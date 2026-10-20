@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -133,6 +134,65 @@ fn two_models(
     harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     (harness, a, b)
+}
+
+struct CountingResolver {
+    inner: crate::host::PrebuiltModelResolver<()>,
+    named_calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl crate::host::ModelResolver<()> for CountingResolver {
+    async fn resolve(
+        &self,
+        request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        self.inner.resolve(request).await
+    }
+
+    async fn resolve_named(
+        &self,
+        name: &str,
+    ) -> crate::error::Result<Option<Arc<dyn ChatModel<()>>>> {
+        self.named_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.resolve_named(name).await
+    }
+
+    fn preview(&self, request: &crate::host::ModelResolveRequest) -> Option<Arc<dyn ChatModel<()>>> {
+        self.inner.preview(request)
+    }
+
+    fn selected_name(&self, request: &crate::host::ModelResolveRequest) -> Option<String> {
+        self.inner.selected_name(request)
+    }
+}
+
+#[tokio::test]
+async fn sticky_switch_reuses_the_model_binding_for_unchanged_inputs() {
+    let a = Arc::new(ScriptedModel::replies(vec!["from a"]).with_profile(profile("openai", "a")));
+    let b = Arc::new(ScriptedModel::replies(vec!["from b"]).with_profile(profile("openai", "b")));
+    let inner = crate::host::PrebuiltModelResolver::new(
+        a,
+        [("b".to_owned(), b.clone() as Arc<dyn ChatModel<()>>)],
+    ).with_primary_name("a");
+    let named_calls = Arc::new(AtomicUsize::new(0));
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(CountingResolver {
+        inner,
+        named_calls: named_calls.clone(),
+    }));
+
+    let handle = SteeringHandle::allow_all_with_model_switch();
+    handle.send(switch("b"));
+    let recorder = EventRecorder::new();
+    let run = harness.invoke_in_context(
+        &(), context(&handle, &recorder), vec![Message::user("hi")],
+    ).await.expect("the switched model runs");
+
+    assert_eq!(run.text(), Some("from b".to_owned()));
+    assert_eq!(b.requests().len(), 1);
+    assert_eq!(named_calls.load(Ordering::SeqCst), 0,
+        "the eligible binding resolved for this request is reused by both switch checks");
 }
 
 /// Answers from a script and, on its first call, queues `command` on the
