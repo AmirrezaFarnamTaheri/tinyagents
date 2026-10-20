@@ -2119,6 +2119,7 @@ dependencies = [
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -58,6 +58,7 @@ pub use blocking::Blocking;
 mod migrations;
 pub mod primitives;
 pub mod schema;
+mod migration_lease;
 
 pub mod backend {
     pub use crate::{ScopedStorage, StorageBackend};
@@ -92,6 +93,7 @@ impl Key {
 
 pub use migrations::{MIGRATIONS_COLLECTION, Migrations};
 pub use primitives::{Counters, Kv, Leases, Repo};
+pub use migration_lease::{MigrationLease, with_migration_lease};
 pub use schema::{
     BlobOutput, BlobStepFn, ComposedRegistry, Expiry, Item, MigrateOptions, MigrationReport, Owner,
     Registry, Schema, SchemaMetadata, ScopeClass, SealPolicy, SealWhen, SourceRecord, Step,
