@@ -50,7 +50,6 @@ use tinystoragedrivers_api::StorageBackend;
 
 mod drivers;
 mod memory;
-mod scope;
 mod types;
 
 use std::sync::Arc;
@@ -60,10 +59,18 @@ pub use drivers::{
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
-pub use scope::{agent_scope, local_scope, user_scope};
 pub use types::AgentStores;
 
 pub use tinyagents_harness::store::{AppendStore, Store};
+
+/// Host-owned mapping from an agent identity to its already-bound storage.
+/// The session library does not choose tenants, construct scopes, or bind a
+/// backend. Hosts resolve identity and authorization before returning storage.
+pub type AgentStorageFactory = Arc<
+    dyn Fn(&str) -> Result<tinyagents_storage_kit::ScopedStorage, tinystoragedrivers_types::StorageError>
+        + Send
+        + Sync,
+>;
 
 use crate::turn_state::{TurnLifecycle, TurnState};
 
@@ -105,7 +112,7 @@ pub trait SessionStoreProvider: Send + Sync {
     /// retain their native sources; hosts must propagate a configured refusal.
     fn bind_actor(
         &self,
-        _backend: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+        _factory: AgentStorageFactory,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         Ok(None)
     }
@@ -140,11 +147,11 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Native actor admission errors, retaining their sources.
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+        factory: AgentStorageFactory,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         match admission {
-            tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(backend),
+            tinyagents_harness::store::SchemaAdmission::Declare => self.bind_actor(factory),
             tinyagents_harness::store::SchemaAdmission::ValidateOnly => Ok(None),
         }
     }
