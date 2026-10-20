@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::MemoryStorage;
 use serde_json::{Value, json};
-use tinyagents_storage_kit::{CollectionSpec, Scope};
+use tinyagents_storage_kit::{CollectionSpec, Scope, ScopedStorage};
 use tinystoragedrivers_api::StorageBackend;
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
@@ -31,21 +31,20 @@ fn message(id: &str, content: &str) -> ThreadMessage {
 }
 
 async fn prepared_append(backend: &dyn StorageBackend) {
-    backend.prepare_schema().await.unwrap();
     let alice = Scope::new("alice").unwrap();
     let bob = Scope::new("bob").unwrap();
     let raw = backend.for_scope(&alice).unwrap();
-    DriverConversationStore::prepare_schema(raw.documents().as_ref())
-        .await
-        .unwrap();
+    DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
+        .await.unwrap();
     raw.documents()
         .ensure_collection(&CollectionSpec::new(PENDING_COLLECTION))
         .await
         .unwrap();
-    let restricted = backend.existing_schema().unwrap();
-    let a = DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
-    let b = DriverConversationStore::new_validate_only(restricted.for_scope(&alice).unwrap());
-    let other = DriverConversationStore::new_validate_only(restricted.for_scope(&bob).unwrap());
+    let a = DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
+    let b = DriverConversationStore::new_validate_only(ScopedStorage::new(raw, alice));
+    let bob_storage = backend.for_scope(&bob).unwrap();
+    DriverConversationStore::prepare_append_schema(bob_storage.documents().as_ref()).await.unwrap();
+    let other = DriverConversationStore::new_validate_only(ScopedStorage::new(bob_storage, bob));
     a.ensure_thread(request("same")).await.unwrap();
     other.ensure_thread(request("same")).await.unwrap();
 

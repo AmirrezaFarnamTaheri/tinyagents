@@ -276,17 +276,13 @@ pub(super) fn faulted(
     }
 }
 pub(super) async fn actor(backend: &dyn StorageBackend) -> DriverConversationStore {
-    backend.prepare_schema().await.unwrap();
-    let raw = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    let scope = Scope::new("alice").unwrap();
+    let raw = backend.for_scope(&scope).unwrap();
     DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
         .await
         .unwrap();
     let store = DriverConversationStore::new_validate_only(
-        backend
-            .existing_schema()
-            .unwrap()
-            .for_scope(&Scope::new("alice").unwrap())
-            .unwrap(),
+        tinyagents_storage_kit::ScopedStorage::new(raw, scope),
     );
     store.ensure_thread(request("same")).await.unwrap();
     store
