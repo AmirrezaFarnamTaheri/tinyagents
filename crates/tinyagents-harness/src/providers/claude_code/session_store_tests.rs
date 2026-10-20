@@ -1,5 +1,9 @@
 //! Contract tests for Claude Code storage-port persistence and imports.
 
+use std::collections::HashMap;
+
+use serde::Serialize;
+
 use super::*;
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
@@ -134,7 +138,32 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
 #[tokio::test]
 async fn legacy_import_merges_matching_session_and_never_overwrites_newer_state() {
     let (_storage, store) = new_store();
-    let old_release_fixture = br#"{"sessions":{"same":"uuid-a","different":"uuid-old","new":"uuid-new"},"delivered":{"same":["old-turn"]}}"#;
+    // This mirrors the old StoreFile serialized by the released file writer
+    // (TinyAgents d5ef63ce7ece369e8faaba69ab32a881540dde78). Keep the captured
+    // bytes as a fixture so import compatibility is pinned to that format.
+    #[derive(Serialize)]
+    struct ReleasedStoreFile {
+        sessions: HashMap<String, String>,
+        delivered: HashMap<String, Vec<String>>,
+    }
+    let released = ReleasedStoreFile {
+        sessions: [
+            ("same".to_owned(), "uuid-a".to_owned()),
+            ("different".to_owned(), "uuid-old".to_owned()),
+            ("new".to_owned(), "uuid-new".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+        delivered: [("same".to_owned(), vec!["old-turn".to_owned()])]
+            .into_iter()
+            .collect(),
+    };
+    let serialized_by_released_writer = serde_json::to_vec_pretty(&released).unwrap();
+    let old_release_fixture = include_bytes!("fixtures/claude-code-sessions.json");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&serialized_by_released_writer).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(old_release_fixture).unwrap()
+    );
     store.set("same", "uuid-a").await.unwrap();
     store
         .record_delivered("same", &["new-turn".into()])
