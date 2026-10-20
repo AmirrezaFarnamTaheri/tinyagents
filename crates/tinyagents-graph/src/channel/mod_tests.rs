@@ -1,3 +1,4 @@
+use tinystoragedrivers_testkit::MemoryBackend;
 //! Unit tests for the channel-per-field state model: each channel's merge rule,
 //! `ChannelSet` dispatch/snapshot, `ChannelState` round-trips through a real
 //! graph (fan-out into aggregate channels), and concurrent-write conflict
@@ -478,6 +479,7 @@ fn register_reducer_is_reachable_through_the_graph_builder() {
 
 #[tokio::test]
 async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
+    let checkpoint_backend = MemoryBackend::new();
     use crate::checkpoint::Checkpointer;
     use crate::command::{Command, Interrupt};
     use std::sync::Arc;
@@ -515,7 +517,7 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
     let dir = tempfile::tempdir().unwrap();
     {
         let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
-            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+            crate::test_support::dir_checkpointer::<ChannelState>(&checkpoint_backend),
         );
         let g = graph().with_checkpointer(cp);
         let paused = g.run_with_thread("ch-thread", initial).await.unwrap();
@@ -527,7 +529,7 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
     // merge through it correctly.
     {
         let cp: Arc<dyn Checkpointer<ChannelState>> = Arc::new(
-            crate::test_support::dir_checkpointer::<ChannelState>(dir.path()),
+            crate::test_support::dir_checkpointer::<ChannelState>(&checkpoint_backend),
         );
         let g = graph().with_checkpointer(cp);
         let exec = g
