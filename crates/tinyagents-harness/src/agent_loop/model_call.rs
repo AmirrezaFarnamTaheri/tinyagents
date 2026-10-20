@@ -1190,8 +1190,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         model_name: &str,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
-        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
-            self.invoke_model_streaming_once_scoped(
+        let (result, refusal) =
+            crate::cost::with_dispatch_outcome_scope(self.invoke_model_streaming_once_scoped(
                 state,
                 ctx,
                 model,
@@ -1200,9 +1200,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 deltas_emitted,
                 model_name,
                 shape,
-            ),
-        )
-        .await;
+            ))
+            .await;
         match refusal {
             Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
             None => result,

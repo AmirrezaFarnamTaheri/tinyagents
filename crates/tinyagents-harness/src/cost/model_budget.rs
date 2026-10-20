@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tinyinference_llm::model::ChatModel;
-use tinyinference_llm::model::budget::{BeforeDispatch, Budget, BudgetedModel, CallBudget};
 use tinyinference_llm::model::DispatchCheckedModel;
+use tinyinference_llm::model::budget::{BeforeDispatch, Budget, BudgetedModel, CallBudget};
 use tinyinference_llm::model::{
     DeferredHandle, DeferredStatus, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
 };
