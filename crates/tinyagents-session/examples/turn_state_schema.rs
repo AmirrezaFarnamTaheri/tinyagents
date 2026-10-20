@@ -17,9 +17,10 @@ struct SessionUiWireTypes {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&schemars::schema_for!(SessionUiWireTypes))?
-    );
+    let schema = schemars::generate::SchemaSettings::draft2020_12()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<SessionUiWireTypes>();
+    println!("{}", serde_json::to_string_pretty(&schema)?);
     Ok(())
 }
