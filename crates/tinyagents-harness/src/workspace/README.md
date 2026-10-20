@@ -9,8 +9,7 @@ Application-specific worktree/sandbox providers need a common seam: a
 `tinytools::WorkspaceDescriptor` tells a tool which filesystem root it may
 touch, and a [`WorkspaceIsolation`] provider trait prepares/tears down a
 per-agent environment. TinyAgents does not own any concrete isolation policy
-— it owns the interface, plus two providers: a trivial single-shared-root
-default and a real git-worktree-backed implementation.
+— it owns the interface and a trivial single-shared-root provider.
 
 ## Public surface
 
