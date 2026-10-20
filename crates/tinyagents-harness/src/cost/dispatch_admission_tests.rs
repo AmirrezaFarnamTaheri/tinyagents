@@ -21,7 +21,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
-use tinyinference_llm::model::budget::{Budget, CallBudget, SpendLimits};
+use tinyinference_llm::model::budget::{Budget, BudgetedModel, CallBudget, SpendLimits};
 use tinyinference_llm::model::{
     ChatModel, DeferredHandle, DeferredStatus, InputModality, InputSource, ModelProfile,
     ModelRequest, ModelResponse, ModelStream, ModelStreamItem, ResponseFormat,
@@ -463,6 +463,39 @@ async fn chat_model_trait_consumer_observes_admission_refusal() {
         result,
         Err(tinyinference_llm::Error::Validation(_))
     ));
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn outer_budget_refunds_before_controlled_acquisition_refusal() {
+    let counts = Arc::new(Counts::default());
+    let admission =
+        ScriptedAdmission::new([Step::Immediate(Err(DispatchRefusalReason::Deadline))]);
+    let controlled = ControlledChatModel::new(
+        model(&counts, ModelBehavior::Succeed),
+        options(Some(admission.clone()), None, &counts),
+    );
+    let ledger = Budget::new(SpendLimits::default());
+    let outer = BudgetedModel::new(
+        Arc::new(controlled),
+        ledger.clone(),
+        CallBudget {
+            input_tokens: 1_000,
+            output_tokens: 32,
+            cost_micros: 100,
+        },
+    );
+
+    assert!(ChatModel::has_pre_invocation_admission_gate(&outer));
+    assert!(matches!(
+        outer.invoke(&(), text_request()).await,
+        Err(tinyinference_llm::Error::Validation(_))
+    ));
+    assert_eq!(ledger.snapshot().spent.cost_micros, 0);
+    assert_eq!(ledger.snapshot().spent.tokens, 0);
+    assert_eq!(ledger.snapshot().reserved.cost_micros, 0);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
