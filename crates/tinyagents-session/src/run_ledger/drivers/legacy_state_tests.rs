@@ -8,7 +8,7 @@ use tinyagents_storage_kit::Scope;
 use tinystoragedrivers_api::DocumentStoreExt;
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
-use tinystoragedrivers_types::{Scope, WriteOptions};
+use tinystoragedrivers_types::WriteOptions;
 
 fn scoped() -> ScopedStorage {
     let backend = memory_backend();
@@ -176,7 +176,8 @@ async fn a_workflow_lease_is_a_tsd_lease_and_not_part_of_the_stored_run() {
 
 #[tokio::test]
 async fn archived_public_writer_rows_open_through_current_typed_owners() {
-    let backend = memory_backend();
+    let backend = std::sync::Arc::new(memory_backend())
+        as std::sync::Arc<dyn tinystoragedrivers_api::StorageBackend>;
     let scope = Scope::new("fixture-agent-scope").unwrap();
     let storage = ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope);
     let fixture: Value =
