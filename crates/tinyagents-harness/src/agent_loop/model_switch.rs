@@ -101,10 +101,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         if request.model.as_deref() == Some(requested.as_str()) {
             request.model = model_before_switch.clone();
         }
+        let resolve = super::model_call::local_resolve_request(request);
         let resolved = self.model_resolver.as_ref()
-            .and_then(|resolver| resolver.preview(&super::model_call::local_resolve_request(request)))
-            .or_else(|| self.fixed_model.clone())
-            .and_then(|model| model.profile().and_then(|p| p.model.clone()))
+            .and_then(|resolver| resolver.selected_name(&resolve))
+            .or_else(|| self.model_resolver.as_ref()
+                .and_then(|resolver| resolver.preview(&resolve))
+                .and_then(|model| model.profile().and_then(|profile| profile.model.clone())))
+            .or_else(|| self.fixed_model.as_ref()
+                .and_then(|model| model.profile().and_then(|profile| profile.model.clone())))
             .unwrap_or_else(|| "<default>".to_string());
         tracing::warn!(
             target: "tinyagents::steering",
