@@ -103,7 +103,8 @@ async fn terminal_event_append_persists_bson_representable_boundary() {
     // A second connection proves the terminal event and exhausted head were
     // persisted by Mongo, rather than retained in the first driver's memory.
     let reopened = MongoConnection::connect(&url, &database).await.unwrap();
-    let peer_docs = Arc::new(MongoDocuments::new(reopened, scope.clone())) as Arc<dyn DocumentStore>;
+    let peer_docs =
+        Arc::new(MongoDocuments::new(reopened, scope.clone())) as Arc<dyn DocumentStore>;
     let peer_memory = MemoryBackend::new().for_scope(&scope).unwrap();
     let peer_storage = ScopedStorage::new(
         Storage::new(
