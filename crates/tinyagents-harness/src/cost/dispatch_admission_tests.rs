@@ -34,20 +34,25 @@ struct PermitState {
     committed: AtomicUsize,
     active: AtomicUsize,
     refuse_commit: std::sync::atomic::AtomicBool,
+    refuse_recheck: std::sync::atomic::AtomicBool,
 }
 
 struct TestPermit {
     state: Arc<PermitState>,
     committed: std::sync::atomic::AtomicBool,
+    checks: AtomicUsize,
 }
 
 impl PhysicalDispatchPermit for TestPermit {
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal> {
+        let check = self.checks.fetch_add(1, Ordering::SeqCst);
+        if self.state.refuse_commit.load(Ordering::SeqCst)
+            || (check > 0 && self.state.refuse_recheck.load(Ordering::SeqCst))
+        {
+            return Err(DispatchRefusal::new(DispatchRefusalReason::Deadline));
+        }
         if self.committed.load(Ordering::SeqCst) {
             return Ok(());
-        }
-        if self.state.refuse_commit.load(Ordering::SeqCst) {
-            return Err(DispatchRefusal::new(DispatchRefusalReason::Deadline));
         }
         if self
             .committed
@@ -123,6 +128,7 @@ impl ScriptedAdmission {
                 committed: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 refuse_commit: std::sync::atomic::AtomicBool::new(false),
+                refuse_recheck: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
@@ -147,6 +153,7 @@ impl PhysicalDispatchAdmission for ScriptedAdmission {
         Ok(Arc::new(TestPermit {
             state: self.permits.clone(),
             committed: std::sync::atomic::AtomicBool::new(false),
+            checks: AtomicUsize::new(0),
         }))
     }
 }
@@ -489,6 +496,60 @@ async fn streaming_agent_turn_preserves_typed_admission_refusal() {
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn lazy_openai_stream_rechecks_committed_admission_before_http_dispatch() {
+    use tinyinference_llm::providers::openai::OpenAiModel;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind local fake provider");
+    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let counts = Arc::new(Counts::default());
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+    admission
+        .permits
+        .refuse_recheck
+        .store(true, Ordering::SeqCst);
+    let provider = Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint));
+    let controlled = ControlledChatModel::new(
+        provider,
+        options(Some(admission.clone()), None, &counts),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model("controlled", Arc::new(controlled));
+    let mut turn = tokio::spawn(async move {
+        harness
+            .invoke_streaming(
+                &(),
+                (),
+                RunConfig::new("lazy-openai-dispatch"),
+                vec![tinyinference_llm::message::Message::user("hello")],
+            )
+            .await
+    });
+
+    tokio::select! {
+        result = &mut turn => {
+            let error = result.expect("turn task").expect_err("late deadline refusal");
+            assert!(matches!(
+                error,
+                TinyAgentsError::PhysicalDispatchAdmission(refusal)
+                    if refusal.reason() == DispatchRefusalReason::Deadline
+            ));
+        }
+        connection = listener.accept() => {
+            turn.abort();
+            panic!("provider received an HTTP connection after the permit's late deadline refusal: {connection:?}");
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+            turn.abort();
+            panic!("turn hung instead of returning the typed late admission refusal");
+        }
+    }
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
