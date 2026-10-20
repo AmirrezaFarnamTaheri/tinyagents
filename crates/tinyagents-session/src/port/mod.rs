@@ -14,10 +14,9 @@
 //!
 //! # Isolation
 //!
-//! [`SessionStoreProvider`] provides handles bound to one agent. With the
-//! `storage-drivers` feature, hosts that must propagate store-opening or
-//! recovery errors should use `try_for_agent`; the legacy `for_agent` accessor
-//! can return refusing handles instead. A provider that serves several users
+//! [`SessionStoreProvider`] provides handles bound to one agent. Hosts that
+//! must propagate store-opening or recovery errors should use `try_for_agent`;
+//! the legacy `for_agent` accessor can return refusing handles instead. A provider that serves several users
 //! from one backend must make it impossible for one agent's
 //! handles to read or write another's data; the explicitly enabled
 //! `testkit::InMemorySessionStores` does, and the conformance suite
@@ -39,9 +38,9 @@
 //!
 //! - `testkit::InMemorySessionStores`: per-agent, process-lifetime storage for
 //!   tests and explicit test-only hosts.
-//! - `DriverSessionStores` (feature `storage-drivers`): opens each agent's
-//!   stores from the host-supplied bound-storage factory and runs the session
-//!   crate's owner migrations before exposing them. Hosts may use
+//! - `DriverSessionStores`: opens each agent's stores from the host-supplied
+//!   bound-storage factory and runs the session crate's owner migrations
+//!   before exposing them. Hosts may use
 //!   [`collections`] for declaration-only backend preparation.
 //! - Workspace files, JSONL transcripts and database engines belong to the
 //!   host; `docs/legacy-import-handoff.md` records the source migration handoff.

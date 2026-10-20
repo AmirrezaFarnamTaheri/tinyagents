@@ -67,8 +67,12 @@ fn scoped_storage(connection: &MongoConnection, scope: &Scope) -> ScopedStorage 
 async fn mongodb_session_store_round_trip_list_delete_and_agent_isolation() {
     let scope = Scope::new("session_store_conformance").unwrap();
     let connection = local_connection("session_store").await;
-    let storage = scoped_storage(&connection, &scope);
-    let factory: AgentStorageFactory = Arc::new(move |_| Ok(storage.clone()));
+    let factory_scope = scope.clone();
+    let factory_connection = connection.clone();
+    let factory: AgentStorageFactory = Arc::new(move |agent_id| {
+        let agent_scope = factory_scope.child(agent_id)?;
+        Ok(scoped_storage(&factory_connection, &agent_scope))
+    });
     let stores = DriverSessionStores::new(factory).unwrap();
     session_store_conformance(&stores).await;
     session_store_isolation_conformance(&stores).await;
