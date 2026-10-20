@@ -43,9 +43,8 @@ use crate::cache::ResponseCache;
 use crate::middleware::{
     AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
 };
-use crate::model_registry::ModelRegistry;
+use crate::host::ModelResolver;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
-use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
 /// Installs a host-selected recursion ceiling without widening the active
@@ -64,7 +63,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// middleware registered.
     pub fn new() -> Self {
         Self {
-            models: ModelRegistry::new(),
+            model_resolver: None,
             tools: ToolRegistry::new(),
             middleware: MiddlewareStack::new(),
             policy: RunPolicy::default(),
@@ -77,21 +76,13 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         }
     }
 
-    /// Registers a model under `name`. The first registered model becomes the
-    /// registry default unless one is already set. Returns `&mut Self` for
-    /// chaining.
-    pub fn register_model(
+    /// Supplies the resolver used for direct SDK turns. Hosted invocations
+    /// continue to use their invocation-local host resolver.
+    pub fn with_model_resolver(
         &mut self,
-        name: impl Into<String>,
-        model: Arc<dyn ChatModel<State>>,
+        resolver: Arc<dyn ModelResolver<State>>,
     ) -> &mut Self {
-        self.models.register(name, model);
-        self
-    }
-
-    /// Sets the default model name used when a request specifies no override.
-    pub fn set_default_model(&mut self, name: impl Into<String>) -> &mut Self {
-        self.models.set_default(name);
+        self.model_resolver = Some(resolver);
         self
     }
 
@@ -289,11 +280,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`Self::with_toolset`].
     pub fn toolset(&self) -> Option<&Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>> {
         self.toolset.as_ref()
-    }
-
-    /// Returns a reference to the model registry.
-    pub fn models(&self) -> &ModelRegistry<State> {
-        &self.models
     }
 
     /// Returns a reference to the tool registry.
