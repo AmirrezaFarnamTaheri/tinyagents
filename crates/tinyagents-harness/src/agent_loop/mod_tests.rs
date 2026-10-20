@@ -3870,7 +3870,7 @@ async fn retry_then_fallback_succeeds() {
     let backup = Arc::new(MockModel::constant("recovered"));
     harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
         failing.clone(),
-        [("backup".to_string(), backup)],
+        [("backup".to_string(), backup as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         // 2 attempts on primary, then fall back to backup.
@@ -3900,7 +3900,7 @@ async fn provider_budget_refusal_does_not_call_model_fallback() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
         primary.clone(),
-        [("fallback".to_string(), fallback.clone())],
+        [("fallback".to_string(), fallback.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
@@ -3953,7 +3953,7 @@ async fn a_provider_budget_refusal_stops_retries_and_model_fallback() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
         primary.clone(),
-        [("fallback".to_string(), fallback.clone())],
+        [("fallback".to_string(), fallback.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(4),
@@ -4088,7 +4088,7 @@ async fn fallback_chain_with_repeated_model_name_terminates() {
     });
     harness.with_model_resolver(Arc::new(crate::host::PrebuiltModelResolver::new(
         primary.clone(),
-        [("backup".to_string(), backup.clone())],
+        [("backup".to_string(), backup.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary")));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
