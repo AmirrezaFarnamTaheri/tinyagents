@@ -708,10 +708,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     // cancel-safe, and the pre-call `is_cancelled()` check above
                     // still short-circuits before the request is ever issued.
                     let fut = async {
-                        model
-                            .invoke(state, attempt_request.clone())
-                            .await
-                            .map_err(TinyAgentsError::from)
+                        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
+                            model.invoke(state, attempt_request.clone()),
+                        )
+                        .await;
+                        match refusal {
+                            Some(refusal) => {
+                                Err(TinyAgentsError::PhysicalDispatchAdmission(refusal))
+                            }
+                            None => result.map_err(TinyAgentsError::from),
+                        }
                     };
                     let budgeted = Self::with_call_budget(
                         remaining,
@@ -1193,14 +1199,21 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let first_event_timeout = positive_window(self.policy.limits.stream_first_event_timeout_ms);
         let first_event_deadline =
             first_event_timeout.map(|window| tokio::time::Instant::now() + window);
+        let open_stream = async {
+            let (result, refusal) =
+                crate::cost::with_dispatch_outcome_scope(model.stream(state, request.clone()))
+                    .await;
+            match refusal {
+                Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
+                None => result.map_err(TinyAgentsError::from),
+            }
+        };
         let stream_result = async {
             match first_event_deadline {
-                Some(deadline) => {
-                    tokio::time::timeout_at(deadline, model.stream(state, request.clone()))
-                        .await
-                        .map_err(|_| ())
-                }
-                None => Ok(model.stream(state, request.clone()).await),
+                Some(deadline) => tokio::time::timeout_at(deadline, open_stream)
+                    .await
+                    .map_err(|_| ()),
+                None => Ok(open_stream.await),
             }
         };
         let mut stream = tokio::select! {
