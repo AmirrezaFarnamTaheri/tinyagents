@@ -368,11 +368,7 @@ impl FlakyDocs {
     /// Injects a typed refusal while the recovery backend is unavailable.
     fn check(&self) -> Result<(), StorageError> {
         if self.down.load(std::sync::atomic::Ordering::SeqCst) {
-            Err(StorageError::unsupported(
-                tinystoragedrivers_types::Capability::Fencing,
-                "flaky backend is down",
-            )
-            .with_source(NativeFailure))
+            Err(StorageError::unavailable("flaky backend is down").with_source(NativeFailure))
         } else {
             Ok(())
         }
@@ -474,7 +470,7 @@ impl StorageBackend for Flaky {
         self.storage.capabilities()
     }
     fn for_scope(&self, scope: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
-        let inner = self.storage.for_scope(scope)?;
+        let inner = tinystoragedrivers_api::StorageBackend::for_scope(&self.storage, scope)?;
         Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(FlakyDocs {
                 inner: Arc::clone(inner.documents()),
@@ -577,7 +573,10 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     // Unusual keys get the hashed principal segment, and are refused alike.
     for key in ["agent", "unusual key", "sha256:reserved"] {
         let error = provider.try_for_agent(key).unwrap_err();
-        assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Unavailable);
+        assert_eq!(
+            error.kind(),
+            tinystoragedrivers_types::ErrorKind::Unavailable
+        );
         let source = error
             .source()
             .unwrap()
@@ -605,9 +604,7 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     let error = provider.try_for_agent("agent").unwrap_err();
     assert_eq!(
         error.kind(),
-        tinystoragedrivers_types::ErrorKind::Unsupported(
-            tinystoragedrivers_types::Capability::Fencing
-        )
+        tinystoragedrivers_types::ErrorKind::Unavailable
     );
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());
@@ -635,9 +632,7 @@ fn checked_open_preserves_native_recovery_declaration_refusal() {
     let error = provider.try_for_agent("agent").unwrap_err();
     assert_eq!(
         error.kind(),
-        tinystoragedrivers_types::ErrorKind::Unsupported(
-            tinystoragedrivers_types::Capability::Fencing
-        )
+        tinystoragedrivers_types::ErrorKind::Unavailable
     );
     assert!(error.source().unwrap().is::<NativeFailure>());
     assert!(provider.agents.lock().unwrap().is_empty());

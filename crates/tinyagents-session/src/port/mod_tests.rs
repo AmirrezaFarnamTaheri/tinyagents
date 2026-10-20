@@ -95,7 +95,10 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
         .bind_actor(host_factory())
         .err()
         .expect("configured refusal must remain an error");
-    assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Unavailable);
+    assert_eq!(
+        error.kind(),
+        tinystoragedrivers_types::ErrorKind::Unavailable
+    );
     assert!(std::error::Error::source(&error).unwrap().is::<Retired>());
 }
 
@@ -225,7 +228,10 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         .bind_actor_with_schema_admission(host_factory(), SchemaAdmission::Declare)
         .err()
         .unwrap();
-    assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Unavailable);
+    assert_eq!(
+        error.kind(),
+        tinystoragedrivers_types::ErrorKind::Unavailable
+    );
     assert!(error.to_string().contains("legacy declaration factory"));
 }
 

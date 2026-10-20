@@ -1,11 +1,13 @@
 use super::*;
 use serde_json::json;
-use tinyagents_storage_kit::Scope;
+use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_types::ErrorKind;
 
 async fn memory_store() -> DriverConversationStore {
     let backend = tinystoragedrivers_testkit::memory_backend();
-    let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
+    let scoped = backend
+        .for_scope(&Scope::new("session-fixture-planner").unwrap())
+        .unwrap();
     DriverConversationStore::prepare_append_schema(scoped.documents())
         .await
         .unwrap();

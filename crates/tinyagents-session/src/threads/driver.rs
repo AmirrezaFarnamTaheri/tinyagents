@@ -430,7 +430,6 @@ fn timestamp(value: &str) -> i64 {
 #[path = "driver_tests.rs"]
 mod tests;
 
-
 #[cfg(test)]
 #[path = "driver_append_tests.rs"]
 mod append_tests;
