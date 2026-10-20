@@ -47,8 +47,8 @@ only capabilities a human explicitly registered can be invoked.
 ## File and module map
 
 - **`capability/`** — the [`CapabilityRegistry`] implementation: registration,
-  lookup, aliasing, duplicate detection, and bridges to the harness
-  ([`ModelRegistry`], [`ToolRegistry`]).
+  lookup, aliasing, duplicate detection, and tool projection to the harness
+  ([`ToolRegistry`]); model execution uses the harness resolver port.
   - `types.rs` — the [`CapabilityRegistry`] struct and storage maps.
   - `mod.rs` — registration and accessor methods.
   - `mod_tests.rs` — tests for registration, alias, and lookup.

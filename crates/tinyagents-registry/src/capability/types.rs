@@ -2,9 +2,9 @@
 //! addressable by name — the data structure that lets a workflow reference
 //! sub-capabilities it didn't hardcode.
 //!
-//! This layer is deliberately distinct from the harness'
-//! [`tinyagents_harness::model_registry::ModelRegistry`] and
-//! [`tinyagents_harness::tool::ToolRegistry`], which are per-run executable stores.
+//! This layer is the named catalog. Hosts adapt selected models through the
+//! harness model resolver port and can project tools into a per-run
+//! [`tinyagents_harness::tool::ToolRegistry`].
 //! The [`CapabilityRegistry`] is a *capability catalog*: it owns named models,
 //! tools, agents, graphs, routers, and reducers so host code can resolve
 //! capabilities by name.
