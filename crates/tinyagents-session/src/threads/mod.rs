@@ -33,8 +33,8 @@ mod types;
 
 pub use types::{
     ConversationThread, CreateConversationThread, CrossThreadHit, DETERMINISTIC_MESSAGE_ID_PREFIX,
-    ThreadMessage, ThreadMessagePatch, is_deterministic_message_id, reply_run_id,
-    run_reply_message_id,
+    ThreadMessage, ThreadMessagePatch, is_deterministic_message_id, is_idempotent_message_id,
+    reply_run_id, run_reply_message_id,
 };
 
 #[cfg(test)]
