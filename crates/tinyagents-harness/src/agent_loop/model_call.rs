@@ -1879,11 +1879,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         if requested == self.resolved.name {
             return Ok(captured());
         }
-        match self.harness.models.resolve_request(request, None, None) {
-            Some(binding)
-                if binding.resolved.source == ModelResolutionSource::RequestOverride
-                    && binding.resolved.name == requested =>
-            {
+        let binding = if let Some(resolver) = self.harness.model_resolver.as_ref() {
+            resolver.resolve_named(requested).await.ok().flatten()
+                .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
+                .map(|model| ModelBinding {
+                    resolved: ResolvedModel { name: requested.to_owned(), requested: Some(requested.to_owned()), source: ModelResolutionSource::RequestOverride },
+                    model,
+                })
+        } else { None };
+        match binding {
+            Some(binding) => {
                 tracing::debug!(
                     call_id = %self.call_id.as_str(),
                     from = %self.resolved.name,
@@ -1892,7 +1897,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 );
                 Ok(binding)
             }
-            _ => {
+            None => {
                 tracing::warn!(
                     call_id = %self.call_id.as_str(),
                     requested = %requested,
