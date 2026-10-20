@@ -135,6 +135,37 @@ impl SessionHooks for PrefixWhenUnfrozen {
     }
 }
 
+struct MutablePrefix(Arc<Mutex<String>>);
+
+#[async_trait]
+impl SessionHooks for MutablePrefix {
+    async fn before_turn(
+        &self,
+        _: &mut SessionTurnRequest,
+        _: &mut TurnOptions,
+        state: SessionStateView<'_>,
+    ) -> Result<TurnPreparation, RuntimeError> {
+        let prompt = self.0.lock().unwrap().clone();
+        Ok(TurnPreparation {
+            prefix: (!state.prefix_is_frozen)
+                .then(|| PrefixSnapshot::new(vec![Message::system(prompt)])),
+            ..TurnPreparation::default()
+        })
+    }
+
+    async fn on_terminal(&self, _: SessionTerminal) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    async fn before_commit(
+        &self,
+        _: &SessionTurnOutcome,
+        _: &TranscriptTurnOptions,
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn reset_history_seals_old_turns_and_starts_a_fresh_resumable_context() {
     let locator = memory();
@@ -252,6 +283,152 @@ async fn reset_history_seals_old_turns_and_starts_a_fresh_resumable_context() {
             .iter()
             .any(|message| message.text() == "before reset")
     );
+}
+
+#[tokio::test]
+async fn reset_by_another_live_session_rebinds_cached_prompt_and_turn_state() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("live-reset", "agent-id");
+    let prompt = Arc::new(Mutex::new("original prompt".to_owned()));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut live = SessionBuilder::new(Arc::new(CapturingDriver(requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(MutablePrefix(prompt.clone())))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    live.turn(
+        SessionTurnRequest::new(Message::user("before reset")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            session: Some(session_ref.clone()),
+            ..TurnOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut resetter =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), session_ref.clone(), meta())
+            .build()
+            .unwrap();
+    assert!(resetter.reset_history().await.unwrap());
+    *prompt.lock().unwrap() = "replacement prompt".to_owned();
+
+    live.turn(
+        SessionTurnRequest::new(Message::user("after reset")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            session: Some(session_ref.clone()),
+            ..TurnOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let history = requests.lock().unwrap()[1].clone();
+    assert_eq!(history[0].text(), "replacement prompt");
+    assert_eq!(history[1].text(), "after reset");
+    assert!(
+        !history
+            .iter()
+            .any(|message| message.text() == "original prompt")
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|message| message.text() == "before reset")
+    );
+    let head = locator.head_generation(&session_ref);
+    let transcript = locator
+        .read_session_transcript(&head)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(transcript.meta.turn_count, 1);
+    assert_eq!(transcript.meta.prefix_message_count, Some(1));
+}
+
+#[tokio::test]
+async fn a_live_session_rebinds_after_another_session_commits_the_reset_head() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("live-reset-commit", "agent-id");
+    let prompt = Arc::new(Mutex::new("original prompt".to_owned()));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut live = SessionBuilder::new(Arc::new(CapturingDriver(requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(MutablePrefix(prompt.clone())))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    live.turn(
+        SessionTurnRequest::new(Message::user("before reset")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            session: Some(session_ref.clone()),
+            ..TurnOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut resetter =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), session_ref.clone(), meta())
+            .build()
+            .unwrap();
+    assert!(resetter.reset_history().await.unwrap());
+
+    let mut first_after_reset =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .hooks(Arc::new(PrefixWhenUnfrozen("committed reset prompt")))
+            .session(locator.clone(), session_ref.clone(), meta())
+            .build()
+            .unwrap();
+    first_after_reset
+        .turn(
+            SessionTurnRequest::new(Message::user("first after reset")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    *prompt.lock().unwrap() = "stale replacement prompt".to_owned();
+    live.turn(
+        SessionTurnRequest::new(Message::user("after concurrent commit")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            session: Some(session_ref.clone()),
+            ..TurnOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let history = requests.lock().unwrap()[1].clone();
+    assert_eq!(history[0].text(), "committed reset prompt");
+    assert_eq!(history[1].text(), "first after reset");
+    assert_eq!(history[2].text(), "reply");
+    assert_eq!(history[3].text(), "after concurrent commit");
+    assert!(!history.iter().any(|message| {
+        matches!(message, Message::System(_))
+            && (message.text() == "original prompt" || message.text() == "stale replacement prompt")
+    }));
+    let head = locator.head_generation(&session_ref);
+    let transcript = locator
+        .read_session_transcript(&head)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(transcript.meta.turn_count, 2);
 }
 
 #[tokio::test]

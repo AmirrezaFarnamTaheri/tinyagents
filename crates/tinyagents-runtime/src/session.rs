@@ -24,6 +24,10 @@ pub struct Session<C: Clone + Send + Sync + 'static = ()> {
     driver: Arc<dyn SessionDriver<C>>,
     codec: Option<Arc<dyn TranscriptCodec<C>>>,
     hooks: Arc<dyn SessionHooks<C>>,
+    /// Prefix configured when this session instance was constructed. A reset
+    /// discovered through another live instance clears the old frozen prefix
+    /// but keeps this current host configuration available to its hooks.
+    configured_prefix: PrefixSnapshot,
     prefix: PrefixSnapshot,
     default_tools: ToolSnapshot,
     history: Vec<Message>,
@@ -53,12 +57,14 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         default_tools: ToolSnapshot,
         target: Option<TranscriptTarget>,
     ) -> Self {
+        let configured_prefix = prefix.frozen();
         Self {
             driver,
             codec,
             hooks,
-            history: prefix.messages().to_vec(),
-            prefix: prefix.frozen(),
+            history: configured_prefix.messages().to_vec(),
+            prefix: configured_prefix.clone(),
+            configured_prefix,
             default_tools,
             persisted: Vec::new(),
             target,
@@ -247,6 +253,32 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         // the sealed parent. The marker distinguishes it from an ordinary
         // empty successor whose legacy prompt still needs to be inferred.
         let reset_head = transcript.meta.prefix_reset && recorded_boundary.is_none();
+        let changed_head = self
+            .transcript
+            .as_ref()
+            .is_some_and(|bound| bound.path() != read.path());
+        if changed_head {
+            // Another live Session instance may have advanced this identity to
+            // a new generation. Rebuild cached transcript state from that head
+            // instead of retaining the old handle's turn count or tool belt.
+            // An explicit reset head is unfrozen and starts with this instance's
+            // configured prefix; a committed successor below restores its
+            // authoritative persisted prefix (including an explicit Some(0)).
+            if reset_head || recorded_boundary.is_some() {
+                self.prefix = if reset_head {
+                    self.configured_prefix.clone()
+                } else {
+                    PrefixSnapshot::default()
+                };
+            }
+            self.history = self.prefix.messages().to_vec();
+            self.persisted.clear();
+            self.persisted_prefix_len = None;
+            self.recorded_tools = None;
+            self.recorded_tools_json = None;
+            self.committed_turns = 0;
+            self.transcript = None;
+        }
         let mut recovered_boundary = None;
         if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head && !reset_head
         {
