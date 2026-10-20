@@ -115,7 +115,8 @@ pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_byte
 pub use port::{AgentStores, SessionStoreProvider, TurnStates};
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
-    RebindableSessionStores, SessionStoreRegistry, storage_schema,
+    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage,
+    storage_schema,
 };
 #[cfg(any(test, feature = "testkit"))]
 pub use port::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};

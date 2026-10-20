@@ -40,7 +40,9 @@
 //! - `testkit::InMemorySessionStores`: per-agent, process-lifetime storage for
 //!   tests and explicit test-only hosts.
 //! - `DriverSessionStores` (feature `storage-drivers`): opens each agent's
-//!   stores from the host-supplied bound-storage factory.
+//!   stores from the host-supplied bound-storage factory and runs the session
+//!   crate's owner migrations before exposing them. Hosts may use
+//!   [`collections`] for declaration-only backend preparation.
 //! - Workspace files, JSONL transcripts and database engines belong to the
 //!   host; `docs/legacy-import-handoff.md` records the source migration handoff.
 
@@ -54,7 +56,8 @@ use std::sync::Arc;
 
 pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
-    RebindableSessionStores, SessionStoreRegistry, open_agent_storage, storage_schema,
+    RebindableSessionStores, SessionStoreRegistry, collections, open_agent_storage,
+    storage_schema,
 };
 #[cfg(any(test, feature = "testkit"))]
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};

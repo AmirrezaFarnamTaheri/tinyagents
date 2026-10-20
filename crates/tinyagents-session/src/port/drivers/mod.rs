@@ -27,7 +27,7 @@ mod schema;
 mod transcripts;
 mod turn_states;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
@@ -452,6 +452,33 @@ pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageEr
         Ok(())
     })
     .await
+}
+
+/// Collection declarations owned by the session crate and its shared ports.
+///
+/// Hosts may use this list to prepare a backend without depending on the
+/// registry migration API. It includes the session, ledger, history, and
+/// conversation collections plus the shared TSD primitive collections used
+/// by those owners.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    let mut collections = BTreeMap::new();
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
+        collections.insert(spec.name.clone(), spec);
+    }
+    for schema in [
+        schema::storage_schema(),
+        crate::run_ledger::ledger_storage_schema(),
+        crate::run_ledger::history_storage_schema(),
+        crate::threads::conversations_storage_schema(),
+    ] {
+        for item in schema.items {
+            if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
+                collections.insert(spec.name.clone(), spec);
+            }
+        }
+    }
+    collections.into_values().collect()
 }
 
 #[cfg(test)]
