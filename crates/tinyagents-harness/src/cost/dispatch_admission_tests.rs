@@ -588,6 +588,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     harness.register_model("controlled", Arc::new(controlled));
     let server_permit_state = admission.permits.clone();
     let server_listener = listener.clone();
+    let (first_response_sent, first_response_received) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = server_listener
             .accept()
@@ -613,6 +614,9 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
             .write_all(body)
             .await
             .expect("write retryable response body");
+        first_response_sent
+            .send(())
+            .expect("test waits for the first response before observing retry");
     });
     let mut turn = tokio::spawn(async move {
         harness
@@ -625,6 +629,11 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
             .await
     });
 
+    tokio::time::timeout(std::time::Duration::from_secs(2), first_response_received)
+        .await
+        .expect("first HTTP attempt returns a retryable response before timeout")
+        .expect("first HTTP server signals its response");
+
     tokio::select! {
         result = &mut turn => {
             let error = result.expect("turn task").expect_err("late deadline refusal");
@@ -634,7 +643,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
                     if refusal.reason() == DispatchRefusalReason::Deadline
             ));
         }
-        connection = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()) => {
+        Ok(connection) = tokio::time::timeout(std::time::Duration::from_millis(250), listener.accept()) => {
             turn.abort();
             panic!("local provider received a retry connection after late deadline refusal (permit checks {}): {connection:?}", admission.permits.checks.load(Ordering::SeqCst));
         }
@@ -643,7 +652,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
             panic!("turn hung instead of returning the typed late admission refusal");
         }
     }
-    server.abort();
+    server.await.expect("local server task");
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
     assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
