@@ -230,33 +230,14 @@ fn a_reserved_stem_reports_nothing_adopted() {
     );
 }
 
-#[cfg(feature = "legacy-import")]
 #[test]
-fn an_imported_file_workspace_is_adopted_and_resumes_the_folded_history() {
-    use crate::port::WorkspaceStores;
-    use crate::transcript::write_transcript;
-
-    let dir = tempfile::tempdir().unwrap();
-    let raw = dir.path().join("session_raw");
-    for (stem, created, row) in [
-        ("1700000100_orchestrator", "2026-01-01", "first"),
-        ("1700000200_orchestrator", "2026-01-02", "second"),
-    ] {
-        let mut legacy = legacy("orchestrator", created, 1, 0);
-        legacy.dispatcher = "native".into();
-        write_transcript(
-            &raw.join(format!("{stem}.jsonl")),
-            &[TranscriptMessage::user(row)],
-            &legacy,
-            None,
-        )
-        .unwrap();
-    }
+fn pre_identity_roots_are_adopted_and_resume_the_folded_history() {
+    let locator = locator();
+    write_root(&locator, "1700000100_orchestrator", &legacy("orchestrator", "2026-01-01", 1, 0), &["first"]);
+    write_root(&locator, "1700000200_orchestrator", &legacy("orchestrator", "2026-01-02", 1, 0), &["second"]);
     let session = SessionRef::scoped(THREAD, "orchestrator");
     let seed = legacy("orchestrator", "2026-02-01", 0, 0);
 
-    let stores = WorkspaceStores::open(dir.path(), "orchestrator").unwrap();
-    let transcripts = stores.transcripts();
     let adoption = transcripts
         .adopt_legacy(&session, THREAD, &seed)
         .unwrap()

@@ -1,3 +1,4 @@
+use tinystoragedrivers_testkit::MemoryBackend;
 //! Tests for member prompt composition and message delivery.
 
 use tempfile::TempDir;
@@ -6,8 +7,8 @@ use super::*;
 use crate::teams::{NewMember, SessionTeamLedger, TeamService};
 
 fn team(dir: &TempDir) -> (SessionTeamLedger, String, String) {
-    let ledger = SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(
-        dir.path(),
+    let ledger_backend = MemoryBackend::new();
+    let ledger = SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(&ledger_backend),
     )))
     .unwrap();
     let service = TeamService::new(ledger.clone());

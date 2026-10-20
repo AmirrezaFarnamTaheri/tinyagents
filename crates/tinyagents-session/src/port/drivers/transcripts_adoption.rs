@@ -1,9 +1,7 @@
 //! Adoption of pre-identity roots into a session, for driver-backed
 //! transcripts.
 //!
-//! A workspace imported from classic `session_raw/` files
-//! ([`legacy::import_transcripts_once`](crate::legacy::import_transcripts_once))
-//! keeps its timestamped roots under their old stems. Resume addresses a
+//! Pre-identity timestamped roots remain under their old stems. Resume addresses a
 //! conversation by [`SessionRef`], so without this those roots are never read
 //! again. [`TranscriptLocator::adopt_legacy`] folds them into the session's
 //! generation 0 once, with the semantics of the file adopter

@@ -166,11 +166,12 @@ async fn independent_scoped_drivers_keep_complete_workflow_runs_separate() {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn registration_and_child_failures_retain_native_unavailable_kind() {
+    let ledger_backend = MemoryBackend::new();
     // Invoke both owning regressions under the driver's native error variant.
     let error = refusal();
     assert_eq!(native_kind(&error), ErrorKind::Unavailable);
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(workspace.path()));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger),
         cas: AtomicUsize::new(0),
