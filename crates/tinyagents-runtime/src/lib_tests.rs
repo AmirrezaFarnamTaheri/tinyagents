@@ -3018,6 +3018,9 @@ async fn resumed_compaction_keeps_the_original_system_prefix_frozen() {
             .append(TranscriptMessage::new(role, content))
             .unwrap();
     }
+    // The scanned root must be the newer one: creation time is whole
+    // milliseconds, so do not create both inside one.
+    std::thread::sleep(std::time::Duration::from_millis(3));
     let mut scanned_meta = meta();
     scanned_meta.thread_id = Some("shared-prefix-thread".into());
     scanned_meta.created = "2026-02-01T00:00:00Z".into();

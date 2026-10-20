@@ -29,7 +29,7 @@ impl DriverConversationStore {
             };
             let mut messages = Vec::new();
             let mut offset = 0;
-            let stream = Self::stream(&row.id, &row.doc.incarnation);
+            let stream = row.doc.stream()?;
             while offset < row.doc.visible_end {
                 let limit = usize::try_from((row.doc.visible_end - offset).min(PAGE_SIZE as u64))
                     .expect("bounded page");
@@ -47,18 +47,11 @@ impl DriverConversationStore {
                         )
                         .into());
                     }
-                    let record: MessageRecord =
-                        serde_json::from_value(entry.value).map_err(|e| {
-                            StorageError::serialization("invalid conversation stream record")
-                                .with_source(e)
-                        })?;
-                    if record.schema != 1 || record.incarnation != row.doc.incarnation {
-                        return Err(StorageError::serialization(
-                            "conversation stream incarnation/schema mismatch",
-                        )
-                        .into());
-                    }
-                    messages.push(record.message);
+                    let record: MessageDto = serde_json::from_value(entry.value).map_err(|e| {
+                        StorageError::serialization("invalid conversation stream record")
+                            .with_source(e)
+                    })?;
+                    messages.push(record.into_message()?);
                     offset += 1;
                 }
             }

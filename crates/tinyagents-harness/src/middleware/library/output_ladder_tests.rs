@@ -101,5 +101,5 @@ async fn body_past_persistable_limit_is_bounded_inline_not_spilled() {
     let mut i = input("shell", "z".repeat(18_000), false);
     i.store = Some(&store);
     let out = run_output_ladder(&pol, &mut p, i).await;
-    assert!(out.contains("tool-results"), "{out}");
+    assert!(out.contains("harness/tool_results"), "{out}");
 }

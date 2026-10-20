@@ -1,6 +1,6 @@
 use super::*;
 use crate::run_ledger::LedgerError;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use serde_json::json;
 use tinystoragedrivers_core::{ErrorKind, MemoryStorage, StorageBackend};
 
@@ -32,7 +32,7 @@ fn workflow(id: &str) -> WorkflowRunUpsert {
         child_run_ids: vec![],
         status: WorkflowRunStatus::Running,
         summary: Some("original".into()),
-        started_at: Some(Utc::now() - Duration::days(1)),
+        started_at: Some(now() - Duration::days(1)),
         completed_at: None,
     }
 }
@@ -137,7 +137,7 @@ async fn scoped_telemetry_upserts_merge_and_isolate_records() {
 #[tokio::test]
 async fn scoped_team_records_preserve_merge_identity_order_and_unique_names() {
     let (a, b) = ledgers();
-    let old = Utc::now() - Duration::days(1);
+    let old = now() - Duration::days(1);
     let input = AgentTeamUpsert {
         id: "team".into(),
         parent_thread_id: Some("thread".into()),
@@ -152,7 +152,7 @@ async fn scoped_team_records_preserve_merge_identity_order_and_unique_names() {
         .upsert_agent_team(AgentTeamUpsert {
             parent_thread_id: None,
             summary: None,
-            created_at: Some(Utc::now()),
+            created_at: Some(now()),
             ..input
         })
         .await
@@ -334,7 +334,7 @@ async fn scoped_workflow_documents_survive_sqlite_reopen() {
 
 /// Unknown schema bodies are reported as typed corruption and never replaced with default rows.
 #[tokio::test]
-async fn scoped_workflow_rejects_malformed_document_schema() {
+async fn scoped_workflow_rejects_malformed_document_body() {
     let (ledger, _) = ledgers();
     ledger.declare().await.unwrap();
     ledger
@@ -342,8 +342,8 @@ async fn scoped_workflow_rejects_malformed_document_schema() {
         .documents()
         .put(
             WORKFLOWS,
-            &storage::key(&["workflow"]),
-            json!({"schemaVersion":999, "record":{}}),
+            &storage::key(&["workflow"]).unwrap(),
+            json!({"unexpected": "shape"}),
             tinystoragedrivers_core::Precondition::Absent,
         )
         .await
@@ -498,19 +498,22 @@ async fn scoped_workflow_terminal_cas_preserves_started_at_and_clears_lease() {
 #[tokio::test]
 async fn scoped_workflow_expiry_boundary_uses_exact_supplied_timestamp() {
     let (ledger, _) = ledgers();
-    let now = Utc::now();
+    let now = now();
     ledger
         .upsert_workflow_run(workflow("workflow"))
         .await
         .unwrap();
+    // "old" holds a lease that lapses exactly at `now`.
     ledger
-        .merge(WORKFLOWS, "workflow", |previous: Option<WorkflowRun>| {
-            let mut row = previous.unwrap();
-            row.lease_owner = Some("old".into());
-            row.lease_expires_at = Some(now);
-            row
-        })
+        .leases_at(now - Duration::hours(1))
+        .acquire(
+            LEDGER_OWNER,
+            &storage::workflow_lease_key("workflow").unwrap(),
+            "old",
+            3_600_000,
+        )
         .await
+        .unwrap()
         .unwrap();
     assert!(
         !ledger
@@ -679,7 +682,7 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
     );
     ledger.entry_import_legacy("session", &[]).await.unwrap();
     ledger.entry_rebuild_index("session").await.unwrap();
-    assert_eq!(ledger.apply_retention(Utc::now()).await.unwrap().total(), 0);
+    assert_eq!(ledger.apply_retention(now()).await.unwrap().total(), 0);
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),
         Some(before)
@@ -873,7 +876,7 @@ async fn scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes() {
     let before = ledger
         .scoped
         .documents()
-        .get(TELEMETRY, &storage::key(&["run"]))
+        .get(TELEMETRY, &storage::key(&["run"]).unwrap())
         .await
         .unwrap();
     for cost in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -884,7 +887,7 @@ async fn scoped_telemetry_rejects_lossy_nonfinite_cost_without_writes() {
             ledger
                 .scoped
                 .documents()
-                .get(TELEMETRY, &storage::key(&["run"]))
+                .get(TELEMETRY, &storage::key(&["run"]).unwrap())
                 .await
                 .unwrap(),
             before

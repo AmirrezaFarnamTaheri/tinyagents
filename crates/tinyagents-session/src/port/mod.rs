@@ -57,6 +57,7 @@ use std::sync::Arc;
 
 pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
+    storage_schema,
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use types::AgentStores;

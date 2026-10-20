@@ -43,7 +43,7 @@ async fn missing_published_row_during_finalize_reconcile_preserves_corruption() 
     let row = store.load("same").await.unwrap().unwrap();
     assert_eq!(row.doc.visible_end, 1);
     assert_eq!(row.doc.thread.message_count, 1);
-    let stream = DriverConversationStore::stream(&row.id, &row.doc.incarnation);
+    let stream = row.doc.stream().unwrap();
     assert!(store.streams.delete_stream(&stream).await.unwrap());
     finalized.release.notify_one();
     let error = call.await.unwrap_err();
@@ -96,7 +96,7 @@ async fn helping_foreign_uncertain_intent_keeps_callers_unreserved_outcome_retry
     );
     assert!(store.get_messages("same").await.unwrap().is_empty());
     let row = store.load("same").await.unwrap().unwrap();
-    let stream = DriverConversationStore::stream(&row.id, &row.doc.incarnation);
+    let stream = row.doc.stream().unwrap();
     assert_eq!(store.streams.len(&stream).await.unwrap(), 1);
     let pending = store
         .docs

@@ -50,6 +50,18 @@ impl DocumentStore for RecordingDocs {
     ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
         self.inner.put(collection, id, doc, condition).await
     }
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        condition: Precondition,
+        options: tinystoragedrivers_core::WriteOptions,
+    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
+        self.inner
+            .put_with(collection, id, doc, condition, options)
+            .await
+    }
     async fn delete(
         &self,
         collection: &str,

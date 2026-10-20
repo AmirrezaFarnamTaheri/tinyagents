@@ -42,6 +42,21 @@ impl DocumentStore for ConflictingDocs {
         }
         self.inner.put(collection, id, doc, condition).await
     }
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: serde_json::Value,
+        condition: Precondition,
+        options: tinystoragedrivers_core::WriteOptions,
+    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+            self.barrier.wait().await;
+        }
+        self.inner
+            .put_with(collection, id, doc, condition, options)
+            .await
+    }
     async fn delete(
         &self,
         collection: &str,

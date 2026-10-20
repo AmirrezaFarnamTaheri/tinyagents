@@ -57,7 +57,7 @@ async fn unprepared_append_never_approximates_a_committed_message() {
         message_type: "text".into(),
         extra_metadata: json!({}),
         sender: "assistant".into(),
-        created_at: "now".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
     };
     assert!(
         matches!(
@@ -72,12 +72,10 @@ async fn unprepared_append_never_approximates_a_committed_message() {
 async fn seed(store: &DriverConversationStore, id: &str, content: &[&str]) {
     store.ensure_thread(request(id)).await.unwrap();
     let mut row = store.load(id).await.unwrap().unwrap();
-    let stream = DriverConversationStore::stream(&row.id, &row.doc.incarnation);
+    let stream = row.doc.stream().unwrap();
     for (offset, content) in content.iter().enumerate() {
-        let record = MessageRecord {
-            schema: 1,
-            incarnation: row.doc.incarnation.clone(),
-            message: ThreadMessage {
+        let record = MessageDto::from_message(
+            &ThreadMessage {
                 id: format!("message:{offset}"),
                 content: (*content).into(),
                 sender: "user".into(),
@@ -85,7 +83,9 @@ async fn seed(store: &DriverConversationStore, id: &str, content: &[&str]) {
                 extra_metadata: json!({}),
                 created_at: format!("2026-01-{:02}T00:00:00Z", offset % 28 + 1),
             },
-        };
+            to_ms,
+        )
+        .unwrap();
         store
             .streams
             .append(&stream, serde_json::to_value(record).unwrap())
@@ -102,7 +102,7 @@ async fn seed(store: &DriverConversationStore, id: &str, content: &[&str]) {
         .put(
             COLLECTION,
             &row.id,
-            serde_json::to_value(&row.doc).unwrap(),
+            serde_json::to_value(row.doc.to_dto().unwrap()).unwrap(),
             row.unchanged(),
         )
         .await
@@ -132,16 +132,7 @@ async fn tombstone_and_recreated_incarnation_hide_old_stream_and_search_rows() {
     assert_ne!(current.doc.incarnation, old.doc.incarnation);
     assert_eq!(current.doc.thread.created_at, "2026-03-01T00:00:00Z");
     assert!(b.get_messages("same").await.unwrap().is_empty());
-    assert_eq!(
-        a.streams
-            .len(&DriverConversationStore::stream(
-                &old.id,
-                &old.doc.incarnation
-            ))
-            .await
-            .unwrap(),
-        1
-    );
+    assert_eq!(a.streams.len(&old.doc.stream().unwrap()).await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -206,7 +197,7 @@ async fn bounded_stream_windows_read_all_committed_rows_and_hide_uncommitted_tai
     let store = scoped(&backend, "profile");
     seed(&store, "one", &vec!["visible"; PAGE_SIZE * 2 + 3]).await;
     let row = store.load("one").await.unwrap().unwrap();
-    let stream = DriverConversationStore::stream(&row.id, &row.doc.incarnation);
+    let stream = row.doc.stream().unwrap();
     store
         .streams
         .append(&stream, json!({"not": "committed"}))
@@ -237,7 +228,7 @@ async fn invalid_ids_and_malformed_committed_records_keep_native_error_kinds() {
         .unwrap();
     seed(&store, "one", &["valid"]).await;
     let row = store.load("one").await.unwrap().unwrap();
-    let stream = DriverConversationStore::stream(&row.id, &row.doc.incarnation);
+    let stream = row.doc.stream().unwrap();
     store.streams.delete_stream(&stream).await.unwrap();
     assert!(
         matches!(store.get_messages("one").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Serialization)
@@ -246,9 +237,7 @@ async fn invalid_ids_and_malformed_committed_records_keep_native_error_kinds() {
         .streams
         .append(
             &stream,
-            json!({"schema": 1, "incarnation":"different", "message": {
-                "id":"x", "content":"bad", "sender":"user", "type":"text", "createdAt":"now"
-            }}),
+            json!({"id": "x", "content": "bad", "sender": "user", "createdAt": "now"}),
         )
         .await
         .unwrap();
@@ -526,7 +515,7 @@ async fn corrupt_stored_identity_reports_serialization_instead_of_caller_input_e
         .put(
             COLLECTION,
             &row.id,
-            serde_json::to_value(&row.doc).unwrap(),
+            serde_json::to_value(row.doc.to_dto().unwrap()).unwrap(),
             row.unchanged(),
         )
         .await

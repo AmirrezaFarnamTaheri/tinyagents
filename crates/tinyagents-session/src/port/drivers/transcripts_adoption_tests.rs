@@ -321,10 +321,11 @@ fn a_reserved_stem_reports_nothing_adopted() {
     // A concurrent writer holds the session's stem.
     let stem = session_stem(&session);
     let docs = Arc::clone(&locator.docs);
+    let tables = Arc::clone(&locator.tables);
     let declared = Arc::clone(&locator.declared);
     run_on(&locator.bridge, async move {
         declared.ensure(&docs).await?;
-        Ok(DriverTranscriptLocator::reserve(&docs, &stem).await)
+        Ok(reservation::reserve(&docs, &tables.leases, &stem).await)
     })
     .unwrap()
     .unwrap();
@@ -413,7 +414,7 @@ fn a_root_missing_from_the_index_is_still_folded() {
         .run(async move {
             docs.delete(
                 super::super::INDEX,
-                &super::super::doc_key(&["1700000200_planner"]),
+                &super::super::index_id("1700000200_planner").unwrap(),
                 tinystoragedrivers_core::Precondition::None,
             )
             .await

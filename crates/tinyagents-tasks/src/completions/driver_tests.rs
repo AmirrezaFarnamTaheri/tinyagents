@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
@@ -155,27 +155,45 @@ async fn compaction_drops_settled_records_only_and_keeps_pending_work() {
     ));
 }
 
+/// A backend whose clock the test moves, since the update time is the driver's.
+fn clocked_store() -> (DriverCompletionStore, Arc<std::sync::atomic::AtomicU64>) {
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(1_700_000_000_000));
+    let clock = {
+        let now = Arc::clone(&now);
+        Arc::new(move || now.load(std::sync::atomic::Ordering::SeqCst))
+    };
+    let storage = MemoryStorage::with_clock(clock);
+    let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
+    (store, now)
+}
+
 #[test]
-fn compaction_matches_the_in_memory_store() {
-    fn seed(store: &dyn CompletionStore) {
-        let mut done = record("done", "p");
-        done.state = CompletionState::Delivered;
-        done.updated_at -= Duration::from_secs(60);
-        let mut gave_up = record("gave-up", "p");
-        gave_up.state = CompletionState::GaveUp;
-        gave_up.updated_at -= Duration::from_secs(60);
-        let mut pending = record("pending", "p");
-        pending.updated_at -= Duration::from_secs(60);
-        let mut recent = record("recent", "p");
-        recent.state = CompletionState::Delivered;
-        for r in [&done, &gave_up, &pending, &recent] {
-            store.put(r).unwrap();
-        }
-    }
+fn compaction_drops_settled_records_older_than_the_window_like_the_in_memory_store() {
+    let (driver, now) = clocked_store();
     let memory = InMemoryCompletionStore::new();
-    let driver = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
-    seed(&memory);
-    seed(&driver);
+    let real_now = SystemTime::now();
+    let ms = |t: SystemTime| t.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+    let old = real_now - Duration::from_secs(60);
+    let seed = |store: &dyn CompletionStore, at: SystemTime| {
+        for (task, state) in [
+            ("done", CompletionState::Delivered),
+            ("gave-up", CompletionState::GaveUp),
+            ("pending", CompletionState::Pending),
+        ] {
+            let mut r = record(task, "p");
+            r.state = state;
+            r.updated_at = at;
+            store.put(&r).unwrap();
+        }
+    };
+    now.store(ms(old), std::sync::atomic::Ordering::SeqCst);
+    seed(&driver, old);
+    seed(&memory, old);
+    now.store(ms(real_now), std::sync::atomic::Ordering::SeqCst);
+    let mut recent = record("recent", "p");
+    recent.state = CompletionState::Delivered;
+    driver.put(&recent).unwrap();
+    memory.put(&recent).unwrap();
     assert_eq!(memory.compact(Duration::from_secs(1)).unwrap(), 2);
     assert_eq!(driver.compact(Duration::from_secs(1)).unwrap(), 2);
     for id in ["pending", "recent"] {
@@ -216,9 +234,9 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
     let store = DriverCompletionStore::new(docs.clone()).unwrap();
     store.put(&record("good", "p")).unwrap();
     docs.put(
-        DriverCompletionStore::DEFAULT_COLLECTION,
+        "tasks.completions",
         "corrupt",
-        serde_json::json!({"taskId": "bad", "parentKey": "p", "state": "pending", "updatedAtMs": 0, "record": {"nope": 1}}),
+        serde_json::json!({"task_id": "bad", "parent_key": "p", "state": "pending", "nope": 1}),
         Precondition::None,
     )
     .await
@@ -229,19 +247,13 @@ async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
 }
 
 #[tokio::test]
-async fn scopes_and_collections_keep_completions_apart() {
+async fn scopes_keep_completions_apart() {
     let storage = MemoryStorage::new();
     let alice = DriverCompletionStore::new(docs_of(&storage, "alice")).unwrap();
     let bob = DriverCompletionStore::new(docs_of(&storage, "bob")).unwrap();
     alice.put(&record("t", "p")).unwrap();
     assert!(bob.get("t").is_none());
     assert!(bob.list(None).is_empty());
-    let other = DriverCompletionStore::with_collection(
-        docs_of(&storage, "alice"),
-        Blocking::new().unwrap(),
-        "another_completions",
-    );
-    assert!(other.get("t").is_none());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -249,4 +261,30 @@ async fn the_sync_trait_works_from_a_multi_thread_runtime() {
     let store = DriverCompletionStore::new(docs_of(&MemoryStorage::new(), "local")).unwrap();
     store.put(&record("mt", "p")).unwrap();
     assert!(store.get("mt").is_some());
+}
+
+#[tokio::test]
+async fn completions_are_v2_documents_with_key_ids_and_metadata_update_times() {
+    let storage = MemoryStorage::new();
+    let docs = docs_of(&storage, "local");
+    let store = DriverCompletionStore::new(docs.clone()).unwrap();
+    store.put(&record("c/1", "p")).unwrap();
+    let row = docs
+        .get("tasks.completions", "c%2F1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.doc["task_id"], "c/1");
+    assert_eq!(row.doc["parent_key"], "p");
+    assert_eq!(row.doc["state"], "pending");
+    assert!(row.doc["finished_ms"].as_i64().unwrap() > 1_600_000_000_000);
+    for old in ["record", "updatedAtMs", "updated_at", "taskId"] {
+        assert!(row.doc.get(old).is_none(), "{old}");
+    }
+    assert_eq!(row.meta.schema, 2);
+    let read = store.get("c/1").unwrap();
+    assert_eq!(
+        read.updated_at,
+        UNIX_EPOCH + Duration::from_millis(row.meta.updated_ms as u64)
+    );
 }

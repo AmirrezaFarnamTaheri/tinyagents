@@ -3,7 +3,7 @@
 //! Tool results enter the model context before the provider has seen them, so
 //! this is the last cheap point to replace large raw output with a bounded
 //! preview. The full, redacted body is written to a tinystoragedrivers
-//! [`BlobStore`] under `tool-results/<session>/<tool>/<call>.txt`, and the
+//! [`BlobStore`] under `harness/tool_results/<session>/<tool>/<call>.txt`, and the
 //! pointer the model receives is that blob key.
 //!
 //! The store takes a blob handle, never a filesystem path:
@@ -36,10 +36,12 @@ use tinystoragedrivers_core::{BlobStore, Capability, MemoryStorage, Scope, Stora
 use super::policy::{ArtifactRedactor, Redacted};
 
 /// The blob namespace every tool-result artifact lives under.
-const ARTIFACT_ROOT: &str = "tool-results";
-/// Pointers a host wrote before the store moved onto blobs
-/// (`artifacts/tool-results/...`) still page: a transcript outlives the store.
-const LEGACY_ARTIFACT_ROOT: &str = "artifacts/tool-results";
+const ARTIFACT_ROOT: &str = "harness/tool_results";
+/// Pointers written before the v2 schema (`tool-results/...`) or before the
+/// store moved onto blobs (`artifacts/tool-results/...`) still page: a
+/// transcript outlives the store. [`canonical_key`] maps both onto
+/// [`ARTIFACT_ROOT`], where the storage step moved the blobs.
+const LEGACY_ARTIFACT_ROOTS: [&str; 2] = ["tool-results", "artifacts/tool-results"];
 
 /// A read of a persisted artifact, recognised from a tool call's arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,10 +81,12 @@ pub fn artifact_read_target(
 /// recognised too, so a transcript written before the move keeps paging.
 fn is_artifact_key(path: &str) -> bool {
     let path = path.trim_start_matches("./");
-    [ARTIFACT_ROOT, LEGACY_ARTIFACT_ROOT].iter().any(|root| {
-        path.strip_prefix(root)
-            .is_some_and(|rest| rest.starts_with('/'))
-    })
+    std::iter::once(&ARTIFACT_ROOT)
+        .chain(&LEGACY_ARTIFACT_ROOTS)
+        .any(|root| {
+            path.strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 fn read_target_matching(
@@ -268,7 +272,7 @@ pub(super) fn apply_tool_result_budget(
 
 /// Writes oversized tool results to a [`BlobStore`].
 ///
-/// Each body is stored under `tool-results/<session>/<tool>/<call>.txt` and the
+/// Each body is stored under `harness/tool_results/<session>/<tool>/<call>.txt` and the
 /// model is handed that key as `artifact_path`.
 ///
 /// The host supplies what the crate cannot decide: the redactor every body
@@ -847,13 +851,21 @@ fn sanitize_component(value: &str) -> String {
 }
 
 /// Normalise a pointer to the blob key it names, refusing anything that is not
-/// a plain `tool-results/<…>` key.
+/// a plain `harness/tool_results/<…>` key. A pre-v2 `tool-results/<…>` or
+/// `artifacts/tool-results/<…>` pointer maps onto the current root.
 fn canonical_key(key: &str) -> anyhow::Result<String> {
     let trimmed = key.trim_start_matches("./");
-    let canonical = trimmed
-        .strip_prefix("artifacts/")
-        .filter(|rest| rest.starts_with("tool-results/"))
-        .unwrap_or(trimmed);
+    let canonical = LEGACY_ARTIFACT_ROOTS
+        .iter()
+        .find_map(|root| {
+            trimmed
+                .strip_prefix(root)
+                .filter(|rest| rest.starts_with('/'))
+        })
+        .map_or_else(
+            || trimmed.to_owned(),
+            |rest| format!("{ARTIFACT_ROOT}{rest}"),
+        );
     let under_namespace = canonical
         .strip_prefix(ARTIFACT_ROOT)
         .is_some_and(|rest| rest.starts_with('/'));
@@ -865,7 +877,7 @@ fn canonical_key(key: &str) -> anyhow::Result<String> {
     if !under_namespace || !clean {
         anyhow::bail!("not a tool-result artifact key: {key}");
     }
-    Ok(canonical.to_string())
+    Ok(canonical)
 }
 
 #[cfg(test)]
