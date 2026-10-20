@@ -510,7 +510,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     Some((key.0, key.1, key.2, binding));
                                 Ok(profile)
                             } else {
-                                Ok(None)
+                                match harness.resolve_local_model(ctx, request).await {
+                                    Ok(binding) => {
+                                        let profile = binding.model.profile().cloned();
+                                        *resolution_cache.lock().unwrap() =
+                                            Some((key.0, key.1, key.2, binding));
+                                        Ok(profile)
+                                    }
+                                    Err(TinyAgentsError::ModelNotFound(_)) => Ok(None),
+                                    Err(error) => Err(error),
+                                }
                             }
                         })
                     },
