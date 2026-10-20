@@ -122,7 +122,7 @@ async fn start_member_runs_and_completes_claimed_task() {
 
 #[tokio::test]
 async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
-    // Independent handles prove the admission fence is durable and shared,
+    // Independent handles prove the admission fence is in the shared backend,
     // rather than a mutex local to one TeamService instance.
     let ledger_backend = MemoryBackend::new();
     let first_service = service_with_backend(&ledger_backend);
