@@ -35,6 +35,7 @@ struct PermitState {
     active: AtomicUsize,
     refuse_commit: std::sync::atomic::AtomicBool,
     refuse_recheck: std::sync::atomic::AtomicBool,
+    stream_constructed: std::sync::atomic::AtomicBool,
 }
 
 struct TestPermit {
@@ -45,9 +46,10 @@ struct TestPermit {
 
 impl PhysicalDispatchPermit for TestPermit {
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal> {
-        let check = self.checks.fetch_add(1, Ordering::SeqCst);
+        self.checks.fetch_add(1, Ordering::SeqCst);
         if self.state.refuse_commit.load(Ordering::SeqCst)
-            || (check > 0 && self.state.refuse_recheck.load(Ordering::SeqCst))
+            || (self.committed.load(Ordering::SeqCst)
+                && self.state.refuse_recheck.load(Ordering::SeqCst))
         {
             return Err(DispatchRefusal::new(DispatchRefusalReason::Deadline));
         }
@@ -129,6 +131,7 @@ impl ScriptedAdmission {
                 active: AtomicUsize::new(0),
                 refuse_commit: std::sync::atomic::AtomicBool::new(false),
                 refuse_recheck: std::sync::atomic::AtomicBool::new(false),
+                stream_constructed: std::sync::atomic::AtomicBool::new(false),
             }),
         })
     }
