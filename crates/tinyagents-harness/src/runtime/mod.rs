@@ -58,7 +58,7 @@ pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
     harness.with_policy(policy);
 }
 
-impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+impl<'model, State: Send + Sync, Ctx: Send + Sync> AgentHarness<'model, State, Ctx> {
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
     pub fn new() -> Self {
@@ -80,7 +80,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// continue to use their invocation-local host resolver.
     pub fn with_model_resolver(
         &mut self,
-        resolver: Arc<dyn ModelResolver<State>>,
+        resolver: Arc<dyn ModelResolver<State> + 'model>,
     ) -> &mut Self {
         self.model_resolver = Some(resolver);
         self
