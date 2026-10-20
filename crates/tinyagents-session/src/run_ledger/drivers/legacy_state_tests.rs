@@ -195,6 +195,13 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
             .await;
         }
     }
+    put(
+        &storage,
+        "session_kv",
+        "legacy-setting",
+        json!({"ns": "prefs", "key": "theme", "value": "dark"}),
+    )
+    .await;
 
     // The provider's real open path binds the host-supplied scope, runs the
     // session-owned legacy-state import, and migrates every session owner
@@ -208,6 +215,23 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
     ))
     .unwrap();
     provider.try_for_agent("fixture-agent").unwrap();
+    let imported_kv = storage
+        .documents()
+        .query_all("tsd.kv", &Default::default())
+        .await
+        .unwrap();
+    assert!(imported_kv.iter().any(|row| {
+        row.doc["owner"] == "session"
+            && row.doc["ns"] == "prefs"
+            && row.doc["key"] == "theme"
+            && row.doc["value"] == "dark"
+    }));
+    assert!(storage
+        .documents()
+        .query_all("session_kv", &Default::default())
+        .await
+        .unwrap()
+        .is_empty());
     let ledger = provider.driver_run_ledger("fixture-agent").unwrap();
     let workflow = ledger.get_workflow_run("fixture-workflow").await.unwrap().unwrap();
     assert_eq!(workflow.definition_id, "fixture-definition");
