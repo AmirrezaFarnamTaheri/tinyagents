@@ -31,12 +31,13 @@ use `ConversationPersistence`. Imported entry trees use
 entries and performs target writes only. None of these methods accepts a path,
 SQLite connection, workspace, tenant grammar, or source authority.
 
-The source files are no longer present in this branch. Their main regression
-fixtures and tests were under `src/legacy/{files_tests.rs,mod_tests.rs,
-rewrite_tests.rs,transcripts_once_tests.rs}` and
-`src/run_ledger/drivers/{import_tests.rs,legacy_state_tests.rs}`. OpenHuman #440
-should port source lifecycle, read-only behavior, schema compatibility,
-idempotence and resume tests to the host importer. Keep this crate's
+The source files are no longer present in this branch. Their importer tests
+were `src/legacy/{files_tests.rs,mod_tests.rs,rewrite_tests.rs,
+transcripts_once_tests.rs}` and `src/run_ledger/drivers/import_tests.rs`.
+`src/run_ledger/drivers/legacy_state_tests.rs` is retained here because it
+tests the in-storage self-migration described above. OpenHuman #440 should
+port source lifecycle, read-only behavior, schema compatibility, idempotence
+and resume tests to the host importer. Keep this crate's
 `run_ledger/drivers/legacy_state.rs` self-migration: it reads old domain
 documents already in the supplied storage scope and moves live workflow leases
 and history counters to shared primitives before the owner's schema migration.
@@ -44,3 +45,31 @@ and history counters to shared primitives before the owner's schema migration.
 The existing `storage_schema()` steps likewise migrate records already in the
 host-supplied backend. They do not inspect the former workspace files. Session
 scope resolution and any profile re-homing remain host-owned operations.
+
+Native-engine admission/fencing tests were removed with the engine-specific
+contract. The former test names are preserved here for the host adapter's
+review: `port/drivers/schema_admission_tests.rs` contained
+`validation_only_conformance_never_attempts_schema_declaration`,
+`validation_only_refusals_keep_native_sources_and_retry_without_caching`,
+`explicit_actor_factory_selects_validation_without_changing_original_provider`,
+`validation_only_missing_or_incompatible_schema_refuses_before_recovery_or_cache`,
+`legacy_actor_factory_inherits_validation_policy_without_declaring_schema`,
+and `validation_only_provider_ledger_uses_prepared_schema_without_declaration`.
+`threads/driver_schema_tests.rs` contained
+`memory_explicit_admission_refuses_missing_declaration_before_read`,
+`sqlite_explicit_admission_refuses_missing_declaration_before_read`,
+`memory_prepared_actor_retains_original_native_fence_and_scope`,
+`sqlite_prepared_actor_retains_original_native_fence_and_scope`,
+`validation_is_repeated_and_preserves_native_refusal_source_without_actor_ddl`,
+`native_required_feature_validation_accepts_compatible_superset_declarations`,
+and `schema_preparation_is_explicit_and_restricted_native_handles_refuse_it`.
+The host-specific stale-fence assertion was
+`threads/driver_tests.rs::native_scope_fence_rejects_metadata_takeover_without_local_fallback`;
+append-phase native fence assertions were in
+`threads/driver_append_tests.rs::memory_original_native_fence_refuses_each_append_commit_after_takeover`
+and `sqlite_original_native_fence_refuses_each_append_commit_after_takeover`.
+The reusable helper was `fenced_phases`. The workflow case was
+`run_ledger/drivers/mod_tests.rs::scoped_workflow_writes_preserve_native_owner_fence_refusal`.
+These tested backend admission and fencing, which the host selects and
+composes; retain the separate session run-lease and transcript-reservation
+behavior tests that exercise session-owned coordination.
