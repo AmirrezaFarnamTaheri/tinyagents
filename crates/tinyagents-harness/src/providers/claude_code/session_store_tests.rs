@@ -2,7 +2,9 @@
 
 use super::*;
 use tinyagents_storage_kit::{Scope, StorageBackend};
-use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
+use tinystoragedrivers_types::ErrorKind;
 
 fn new_store() -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>) {
     let storage = MemoryBackend::new()
@@ -129,6 +131,57 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
             .is_empty()
     );
     drop(claim);
+}
+
+#[tokio::test]
+async fn failed_session_removal_keeps_the_mapping_and_delivered_turns() {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-remove-failure").unwrap())
+        .unwrap();
+    let faults = FaultPlan::new();
+    let documents: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(
+        Arc::clone(storage.documents()),
+        faults.clone(),
+    ));
+    let store = SessionStore::new(&documents).unwrap();
+    store.set("thread", "session-a").await.unwrap();
+    store
+        .record_delivered("thread", &["turn".to_owned()])
+        .await
+        .unwrap();
+
+    faults.fail_operation_nth("documents.put", 1, ErrorKind::Backend);
+    assert!(store.remove_if("thread", "session-a").await.is_err());
+    faults.clear();
+
+    assert_eq!(store.get("thread").await.unwrap().as_deref(), Some("session-a"));
+    assert!(store.delivered("thread").await.unwrap().contains("turn"));
+}
+
+#[tokio::test]
+async fn failed_delivery_write_releases_the_reservation_for_retry() {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new("claude-code-delivery-failure").unwrap())
+        .unwrap();
+    let faults = FaultPlan::new();
+    let documents: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(
+        Arc::clone(storage.documents()),
+        faults.clone(),
+    ));
+    let store = Arc::new(SessionStore::new(&documents).unwrap());
+    let fingerprint = ["turn".to_owned()];
+    let (already, claim) = store.claim_delivered("thread", &fingerprint).await.unwrap();
+    assert!(already.is_empty());
+
+    faults.fail_operation_nth("documents.put", 1, ErrorKind::Backend);
+    assert!(store.record_delivered("thread", &fingerprint).await.is_err());
+    drop(claim);
+    faults.clear();
+
+    let (already, retry) = store.claim_delivered("thread", &fingerprint).await.unwrap();
+    assert!(already.is_empty());
+    assert!(store.delivered("thread").await.unwrap().is_empty());
+    drop(retry);
 }
 
 #[tokio::test]
