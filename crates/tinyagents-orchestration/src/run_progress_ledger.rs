@@ -4,9 +4,11 @@
 //! progress-to-ledger mapping; it never selects a backend or derives storage
 //! scope from event payloads.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::json;
+use tinyagents_harness::progress::AgentProgress;
 use tinyagents_session::run_ledger::{
     AgentRunKind, AgentRunStatus, AgentRunUpsert, RunEventAppend, RunLedgerStore, RunTelemetry,
     RunTelemetryUpsert,
@@ -38,49 +40,301 @@ pub struct ChildDone<'a> {
 
 /// Progress recorder for one parent agent turn and its child runs.
 pub struct RunProgressLedger {
-    store: Arc<dyn RunLedgerStore>,
+    store: Option<Arc<dyn RunLedgerStore>>,
     identity: RunProgressIdentity,
+    state: RunProgressState,
+}
+
+#[derive(Default)]
+struct RunProgressState {
+    events_seen: u64,
+    parent_completed: bool,
+    parent_tool_count: u64,
+    child_tool_counts: HashMap<String, u64>,
+    subagent_parent_call_ids: HashMap<String, Option<String>>,
+}
+
+/// Correlation retained for the host's surface-specific subagent projection.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProgressLedgerContext {
+    pub parent_call_id: Option<String>,
 }
 
 impl RunProgressLedger {
     /// Bind the recorder to the store already selected by the host's trusted
     /// tenant/agent context.
-    pub fn new(store: Arc<dyn RunLedgerStore>, identity: RunProgressIdentity) -> Self {
-        Self { store, identity }
+    pub fn new(store: Option<Arc<dyn RunLedgerStore>>, identity: RunProgressIdentity) -> Self {
+        Self {
+            store,
+            identity,
+            state: RunProgressState::default(),
+        }
     }
 
     async fn run(&self, upsert: AgentRunUpsert) {
-        if let Err(err) = self.store.upsert_agent_run(upsert).await {
+        let Some(store) = &self.store else { return };
+        if let Err(err) = store.upsert_agent_run(upsert).await {
             tracing::warn!(error = %err, "failed to upsert progress run");
         }
     }
 
     async fn event(&self, run_id: &str, event_type: &str, payload: serde_json::Value) {
+        let Some(store) = &self.store else { return };
         let append = RunEventAppend {
             run_id: run_id.to_owned(),
             event_type: event_type.to_owned(),
             payload,
         };
-        if let Err(err) = self.store.append_run_event(append).await {
+        if let Err(err) = store.append_run_event(append).await {
             tracing::warn!(error = %err, "failed to append progress event");
         }
     }
 
     async fn telemetry(&self, telemetry: RunTelemetryUpsert) {
-        if let Err(err) = self.store.upsert_run_telemetry(telemetry).await {
+        let Some(store) = &self.store else { return };
+        if let Err(err) = store.upsert_run_telemetry(telemetry).await {
             tracing::warn!(error = %err, "failed to upsert progress telemetry");
         }
     }
 
     /// The turn's telemetry as written so far, for the trace export.
     pub async fn read_telemetry(&self) -> Option<RunTelemetry> {
-        match self.store.get_agent_run(&self.identity.request_id).await {
+        let store = self.store.as_ref()?;
+        match store.get_agent_run(&self.identity.request_id).await {
             Ok(run) => run.and_then(|run| run.telemetry),
             Err(err) => {
                 tracing::warn!(error = %err, "failed to read progress telemetry");
                 None
             }
         }
+    }
+
+    /// Fold a provider-neutral progress event into the run ledger.
+    ///
+    /// The host calls this once for every event in the turn's ordered stream.
+    /// It retains only generic run correlation/counters and does not select a
+    /// store scope or translate progress into a user-facing event.
+    pub async fn observe(&mut self, event: &AgentProgress) -> ProgressLedgerContext {
+        self.state.events_seen = self.state.events_seen.saturating_add(1);
+        match event {
+            AgentProgress::TurnStarted => self.turn_started().await,
+            AgentProgress::ToolCallStarted {
+                call_id,
+                tool_name,
+                iteration,
+                ..
+            } => {
+                self.state.parent_tool_count = self.state.parent_tool_count.saturating_add(1);
+                self.tool_started(call_id, tool_name, *iteration, self.state.parent_tool_count)
+                    .await;
+            }
+            AgentProgress::ToolCallCompleted {
+                call_id,
+                tool_name,
+                success,
+                output_chars,
+                elapsed_ms,
+                iteration,
+                failure,
+                ..
+            } => {
+                self.tool_completed(json!({
+                    "callId": call_id,
+                    "toolName": tool_name,
+                    "success": success,
+                    "outputChars": output_chars,
+                    "elapsedMs": elapsed_ms,
+                    "iteration": iteration,
+                    "failure": failure.as_ref().and_then(|f| serde_json::to_value(f).ok()),
+                }))
+                .await;
+            }
+            AgentProgress::TurnCostUpdated {
+                model,
+                input_tokens,
+                output_tokens,
+                cached_input_tokens,
+                total_usd,
+                ..
+            } => {
+                self.cost(
+                    model,
+                    *input_tokens,
+                    *output_tokens,
+                    *cached_input_tokens,
+                    *total_usd,
+                )
+                .await;
+            }
+            AgentProgress::TurnCompleted { iterations, .. } => {
+                self.state.parent_completed = true;
+                self.turn_completed(*iterations).await;
+            }
+            AgentProgress::SubagentSpawned {
+                agent_id,
+                task_id,
+                mode,
+                dedicated_thread,
+                prompt_chars,
+                worker_thread_id,
+                display_name,
+                parent_call_id,
+                ..
+            } => {
+                self.state
+                    .subagent_parent_call_ids
+                    .insert(task_id.clone(), parent_call_id.clone());
+                self.child_spawned(
+                    agent_id,
+                    task_id,
+                    mode,
+                    *dedicated_thread,
+                    *prompt_chars,
+                    worker_thread_id,
+                    display_name,
+                    parent_call_id,
+                )
+                .await;
+                return ProgressLedgerContext {
+                    parent_call_id: parent_call_id.clone(),
+                };
+            }
+            AgentProgress::SubagentCompleted {
+                agent_id,
+                task_id,
+                elapsed_ms,
+                iterations,
+                output_chars,
+                worktree_path,
+                changed_files,
+                dirty_status,
+                ..
+            } => {
+                let parent_call_id = self
+                    .state
+                    .subagent_parent_call_ids
+                    .remove(task_id)
+                    .flatten();
+                self.child_completed(&ChildDone {
+                    agent_id,
+                    task_id,
+                    elapsed_ms: *elapsed_ms,
+                    iterations: *iterations,
+                    output_chars: *output_chars,
+                    worktree_path,
+                    changed_files,
+                    dirty_status: *dirty_status,
+                    parent_call_id: &parent_call_id,
+                    tool_count: self.state.child_tool_counts.get(task_id).copied(),
+                })
+                .await;
+                return ProgressLedgerContext { parent_call_id };
+            }
+            AgentProgress::SubagentFailed {
+                agent_id,
+                task_id,
+                error,
+            } => {
+                let parent_call_id = self
+                    .state
+                    .subagent_parent_call_ids
+                    .remove(task_id)
+                    .flatten();
+                self.child_failed(
+                    agent_id,
+                    task_id,
+                    error,
+                    &parent_call_id,
+                    self.state.child_tool_counts.get(task_id).copied(),
+                )
+                .await;
+                return ProgressLedgerContext { parent_call_id };
+            }
+            AgentProgress::SubagentAwaitingUser {
+                agent_id,
+                task_id,
+                question,
+                worker_thread_id,
+                checkpoint_path,
+            } => {
+                let parent_call_id = self
+                    .state
+                    .subagent_parent_call_ids
+                    .get(task_id)
+                    .cloned()
+                    .flatten();
+                self.child_awaiting_user(
+                    agent_id,
+                    task_id,
+                    question,
+                    worker_thread_id,
+                    checkpoint_path,
+                    &parent_call_id,
+                )
+                .await;
+                return ProgressLedgerContext { parent_call_id };
+            }
+            AgentProgress::SubagentToolCallStarted {
+                agent_id,
+                task_id,
+                call_id,
+                tool_name,
+                iteration,
+                ..
+            } => {
+                let count = {
+                    let count = self
+                        .state
+                        .child_tool_counts
+                        .entry(task_id.clone())
+                        .or_insert(0);
+                    *count = count.saturating_add(1);
+                    *count
+                };
+                self.child_tool_started(agent_id, task_id, call_id, tool_name, *iteration, count)
+                    .await;
+            }
+            AgentProgress::SubagentToolCallCompleted {
+                agent_id,
+                task_id,
+                call_id,
+                tool_name,
+                success,
+                output_chars,
+                elapsed_ms,
+                iteration,
+                failure,
+                ..
+            } => {
+                self.child_tool_completed(
+                    task_id,
+                    json!({
+                        "agentId": agent_id,
+                        "callId": call_id,
+                        "toolName": tool_name,
+                        "success": success,
+                        "outputChars": output_chars,
+                        "elapsedMs": elapsed_ms,
+                        "iteration": iteration,
+                        "failure": failure.as_ref().and_then(|f| serde_json::to_value(f).ok()),
+                    }),
+                )
+                .await;
+            }
+            _ => {}
+        }
+        ProgressLedgerContext::default()
+    }
+
+    /// Record an interrupted run if the parent did not complete.
+    pub async fn finish(&self) {
+        if !self.state.parent_completed {
+            self.turn_interrupted(self.state.events_seen).await;
+        }
+    }
+
+    pub fn events_seen(&self) -> u64 {
+        self.state.events_seen
     }
 
     fn turn_row(
@@ -113,7 +367,7 @@ impl RunProgressLedger {
         }
     }
 
-    pub async fn turn_started(&self) {
+    async fn turn_started(&self) {
         self.run(self.turn_row(
             AgentRunStatus::Running,
             None,
@@ -129,7 +383,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn turn_completed(&self, iterations: u32) {
+    async fn turn_completed(&self, iterations: u32) {
         self.run(self.turn_row(
             AgentRunStatus::Completed,
             Some(format!("Completed in {iterations} iteration(s)")),
@@ -146,7 +400,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn turn_interrupted(&self, events_seen: u64) {
+    async fn turn_interrupted(&self, events_seen: u64) {
         self.run(self.turn_row(
             AgentRunStatus::Interrupted,
             None,
@@ -163,7 +417,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn tool_started(&self, call_id: &str, tool_name: &str, iteration: u32, count: u64) {
+    async fn tool_started(&self, call_id: &str, tool_name: &str, iteration: u32, count: u64) {
         self.event(
             &self.identity.request_id,
             "tool_call_started",
@@ -178,12 +432,12 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn tool_completed(&self, payload: serde_json::Value) {
+    async fn tool_completed(&self, payload: serde_json::Value) {
         self.event(&self.identity.request_id, "tool_call_completed", payload)
             .await;
     }
 
-    pub async fn cost(
+    async fn cost(
         &self,
         model: &str,
         input_tokens: u64,
@@ -230,7 +484,7 @@ impl RunProgressLedger {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn child_spawned(
+    async fn child_spawned(
         &self,
         agent_id: &str,
         task_id: &str,
@@ -279,7 +533,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn child_completed(&self, done: &ChildDone<'_>) {
+    async fn child_completed(&self, done: &ChildDone<'_>) {
         let mut row = self.child_row(
             done.task_id,
             done.agent_id,
@@ -316,7 +570,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn child_failed(
+    async fn child_failed(
         &self,
         agent_id: &str,
         task_id: &str,
@@ -348,7 +602,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn child_awaiting_user(
+    async fn child_awaiting_user(
         &self,
         agent_id: &str,
         task_id: &str,
@@ -390,7 +644,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn child_tool_started(
+    async fn child_tool_started(
         &self,
         agent_id: &str,
         task_id: &str,
@@ -418,7 +672,7 @@ impl RunProgressLedger {
         .await;
     }
 
-    pub async fn child_tool_completed(&self, task_id: &str, payload: serde_json::Value) {
+    async fn child_tool_completed(&self, task_id: &str, payload: serde_json::Value) {
         self.event(task_id, "subagent_tool_call_completed", payload)
             .await;
     }
