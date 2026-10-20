@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_storage_kit::Scope;
 use tinystoragedrivers_testkit::{MemoryBackend, memory_storage};
+use tinyagents_storage_kit::StorageBackend;
 
 /// Stand-in for a host's credential/PII pass: rewrites a GitHub token and
 /// phone numbers, and (like the real one) can grow a body.

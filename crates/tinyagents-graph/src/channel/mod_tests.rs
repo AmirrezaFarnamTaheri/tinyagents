@@ -1,9 +1,9 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 //! Unit tests for the channel-per-field state model: each channel's merge rule,
 //! `ChannelSet` dispatch/snapshot, `ChannelState` round-trips through a real
 //! graph (fan-out into aggregate channels), and concurrent-write conflict
 //! detection on non-aggregate channels.
 
+use tinystoragedrivers_testkit::MemoryBackend;
 use super::*;
 use crate::TinyAgentsError;
 use crate::builder::{GraphBuilder, NodeContext};

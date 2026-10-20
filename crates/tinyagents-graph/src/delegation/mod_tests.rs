@@ -1,8 +1,8 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 //! Unit tests for the delegation graph: the revision loop and its budget,
 //! cancellation, durable checkpoint/resume classification, the human-approval
 //! interrupt, and the on-disk shape of [`DelegationState`].
 
+use tinystoragedrivers_testkit::MemoryBackend;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

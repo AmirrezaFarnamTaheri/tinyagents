@@ -1,4 +1,3 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 //! `NodeContext::durable_task`: per-task memoisation of a side-effecting
 //! sub-step, keyed by `(task_id, key)` in the checkpoint write ledger.
 //!

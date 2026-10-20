@@ -29,7 +29,7 @@ impl AsyncWorkflowExecutor for RegisteredExecutor {
 async fn authoritative_engine_awaits_registration_and_completes_on_current_thread() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(RegisteredExecutor),
@@ -140,7 +140,7 @@ fn innermost(error: &WorkflowPersistenceError) -> &WorkflowPersistenceError {
 async fn ignored_registration_refusal_cancels_child_and_preserves_source_without_waiting() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let store = Arc::new(RegistrationRefusal {
         inner: LedgerWorkflowStore::new(ledger.clone()),
         cas: AtomicUsize::new(0),
@@ -203,7 +203,7 @@ impl AsyncWorkflowExecutor for UnregisteredExecutor {
 async fn authoritative_success_cannot_substitute_for_committed_child_registration() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(UnregisteredExecutor),
@@ -255,7 +255,7 @@ impl AsyncWorkflowExecutor for RefusingChild {
 async fn typed_child_failure_interrupts_parallel_waiters_without_string_flattening() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let engine = WorkflowEngine::new_async(
         Arc::new(LedgerWorkflowStore::new(ledger.clone())),
         Arc::new(RefusingChild),

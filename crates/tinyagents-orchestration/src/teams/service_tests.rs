@@ -8,7 +8,7 @@ use tinyagents_session::run_ledger::{AgentTeamMemberStatus, AgentTeamTaskStatus}
 fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();
     TeamService::new(
-        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)))).unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
     )
 }
 

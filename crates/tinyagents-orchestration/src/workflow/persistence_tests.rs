@@ -22,7 +22,7 @@ fn row() -> WorkflowRunUpsert {
 async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     let expected = ledger.upsert_workflow_run(row()).await.unwrap();
     let store: Arc<dyn AsyncWorkflowStore> = Arc::new(LedgerWorkflowStore::new(ledger));
     assert_eq!(store.load("workflow").await.unwrap(), Some(expected));
@@ -33,9 +33,9 @@ async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
     let first =
-        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))));
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let second =
-        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))));
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let initial = first.upsert(row()).await.unwrap();
     assert_eq!(initial.revision, 0);
     let WorkflowLeaseClaim::Acquired(claimed) = first
@@ -132,7 +132,7 @@ async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
     let store =
-        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))));
+        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let lease = Duration::MAX;
     assert!(matches!(
         store.claim("workflow", "owner", lease).await,
@@ -183,7 +183,7 @@ async fn explicit_legacy_registration_preserves_callback_results() {
 async fn expired_owner_takeover_fences_prior_owner_without_sleeping() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let ledger = Arc::new(crate::test_support::ledger_in(&ledger_backend));
     ledger.upsert_workflow_run(row()).await.unwrap();
     let WorkflowLeaseClaim::Acquired(expired) = ledger
         .try_claim_workflow_run("workflow", "old-owner", chrono::Duration::seconds(-1))

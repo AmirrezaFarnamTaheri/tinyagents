@@ -35,6 +35,26 @@
 
 pub mod conformance;
 
+/// Legacy-compatible constructor for tests that need a real, six-port memory
+/// backend. This adapter is compiled only with the session testkit.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
+
+impl MemoryStorage {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl tinyagents_storage_kit::StorageBackend for MemoryStorage {
+    fn for_scope(
+        &self,
+        scope: &tinyagents_storage_kit::Scope,
+    ) -> tinyagents_storage_kit::error::Result<tinyagents_storage_kit::ScopedStorage> {
+        tinyagents_storage_kit::StorageBackend::for_scope(self.0.as_ref(), scope)
+    }
+}
+
 mod in_memory_transcript;
 pub use in_memory_transcript::InMemoryTranscriptHistory;
 

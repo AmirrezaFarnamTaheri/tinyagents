@@ -1,4 +1,3 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 //! Durable executor tests: the interrupt→resume and failure→retry scenarios
 //! from `test.rs` (`interrupt_then_resume_reruns_node`,
 //! `exhausted_retries_leave_a_resumable_failure_checkpoint`), replayed against
@@ -12,6 +11,7 @@ use tinystoragedrivers_testkit::MemoryBackend;
 //! merely calling `.resume()`/`.retry()` on an already-warm in-process
 //! checkpointer.
 
+use tinystoragedrivers_testkit::MemoryBackend;
 use super::*;
 use crate::builder::{GraphBuilder, NodeContext};
 use crate::checkpoint::Checkpointer;
