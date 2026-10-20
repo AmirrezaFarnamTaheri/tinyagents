@@ -38,16 +38,28 @@ async fn session_and_delivered_turns_roundtrip_through_host_storage() {
     let (_storage, store) = new_store();
     assert_eq!(store.get("thread").await.unwrap(), None);
     store.set("thread", "session-a").await.unwrap();
-    store.record_delivered("thread", &["one".into(), "two".into()]).await.unwrap();
-    assert_eq!(store.get("thread").await.unwrap().as_deref(), Some("session-a"));
-    assert_eq!(store.delivered("thread").await.unwrap(), ["one", "two"].into_iter().map(str::to_owned).collect());
+    store
+        .record_delivered("thread", &["one".into(), "two".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
+    assert_eq!(
+        store.delivered("thread").await.unwrap(),
+        ["one", "two"].into_iter().map(str::to_owned).collect()
+    );
 }
 
 #[tokio::test]
 async fn replacement_session_clears_delivered_fingerprints() {
     let (_storage, store) = new_store();
     store.set("thread", "old").await.unwrap();
-    store.record_delivered("thread", &["turn".into()]).await.unwrap();
+    store
+        .record_delivered("thread", &["turn".into()])
+        .await
+        .unwrap();
     store.set("thread", "old").await.unwrap();
     assert!(store.delivered("thread").await.unwrap().contains("turn"));
     store.set("thread", "new").await.unwrap();
@@ -58,9 +70,15 @@ async fn replacement_session_clears_delivered_fingerprints() {
 async fn remove_if_only_clears_the_expected_session_and_its_deliveries() {
     let (_storage, store) = new_store();
     store.set("thread", "session-a").await.unwrap();
-    store.record_delivered("thread", &["turn".into()]).await.unwrap();
+    store
+        .record_delivered("thread", &["turn".into()])
+        .await
+        .unwrap();
     assert!(!store.remove_if("thread", "session-b").await.unwrap());
-    assert_eq!(store.get("thread").await.unwrap().as_deref(), Some("session-a"));
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
     assert!(store.remove_if("thread", "session-a").await.unwrap());
     assert_eq!(store.get("thread").await.unwrap(), None);
     assert!(store.delivered("thread").await.unwrap().is_empty());
@@ -76,7 +94,14 @@ async fn claim_is_exclusive_released_on_failure_and_committed_after_acceptance()
     assert!(already.contains("turn"));
     drop(second);
     drop(first);
-    assert!(store.claim_delivered("t", &fingerprints).await.unwrap().0.is_empty());
+    assert!(
+        store
+            .claim_delivered("t", &fingerprints)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
     store.record_delivered("t", &fingerprints).await.unwrap();
     assert!(store.delivered("t").await.unwrap().contains("turn"));
 }
@@ -88,8 +113,21 @@ async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
     let (_storage_other, other) = another_scope("separate-claude-code-scope");
     let fp = ["same-fingerprint".to_owned()];
     let (_, claim) = a.claim_delivered("thread", &fp).await.unwrap();
-    assert!(b.claim_delivered("thread", &fp).await.unwrap().0.contains(&fp[0]));
-    assert!(other.claim_delivered("thread", &fp).await.unwrap().0.is_empty());
+    assert!(
+        b.claim_delivered("thread", &fp)
+            .await
+            .unwrap()
+            .0
+            .contains(&fp[0])
+    );
+    assert!(
+        other
+            .claim_delivered("thread", &fp)
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
     drop(claim);
 }
 
@@ -98,14 +136,27 @@ async fn legacy_import_merges_matching_session_and_never_overwrites_newer_state(
     let (_storage, store) = new_store();
     let old_release_fixture = br#"{"sessions":{"same":"uuid-a","different":"uuid-old","new":"uuid-new"},"delivered":{"same":["old-turn"]}}"#;
     store.set("same", "uuid-a").await.unwrap();
-    store.record_delivered("same", &["new-turn".into()]).await.unwrap();
+    store
+        .record_delivered("same", &["new-turn".into()])
+        .await
+        .unwrap();
     store.set("different", "uuid-current").await.unwrap();
-    assert_eq!(import_legacy_sessions(&store, old_release_fixture).await.unwrap(), 1);
-    assert_eq!(store.get("different").await.unwrap().as_deref(), Some("uuid-current"));
+    assert_eq!(
+        import_legacy_sessions(&store, old_release_fixture)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.get("different").await.unwrap().as_deref(),
+        Some("uuid-current")
+    );
     assert_eq!(store.get("new").await.unwrap().as_deref(), Some("uuid-new"));
     assert!(store.delivered("same").await.unwrap().contains("old-turn"));
     assert!(store.delivered("same").await.unwrap().contains("new-turn"));
-    import_legacy_sessions(&store, old_release_fixture).await.unwrap();
+    import_legacy_sessions(&store, old_release_fixture)
+        .await
+        .unwrap();
     assert_eq!(store.delivered("same").await.unwrap().len(), 2);
 }
 

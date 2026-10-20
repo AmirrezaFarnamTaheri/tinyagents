@@ -5,8 +5,16 @@ use super::*;
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
 
-fn storage_pair(name: &str) -> (tinyagents_storage_kit::ScopedStorage, Arc<SessionStore>, tinyagents_storage_kit::primitives::Kv) {
-    let storage = MemoryBackend::new().for_scope(&Scope::new(name).unwrap()).unwrap();
+fn storage_pair(
+    name: &str,
+) -> (
+    tinyagents_storage_kit::ScopedStorage,
+    Arc<SessionStore>,
+    tinyagents_storage_kit::primitives::Kv,
+) {
+    let storage = MemoryBackend::new()
+        .for_scope(&Scope::new(name).unwrap())
+        .unwrap();
     let sessions = Arc::new(SessionStore::new(storage.documents()).unwrap());
     let settings = super::settings::store(storage.documents()).unwrap();
     (storage, sessions, settings)
@@ -91,7 +99,11 @@ mod retry {
         assert_eq!(lines.len(), 2, "one resume then one retry: {log}");
         assert!(lines[0].contains("--resume"));
         assert!(lines[1].contains("--session-id") && !lines[1].contains("--resume"));
-        let new_id = store.get("t1").await.unwrap().expect("new mapping persisted");
+        let new_id = store
+            .get("t1")
+            .await
+            .unwrap()
+            .expect("new mapping persisted");
         assert_ne!(new_id, SAVED);
     }
 
@@ -101,7 +113,11 @@ mod retry {
         let (_storage, store, settings_store) = storage_pair("driver-retry-two");
         store.set("t1", SAVED).await.unwrap();
         let bin = fake_cli(dir.path(), "authentication_failed");
-        assert!(drive(dir.path(), store.clone(), settings_store, bin).await.is_err());
+        assert!(
+            drive(dir.path(), store.clone(), settings_store, bin)
+                .await
+                .is_err()
+        );
         let log = std::fs::read_to_string(dir.path().join("calls.log")).unwrap();
         assert_eq!(log.lines().count(), 1);
         assert_eq!(store.get("t1").await.unwrap().as_deref(), Some(SAVED));
@@ -331,7 +347,9 @@ async fn full_access_reads_persisted_toggle_when_env_unset() {
     let prev = std::env::var(key).ok();
     super::super::test_remove_env(key);
 
-    settings::save(&settings_store, &ClaudeCodeSettings { full_access: true }).await.unwrap();
+    settings::save(&settings_store, &ClaudeCodeSettings { full_access: true })
+        .await
+        .unwrap();
     assert!(
         claude_code_full_access(&settings_store).await,
         "persisted toggle ON must enable full access when env is unset"

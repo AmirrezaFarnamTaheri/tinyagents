@@ -210,7 +210,10 @@ async fn claude_code_full_access(settings_store: &tinyagents_storage_kit::primit
             _ => {}
         }
     }
-    super::settings::load(settings_store).await.map(|settings| settings.full_access).unwrap_or(false)
+    super::settings::load(settings_store)
+        .await
+        .map(|settings| settings.full_access)
+        .unwrap_or(false)
 }
 
 /// Whether to wrap the `claude` spawn in the macOS Seatbelt jail. On by
@@ -541,7 +544,10 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     let (delivered, claim) = if is_new || !ctx.persist_session {
         (std::collections::HashSet::new(), None)
     } else {
-        let (already, claim) = ctx.session_store.claim_delivered(&ctx.thread_id, &pending).await?;
+        let (already, claim) = ctx
+            .session_store
+            .claim_delivered(&ctx.thread_id, &pending)
+            .await?;
         (already, Some(claim))
     };
     let stdin_bytes = build_stdin_with_delivered(ctx.messages, is_new, &delivered);
@@ -754,7 +760,11 @@ pub(crate) async fn run_turn(ctx: TurnContext<'_>) -> anyhow::Result<ChatRespons
     // One-shot (non-durable) calls never resume, so they record nothing.
     if ctx.persist_session {
         let accepted_id = mapper.session_id.as_deref().unwrap_or(&cc_session_id);
-        if let Err(error) = ctx.session_store.record_delivered(&ctx.thread_id, &pending).await {
+        if let Err(error) = ctx
+            .session_store
+            .record_delivered(&ctx.thread_id, &pending)
+            .await
+        {
             tracing::warn!(
                 "[claude-code][driver] failed to record delivered turns for thread {} session {}: {}",
                 ctx.thread_id,
@@ -781,7 +791,8 @@ async fn clear_missing_session(ctx: &TurnContext<'_>, failed_session_id: &str) -
     );
     match ctx
         .session_store
-        .remove_if(&ctx.thread_id, failed_session_id).await
+        .remove_if(&ctx.thread_id, failed_session_id)
+        .await
     {
         Ok(removed) => removed,
         Err(error) => {

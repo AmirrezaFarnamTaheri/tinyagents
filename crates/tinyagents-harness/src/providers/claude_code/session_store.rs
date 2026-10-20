@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_api::DocumentStore;
 use tinyagents_storage_kit::primitives::Kv;
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::StorageError;
 
 /// Maximum delivered-turn fingerprints remembered per thread.
@@ -45,15 +45,21 @@ impl SessionStore {
 
     pub async fn get(&self, thread_id: &str) -> Result<Option<String>, StorageError> {
         let _guard = STORE_LOCK.lock().await;
-        Ok(self.record(thread_id).await?.and_then(|record| record.session_id))
+        Ok(self
+            .record(thread_id)
+            .await?
+            .and_then(|record| record.session_id))
     }
 
     #[cfg(test)]
     pub async fn delivered(&self, thread_id: &str) -> Result<HashSet<String>, StorageError> {
         let _guard = STORE_LOCK.lock().await;
-        Ok(self.record(thread_id).await?.map_or_else(HashSet::new, |record| {
-            record.delivered.into_iter().collect()
-        }))
+        Ok(self
+            .record(thread_id)
+            .await?
+            .map_or_else(HashSet::new, |record| {
+                record.delivered.into_iter().collect()
+            }))
     }
 
     pub async fn claim_delivered(
@@ -78,7 +84,11 @@ impl SessionStore {
             }
         }
         in_flight.extend(claimed.iter().map(|fingerprint| {
-            (self.store_identity, thread_id.to_owned(), fingerprint.clone())
+            (
+                self.store_identity,
+                thread_id.to_owned(),
+                fingerprint.clone(),
+            )
         }));
         drop(in_flight);
         Ok((
@@ -139,7 +149,9 @@ impl SessionStore {
         let removed = self
             .kv
             .update(thread_id, |current: Option<SessionRecord>| {
-                let Some(record) = current else { return Ok(None) };
+                let Some(record) = current else {
+                    return Ok(None);
+                };
                 if record.session_id.as_deref() != Some(expected_session_id) {
                     return Ok(None);
                 }
@@ -219,7 +231,11 @@ pub async fn import_legacy_sessions(
     for (thread_id, session_id) in legacy.sessions {
         let record = SessionRecord {
             session_id: Some(session_id.clone()),
-            delivered: legacy.delivered.get(&thread_id).cloned().unwrap_or_default(),
+            delivered: legacy
+                .delivered
+                .get(&thread_id)
+                .cloned()
+                .unwrap_or_default(),
         };
         let before = store.get(&thread_id).await?;
         store.import_record(&thread_id, record).await?;
@@ -263,8 +279,12 @@ pub fn is_uuid_v4(value: &str) -> bool {
     }
     for (index, byte) in bytes.iter().enumerate() {
         if [8, 13, 18, 23].contains(&index) {
-            if *byte != b'-' { return false; }
-        } else if !byte.is_ascii_hexdigit() { return false; }
+            if *byte != b'-' {
+                return false;
+            }
+        } else if !byte.is_ascii_hexdigit() {
+            return false;
+        }
     }
     bytes[14] == b'4' && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B')
 }

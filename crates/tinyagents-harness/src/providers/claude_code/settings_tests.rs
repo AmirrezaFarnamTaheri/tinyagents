@@ -21,18 +21,30 @@ async fn missing_settings_return_the_safe_default() {
 #[tokio::test]
 async fn save_then_load_roundtrips_settings() {
     let (_scoped, kv) = settings_store();
-    save(&kv, &ClaudeCodeSettings { full_access: true }).await.unwrap();
+    save(&kv, &ClaudeCodeSettings { full_access: true })
+        .await
+        .unwrap();
     assert!(load(&kv).await.unwrap().full_access);
-    save(&kv, &ClaudeCodeSettings { full_access: false }).await.unwrap();
+    save(&kv, &ClaudeCodeSettings { full_access: false })
+        .await
+        .unwrap();
     assert!(!load(&kv).await.unwrap().full_access);
 }
 
 #[tokio::test]
 async fn legacy_settings_import_only_fills_an_empty_target() {
     let (_scoped, kv) = settings_store();
-    assert!(import_legacy(&kv, br#"{"full_access":true}"#).await.unwrap());
+    assert!(
+        import_legacy(&kv, br#"{"full_access":true}"#)
+            .await
+            .unwrap()
+    );
     assert!(load(&kv).await.unwrap().full_access);
-    assert!(!import_legacy(&kv, br#"{"full_access":false}"#).await.unwrap());
+    assert!(
+        !import_legacy(&kv, br#"{"full_access":false}"#)
+            .await
+            .unwrap()
+    );
     assert!(load(&kv).await.unwrap().full_access);
 }
 

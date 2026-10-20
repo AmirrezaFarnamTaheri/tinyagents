@@ -16,7 +16,9 @@ pub struct ClaudeCodeSettings {
     pub full_access: bool,
 }
 
-pub fn store(docs: &std::sync::Arc<dyn tinystoragedrivers_api::DocumentStore>) -> Result<Kv, StorageError> {
+pub fn store(
+    docs: &std::sync::Arc<dyn tinystoragedrivers_api::DocumentStore>,
+) -> Result<Kv, StorageError> {
     Kv::ns(docs, OWNER, NAMESPACE)
 }
 
@@ -26,7 +28,9 @@ pub async fn load(kv: &Kv) -> Result<ClaudeCodeSettings, StorageError> {
         Ok(Some(settings)) => Ok(settings),
         Ok(None) => Ok(ClaudeCodeSettings::default()),
         Err(error) => {
-            tracing::warn!("[claude-code][settings] failed to read settings; using safe defaults: {error}");
+            tracing::warn!(
+                "[claude-code][settings] failed to read settings; using safe defaults: {error}"
+            );
             Ok(ClaudeCodeSettings::default())
         }
     }
