@@ -25,6 +25,7 @@ fn meta() -> TranscriptMeta {
         updated: "then".into(),
         turn_count: 0,
         prefix_message_count: None,
+        prefix_reset: false,
         input_tokens: 0,
         output_tokens: 0,
         cached_input_tokens: 0,
@@ -176,7 +177,10 @@ async fn reset_history_seals_old_turns_and_starts_a_fresh_resumable_context() {
         .read_session()
         .unwrap()
         .unwrap();
-    assert_eq!(format!("{old_after:?}"), format!("{old_before:?}"));
+    assert_eq!(
+        serde_json::to_value((&old_after.meta, &old_after.messages, &old_after.tools,)).unwrap(),
+        serde_json::to_value((&old_before.meta, &old_before.messages, &old_before.tools,)).unwrap(),
+    );
     assert!(
         locator
             .read_session_transcript(&new_head)
@@ -279,7 +283,17 @@ async fn reset_history_advances_an_explicit_frozen_empty_prefix() {
             .unwrap()
             .meta
             .prefix_message_count,
-        None
+        None,
+    );
+    assert!(
+        locator
+            .read_session_transcript(&reset_head)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap()
+            .meta
+            .prefix_reset
     );
 
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -300,6 +314,171 @@ async fn reset_history_advances_an_explicit_frozen_empty_prefix() {
     .await
     .unwrap();
     assert_eq!(requests.lock().unwrap()[0][0].text(), "after empty reset");
+}
+
+#[tokio::test]
+async fn an_empty_compaction_without_reset_marker_recovers_explicit_parent_boundary() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("empty-compaction", "agent-id");
+    let mut root_meta = meta();
+    root_meta.prefix_message_count = Some(0);
+    let root = locator
+        .open_stem(&session_stem(&session_ref), root_meta)
+        .unwrap();
+    root.replace(&[]).unwrap();
+    let (successor, empty_head) = locator
+        .begin_generation_from_baseline(&session_ref, meta(), &[])
+        .unwrap();
+    empty_head.replace(&[]).unwrap();
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut resumed = SessionBuilder::new(Arc::new(CapturingDriver(requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen(
+            "must not replace frozen empty",
+        )))
+        .session(locator, session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    resumed
+        .turn(
+            SessionTurnRequest::new(Message::user("after compaction")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let request = requests.lock().unwrap()[0].clone();
+    assert_eq!(request.len(), 1);
+    assert_eq!(request[0].text(), "after compaction");
+    assert_eq!(successor.generation, 1);
+}
+
+#[tokio::test]
+async fn reset_waits_for_an_in_flight_append_before_sealing_the_head() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("reset-race", "agent-id");
+    seed(
+        locator.as_ref(),
+        &session_stem(&session_ref),
+        &[
+            TranscriptMessage::user("before concurrent turn"),
+            TranscriptMessage::assistant("old answer"),
+        ],
+        &meta(),
+    );
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut turning = SessionBuilder::new(Arc::new(GatedDriver {
+        started: started.clone(),
+        release: release.clone(),
+    }))
+    .codec(Arc::new(RoleCodec))
+    .session(locator.clone(), session_ref.clone(), meta())
+    .build()
+    .unwrap();
+    let turn_ref = session_ref.clone();
+    let turn = tokio::spawn(async move {
+        turning
+            .turn(
+                SessionTurnRequest::new(Message::user("commits before reset")),
+                TurnOptions {
+                    resume: ResumeMode::Session,
+                    session: Some(turn_ref),
+                    ..TurnOptions::default()
+                },
+            )
+            .await
+    });
+    started.notified().await;
+
+    let reset_ref = SessionRef::scoped("reset-race", "agent-id");
+    let mut resetting =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), reset_ref, meta())
+            .build()
+            .unwrap();
+    let reset = tokio::spawn(async move { resetting.reset_history().await });
+    tokio::task::yield_now().await;
+    assert!(
+        !reset.is_finished(),
+        "reset bypassed the active session turn lock"
+    );
+
+    release.notify_one();
+    turn.await.unwrap().unwrap();
+    assert!(reset.await.unwrap().unwrap());
+    let old = locator
+        .read_session_transcript(&session_ref)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert!(
+        old.messages
+            .iter()
+            .any(|message| message.content == "commits before reset")
+    );
+    assert_eq!(locator.head_generation(&session_ref).generation, 1);
+}
+
+#[tokio::test]
+async fn reset_does_not_create_an_absent_session_or_cross_agent_boundary() {
+    let locator = memory();
+    let absent_ref = SessionRef::scoped("absent-reset", "agent-a");
+    let mut absent =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), absent_ref.clone(), meta())
+            .build()
+            .unwrap();
+    assert!(!absent.reset_history().await.unwrap());
+    assert!(locator.read_session_transcript(&absent_ref).is_none());
+
+    let first_ref = SessionRef::scoped("same-thread", "agent-a");
+    let other_agent_ref = SessionRef::scoped("same-thread", "agent-b");
+    seed(
+        locator.as_ref(),
+        &session_stem(&first_ref),
+        &[
+            TranscriptMessage::user("first agent"),
+            TranscriptMessage::assistant("answer"),
+        ],
+        &meta(),
+    );
+    seed(
+        locator.as_ref(),
+        &session_stem(&other_agent_ref),
+        &[
+            TranscriptMessage::user("other agent"),
+            TranscriptMessage::assistant("answer"),
+        ],
+        &meta(),
+    );
+    let mut first =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), first_ref.clone(), meta())
+            .build()
+            .unwrap();
+    assert!(first.reset_history().await.unwrap());
+    assert_eq!(locator.head_generation(&first_ref).generation, 1);
+    assert_eq!(locator.head_generation(&other_agent_ref).generation, 0);
+    assert!(
+        locator
+            .read_session_transcript(&other_agent_ref)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|message| message.content == "other agent")
+    );
 }
 
 /// An atomic import may create a durable session before its first model turn.

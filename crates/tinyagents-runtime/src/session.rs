@@ -243,19 +243,12 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
-        // A durable empty successor with no committed turns is the fresh head
-        // created by an explicit history reset. Do not inherit the sealed
-        // generation's prompt boundary into it. An explicit Some(0) on this
-        // head remains authoritative because `recorded_boundary` is present.
-        let reset_empty_head = compacted_head
-            && transcript.messages.is_empty()
-            && transcript.meta.turn_count == 0
-            && recorded_boundary.is_none();
+        // An explicit history reset suppresses prompt-boundary recovery from
+        // the sealed parent. The marker distinguishes it from an ordinary
+        // empty successor whose legacy prompt still needs to be inferred.
+        let reset_head = transcript.meta.prefix_reset && recorded_boundary.is_none();
         let mut recovered_boundary = None;
-        if recorded_boundary.is_none()
-            && cached_boundary.is_none()
-            && compacted_head
-            && !reset_empty_head
+        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head && !reset_head
         {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
@@ -543,6 +536,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         let mut seed = transcript.meta.clone();
         seed.turn_count = 0;
         seed.prefix_message_count = None;
+        seed.prefix_reset = true;
         seed.session_id = None;
         seed.parent_session_id = None;
         let (successor, handle) = target
@@ -562,6 +556,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         target.meta.parent_session_id = successor.parent_session_id();
         target.meta.turn_count = 0;
         target.meta.prefix_message_count = None;
+        target.meta.prefix_reset = true;
         self.transcript = Some(handle);
         self.prefix = PrefixSnapshot::default();
         self.history.clear();
@@ -1085,6 +1080,7 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         };
         meta.turn_count += 1;
         meta.prefix_message_count = Some(prefix_len);
+        meta.prefix_reset = false;
         meta.updated = chrono::Utc::now().to_rfc3339();
         // Record every ordinary turn's declarations. Comparing against this
         // session's cached snapshot is unsafe when another live Session has
