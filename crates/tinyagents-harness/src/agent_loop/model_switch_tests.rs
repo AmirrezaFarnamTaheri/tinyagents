@@ -460,7 +460,7 @@ fn failover_harness(
         let resolver = crate::host::PrebuiltModelResolver::new(
             primary,
             models.map(|(name, model)| (name.to_string(), model)),
-        ).with_primary_name(primary);
+        ).with_primary_name(primary_name);
         harness.with_model_resolver(Arc::new(resolver));
     }
     harness.with_policy(RunPolicy {
