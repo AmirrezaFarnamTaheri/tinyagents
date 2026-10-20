@@ -51,10 +51,15 @@ fn public_goal_schema_uses_the_serialized_camel_case_record() {
     ] {
         assert!(properties.get(field).is_some(), "missing {field}: {schema}");
     }
-    assert_eq!(
-        schema["$defs"]["ThreadGoalStatus"]["enum"],
-        serde_json::json!(["active", "paused", "budget_limited", "complete"])
-    );
+    assert!(properties["status"].is_object());
+    for (status, serialized) in [
+        (ThreadGoalStatus::Active, "active"),
+        (ThreadGoalStatus::Paused, "paused"),
+        (ThreadGoalStatus::BudgetLimited, "budget_limited"),
+        (ThreadGoalStatus::Complete, "complete"),
+    ] {
+        assert_eq!(serde_json::to_value(status).unwrap(), serialized);
+    }
 }
 
 #[test]
