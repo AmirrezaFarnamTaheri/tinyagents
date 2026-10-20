@@ -77,12 +77,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         request: &tinyinference_llm::model::ModelRequest,
     ) -> Option<tinyinference_llm::model::ModelProfile> {
-        let resolve = crate::agent_loop::model_call::local_resolve_request(request);
-        self.model_resolver
-            .as_ref()
-            .and_then(|resolver| resolver.preview(&resolve))
-            .or_else(|| self.fixed_model.clone())
-            .and_then(|model| model.profile().cloned())
+        crate::agent_loop::model_call::preview_local_model_profile(
+            self.model_resolver.as_ref(), self.fixed_model.as_ref(), request,
+        )
     }
 
     /// Creates an empty harness with default policy and no models, tools, or

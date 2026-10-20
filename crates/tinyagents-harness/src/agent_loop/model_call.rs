@@ -35,6 +35,33 @@ pub(crate) fn local_resolve_request(request: &ModelRequest) -> crate::host::Mode
     resolve
 }
 
+pub(crate) fn preview_local_model_profile<State: Send + Sync>(
+    resolver: Option<&Arc<dyn crate::host::ModelResolver<State>>>,
+    fixed_model: Option<&Arc<dyn ChatModel<State>>>,
+    request: &ModelRequest,
+) -> Option<tinyinference_llm::model::ModelProfile> {
+    if let Some(resolver) = resolver {
+        let resolve = local_resolve_request(request);
+        let model = resolver.preview(&resolve)?;
+        if model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()) {
+            return model.profile().cloned();
+        }
+        if request.model.is_some() || !request.model_hints.is_empty() {
+            let mut default = crate::host::ModelResolveRequest::new("local");
+            if let Some(required) = request.required_capabilities.clone() {
+                default = default.with_required_capabilities(required);
+            }
+            return resolver.preview(&default)
+                .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
+                .and_then(|model| model.profile().cloned());
+        }
+        return None;
+    }
+    fixed_model
+        .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
+        .and_then(|model| model.profile().cloned())
+}
+
 pub(super) fn model_is_eligible<State: Send + Sync>(
     model: &dyn ChatModel<State>,
     required: Option<&tinyinference_llm::model::CapabilitySet>,
@@ -73,11 +100,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         request: &ModelRequest,
     ) -> Option<tinyinference_llm::model::ModelProfile> {
-        let resolve = local_resolve_request(request);
-        self.model_resolver.as_ref()
-            .and_then(|resolver| resolver.preview(&resolve))
-            .or_else(|| self.fixed_model.clone())
-            .and_then(|model| model.profile().cloned())
+        preview_local_model_profile(self.model_resolver.as_ref(), self.fixed_model.as_ref(), request)
     }
 
     /// Resolves the model binding through the host's routing authority when
