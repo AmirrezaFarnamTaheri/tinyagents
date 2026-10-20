@@ -7,8 +7,8 @@ mod steps;
 mod types;
 
 use tinyagents_storage_kit::{
-    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema,
-    ScopeClass, ScopedStorage, primitives,
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
+    primitives,
 };
 
 pub use import::{import_legacy_leases, import_legacy_task_cache};
