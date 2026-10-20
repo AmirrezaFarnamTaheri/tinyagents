@@ -277,6 +277,12 @@ async fn erased_use_skill_exposes_its_shared_registry_handle() {
     assert_eq!(result.text(), "a_one:{}");
 }
 
+#[test]
+fn unrelated_tool_has_no_pack_registry_handle() {
+    let tool = FakeTool::plain("anything_else");
+    assert!(pack_registry_handle(&tool).is_none());
+}
+
 #[tokio::test]
 async fn catalogs_with_the_same_start_pointer_but_different_lengths_conflict() {
     let handle = PackRegistryHandle::default();

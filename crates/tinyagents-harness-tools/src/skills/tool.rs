@@ -235,8 +235,8 @@ impl UseSkillTool {
             catalog.pack_index_markdown()
         );
         let binding_handle = handle.clone();
-        let binding =
-            ToolCallBinding::new(move |outer, args| binding_handle.bind_call(outer, args));
+        let binding = ToolCallBinding::new(move |outer, args| binding_handle.bind_call(outer, args))
+            .with_metadata(handle.clone());
         Self {
             handle,
             catalog,
@@ -254,6 +254,18 @@ impl UseSkillTool {
         let tool = named_tool(args)?;
         self.handle.resolve(&self.catalog, skill, tool)
     }
+}
+
+/// Recovers the shared registry handle from an erased registered `use_skill` tool.
+///
+/// The handle lets a host bind durable and synthesized registries and render
+/// their filtered pack listings. Calls still pass through the generic
+/// [`ToolCallBinding`] so admission and execution use the same pinned target.
+pub fn pack_registry_handle(tool: &dyn Tool) -> Option<PackRegistryHandle> {
+    tool.host_extension()
+        .and_then(|extension| extension.downcast_ref::<ToolCallBinding>())
+        .and_then(|binding| binding.metadata::<PackRegistryHandle>())
+        .cloned()
 }
 
 #[async_trait]

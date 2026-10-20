@@ -27,6 +27,7 @@ type Binder = dyn Fn(Arc<dyn Tool>, &Value) -> Arc<dyn BoundToolCall> + Send + S
 /// implementation-specific routing model.
 pub struct ToolCallBinding {
     bind: Arc<Binder>,
+    metadata: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 impl ToolCallBinding {
@@ -36,7 +37,23 @@ impl ToolCallBinding {
     ) -> Self {
         Self {
             bind: Arc::new(bind),
+            metadata: None,
         }
+    }
+
+    /// Associates implementation-owned registration metadata with this binding.
+    ///
+    /// Metadata describes the registered tool and is not the call-scoped target
+    /// returned by [`Self::bind`]. Admission and execution must continue to use
+    /// the bound call so both observe the same captured target.
+    pub fn with_metadata<T: Any + Send + Sync>(mut self, metadata: T) -> Self {
+        self.metadata = Some(Arc::new(metadata));
+        self
+    }
+
+    /// Returns registration metadata when it has the requested concrete type.
+    pub fn metadata<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.metadata.as_ref()?.downcast_ref()
     }
 
     /// Captures the indirect target selected for these arguments.
