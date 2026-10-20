@@ -30,7 +30,6 @@ the module map below.
 | `error` | The crate-wide `TinyAgentsError` type and `Result` alias every fallible surface funnels through. |
 | `events` | The typed observability layer (`AgentEvent`, sinks, listeners) — the live in-process event surface. |
 | `finish_reason` (private) | Shared helper that recognises provider spellings of an output-cap stop (`length`, `max_tokens`, `MAX_TOKENS`). |
-| `handoff` | Progressive-disclosure handoff cache for oversized tool results, keeping bloated payloads out of sub-agent history. |
 | `host` | Host capability traits — the seams a host implements to supply product-specific behavior to a generic runtime. |
 | `ids` | Identifier newtypes (`RunId`, `CallId`, …) and lifecycle enums used to correlate a recursive run tree. |
 | `limits` | Run-scoped limit enforcement (model/tool call caps, wall clock) that keeps recursion bounded. |
@@ -42,7 +41,6 @@ the module map below.
 | `observability` | Durable observability — journals, status stores, sinks — making the live event stream persistent. See [`observability/README.md`](observability/README.md). |
 | `prompt` | Prompt assembly — templates and `PromptBuilder` turning runtime values into the final request. |
 | `providers` | Model adapters whose behavior depends on TinyAgents-specific prompt dialects (e.g. Claude Code/Agent SDK). |
-| `retriever` | Provider-neutral retrieval contracts (`Retriever`) for injecting ranked context into a prompt. See [`retriever/README.md`](retriever/README.md). |
 | `retry` | Retry/backoff, model fallback, and rate-limiting policies applied uniformly to every model call. See [`retry/README.md`](retry/README.md). |
 | `run_queue` | A generic multi-lane FIFO queue (steer/followup/collect) for messages arriving during an active run. See [`run_queue/README.md`](run_queue/README.md). |
 | `runtime` | The harness runtime facade (`AgentHarness`) and invocation-local runtime wiring. See [`runtime/README.md`](runtime/README.md). |
@@ -67,8 +65,7 @@ the module map below.
    and event sink (`events`).
 2. **Run**: `agent_loop` drives the model ⇄ tool cycle for one turn,
    consulting `retry`/`model_registry` on provider failure, `no_progress` and
-   `summarization` to keep the loop productive and in-budget, `handoff` to
-   keep oversized tool results out of history, and `middleware` around every
+   `summarization` to keep the loop productive and in-budget, and `middleware` around every
    step.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation
    (`SubAgent` / `SubAgentTool` in `tinyagents-orchestration`), so the same

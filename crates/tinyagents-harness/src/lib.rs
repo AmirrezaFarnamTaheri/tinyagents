@@ -25,19 +25,6 @@
 //! `claude-code` and `langfuse` are part of `default` so existing consumers
 //! see no change; disable default features to opt out of either.
 //!
-//! # Host utilities not on the agent loop path (M-10)
-//!
-//! [`handoff`] is exported for a host to build on, but [`agent_loop`] does
-//! not call into it on its own — it is opt-in plumbing, not implicit loop
-//! behavior. (A
-//! [`run_queue::RunQueue`] *is* drained by the loop once attached via
-//! [`context::RunContext::with_run_queue`]; see that module's docs.)
-//!
-//! - [`handoff`] is a progressive-disclosure cache for oversized tool
-//!   results; a host calls [`handoff::apply_handoff`] itself before
-//!   appending a tool result to history, and registers an extraction tool
-//!   that reads the same [`handoff::ResultHandoffCache`].
-//!
 //! Persisting a thread's transcript across runs lives in the separate
 //! `tinyagents-session` crate: a host reads history into a run's `input` and
 //! appends the run's messages back afterward.
@@ -76,7 +63,6 @@ pub mod driver_ids;
 pub mod error;
 pub mod events;
 mod finish_reason;
-pub mod handoff;
 pub mod host;
 pub mod ids;
 pub mod limits;
@@ -90,7 +76,6 @@ pub mod no_progress;
 pub mod observability;
 pub mod prompt;
 pub mod providers;
-pub mod retriever;
 pub mod retry;
 pub mod run_queue;
 pub mod runtime;
