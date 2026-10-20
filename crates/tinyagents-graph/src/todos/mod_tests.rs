@@ -3,7 +3,10 @@
 use super::types::*;
 
 #[cfg(feature = "json-schema")]
-fn schema_string_values(root: &serde_json::Value, mut schema: &serde_json::Value) -> Vec<String> {
+fn schema_string_values<'a>(
+    root: &'a serde_json::Value,
+    mut schema: &'a serde_json::Value,
+) -> Vec<String> {
     while let Some(reference) = schema.get("$ref").and_then(serde_json::Value::as_str) {
         let pointer = reference.strip_prefix('#').expect("local schema reference");
         schema = root.pointer(pointer).expect("schema reference resolves");
