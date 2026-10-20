@@ -20,8 +20,8 @@
 //! recovery errors should use `try_for_agent`; the legacy `for_agent` accessor
 //! can return refusing handles instead. A provider that serves several users
 //! from one backend must make it impossible for one agent's
-//! handles to read or write another's data; [`InMemorySessionStores`] does,
-//! and the conformance suite
+//! handles to read or write another's data; the explicitly enabled
+//! `testkit::InMemorySessionStores` does, and the conformance suite
 //! ([`crate::testkit::conformance::session_store_isolation_conformance`])
 //! checks it. A single-user host (the desktop app) may legitimately share one
 //! store between its agents, and simply does not claim isolation. The optional
@@ -38,8 +38,8 @@
 //!
 //! # Bundled implementations
 //!
-//! - [`InMemorySessionStores`]: per-agent, process-lifetime storage, for
-//!   tests and for hosts that deliberately keep nothing.
+//! - `testkit::InMemorySessionStores`: per-agent, process-lifetime storage for
+//!   tests and explicit test-only hosts.
 //! - `DriverSessionStores` (feature `storage-drivers`): every agent's stores
 //!   in one `tinystoragedrivers` backend (SQLite, MongoDB, ...), each agent
 //!   under its own storage scope.

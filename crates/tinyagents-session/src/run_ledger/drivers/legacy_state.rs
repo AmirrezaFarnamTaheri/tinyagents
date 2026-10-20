@@ -22,15 +22,15 @@
 //! completion marker in `tsd.migrations` (step `legacy_state_import`); the
 //! importer is idempotent and resumable.
 
-use super::storage::{HISTORY_OWNER, LEDGER_OWNER, key, workflow_lease_key};
-use serde_json::{Value, json};
+use super::storage::{key, workflow_lease_key, HISTORY_OWNER, LEDGER_OWNER};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tinyagents_storage_kit::primitives::{self, LEASES};
 use tinyagents_storage_kit::{
-    Counters, Migrations, ScopedStorage, MIGRATIONS_COLLECTION, with_migration_lease,
+    with_migration_lease, Counters, Migrations, ScopedStorage, MIGRATIONS_COLLECTION,
 };
 use tinyagents_storage_kit::{
-    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Precondition, Query, Result, Sort,
+    CollectionSpec, Cursor, ErrorKind, Filter, Precondition, Query, Result, Sort, ID_FIELD,
 };
 
 const STEP: &str = "legacy_state_import";
@@ -100,30 +100,31 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
         let docs = storage.documents();
         let now_ms = chrono::Utc::now().timestamp_millis();
         for row in rows(storage, "run_ledger_workflow_runs").await? {
-        let Some(record) = row.doc.get("record") else {
-            continue;
-        };
-        let (Some(run_id), Some(holder), Some(expires)) = (
-            record.get("id").and_then(Value::as_str),
-            record.get("leaseOwner").and_then(Value::as_str),
-            record
-                .get("leaseExpiresAt")
-                .and_then(Value::as_str)
-                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()),
-        ) else {
-            continue;
-        };
-        if expires.timestamp_millis() <= now_ms {
-            continue;
-        }
-        let id = key(&[LEDGER_OWNER, &workflow_lease_key(run_id)?])?;
-        let body = json!({"holder": holder, "epoch": 1, "expires_ms": expires.timestamp_millis()});
-        match docs.put(LEASES, &id, body, Precondition::Absent).await {
-            Ok(_) => report.leases += 1,
-            Err(error)
-                if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
-            Err(error) => return Err(error),
-        }
+            let Some(record) = row.doc.get("record") else {
+                continue;
+            };
+            let (Some(run_id), Some(holder), Some(expires)) = (
+                record.get("id").and_then(Value::as_str),
+                record.get("leaseOwner").and_then(Value::as_str),
+                record
+                    .get("leaseExpiresAt")
+                    .and_then(Value::as_str)
+                    .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()),
+            ) else {
+                continue;
+            };
+            if expires.timestamp_millis() <= now_ms {
+                continue;
+            }
+            let id = key(&[LEDGER_OWNER, &workflow_lease_key(run_id)?])?;
+            let body =
+                json!({"holder": holder, "epoch": 1, "expires_ms": expires.timestamp_millis()});
+            match docs.put(LEASES, &id, body, Precondition::Absent).await {
+                Ok(_) => report.leases += 1,
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
+                Err(error) => return Err(error),
+            }
         }
         let counters = Counters::new(docs);
         let names = [

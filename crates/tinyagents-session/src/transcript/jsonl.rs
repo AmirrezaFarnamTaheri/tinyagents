@@ -3,18 +3,21 @@
 //! [`TranscriptMeta`] / [`DisplayMessage`] types.
 
 use super::display::{metadata_with_background, split_background};
-use super::types::{BackgroundOrigin, DisplayMessage, MessageUsage, TranscriptMeta, TurnUsage};
+#[cfg(test)]
+use super::types::TranscriptMeta;
 #[cfg(test)]
 use super::types::TRANSCRIPT_SCHEMA_VERSION;
+use super::types::{BackgroundOrigin, DisplayMessage, MessageUsage, TurnUsage};
 use super::types::{ToolFailure, TranscriptMessage, TranscriptPart, TranscriptToolCall};
-use anyhow::Result;
 #[cfg(test)]
 use anyhow::Context;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tinytools_agent::dialect::{
-    ContentPart, NativeToolCall, encode_assistant_envelope, encode_tool_envelope, join_image_parts,
+    encode_assistant_envelope, encode_tool_envelope, join_image_parts,
     parse_canonical_assistant_envelope, parse_canonical_tool_envelope, split_image_parts,
+    ContentPart, NativeToolCall,
 };
 
 /// Discriminator value for a compaction record's `kind` field.
