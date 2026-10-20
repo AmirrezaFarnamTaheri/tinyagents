@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinyagents_storage_kit::{Scope};
+use tinyagents_storage_kit::Scope;
 
 fn request(id: &str) -> CreateConversationThread {
     CreateConversationThread {
@@ -14,7 +14,7 @@ fn request(id: &str) -> CreateConversationThread {
         working_dir: None,
     }
 }
-fn scoped(backend: &scope: &str) -> DriverConversationStore {
+fn scoped(backend: &MemoryStorage, scope: &str) -> DriverConversationStore {
     DriverConversationStore::new(backend.for_scope(&Scope::new(scope).unwrap()).unwrap())
 }
 
