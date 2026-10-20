@@ -23,7 +23,7 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{
-    CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
+    CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResolutionSource,
     ModelResponse,
 };
 use tinyinference_llm::providers::MockModel;
@@ -105,11 +105,7 @@ impl Middleware<(), ()> for RequireJsonSchemaMiddleware {
             json_schema: true,
             ..CapabilitySet::default()
         });
-        request.model_hints.push(ModelHint {
-            model: "capable".to_string(),
-            priority: 1,
-            reason: Some("needs json schema".to_string()),
-        });
+        request.model = Some("capable".to_string());
         Ok(())
     }
 }
@@ -142,27 +138,28 @@ async fn single_turn_response_completes_with_one_model_call() {
 }
 
 #[tokio::test]
-async fn required_capabilities_select_capable_model() {
+async fn explicit_model_override_uses_the_named_capable_route() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("incapable", Arc::new(ProfiledIntegrationModel {
+        .with_model_resolver(Arc::new(tinyagents_harness::host::PrebuiltModelResolver::new(
+            Arc::new(ProfiledIntegrationModel {
                 profile: ModelProfile::default(),
                 text: "incapable",
-            }),)))
-        
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("capable", Arc::new(ProfiledIntegrationModel {
+            }),
+            [("capable".to_string(), Arc::new(ProfiledIntegrationModel {
                 profile: ModelProfile {
                     json_schema: true,
                     ..ModelProfile::default()
                 },
                 text: "capable",
-            }),)))
+            }) as Arc<dyn ChatModel<()>>)],
+        ).with_primary_name("incapable")))
         .push_middleware(Arc::new(RequireJsonSchemaMiddleware));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("pick a model")])
         .await
-        .expect("capable hinted model satisfies required capabilities");
+        .expect("named route satisfies the request's required capabilities");
 
     assert_eq!(run.text(), Some("capable".to_string()));
     let resolved = run
@@ -171,7 +168,7 @@ async fn required_capabilities_select_capable_model() {
         .resolved_model
         .expect("resolved model metadata");
     assert_eq!(resolved.name, "capable");
-    assert_eq!(resolved.source, ModelResolutionSource::Hint);
+    assert_eq!(resolved.source, ModelResolutionSource::RequestOverride);
 }
 
 #[tokio::test]
