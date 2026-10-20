@@ -55,6 +55,20 @@ pub(crate) fn mapped_storage_factory(
     })
 }
 
+/// Makes an explicit test-host binding factory for every requested agent.
+/// Labels are arbitrary fixtures and are never derived from product scope rules.
+#[cfg(test)]
+pub(crate) fn scoped_storage_factory(
+    backend: std::sync::Arc<dyn tinystoragedrivers_api::StorageBackend>,
+    labels: std::collections::HashMap<String, String>,
+) -> crate::port::AgentStorageFactory {
+    let scopes = labels
+        .into_iter()
+        .map(|(agent, label)| (agent, tinyagents_storage_kit::Scope::new(label).unwrap()))
+        .collect();
+    mapped_storage_factory(backend, scopes)
+}
+
 /// Legacy-compatible constructor for tests that need a real, six-port memory
 /// backend. This adapter is compiled only with the session testkit.
 #[cfg(test)]
