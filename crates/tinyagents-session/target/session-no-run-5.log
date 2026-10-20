@@ -1,0 +1,3 @@
+[ci-cancel-aware] exec: cargo test -p tinyagents-session --all-features --no-run 
+   Compiling tinyagents-storage-kit v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-storage-kit)
+   Compiling tinyagents-harness v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-harness)

@@ -280,8 +280,10 @@ async fn conflicting_metadata_edits_reread_version_and_preserve_both_fields() {
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: false,
     });
-    let a = DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
-    let b = DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
+    let a =
+        DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
+    let b =
+        DriverConversationStore::new(crate::testkit::with_documents(&scoped_ports, docs.clone()));
     let (title, labels) = tokio::join!(
         a.update_thread_title("one", "Changed", "now"),
         b.update_thread_labels("one", vec!["worker".into()], "now")
