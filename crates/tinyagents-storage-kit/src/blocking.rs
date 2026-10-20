@@ -19,7 +19,7 @@ use std::thread;
 
 use tokio::sync::mpsc;
 
-use crate::error::{Result, StorageError};
+use tinystoragedrivers_types::{ErrorKind, Result, StorageError};
 
 type Job = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -61,7 +61,7 @@ impl Blocking {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Backend`](crate::ErrorKind::Backend) when the runtime or
+    /// [`ErrorKind::Backend`] when the runtime or
     /// thread cannot be created.
     pub fn new() -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -103,7 +103,7 @@ impl Blocking {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Backend`](crate::ErrorKind::Backend) when called from the
+    /// [`ErrorKind::Backend`] when called from the
     /// bridge thread itself (which would deadlock), when the bridge has
     /// stopped, or when the future panicked.
     pub fn run<F, T>(&self, future: F) -> Result<T>

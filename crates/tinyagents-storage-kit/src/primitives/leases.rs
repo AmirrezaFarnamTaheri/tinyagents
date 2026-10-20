@@ -17,13 +17,18 @@ use serde::{Deserialize, Serialize};
 
 use super::LEASES;
 use super::repo::{Repo, RetryPolicy};
-use crate::document::DocumentStore;
-use crate::error::{Result, StorageError};
-use crate::fence::Fence;
-use crate::filter::Filter;
-use crate::key::Key;
-use crate::memory::{Clock, system_clock};
-use crate::scope::Scope;
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::{Filter, Key, Result, StorageError};
+
+/// Injectable Unix epoch-millisecond clock.
+pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+fn system_clock() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 /// The stored body: `{holder, epoch, expires_ms}` plus the optional
 /// `endpoint` and `released` fields, both absent from records that never
@@ -135,46 +140,6 @@ pub struct Lease {
 }
 
 impl Lease {
-    /// A [`Fence`] that holds while this lease's epoch is still the stored
-    /// one. Bind it with
-    /// [`StorageBackend::for_scope_fenced`](crate::StorageBackend::for_scope_fenced)
-    /// so a holder that lost the lease cannot land a late write.
-    ///
-    /// `scope` is the scope the lease record lives in, the one the
-    /// [`Leases`] handle was opened for.
-    ///
-    /// The fence checks the epoch only: it refuses writes once another holder
-    /// took over, not merely because the clock passed `expires_ms`. A holder
-    /// that wants the second guarantee renews before expiry.
-    #[must_use]
-    pub fn fence(&self, scope: &Scope) -> Fence {
-        Fence::epoch(scope.clone(), LEASES, self.id.clone(), "epoch", self.epoch)
-    }
-
-    /// A [`Fence`] that holds only while this very tenure is intact: the
-    /// stored `epoch` is still this lease's, its `holder` is still this
-    /// lease's holder, and the record has not been `released`.
-    ///
-    /// [`fence`](Self::fence) checks the epoch alone, so a holder that
-    /// released the lease cleanly (the record and its epoch stay for the next
-    /// takeover to continue) can still land writes until someone takes over.
-    /// This fence refuses them as soon as the holder lets go, as it does once
-    /// another holder takes over or the record is compacted away.
-    ///
-    /// `scope` is the scope the lease record lives in, as for
-    /// [`fence`](Self::fence).
-    #[must_use]
-    pub fn holder_fence(&self, scope: &Scope) -> Fence {
-        Fence::new(
-            scope.clone(),
-            LEASES,
-            self.id.clone(),
-            Filter::eq("epoch", self.epoch)
-                .and(Filter::eq("holder", self.holder.as_str()))
-                .and(Filter::exists("released", false)),
-        )
-    }
-
     fn from_body(id: String, body: Body) -> Self {
         Self {
             id,

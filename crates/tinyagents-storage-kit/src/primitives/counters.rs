@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use super::COUNTERS;
 use super::repo::{Repo, RetryPolicy};
-use crate::document::DocumentStore;
-use crate::error::{Result, StorageError};
-use crate::key::Key;
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::{Key, Result, StorageError};
 
 /// The largest value every driver can store (`i64::MAX`).
 const MAX_VALUE: u64 = i64::MAX as u64;

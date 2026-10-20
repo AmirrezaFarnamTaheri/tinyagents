@@ -30,13 +30,11 @@ mod kv;
 mod leases;
 mod repo;
 
-use crate::backend::ScopedStorage;
-use crate::document::{CollectionSpec, IndexSpec};
-use crate::error::Result;
+use tinystoragedrivers_types::{CollectionSpec, IndexSpec};
 
 pub use counters::Counters;
 pub use kv::Kv;
-pub use leases::{Acquire, Acquisition, Lease, LeaseRecord, Leases};
+pub use leases::{Acquire, Acquisition, Clock, Lease, LeaseRecord, Leases};
 pub use repo::{Repo, RetryPolicy};
 
 /// The lease collection.
@@ -58,18 +56,6 @@ pub fn collection_specs() -> Vec<CollectionSpec> {
         CollectionSpec::new(KV).index(IndexSpec::new("kv_by_key", ["owner", "ns", "key"])),
         CollectionSpec::new(COUNTERS),
     ]
-}
-
-/// Declare [`collection_specs`] on `storage`'s scope. Idempotent.
-///
-/// # Errors
-///
-/// The first failing [`ensure_collection`](crate::DocumentStore::ensure_collection).
-pub async fn ensure(storage: &ScopedStorage) -> Result<()> {
-    for spec in collection_specs() {
-        storage.documents().ensure_collection(&spec).await?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
