@@ -379,7 +379,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     Option<String>,
                     Vec<tinyinference_llm::model::ModelHint>,
                     Option<tinyinference_llm::model::CapabilitySet>,
-                    crate::model_registry::ResolvedModelBinding<State>,
+                    crate::agent_loop::ModelBinding<State>,
                 )>,
             ));
             // A pending steered model switch decides the model this call

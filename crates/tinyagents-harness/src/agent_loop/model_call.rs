@@ -68,7 +68,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         ctx: &RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> Result<Option<ResolvedModelBinding<State>>> {
+    ) -> Result<Option<ModelBinding<State>>> {
         let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
             return Ok(None);
         };
@@ -123,7 +123,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .profile()
             .and_then(|profile| profile.model.clone())
             .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
-        Ok(Some(ResolvedModelBinding {
+        Ok(Some(ModelBinding {
             resolved: ResolvedModel {
                 name,
                 requested: resolve.model_pin,
@@ -185,7 +185,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         call_id: &CallId,
-        binding: ResolvedModelBinding<State>,
+        binding: ModelBinding<State>,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
         let streaming = shape.streaming;
@@ -601,7 +601,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         call_id: &CallId,
-        binding: ResolvedModelBinding<State>,
+        binding: ModelBinding<State>,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
         let streaming = shape.streaming;
@@ -1781,8 +1781,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> Result<ResolvedModelBinding<State>> {
-        let captured = || ResolvedModelBinding {
+    ) -> Result<ModelBinding<State>> {
+        let captured = || ModelBinding {
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
         };
