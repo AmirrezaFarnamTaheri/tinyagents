@@ -2135,6 +2135,7 @@ dependencies = [
  "tinyagents-storage-kit",
  "tinyinference-llm",
  "tinystoragedrivers-api",
+ "tinystoragedrivers-document",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tinytools",
