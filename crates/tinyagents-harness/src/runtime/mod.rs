@@ -44,6 +44,7 @@ use crate::middleware::{
     AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
 };
 use crate::host::ModelResolver;
+use crate::host::ModelResolveRequest;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinytools::Tool;
 
@@ -59,6 +60,69 @@ pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Resolves one direct SDK model request through this harness's configured
+    /// model port. Hosted invocations use their invocation-local resolver in
+    /// the agent loop instead.
+    pub async fn resolve_model_for_request(
+        &self,
+        request: &tinyinference_llm::model::ModelRequest,
+    ) -> crate::error::Result<(Option<String>, Arc<dyn tinyinference_llm::model::ChatModel<State>>)> {
+        let mut resolve = ModelResolveRequest::new("local");
+        if let Some(pin) = request.model.as_deref() {
+            resolve = resolve.with_model_pin(pin);
+        } else if let Some(hint) = request.model_hints.first() {
+            resolve = resolve.with_model_hint(&hint.model);
+        }
+        if let Some(required) = request.required_capabilities.clone() {
+            resolve = resolve.with_required_capabilities(required);
+        }
+        let (name, model) = if let Some(resolver) = &self.model_resolver {
+            let model = resolver.resolve(&resolve).await?;
+            (resolver.selected_name(&resolve), model)
+        } else if let Some(model) = self.fixed_model.clone() {
+            (model.profile().and_then(|profile| profile.model.clone()), model)
+        } else {
+            return Err(crate::error::TinyAgentsError::ModelNotFound(
+                request.model.clone().unwrap_or_else(|| "<default>".into()),
+            ));
+        };
+        let eligible = model.profile().is_none_or(|profile| {
+            profile.is_usable()
+                && request
+                    .required_capabilities
+                    .as_ref()
+                    .is_none_or(|required| profile.satisfies(required))
+        });
+        if !eligible {
+            return Err(crate::error::TinyAgentsError::ModelNotFound(
+                request.model.clone().unwrap_or_else(|| "<default>".into()),
+            ));
+        }
+        Ok((name, model))
+    }
+
+    /// Returns the profile a direct SDK request would reach without dispatching
+    /// a model call. Hosts with dynamic routing can decline synchronous preview.
+    pub fn preview_model_profile_for_request(
+        &self,
+        request: &tinyinference_llm::model::ModelRequest,
+    ) -> Option<tinyinference_llm::model::ModelProfile> {
+        let mut resolve = ModelResolveRequest::new("local");
+        if let Some(pin) = request.model.as_deref() {
+            resolve = resolve.with_model_pin(pin);
+        } else if let Some(hint) = request.model_hints.first() {
+            resolve = resolve.with_model_hint(&hint.model);
+        }
+        if let Some(required) = request.required_capabilities.clone() {
+            resolve = resolve.with_required_capabilities(required);
+        }
+        self.model_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.preview(&resolve))
+            .or_else(|| self.fixed_model.clone())
+            .and_then(|model| model.profile().cloned())
+    }
+
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
     pub fn new() -> Self {

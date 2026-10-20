@@ -269,10 +269,7 @@ where
     // strategy choice; an explicit `ResponseFormat::JsonSchema` is
     // unaffected either way. This is a documented simplification relative to
     // the direct loop, which resolves the model first.
-    let profile = harness
-        .models()
-        .resolve_request(&request, None, None)
-        .and_then(|binding| binding.model.profile().cloned());
+    let profile = harness.preview_model_profile_for_request(&request);
     let structured = resolve_structured_plan(&mut request, profile.as_ref());
 
     loop_state.pending_request = Some(request);
@@ -328,14 +325,7 @@ where
         .take()
         .ok_or_else(|| TinyAgentsError::Validation("model node ran with no pending plan".into()))?;
 
-    let binding = harness
-        .models()
-        .resolve_request(&request, None, None)
-        .ok_or_else(|| {
-            TinyAgentsError::ModelNotFound(
-                request.model.clone().unwrap_or_else(|| "<default>".into()),
-            )
-        })?;
+    let binding = harness.resolve_model_for_request(&request).await?;
     let call_id = CallId::new(format!("{}-model-{}", ctx.run_id(), run.model_calls + 1));
 
     let mut request = request;
@@ -352,7 +342,7 @@ where
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|(_, _, _, binding)| binding.model.profile().cloned());
+        .and_then(|(_, _, _, (_, model))| model.profile().cloned());
     let profile_cache = resolution_cache.clone();
     harness
         .middleware()
@@ -377,12 +367,9 @@ where
                     {
                         return Ok(binding.model.profile().cloned());
                     }
-                    let binding = harness.models().resolve_request(request, None, None);
-                    let profile = binding
-                        .as_ref()
-                        .and_then(|binding| binding.model.profile().cloned());
-                    *profile_cache.lock().unwrap() =
-                        binding.map(|binding| (key.0, key.1, key.2, binding));
+                    let binding = harness.resolve_model_for_request(request).await?;
+                    let profile = binding.1.profile().cloned();
+                    *profile_cache.lock().unwrap() = Some((key.0, key.1, key.2, binding));
                     Ok(profile)
                 })
             },
@@ -407,22 +394,21 @@ where
                     .then_some(binding)
             },
         )
-        .or_else(|| harness.models().resolve_request(&request, None, None))
-        .ok_or_else(|| {
-            TinyAgentsError::ModelNotFound(
-                request.model.clone().unwrap_or_else(|| "<default>".into()),
-            )
-        })?;
-    ctx.model_profile = binding.model.profile().cloned();
+        .or_else(|| None);
+    let binding = match binding {
+        Some(binding) => binding,
+        None => harness.resolve_model_for_request(&request).await?,
+    };
+    ctx.model_profile = binding.1.profile().cloned();
     tinyagents_harness::middleware::library::rehome_ephemeral_system_instructions(
         &mut request,
         ctx.model_profile.as_ref(),
     );
-    let model_name = binding.resolved.name.clone();
+    let model_name = binding.0.clone().unwrap_or_else(|| request.model.clone().unwrap_or_else(|| "<default>".into()));
 
     // Mirror the direct loop: a named effort picks up the resolved model's
     // tuned `thinking_level_map` entry, unless an explicit budget is pinned.
-    if let Some(profile) = binding.model.profile()
+    if let Some(profile) = binding.1.profile()
         && let Some(reasoning) = request.reasoning.as_ref()
         && reasoning.budget_tokens.is_none()
         && let Some(effort) = reasoning.effort
