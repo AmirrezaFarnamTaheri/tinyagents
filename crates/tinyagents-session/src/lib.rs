@@ -3,7 +3,7 @@
 //! Everything this crate persists goes through the `tinystoragedrivers` ports:
 //! session history (sessions, messages, tool calls, with full-text search), a
 //! [`run_ledger`] for background agent and workflow execution state, the
-//! conversation [`entry_tree`], transcripts, turn-state snapshots and chat
+//! transcripts, turn-state snapshots and chat
 //! threads. A host selects its backend and supplies storage already bound to
 //! each authorized agent identity to [`DriverSessionStores`]. This is the
 //! runtime's *history* layer: what ran, what it cost, what it called, and how
@@ -36,16 +36,6 @@
 //! retention) and [`run_ledger::SessionHistoryStore`] (the session, message and
 //! tool-call history and its full-text index). Retention, trimming and
 //! `reindex_fts` bound and repair exactly the records those writers produce.
-//!
-//! # The entry tree
-//!
-//! [`entry_tree`] adds a second, opt-in shape over the same ledger: an
-//! append-only, branchable tree of entries (`id`/`parent_id`) rather than a
-//! flat list. It exists alongside the linear transcript paths, not in place of
-//! them — a host that never forks a conversation can ignore it entirely. See
-//! `docs/modules/session/README.md` for the full design (entry kinds, the
-//! context-projection rule, fork semantics) and [`entry_tree::legacy`] for how
-//! pre-tree data is deterministically read into the same model.
 //!
 //! # Chat threads
 //!
@@ -108,7 +98,6 @@
 //! See [`README.md`](./README.md) for the layout, the FTS behaviour, and the
 //! coordination guarantees.
 
-pub mod entry_tree;
 pub mod fts;
 pub mod port;
 pub mod retention;
@@ -122,10 +111,6 @@ pub mod types;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
-pub use entry_tree::{
-    Branch, BranchSummaryEntry, CompactionEntry, CustomEntry, Entry, EntryId, EntryKind, Fork,
-    ForkPosition, ForkScope, LabelEntry, SessionCompactionSink,
-};
 pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
 pub use port::{AgentStores, SessionStoreProvider, TurnStates};
 pub use port::{
