@@ -280,31 +280,11 @@ The supplied ScopedStorage must also use the native ExistingSchema contract to
 restrict driver-internal initialization. The constructor does not infer
 authority from capabilities or turn arbitrary ports into restricted ports.
 
-### Source admission before migration
+### Legacy source import
 
-`SourceOwner::asserted_by_trusted_host(scope)` and
-`QuiescentSource::asserted_by_trusted_host(path, owner)` represent trusted host
-assertions. Hosts must validate the path-to-owner mapping and stop source writers
-for the complete inspection/import. Model input, stored rows and path digests
-cannot establish that authority.
-
-`preflight_source` compares source ownership with the target scope before source
-access. It rejects missing databases without creating directories, and refuses
-WAL or journal sidecars with `LedgerError::SourceRequiresSnapshot`. The host must
-supply a checkpointed database or consistent snapshot; the importer never
-checkpoints it. Sources are opened through SQLite immutable read-only access,
-which also avoids writing auxiliary shared-memory files. The retained snapshot
-discovers historical schema and columns without migrations. import_agent_family supports the known agent_runs, run_events and run_telemetry
-schema. It validates all source rows before target declarations, commits all
-absent target records and a durable operation receipt in one native batch, and
-retains source bytes. An identical operation retry returns its receipt without
-overwriting later native edits; changed source bytes or target collisions
-refuse. The source fingerprint identifies content and grants no authority.
-Original event ordinals survive import, and allocation continues above their
-maximum.
-
-Hosts must still arrange source ownership, quiescence, snapshots and the
-migration checkpoint. Older incomplete layouts can be inspected but are not
-silently upgraded. Workflow/team/effect/session import, automatic host
-migration, shared-owner recovery and generation-aware retention remain separate
-work.
+The session crate does not open SQLite databases, discover workspace files, or
+rewrite JSONL transcripts. OpenHuman owns those source-reading workflows and
+uses the typed target APIs documented in
+[`legacy-import-handoff.md`](../docs/legacy-import-handoff.md). The session
+crate retains migrations over records already present in its bound storage and
+runs them from its owner-open path.
