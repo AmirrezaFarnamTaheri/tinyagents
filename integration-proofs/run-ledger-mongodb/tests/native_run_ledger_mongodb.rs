@@ -10,21 +10,19 @@
 
 use chrono::Utc;
 use serde_json::json;
-use tinyagents_session::{
-    run_ledger::{
-        AgentRunKind, AgentRunStatus, AgentRunUpsert, DriverRunLedger, LedgerError, RunEventAppend,
-        RunEventListRequest, RunLedgerStore,
-        drivers::{QuiescentSource, SourceOwner},
-    },
-};
 use std::sync::Arc;
+use tinyagents_session::run_ledger::{
+    AgentRunKind, AgentRunStatus, AgentRunUpsert, DriverRunLedger, LedgerError, RunEventAppend,
+    RunEventListRequest, RunLedgerStore,
+    drivers::{QuiescentSource, SourceOwner},
+};
 
+use tinyagents_storage_kit::ScopedStorage;
 use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
 use tinystoragedrivers_connect::MongoConnection;
 use tinystoragedrivers_document::mongodb::{MongoDocuments, MongoStreams};
 use tinystoragedrivers_testkit::MemoryBackend;
 use tinystoragedrivers_types::{ErrorKind, Scope};
-use tinyagents_storage_kit::ScopedStorage;
 
 /// Validate the explicitly opted-in unauthenticated loopback Mongo endpoint.
 fn endpoint() -> String {
@@ -53,8 +51,7 @@ async fn backend(scope: &Scope) -> (String, String, ScopedStorage) {
     let connection = MongoConnection::connect(&url, &database).await.unwrap();
     let documents =
         Arc::new(MongoDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
-    let streams =
-        Arc::new(MongoStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
+    let streams = Arc::new(MongoStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
     let memory = MemoryBackend::new().for_scope(scope).unwrap();
     let storage = Storage::new(
         documents,
@@ -158,8 +155,8 @@ async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
         .await
         .unwrap();
     let reopened = MongoConnection::connect(&url, &database).await.unwrap();
-    let documents = Arc::new(MongoDocuments::new(reopened.clone(), scope.clone()))
-        as Arc<dyn DocumentStore>;
+    let documents =
+        Arc::new(MongoDocuments::new(reopened.clone(), scope.clone())) as Arc<dyn DocumentStore>;
     let streams = Arc::new(MongoStreams::new(reopened, scope.clone())) as Arc<dyn StreamStore>;
     let memory = MemoryBackend::new().for_scope(&scope).unwrap();
     let peer_storage = ScopedStorage::new(

@@ -44,10 +44,10 @@ async fn local_connection(label: &str) -> MongoConnection {
 }
 
 fn scoped_storage(connection: &MongoConnection, scope: &Scope) -> ScopedStorage {
-    let documents = Arc::new(MongoDocuments::new(connection.clone(), scope.clone()))
-        as Arc<dyn DocumentStore>;
-    let streams = Arc::new(MongoStreams::new(connection.clone(), scope.clone()))
-        as Arc<dyn StreamStore>;
+    let documents =
+        Arc::new(MongoDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    let streams =
+        Arc::new(MongoStreams::new(connection.clone(), scope.clone())) as Arc<dyn StreamStore>;
     let memory = MemoryBackend::new().for_scope(scope).unwrap();
     ScopedStorage::new(
         Storage::new(
@@ -86,8 +86,7 @@ async fn mongodb_run_ledger_contract_and_scope_isolation() {
     let peer_storage = scoped_storage(&connection, &peer_scope);
     let peer = Arc::new(DriverRunLedger::new(peer_storage)) as Arc<dyn RunLedgerStore>;
     assert!(
-        peer
-            .list_agent_runs(&AgentRunListRequest::default())
+        peer.list_agent_runs(&AgentRunListRequest::default())
             .await
             .unwrap()
             .runs
