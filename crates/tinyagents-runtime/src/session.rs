@@ -243,8 +243,20 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             .as_ref()
             .is_some_and(|session| session.generation > 0)
             || transcript.meta.parent_session_id.is_some();
+        // A durable empty successor with no committed turns is the fresh head
+        // created by an explicit history reset. Do not inherit the sealed
+        // generation's prompt boundary into it. An explicit Some(0) on this
+        // head remains authoritative because `recorded_boundary` is present.
+        let reset_empty_head = compacted_head
+            && transcript.messages.is_empty()
+            && transcript.meta.turn_count == 0
+            && recorded_boundary.is_none();
         let mut recovered_boundary = None;
-        if recorded_boundary.is_none() && cached_boundary.is_none() && compacted_head {
+        if recorded_boundary.is_none()
+            && cached_boundary.is_none()
+            && compacted_head
+            && !reset_empty_head
+        {
             // Without the sealed root there is no safe boundary in a head
             // containing a System summary. If a replacement prefix was
             // supplied, fail rather than replaying unverifiable old System
@@ -528,9 +540,20 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
             return Ok(false);
         }
 
+        let mut seed = transcript.meta.clone();
+        seed.turn_count = 0;
+        seed.prefix_message_count = None;
+        seed.session_id = None;
+        seed.parent_session_id = None;
         let (successor, handle) = target
             .locator
-            .begin_generation_from_baseline(&head, transcript.meta.clone(), &transcript.messages)
+            .begin_generation_from_baseline(&head, seed, &transcript.messages)
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        // Generation allocation reserves the successor but leaves it
+        // unwritten. Persist an explicit empty context now so a process restart
+        // before the next user turn still resolves the successor as the head.
+        handle
+            .replace(&[])
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
 
         let target = self.target.as_mut().expect("target was checked above");

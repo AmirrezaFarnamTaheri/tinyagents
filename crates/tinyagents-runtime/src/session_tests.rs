@@ -256,9 +256,10 @@ async fn reset_history_advances_an_explicit_frozen_empty_prefix() {
     let session_ref = SessionRef::scoped("empty-prefix-reset", "agent-id");
     let mut empty_prefix_meta = meta();
     empty_prefix_meta.prefix_message_count = Some(0);
-    locator
-        .begin_generation(&session_ref, empty_prefix_meta)
+    let empty_head = locator
+        .open_stem(&session_stem(&session_ref), empty_prefix_meta)
         .unwrap();
+    empty_head.replace(&[]).unwrap();
     let mut session =
         SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
             .codec(Arc::new(RoleCodec))
