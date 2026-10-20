@@ -112,7 +112,7 @@ pub async fn open_storage(
     }
     storage
         .documents()
-        .ensure_collection(&tinyagents_storage_kit::primitives::collection_specs()[1])
+        .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
         .await?;
     registry.migrate(&storage, &MigrateOptions::new()).await?;
     for (collection, kind) in [

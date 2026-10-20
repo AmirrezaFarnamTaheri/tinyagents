@@ -129,13 +129,11 @@ pub async fn open_storage(
     for spec in collections() {
         storage.documents().ensure_collection(&spec).await?;
     }
-    for primitive_index in [0, 1] {
-        storage
-            .documents()
-            .ensure_collection(
-                &tinyagents_storage_kit::primitives::collection_specs()[primitive_index],
-            )
-            .await?;
+    for spec in [
+        primitives::leases_collection_spec(),
+        primitives::kv_collection_spec(),
+    ] {
+        storage.documents().ensure_collection(&spec).await?;
     }
     registry.migrate(&storage, &MigrateOptions::new()).await?;
     import_legacy_leases(&storage).await?;

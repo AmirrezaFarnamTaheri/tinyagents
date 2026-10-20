@@ -49,6 +49,19 @@ pub const KV: &str = "tsd.kv";
 /// The counter collection.
 pub const COUNTERS: &str = "tsd.counters";
 
+/// The declaration needed by [`Kv`] and owners that migrate legacy key-value
+/// rows into `tsd.kv`.
+#[must_use]
+pub fn kv_collection_spec() -> CollectionSpec {
+    CollectionSpec::new(KV).index(IndexSpec::new("kv_by_key", ["owner", "ns", "key"]))
+}
+
+/// The declaration needed by [`Leases`].
+#[must_use]
+pub fn leases_collection_spec() -> CollectionSpec {
+    CollectionSpec::new(LEASES)
+}
+
 /// The collections the primitives need, with their indexes.
 ///
 /// [`Kv`] declares an index over `(owner, ns, key)` so a namespace lists in
@@ -57,8 +70,8 @@ pub const COUNTERS: &str = "tsd.counters";
 #[must_use]
 pub fn collection_specs() -> Vec<CollectionSpec> {
     vec![
-        CollectionSpec::new(LEASES),
-        CollectionSpec::new(KV).index(IndexSpec::new("kv_by_key", ["owner", "ns", "key"])),
+        leases_collection_spec(),
+        kv_collection_spec(),
         CollectionSpec::new(COUNTERS),
     ]
 }
