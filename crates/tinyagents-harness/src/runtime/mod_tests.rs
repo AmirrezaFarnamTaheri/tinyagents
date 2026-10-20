@@ -966,23 +966,13 @@ impl Tool for InjectedArgumentTool {
 #[test]
 fn new_harness_is_empty_with_default_policy() {
     let harness: AgentHarness<()> = AgentHarness::new();
-    assert!(harness.models().default_name().is_none());
+    assert!(harness.model_resolver.is_none());
     assert_eq!(harness.tools().names().len(), 0);
     assert!(harness.middleware().is_empty());
     assert_eq!(harness.policy(), &RunPolicy::default());
 }
 
 #[test]
-fn register_first_model_becomes_default() {
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("a")))))
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("b")))));
-    assert_eq!(harness.models().default_name(), Some("a"));
-    harness;
-    assert_eq!(harness.models().default_name(), Some("b"));
-}
-
 #[test]
 fn register_tool_and_push_middleware() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
