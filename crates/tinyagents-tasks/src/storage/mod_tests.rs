@@ -125,7 +125,7 @@ async fn opening_tasks_storage_runs_its_owner_migrations_before_returning() {
         &legacy,
         "orchestration_tasks",
         "old-task",
-        json!({"taskId": "old-task", "record": v1_record("old-task", "completed")}),
+        json!({"taskId": "old-task", "rev": 1, "record": v1_record("old-task", "completed")}),
     )
     .await;
 

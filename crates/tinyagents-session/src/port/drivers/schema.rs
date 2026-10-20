@@ -35,12 +35,9 @@ mod steps;
 /// - The journal streams are the harness's: `harness.journal/<run>`, declared and
 ///   migrated by `tinyagents_harness::storage_schema()`.
 ///
-/// A provider is constructed with the tenant scope (see
-/// `DriverSessionStores::new`) and binds each agent to `tenant.agent(id)`;
-/// the scope class is `Agent` for that reason. Data stored by v1 under a raw
-/// agent-id scope is not moved by these steps: a step runs inside one scope,
-/// and the host that re-homes a profile's database copies each v1 agent scope
-/// into its `tenant.agent(id)` scope.
+/// Each migration runs against the already-bound scope supplied by the host.
+/// Scope selection and any profile re-homing are host-owned operations; a step
+/// here transforms data only within its supplied scope.
 #[must_use]
 pub fn storage_schema() -> Schema {
     let owner = Owner::new("session").expect("`session` is a valid owner");
