@@ -357,27 +357,33 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
 }
 
 #[tokio::test]
-async fn tenant_is_preserved_across_rebind_without_crossing_other_tenants() {
+async fn host_supplied_scope_bindings_survive_rebind_without_crossing_scopes() {
     let registry = SessionStoreRegistry::default();
-    let tenant = Scope::new("u:alice").unwrap();
-    let provider = RebindableSessionStores::new_in_tenant(
+    let provider = RebindableSessionStores::new_in(
         &registry,
-        Arc::new(MemoryStorage::new()),
-        tenant.clone(),
+        crate::testkit::fixed_scope_factory(Arc::new(MemoryStorage::new()), "host-alice"),
         false,
     )
     .unwrap();
     let retained = provider.for_agent("agent");
     let next = Arc::new(MemoryStorage::new());
-    registry.rebind(crate::testkit::fixed_scope_factory(next.clone(), "tenant-rebind")).unwrap();
+    registry
+        .rebind(crate::testkit::fixed_scope_factory(
+            next.clone(),
+            "host-alice-rebound",
+        ))
+        .unwrap();
     retained
         .kv
         .put("n", "k", serde_json::json!("alice"))
         .await
         .unwrap();
-    let alice = DriverSessionStores::new(next.clone(), tenant)
-        .unwrap()
-        .for_agent("agent");
+    let alice = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
+        next.clone(),
+        "host-alice-rebound",
+    ))
+    .unwrap()
+    .for_agent("agent");
     let bob = DriverSessionStores::new(crate::testkit::fixed_scope_factory(next.clone(), "u:bob"))
         .unwrap()
         .for_agent("agent");
