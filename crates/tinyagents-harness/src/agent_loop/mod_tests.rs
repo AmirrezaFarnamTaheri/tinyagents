@@ -5113,7 +5113,7 @@ async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting(
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let resolver = PrebuiltModelResolver::new(
         slow.clone(),
-        [("fallback".to_string(), fallback.clone())],
+        [("fallback".to_string(), fallback.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("slow");
     harness.with_model_resolver(Arc::new(resolver));
 
@@ -5799,7 +5799,7 @@ async fn honored_model_override_emits_no_diagnostic_event() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let resolver = PrebuiltModelResolver::new(
         Arc::new(MockModel::constant("default")),
-        [("special".to_string(), Arc::new(MockModel::constant("special answer")))],
+        [("special".to_string(), Arc::new(MockModel::constant("special answer")) as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("mock");
     harness.with_model_resolver(Arc::new(resolver));
     harness.push_middleware(Arc::new(OverrideModelMiddleware("special")));
