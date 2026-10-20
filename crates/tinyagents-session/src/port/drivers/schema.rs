@@ -22,9 +22,9 @@ mod steps;
 ///
 /// Things that move outside a document step:
 ///
-/// - `session_kv` lives in `tsd.kv` (owner `session`); the host calls
-///   `tinyagents_harness::storage::import_legacy_kv(storage, "session",
-///   "session_kv", LegacyKv::Flat)` once per scope.
+/// - `session_kv` lives in `tsd.kv` (owner `session`); `open_agent_storage`
+///   calls `tinyagents_harness::storage::import_legacy_kv` once per scope
+///   before the session Registry migration.
 /// - The generation reservations that were `reserved_at` rows are `tsd.leases`
 ///   records (owner `session`, key = the successor stem); nothing is migrated,
 ///   an in-flight reservation simply lapses.

@@ -30,6 +30,10 @@ session, ledger, history, and conversation schemas. The host supplies the
 already-bound scope and does not compose consumer registries or run these model
 migrations itself. `driver_run_ledger(agent_id)` and
 `SessionStoreProvider::run_ledger_for_agent(agent_id)` use the same open path.
+The open path also moves the session-owned `session_kv` rows into `tsd.kv`
+through the harness's public `import_legacy_kv` API before acquiring the
+session Registry lease; that importer owns its own lease. This is distinct from
+the old workspace/SQLite import workflows listed above.
 Session history uses `SessionHistoryStore` methods such
 as `record_session_start`, `record_message`, `record_tool_call`, and
 `record_session_end`; turn snapshots use `TurnStates`; transcripts use
