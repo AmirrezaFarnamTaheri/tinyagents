@@ -133,7 +133,6 @@ async fn a_fallback_answer_is_never_cached_under_the_primary_key() {
             "backup answer",
             backup_calls.clone(),
         )),)));
-    harness;
     harness.with_response_cache(cache.clone());
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
@@ -338,7 +337,6 @@ async fn model_fallback_middleware_actually_switches_models() {
             "backup answer",
             backup_calls.clone(),
         )),)));
-    harness;
     // No harness-level `FallbackPolicy` — the switch must come from the wrap
     // middleware alone, which steers by mutating `request.model`.
     harness.with_policy(RunPolicy {
@@ -383,7 +381,6 @@ async fn an_unresolvable_wrap_override_keeps_the_resolved_binding() {
             identity: "primary-identity",
             calls: primary_calls.clone(),
         }),)));
-    harness;
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)

@@ -25,7 +25,6 @@ fn harness_with_scripted(replies: Vec<&str>) -> (AgentHarness<(), ()>, Arc<Scrip
     let model = Arc::new(ScriptedModel::replies(replies));
     let mut harness = AgentHarness::<(), ()>::new();
     harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", model.clone())));
-    harness;
     (harness, model)
 }
 

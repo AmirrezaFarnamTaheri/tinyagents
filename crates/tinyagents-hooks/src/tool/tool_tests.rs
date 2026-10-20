@@ -175,7 +175,6 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
             response,
             ModelResponse::assistant("done"),
         ])),)));
-    harness;
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_nested_depth(1),
         ..RunPolicy::default()
