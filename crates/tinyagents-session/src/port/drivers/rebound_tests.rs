@@ -244,7 +244,7 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
             .await
             .unwrap();
         let direct =
-            DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "new"))
+            DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "gated"))
                 .unwrap();
         assert_eq!(
             direct
@@ -298,7 +298,7 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .unwrap();
         let independent = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
             expected_backend,
-            "gated",
+            "new",
         ))
         .unwrap()
         .for_agent("racing-agent");
