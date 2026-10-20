@@ -128,10 +128,9 @@ pub use entry_tree::{
     ForkPosition, ForkScope, LabelEntry, SessionCompactionSink,
 };
 pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
-pub use port::{
-    AgentStores, InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates,
-    SessionStoreProvider, TurnStates,
-};
+pub use port::{AgentStores, SessionStoreProvider, TurnStates};
+#[cfg(any(test, feature = "testkit"))]
+pub use port::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
