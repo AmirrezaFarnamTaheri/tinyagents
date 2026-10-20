@@ -14,7 +14,7 @@ use super::storage::{
 use crate::run_ledger::tool_effects::ToolEffectStatus;
 use crate::run_ledger::types::*;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tinyagents_storage_kit::{SourceRecord, Step, TargetRecord};
 
 /// The wire record inside a v1 envelope.

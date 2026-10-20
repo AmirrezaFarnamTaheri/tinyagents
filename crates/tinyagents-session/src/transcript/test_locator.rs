@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    DisplayRecord, DisplaySessionTranscript, SessionRef, SessionTranscript, ThreadTranscript,
+    DisplayRecord, DisplaySessionTranscript, SessionRef, SessionTranscript,
     ThreadTranscripts, TranscriptHistory, TranscriptLocator, TranscriptMeta, TranscriptRead,
     TranscriptTurn, read_transcript_display,
 };

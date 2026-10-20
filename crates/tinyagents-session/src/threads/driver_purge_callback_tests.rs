@@ -2,10 +2,10 @@ use super::*;
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinystoragedrivers_api::{Capabilities, DocumentStore};
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
-    CollectionSpec, Filter, Page, Precondition, Query, Sort, StorageError, Version, Versioned,
-    WriteOptions,
+    Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, Sort, StorageError,
+    Version, Versioned, WriteOptions,
 };
 
 struct DeleteProbeDocs {
@@ -198,22 +198,21 @@ async fn probed_store(
     inject_thread_after_first_delete: Option<&str>,
     return_false_after_thread_delete: Option<usize>,
 ) -> (DriverConversationStore, Arc<DeleteProbeDocs>) {
-    let base = DriverConversationStore::in_memory().await;
+    let backend = crate::testkit::MemoryStorage::new();
+    let scope = tinyagents_storage_kit::Scope::new("purge-callback-probe")
+        .expect("fixture scope is valid");
+    let scoped = backend.for_scope(&scope).expect("memory ports");
     let injected_thread = inject_thread_after_first_delete
         .map(|id| DriverConversationStore::ensure(None, &request(id)));
     let docs = Arc::new(DeleteProbeDocs {
-        inner: base.docs.clone(),
+        inner: scoped.documents().clone(),
         thread_deletes: AtomicUsize::new(0),
         successful_thread_deletes: AtomicUsize::new(0),
         fail_on_thread_delete,
         return_false_after_thread_delete,
         inject_thread_after_first_delete: Mutex::new(injected_thread),
     });
-    let store = DriverConversationStore {
-        docs: docs.clone(),
-        streams: base.streams.clone(),
-        validate_only: false,
-    };
+    let store = DriverConversationStore::new(crate::testkit::with_documents(&scoped, docs.clone()));
     (store, docs)
 }
 
@@ -291,7 +290,7 @@ async fn purge_callback_keeps_successful_ids_when_a_later_document_delete_fails(
 
     assert!(matches!(
         result,
-        Err(ConversationError::Driver(error)) if error.kind() == tinystoragedrivers_core::ErrorKind::Unavailable
+        Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::Unavailable
     ));
     assert_eq!(callbacks, vec![expected_first]);
     assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
@@ -325,7 +324,7 @@ async fn async_purge_callback_keeps_completed_ids_when_a_later_delete_fails() {
 
     assert!(matches!(
         result,
-        Err(ConversationError::Driver(error)) if error.kind() == tinystoragedrivers_core::ErrorKind::Unavailable
+        Err(ConversationError::Driver(error)) if error.kind() == ErrorKind::Unavailable
     ));
     assert_eq!(callbacks, vec![expected_first]);
     assert_eq!(docs.successful_thread_deletes.load(Ordering::SeqCst), 1);
