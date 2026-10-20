@@ -120,11 +120,6 @@ impl DriverSessionStores {
         }
     }
 
-    /// The tenant scope every agent of this provider lives under.
-    pub fn tenant(&self) -> &Scope {
-        &self.tenant
-    }
-
     /// Marks an agent's in-flight turns interrupted the first time this
     /// provider opens its stores.
     ///
@@ -306,7 +301,7 @@ impl DriverSessionStores {
         // The provider's own id keeps two providers with the same driver and
         // scope from claiming one destination; unlike an address, it is
         // never reused.
-        let label = format!("storage://{}/{}", self.id, scoped.scope());
+        let label = format!("storage://{}/{}", self.id, scoped.scope().as_str());
         let turn_states = Arc::new(DriverTurnStates::new_with_schema_admission(
             Arc::clone(&docs),
             self.bridge.clone(),

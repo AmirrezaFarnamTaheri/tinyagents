@@ -22,7 +22,7 @@
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let backend = memory_backend();
 //! let scope = Scope::new("test-ledger").unwrap();
-//! let storage = ScopedStorage::new(backend.for_scope(&scope)?, scope);
+//! let storage = ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope);
 //! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
 //! # });
 //! ```
