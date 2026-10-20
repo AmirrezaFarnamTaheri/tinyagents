@@ -2,7 +2,13 @@ use super::*;
 use crate::entry_tree::{ForkPosition, ForkScope};
 use crate::testkit::MemoryStorage;
 use crate::transcript::TranscriptMessage;
+use tinyagents_storage_kit::ScopedStorage;
 use tinystoragedrivers_api::StorageBackend;
+
+fn scoped_for(backend: &dyn StorageBackend, label: &str) -> ScopedStorage {
+    let scope = Scope::new(label).unwrap();
+    ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope)
+}
 
 fn kind(text: &str) -> EntryKind {
     EntryKind::Message(TranscriptMessage::new("user", text))
@@ -13,7 +19,7 @@ fn kind(text: &str) -> EntryKind {
 /// `(session, ordinal)`, a tip is an entry nobody parents, a label is an entry
 /// plus a name, and a tree fork copies the ancestor path.
 async fn branches_forks_and_context(backend: &dyn StorageBackend) {
-    let scoped = backend.for_scope(&Scope::new("alice").unwrap()).unwrap();
+    let scoped = scoped_for(backend, "alice");
     let native = DriverRunLedger::new(scoped.clone());
     let peer = DriverRunLedger::new(scoped);
     let at = |ordinal| EntryId::derive("session", ordinal);
@@ -116,7 +122,7 @@ async fn branches_forks_and_context(backend: &dyn StorageBackend) {
             .unwrap()
             .is_none()
     );
-    let other = DriverRunLedger::new(backend.for_scope(&Scope::new("bob").unwrap()).unwrap());
+    let other = DriverRunLedger::new(scoped_for(backend, "bob"));
     assert!(other.entry_head("session").await.unwrap().is_none());
 }
 

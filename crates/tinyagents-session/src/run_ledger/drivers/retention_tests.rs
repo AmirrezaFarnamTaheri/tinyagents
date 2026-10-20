@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::MemoryStorage;
 use chrono::Duration;
-use tinyagents_storage_kit::Precondition;
+use tinyagents_storage_kit::{Precondition, Scope, ScopedStorage};
 use tinystoragedrivers_api::StorageBackend;
 
 async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
@@ -28,9 +28,15 @@ async fn seed(ledger: &DriverRunLedger, id: &str, at: DateTime<Utc>) {
 }
 
 async fn prunes_only_old_telemetry(backend: &dyn StorageBackend) {
-    let a = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
-    let peer = DriverRunLedger::new(backend.for_scope(&Scope::new("a").unwrap()).unwrap());
-    let sibling = DriverRunLedger::new(backend.for_scope(&Scope::new("b").unwrap()).unwrap());
+    let a_scope = Scope::new("a").unwrap();
+    let a_storage = ScopedStorage::new(backend.for_scope(&a_scope).unwrap(), a_scope.clone());
+    let a = DriverRunLedger::new(a_storage.clone());
+    let peer = DriverRunLedger::new(a_storage);
+    let b_scope = Scope::new("b").unwrap();
+    let sibling = DriverRunLedger::new(ScopedStorage::new(
+        backend.for_scope(&b_scope).unwrap(),
+        b_scope,
+    ));
     let cutoff = DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
