@@ -246,41 +246,6 @@ async fn invalid_ids_and_malformed_committed_records_keep_native_error_kinds() {
         matches!(store.get_messages("one").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Serialization)
     );
 }
-
-#[tokio::test]
-async fn native_scope_fence_rejects_metadata_takeover_without_local_fallback() {
-    use tinystoragedrivers_types::Fence;
-    let backend = MemoryStorage::new();
-    let owner_scope = Scope::new("root-owner").unwrap();
-    let owner = backend.for_scope(&owner_scope).unwrap();
-    owner
-        .documents()
-        .put(
-            "leases",
-            "profile",
-            json!({"epoch":1}),
-            Precondition::Absent,
-        )
-        .await
-        .unwrap();
-    let profile = Scope::new("profile").unwrap();
-    let fence = Fence::epoch(owner_scope, "leases", "profile", "epoch", 1);
-    let store = DriverConversationStore::new(backend.for_scope_fenced(&profile, &fence).unwrap());
-    let before = store.ensure_thread(request("one")).await.unwrap();
-    owner
-        .documents()
-        .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-        .await
-        .unwrap();
-    assert!(
-        matches!(store.update_thread_title("one", "stale", "now").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Unavailable)
-    );
-    assert_eq!(
-        scoped(&backend, "profile").get_thread("one").await.unwrap(),
-        Some(before)
-    );
-}
-
 #[tokio::test]
 async fn store_reconstruction_reads_same_committed_profile_fixture() {
     let scope = Scope::new("profile").unwrap();

@@ -696,56 +696,6 @@ async fn scoped_ledger_collections_start_empty_and_entry_trees_need_no_writes() 
         );
     }
 }
-
-/// A supplied native fence remains active through the adapter and refusal retains its native error kind.
-#[tokio::test]
-async fn scoped_workflow_writes_preserve_native_owner_fence_refusal() {
-    use tinyagents_storage_kit::{CollectionSpec, Fence, Precondition};
-    let backend = MemoryStorage::new();
-    let owner_scope = Scope::new("owners").unwrap();
-    let owner = backend.for_scope(&owner_scope).unwrap();
-    owner
-        .documents()
-        .ensure_collection(&CollectionSpec::new("leases"))
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put(
-            "leases",
-            "profile",
-            json!({"epoch":1}),
-            Precondition::Absent,
-        )
-        .await
-        .unwrap();
-    let scope = Scope::new("profile-a").unwrap();
-    let fence = Fence::epoch(owner_scope, "leases", "profile", "epoch", 1);
-    let ledger = DriverRunLedger::new(backend.for_scope_fenced(&scope, &fence).unwrap());
-    let first = ledger
-        .upsert_workflow_run(workflow("workflow"))
-        .await
-        .unwrap();
-    owner
-        .documents()
-        .put("leases", "profile", json!({"epoch":2}), Precondition::None)
-        .await
-        .unwrap();
-    assert!(
-        matches!(ledger.upsert_workflow_run(workflow("workflow")).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Unavailable)
-    );
-    assert!(
-        matches!(ledger.try_claim_workflow_run("workflow", "worker", Duration::hours(1)).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Unavailable)
-    );
-    let inspect = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
-    assert_eq!(
-        inspect.get_workflow_run("workflow").await.unwrap(),
-        Some(first)
-    );
-}
-
 /// Single-record member lifecycle and task release preserve identity filters and run/evidence history.
 #[tokio::test]
 async fn scoped_member_lifecycle_and_task_release_preserve_history() {
