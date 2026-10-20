@@ -111,7 +111,9 @@ fn state_and_history_survive_a_driver_reopen_on_the_same_backend() {
         assert_eq!(store.history(&id).len(), 3);
     }
     let reopened = DriverTaskStore::new(docs_of(&storage, "local")).unwrap();
-    let record = reopened.get(&id).expect("task survives a restart");
+    let record = reopened
+        .get(&id)
+        .expect("task survives reopening a driver on the same backend");
     assert_eq!(record.status, OrchestrationTaskStatus::Completed);
     assert_eq!(record.result.unwrap().text.as_deref(), Some("done"));
     assert_eq!(reopened.history(&id).len(), 3);
