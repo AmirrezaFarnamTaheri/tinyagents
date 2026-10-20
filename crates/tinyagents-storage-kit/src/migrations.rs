@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{Precondition, Result, StorageError};
 

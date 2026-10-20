@@ -1,6 +1,6 @@
 use super::*;
 use crate::Scope;
-use tinystoragedrivers_api::{DocumentStoreExt, StorageBackend};
+use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
 
 #[tokio::test]

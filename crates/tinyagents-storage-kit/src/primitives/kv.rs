@@ -9,9 +9,7 @@ use serde_json::Value;
 use super::KV;
 use super::repo::Repo;
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{
-    Filter, Key, Precondition, Query, Result, Sort, StorageError, Version,
-};
+use tinystoragedrivers_types::{Filter, Precondition, Query, Result, Sort, StorageError, Version};
 
 /// Entries per page while [`Kv::list`] walks a namespace.
 const PAGE: usize = 200;
@@ -130,9 +128,9 @@ impl Kv {
                 }))
             })
             .await?;
-        changed
+        Ok(changed
             .map(|(entry, _)| serde_json::from_value(entry.value))
-            .transpose()
+            .transpose()?)
     }
 
     /// Remove `key` and report whether it existed.

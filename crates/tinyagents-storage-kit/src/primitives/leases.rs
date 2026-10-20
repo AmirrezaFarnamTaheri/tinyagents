@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::LEASES;
 use super::repo::{Repo, RetryPolicy};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Key, Result, StorageError};
+use tinystoragedrivers_types::{Result, StorageError};
 
 /// Injectable Unix epoch-millisecond clock.
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
