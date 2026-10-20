@@ -44,7 +44,7 @@ use tinyagents_storage_kit::{
 use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::{Mutex, OnceCell};
 
-use super::super::memory::MAX_GENERATIONS;
+use super::super::helpers::MAX_GENERATIONS;
 use crate::transcript::{
     SessionRef, SessionTranscript, TranscriptHistory, TranscriptLocator, TranscriptMessage,
     TranscriptMeta, TranscriptPartial, TranscriptRead, TranscriptTurn, TurnUsage,

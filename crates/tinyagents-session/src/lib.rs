@@ -129,12 +129,12 @@ pub use entry_tree::{
 };
 pub use fts::{DEFAULT_FTS_SNIPPET_BYTES, fts_snippet_bytes, set_fts_snippet_bytes};
 pub use port::{AgentStores, SessionStoreProvider, TurnStates};
-#[cfg(any(test, feature = "testkit"))]
-pub use port::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use port::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
+#[cfg(any(test, feature = "testkit"))]
+pub use port::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use retention::RetentionReport;
 pub use run_ledger::DriverRunLedger;
 pub use run_ledger::command_center::{CommandCenterView, ControlError, ControlVerb, build_view};

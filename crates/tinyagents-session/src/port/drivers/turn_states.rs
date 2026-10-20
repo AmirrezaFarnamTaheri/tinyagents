@@ -30,7 +30,7 @@ use tinystoragedrivers_api::DocumentStore;
 use tokio::sync::OnceCell;
 
 use super::super::TurnStates;
-use super::super::memory::{
+use super::super::helpers::{
     COMPLETED_RETENTION, completed_newest_first, is_terminal, newest_first,
 };
 use crate::turn_state::{TurnLifecycle, TurnState};
