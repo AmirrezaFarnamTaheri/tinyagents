@@ -202,6 +202,9 @@ async fn probed_store(
     let scope = tinyagents_storage_kit::Scope::new("purge-callback-probe")
         .expect("fixture scope is valid");
     let scoped = backend.for_scope(&scope).expect("memory ports");
+    DriverConversationStore::prepare_schema(scoped.documents().as_ref())
+        .await
+        .expect("conversation schema");
     let injected_thread = inject_thread_after_first_delete
         .map(|id| DriverConversationStore::ensure(None, &request(id)));
     let docs = Arc::new(DeleteProbeDocs {

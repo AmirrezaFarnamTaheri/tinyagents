@@ -298,7 +298,7 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .unwrap();
         let independent = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
             expected_backend,
-            "local",
+            "new",
         ))
         .unwrap()
         .for_agent("racing-agent");
@@ -377,7 +377,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
             .unwrap();
         let direct = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
             backends[winner].clone(),
-            "local",
+            "candidate",
         ))
         .unwrap();
         assert_eq!(
