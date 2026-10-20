@@ -211,9 +211,10 @@ async fn collect_reaches_the_next_model_boundary_as_additional_context() {
     forward_collects(&queue, &handle, "thread-test", &sink).await;
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .register_model("scripted", model.clone())
-        .set_default_model("scripted");
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "scripted",
+        model.clone(),
+    )));
     harness
         .invoke_in_context(
             &(),

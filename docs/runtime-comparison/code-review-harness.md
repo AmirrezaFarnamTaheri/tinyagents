@@ -282,7 +282,7 @@ and, on success, clear `invalid` and proceed to normal validation (emit `Invalid
    `From`. Add `#[non_exhaustive]` to it and `AgentEvent` now (cheap, prevents the next break). Risk: medium for downstream matches.
 5. **R-5. Feature-gate heavy optional surfaces**: `claude-code` (subprocess driver + `uuid`, `tempfile`, `wait-timeout`, `dirs`),
    `langfuse` (`reqwest`), keep `tools` owning `chrono`. Risk: low; integration tests already gate `sqlite`/`tools`.
-6. **R-6. Move `handoff`, `run_queue`, `no_progress`, `artifacts`, `workspace/git` into a `tinyagents-host-utils` crate** or under a
+6. **R-6. Move `run_queue`, `no_progress`, and `artifacts` into a `tinyagents-host-utils` crate** or under a
    `host-utils` feature. They are not on any loop path and carry product-specific heuristics (M-9).
 
 ---

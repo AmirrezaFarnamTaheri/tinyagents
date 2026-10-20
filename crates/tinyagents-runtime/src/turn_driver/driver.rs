@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use tinyagents_harness::agent_loop::PartialRunOutcome;
 use tinyagents_harness::context::RunContext;
 use tinyagents_harness::events::EventListener;
+use tinyagents_harness::host::PrebuiltModelResolver;
 use tinyagents_harness::middleware::AgentRun;
 use tinyagents_harness::middleware::{
     ApprovalResolver, Middleware, ToolCallPolicy, ToolPolicyGateMiddleware,
@@ -386,11 +387,11 @@ impl<State: Send + Sync + 'static, C: Send + Sync + 'static> TurnDriver<State, C
 
         let mut harness: AgentHarness<State, C> = AgentHarness::new();
         harness.with_policy(policy);
-        for (index, (name, model)) in models.into_iter().enumerate() {
-            harness.register_model(name.clone(), model);
-            if index == 0 {
-                harness.set_default_model(name);
-            }
+        if let Some((primary_name, primary_model)) = models.first().cloned() {
+            let routes = models.iter().skip(1).cloned().collect::<Vec<_>>();
+            let resolver =
+                PrebuiltModelResolver::new(primary_model, routes).with_primary_name(primary_name);
+            harness.with_model_resolver(Arc::new(resolver));
         }
         let outcome_sink = tinyagents_harness::turn_outcome::new_tool_outcome_sink();
         harness.push_middleware(Arc::new(

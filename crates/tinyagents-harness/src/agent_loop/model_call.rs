@@ -22,6 +22,71 @@ use crate::no_progress::StreamTextStallDetector;
 use crate::retry::{FailoverDecision, FailoverReason, FailoverState, decide};
 use tinyinference_llm::cache::CachePolicy;
 
+pub(crate) fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
+    let mut resolve = crate::host::ModelResolveRequest::new("local");
+    if let Some(pin) = request.model.as_deref() {
+        resolve = resolve.with_model_pin(pin);
+    } else if let Some(hint) = request.model_hints.first() {
+        resolve = resolve.with_model_hint(&hint.model);
+    }
+    if let Some(required) = request.required_capabilities.clone() {
+        resolve = resolve.with_required_capabilities(required);
+    }
+    resolve
+}
+
+pub(crate) fn preview_local_model_profile<State: Send + Sync>(
+    resolver: Option<&Arc<dyn crate::host::ModelResolver<State>>>,
+    fixed_model: Option<&Arc<dyn ChatModel<State>>>,
+    request: &ModelRequest,
+) -> Option<tinyinference_llm::model::ModelProfile> {
+    if let Some(resolver) = resolver {
+        let resolve = local_resolve_request(request);
+        let model = resolver.preview(&resolve)?;
+        if model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()) {
+            return model.profile().cloned();
+        }
+        if request.model.is_some() || !request.model_hints.is_empty() {
+            let mut default = crate::host::ModelResolveRequest::new("local");
+            if let Some(required) = request.required_capabilities.clone() {
+                default = default.with_required_capabilities(required);
+            }
+            return resolver
+                .preview(&default)
+                .filter(|model| {
+                    model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+                })
+                .and_then(|model| model.profile().cloned());
+        }
+        return None;
+    }
+    fixed_model
+        .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
+        .and_then(|model| model.profile().cloned())
+}
+
+pub(super) fn model_is_eligible<State: Send + Sync>(
+    model: &dyn ChatModel<State>,
+    required: Option<&tinyinference_llm::model::CapabilitySet>,
+) -> bool {
+    model.profile().is_none_or(|profile| {
+        profile.is_usable() && required.is_none_or(|required| profile.satisfies(required))
+    })
+}
+
+fn ensure_model_eligible<State: Send + Sync>(
+    model: &dyn ChatModel<State>,
+    request: &ModelRequest,
+) -> Result<()> {
+    if model_is_eligible(model, request.required_capabilities.as_ref()) {
+        Ok(())
+    } else {
+        Err(TinyAgentsError::ModelNotFound(
+            request.model.clone().unwrap_or_else(|| "<default>".into()),
+        ))
+    }
+}
+
 /// Converts a configured stream window to a [`Duration`]. `None` and a zero
 /// window both mean "no bound": a zero-length window would fail every stream
 /// before it could deliver anything.
@@ -30,28 +95,9 @@ fn positive_window(ms: Option<u64>) -> Option<Duration> {
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
-    /// Previews which model `request` would reach through the local
-    /// [`crate::model_registry::ModelRegistry`] and returns its capability
-    /// profile, without dispatching anything.
-    ///
-    /// A pure registry lookup (no network call), so it is cheap enough to run
-    /// before every `before_model` pass and before every tool-change patch.
-    /// `None` when nothing resolves or the model advertises no profile. A
-    /// Hosted runs use their resolver for the profile shown to middleware;
-    /// this local preview is only their initial fallback.
-    pub(super) fn preview_model_profile(
-        &self,
-        request: &ModelRequest,
-    ) -> Option<tinyinference_llm::model::ModelProfile> {
-        self.models
-            .resolve_request(request, None, None)
-            .and_then(|binding| binding.model.profile().cloned())
-    }
-
     /// Resolves the model binding through the host's routing authority when
     /// this run is a hosted invocation; returns `None` for a plain SDK run so
-    /// the caller falls through to local [`crate::model_registry::ModelRegistry`]
-    /// resolution instead.
+    /// the caller falls through to the configured local resolver instead.
     ///
     /// The first call for a run (`ctx.depth() == 0`) is flagged
     /// [`as_team_lead`][crate::host::ModelResolveRequest::as_team_lead] so the
@@ -68,7 +114,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         ctx: &RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> Result<Option<ResolvedModelBinding<State>>> {
+    ) -> Result<Option<ModelBinding<State>>> {
         let Some(host_run) = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)? else {
             return Ok(None);
         };
@@ -123,7 +169,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             .profile()
             .and_then(|profile| profile.model.clone())
             .unwrap_or_else(|| format!("host:{}", host_run.agent_id));
-        Ok(Some(ResolvedModelBinding {
+        Ok(Some(ModelBinding {
             resolved: ResolvedModel {
                 name,
                 requested: resolve.model_pin,
@@ -135,6 +181,69 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
             model,
         }))
+    }
+
+    pub(crate) async fn resolve_local_model(
+        &self,
+        ctx: &RunContext<Ctx>,
+        request: &ModelRequest,
+    ) -> Result<ModelBinding<State>> {
+        let resolve = local_resolve_request(request);
+        let (model, selected_name) = if let Some(resolver) = self.model_resolver.as_ref() {
+            let (budget, bound) = self.model_call_budget(ctx);
+            let mut model = ctx
+                .bounded(budget, resolver.resolve(&resolve), || {
+                    format!(
+                        "local model resolution for run `{}` exceeded its {bound}",
+                        ctx.run_id()
+                    )
+                })
+                .await?;
+            let mut selected_name = resolver.selected_name(&resolve);
+            if !model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+                && (request.model.is_some() || !request.model_hints.is_empty())
+            {
+                let mut default_request = crate::host::ModelResolveRequest::new("local");
+                if let Some(required) = request.required_capabilities.clone() {
+                    default_request = default_request.with_required_capabilities(required);
+                }
+                let (budget, bound) = self.model_call_budget(ctx);
+                model = ctx
+                    .bounded(budget, resolver.resolve(&default_request), || {
+                        format!(
+                            "local default model resolution for run `{}` exceeded its {bound}",
+                            ctx.run_id()
+                        )
+                    })
+                    .await?;
+                selected_name = resolver.selected_name(&default_request);
+            }
+            (model, selected_name)
+        } else if let Some(model) = self.fixed_model.clone() {
+            let selected_name = model.profile().and_then(|profile| profile.model.clone());
+            (model, selected_name)
+        } else {
+            return Err(TinyAgentsError::ModelNotFound(
+                request.model.clone().unwrap_or_else(|| "<default>".into()),
+            ));
+        };
+        ensure_model_eligible(model.as_ref(), request)?;
+        let name = selected_name
+            .or_else(|| model.profile().and_then(|profile| profile.model.clone()))
+            .or_else(|| request.model.clone())
+            .unwrap_or_else(|| "default".into());
+        Ok(ModelBinding {
+            resolved: ResolvedModel {
+                name: name.clone(),
+                requested: request.model.clone(),
+                source: if request.model.as_deref() == Some(name.as_str()) {
+                    ModelResolutionSource::RequestOverride
+                } else {
+                    ModelResolutionSource::RegistryDefault
+                },
+            },
+            model,
+        })
     }
     /// Invokes a model, consulting the local response cache around the
     /// retry/fallback path.
@@ -185,7 +294,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         call_id: &CallId,
-        binding: ResolvedModelBinding<State>,
+        binding: ModelBinding<State>,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
         let streaming = shape.streaming;
@@ -601,7 +710,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         call_id: &CallId,
-        binding: ResolvedModelBinding<State>,
+        binding: ModelBinding<State>,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
         let streaming = shape.streaming;
@@ -628,8 +737,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         // anyway — failing again is better than refusing to try.
         if ctx.limits.is_model_skipped(&current_name)
             && crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?.is_none()
-            && let Some((name, next_model)) =
-                self.select_fallback(ctx, request, &current_name, &mut visited, None)
+            && let Some((name, next_model)) = self
+                .select_fallback(ctx, request, &current_name, &mut visited, None)
+                .await?
         {
             tracing::debug!(
                 call_id = %call_id.as_str(),
@@ -882,13 +992,9 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                             .and_then(|profile| profile.max_input_tokens)
                             .unwrap_or(u64::MAX)
                     });
-                    let selected = self.select_fallback(
-                        ctx,
-                        request,
-                        &current_name,
-                        &mut visited,
-                        larger_than,
-                    );
+                    let selected = self
+                        .select_fallback(ctx, request, &current_name, &mut visited, larger_than)
+                        .await?;
                     let decision = decide(
                         reason,
                         FailoverState {
@@ -948,18 +1054,18 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// the same gate here a primary failure could silently fall back to a model
     /// that can't call tools, lacks vision, or has a smaller context window
     /// (issue #4641). `allow_retired` is `false` to match
-    /// `ModelRegistry::resolve_request`. Every skipped candidate is recorded as
+    /// hosted model selection. Every skipped candidate is recorded as
     /// visited and surfaced as [`AgentEvent::FallbackSkipped`]. With
     /// `larger_than = Some(n)` a candidate must also declare a
     /// `max_input_tokens` strictly greater than `n` (context-overflow failover).
-    fn select_fallback(
+    async fn select_fallback(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
         cursor: &str,
         visited: &mut std::collections::HashSet<String>,
         larger_than: Option<u64>,
-    ) -> Option<(String, Arc<dyn ChatModel<State>>)> {
+    ) -> Result<Option<(String, Arc<dyn ChatModel<State>>)>> {
         let required = request.required_capabilities.as_ref();
         // A steered model outside the chain falls back through the whole
         // chain (the original primary's), not from a position it lacks.
@@ -979,8 +1085,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 })
                 .map(str::to_owned)
                 .filter(|name| !visited.contains(name));
-            let (name, next_model) =
-                next.and_then(|name| self.models.get(&name).map(|m| (name, m)))?;
+            let Some(name) = next else {
+                return Ok(None);
+            };
+            let host = crate::runtime::host_invocation_binding::<State, Ctx>(ctx)?;
+            let resolver = host
+                .as_ref()
+                .map(|binding| &binding.host.models)
+                .or(self.model_resolver.as_ref());
+            let next_model = if let Some(resolver) = resolver {
+                let (budget, bound) = self.model_call_budget(ctx);
+                ctx.bounded(budget, resolver.resolve_named(&name), || {
+                    format!(
+                        "fallback model resolution for run `{}` exceeded its {bound}",
+                        ctx.run_id()
+                    )
+                })
+                .await?
+            } else {
+                self.fixed_model.clone().filter(|model| {
+                    model.profile().and_then(|profile| profile.model.as_deref())
+                        == Some(name.as_str())
+                })
+            };
+            let Some(next_model) = next_model else {
+                visited.insert(name.clone());
+                ctx.emit(AgentEvent::FallbackSkipped {
+                    model: name.clone(),
+                });
+                cursor = name;
+                continue;
+            };
             let written_off = ctx.limits.is_model_skipped(&name);
             // `larger_than` (context-overflow failover): the candidate must
             // *declare* a window strictly above the given one.
@@ -990,7 +1125,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     .and_then(|profile| profile.max_input_tokens)
                     .is_none_or(|window| window <= floor)
             });
-            if written_off || too_small || !model_eligible(next_model.as_ref(), required, false) {
+            if written_off || too_small || !model_is_eligible(next_model.as_ref(), required) {
                 visited.insert(name.clone());
                 ctx.emit(AgentEvent::FallbackSkipped {
                     model: name.clone(),
@@ -998,7 +1133,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 cursor = name;
                 continue;
             }
-            return Some((name, next_model));
+            return Ok(Some((name, next_model)));
         }
     }
 
@@ -1781,8 +1916,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &ModelRequest,
-    ) -> Result<ResolvedModelBinding<State>> {
-        let captured = || ResolvedModelBinding {
+    ) -> Result<ModelBinding<State>> {
+        let captured = || ModelBinding {
             resolved: self.resolved.clone(),
             model: Arc::clone(&self.model),
         };
@@ -1810,11 +1945,58 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         if requested == self.resolved.name {
             return Ok(captured());
         }
-        match self.harness.models.resolve_request(request, None, None) {
-            Some(binding)
-                if binding.resolved.source == ModelResolutionSource::RequestOverride
-                    && binding.resolved.name == requested =>
+        let binding = if let Some(resolver) = self.harness.model_resolver.as_ref() {
+            let (budget, bound) = self.harness.model_call_budget(ctx);
+            let named = match ctx
+                .bounded(budget, resolver.resolve_named(requested), || {
+                    format!(
+                        "model override resolution for run `{}` exceeded its {bound}",
+                        ctx.run_id()
+                    )
+                })
+                .await
             {
+                Ok(model) => model,
+                Err(
+                    error @ (TinyAgentsError::Cancelled
+                    | TinyAgentsError::Timeout(_)
+                    | TinyAgentsError::CallTimeout(_)),
+                ) => return Err(error),
+                Err(_) => None,
+            };
+            named
+                .filter(|model| {
+                    model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+                })
+                .map(|model| ModelBinding {
+                    resolved: ResolvedModel {
+                        name: requested.to_owned(),
+                        requested: Some(requested.to_owned()),
+                        source: ModelResolutionSource::RequestOverride,
+                    },
+                    model,
+                })
+        } else {
+            self.harness
+                .fixed_model
+                .clone()
+                .filter(|model| {
+                    model.profile().and_then(|profile| profile.model.as_deref()) == Some(requested)
+                })
+                .filter(|model| {
+                    model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+                })
+                .map(|model| ModelBinding {
+                    resolved: ResolvedModel {
+                        name: requested.to_owned(),
+                        requested: Some(requested.to_owned()),
+                        source: ModelResolutionSource::RequestOverride,
+                    },
+                    model,
+                })
+        };
+        match binding {
+            Some(binding) => {
                 tracing::debug!(
                     call_id = %self.call_id.as_str(),
                     from = %self.resolved.name,
@@ -1823,7 +2005,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
                 );
                 Ok(binding)
             }
-            _ => {
+            None => {
                 tracing::warn!(
                     call_id = %self.call_id.as_str(),
                     requested = %requested,

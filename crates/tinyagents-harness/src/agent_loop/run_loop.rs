@@ -379,7 +379,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     Option<String>,
                     Vec<tinyinference_llm::model::ModelHint>,
                     Option<tinyinference_llm::model::CapabilitySet>,
-                    crate::model_registry::ResolvedModelBinding<State>,
+                    crate::agent_loop::ModelBinding<State>,
                 )>,
             ));
             // A pending steered model switch decides the model this call
@@ -400,7 +400,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ));
                     profile
                 } else {
-                    self.preview_model_profile(&patch_request)
+                    match self.resolve_local_model(ctx, &patch_request).await {
+                        Ok(binding) => {
+                            let profile = binding.model.profile().cloned();
+                            *resolution_cache.lock().unwrap() = Some((
+                                patch_request.model.clone(),
+                                patch_request.model_hints.clone(),
+                                patch_request.required_capabilities.clone(),
+                                binding,
+                            ));
+                            profile
+                        }
+                        Err(TinyAgentsError::ModelNotFound(_)) => None,
+                        Err(error) => return Err(error),
+                    }
                 };
 
             // B6: re-consult the toolset chain and declare any live change as a
@@ -434,7 +447,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             // handoff/budget/dialect decisions below all see the new model.
             // Re-applied after `before_model` (see below).
             let model_before_switch = request.model.clone();
-            self.apply_steered_model_switch(ctx, &mut request, &model_before_switch);
+            let switch_candidate = self.steered_model(ctx).and_then(|requested| {
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                        .then(|| binding.model.clone())
+                    })
+            });
+            self.apply_steered_model_switch(
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Known tool requirements must shape the hosted profile seen by
             // middleware. The later gate below still catches tools added by
@@ -488,7 +518,16 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                                     Some((key.0, key.1, key.2, binding));
                                 Ok(profile)
                             } else {
-                                Ok(harness.preview_model_profile(request))
+                                match harness.resolve_local_model(ctx, request).await {
+                                    Ok(binding) => {
+                                        let profile = binding.model.profile().cloned();
+                                        *resolution_cache.lock().unwrap() =
+                                            Some((key.0, key.1, key.2, binding));
+                                        Ok(profile)
+                                    }
+                                    Err(TinyAgentsError::ModelNotFound(_)) => Ok(None),
+                                    Err(error) => Err(error),
+                                }
                             }
                         })
                     },
@@ -515,7 +554,24 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
 
             // Middleware may have chosen another model or added capability
             // requirements; the steered switch is re-validated and wins.
-            self.apply_steered_model_switch(ctx, &mut request, &model_before_switch);
+            let switch_candidate = self.steered_model(ctx).and_then(|requested| {
+                resolution_cache
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, _, _, binding)| {
+                        (binding.resolved.name == requested
+                            && binding.resolved.requested.as_deref() == Some(requested.as_str()))
+                        .then(|| binding.model.clone())
+                    })
+            });
+            self.apply_steered_model_switch(
+                ctx,
+                &mut request,
+                &model_before_switch,
+                switch_candidate,
+            )
+            .await?;
 
             // Safe checkpoint: a control requested from `before_model_control`
             // (for example `BudgetMiddleware` finding the budget already
@@ -558,16 +614,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let binding = if let Some(binding) = hosted_binding {
                 binding
             } else {
-                self.models
-                    .resolve_request(&request, None, None)
-                    .ok_or_else(|| {
-                        TinyAgentsError::ModelNotFound(
-                            request
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "<default>".to_string()),
-                        )
-                    })?
+                self.resolve_local_model(ctx, &request).await?
             };
             ctx.model_profile = binding.model.profile().cloned();
             crate::middleware::library::rehome_ephemeral_system_instructions(

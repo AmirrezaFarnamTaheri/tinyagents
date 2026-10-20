@@ -7,31 +7,29 @@
 //!
 //! See `types` for the data definitions. This module provides registration,
 //! lookup, aliasing, duplicate validation, and conveniences for handing the
-//! catalog's models and tools to a harness ([`to_model_registry`] /
-//! [`to_tool_registry`]).
+//! catalog's tools to a harness ([`to_tool_registry`]).
 //!
-//! [`to_model_registry`]: CapabilityRegistry::to_model_registry
 //! [`to_tool_registry`]: CapabilityRegistry::to_tool_registry
 
 mod types;
+mod value;
 
 use std::sync::Arc;
 
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinyagents_harness::model_registry::ModelRegistry;
 use tinyagents_harness::tool::ToolRegistry;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
 pub use types::*;
+pub use value::Capability;
 
 impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Creates an empty registry.
     pub fn new() -> Self {
         Self {
             models: std::collections::HashMap::new(),
-            model_order: Vec::new(),
             tools: std::collections::HashMap::new(),
             agents: std::collections::HashMap::new(),
             meta: std::collections::HashMap::new(),
@@ -101,7 +99,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
 
     /// Replaces the [`ComponentMetadata`] recorded for `(kind, name)`.
     ///
-    /// Unlike [`record_meta`](Self::record_meta) (which only fills in a
+    /// Unlike `record_meta` (which only fills in a
     /// default the first time a name is registered), this overwrites whatever
     /// metadata is already there — so `with_description`/`with_tag` builders
     /// (`crate::component::ComponentMetadata`) actually reach a registered
@@ -149,7 +147,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         match kind {
             ComponentKind::Model => {
                 self.models.remove(name);
-                self.model_order.retain(|n| n != name);
             }
             ComponentKind::Tool => {
                 self.tools.remove(name);
@@ -188,7 +185,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         let name = name.into();
         self.ensure_absent(ComponentKind::Model, &name)?;
         self.record_meta(ComponentKind::Model, &name);
-        self.remember_model_order(&name);
         self.models.insert(name, model);
         Ok(self)
     }
@@ -202,22 +198,12 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     ) -> &mut Self {
         let name = name.into();
         self.record_meta(ComponentKind::Model, &name);
-        self.remember_model_order(&name);
         self.models.insert(name, model);
         self
     }
 
-    /// Appends `name` to [`Self::model_order`] the first time it is
-    /// registered. Re-registering an existing name (via
-    /// [`replace_model`](Self::replace_model)) keeps its original position.
-    fn remember_model_order(&mut self, name: &str) {
-        if !self.models.contains_key(name) {
-            self.model_order.push(name.to_owned());
-        }
-    }
-
     /// Registers a model under `name` with explicit [`ComponentMetadata`]
-    /// instead of the bare default [`record_meta`](Self::record_meta) would
+    /// instead of the bare default `record_meta` would
     /// attach, so a description/tags are attached atomically with
     /// registration rather than needing a follow-up
     /// [`set_metadata`](Self::set_metadata) call.
@@ -236,7 +222,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
         self.ensure_absent(ComponentKind::Model, &name)?;
         self.meta
             .insert((ComponentKind::Model, name.clone()), metadata);
-        self.remember_model_order(&name);
         self.models.insert(name, model);
         Ok(self)
     }
@@ -331,8 +316,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     // Registration: capability bundles (gap G3)
     // -----------------------------------------------------------------------
 
-    /// Registers a [`tinyagents_harness::capability::Capability`] bundle
-    /// under its own [`Capability::name`](tinyagents_harness::capability::Capability::name).
+    /// Registers a [`Capability`] bundle under its own name.
     ///
     /// # Why `Ctx` is a method type parameter, not stored on `Self`
     ///
@@ -341,12 +325,9 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// definitions — is `Ctx`-free: `Arc<dyn ChatModel<State>>`, `Arc<dyn
     /// tinytools::Tool>`, and `AgentDefinition` none of them name a `Ctx`
     /// type. A `Capability`,
-    /// however, composes `tinyagents_harness::tool::toolset::ToolSet<State,
-    /// Ctx>` and `tinyagents_harness::middleware::Middleware<State, Ctx>`
-    /// trait objects (see `tinyagents-harness`'s `capability` module doc
-    /// comment for why `Capability` itself cannot live in
-    /// `tinyagents-definition`, the lower crate that would otherwise be the
-    /// natural home for a registry-stored declarative bundle).
+    /// however, composes harness `ToolSet<State, Ctx>` and `Middleware<State,
+    /// Ctx>` trait objects, so its owning type lives here rather than in the
+    /// lower `tinyagents-definition` crate.
     ///
     /// Adding a `Ctx` type parameter to `CapabilityRegistry<State>` itself —
     /// so every one of its dozen kinds carries a `Ctx` dimension only this
@@ -365,7 +346,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// already registered under this name.
     pub fn register_capability<Ctx>(
         &mut self,
-        capability: tinyagents_harness::capability::Capability<State, Ctx>,
+        capability: Capability<State, Ctx>,
     ) -> Result<&mut Self>
     where
         State: 'static,
@@ -381,10 +362,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Registers or overwrites a capability bundle under its own name,
     /// preserving any existing metadata. See [`Self::register_capability`]
     /// for why `Ctx` is a method type parameter.
-    pub fn replace_capability<Ctx>(
-        &mut self,
-        capability: tinyagents_harness::capability::Capability<State, Ctx>,
-    ) -> &mut Self
+    pub fn replace_capability<Ctx>(&mut self, capability: Capability<State, Ctx>) -> &mut Self
     where
         State: 'static,
         Ctx: Send + Sync + 'static,
@@ -402,10 +380,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// when one is registered but under a different `Ctx` than the one
     /// requested here (a caller-programming-error case — a registry is
     /// normally used with one consistent `Ctx` per application).
-    pub fn capability<Ctx>(
-        &self,
-        name: &str,
-    ) -> Option<&tinyagents_harness::capability::Capability<State, Ctx>>
+    pub fn capability<Ctx>(&self, name: &str) -> Option<&Capability<State, Ctx>>
     where
         State: 'static,
         Ctx: Send + Sync + 'static,
@@ -584,61 +559,6 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     pub fn metadata(&self, kind: ComponentKind, name: &str) -> Option<&ComponentMetadata> {
         let canonical = self.resolve_name(kind, name)?;
         self.meta.get(&(kind, canonical))
-    }
-
-    // -----------------------------------------------------------------------
-    // Handoff to harness registries
-    // -----------------------------------------------------------------------
-
-    /// Builds a harness [`ModelRegistry`] from the registered models, including
-    /// alias names bound to the same model handle.
-    ///
-    /// Models are registered onto the result in [`Self::model_order`] — the
-    /// order `register_model`/`replace_model` first saw each name in — so the
-    /// harness registry's "first-registered model becomes the default" rule
-    /// ([`ModelRegistry::register`]) is deterministic and reproducible across
-    /// runs, rather than following `HashMap` iteration order. That default is
-    /// still whichever model happened to be registered first; callers who
-    /// need a specific default regardless of registration order should use
-    /// [`Self::to_model_registry_with_default`] or call `set_default`
-    /// explicitly on the result.
-    pub fn to_model_registry(&self) -> ModelRegistry<State> {
-        let mut registry = ModelRegistry::new();
-        for name in &self.model_order {
-            if let Some(model) = self.models.get(name) {
-                registry.register(name.clone(), model.clone());
-            }
-        }
-        let mut aliases: Vec<(&String, &String)> = self
-            .aliases
-            .iter()
-            .filter(|((kind, _), _)| *kind == ComponentKind::Model)
-            .map(|((_, alias), target)| (alias, target))
-            .collect();
-        aliases.sort();
-        for (alias, target) in aliases {
-            if let Some(model) = self.models.get(target) {
-                registry.register(alias.clone(), model.clone());
-            }
-        }
-        registry
-    }
-
-    /// Builds a harness [`ModelRegistry`] exactly like [`Self::to_model_registry`],
-    /// but with the default model explicitly set to `name` instead of
-    /// whichever model was registered first.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TinyAgentsError::ModelNotFound`] if `name` (or an alias of
-    /// it) is not a registered model.
-    pub fn to_model_registry_with_default(&self, name: &str) -> Result<ModelRegistry<State>> {
-        if self.model(name).is_none() {
-            return Err(TinyAgentsError::ModelNotFound(name.to_string()));
-        }
-        let mut registry = self.to_model_registry();
-        registry.set_default(name);
-        Ok(registry)
     }
 
     /// Builds a harness [`ToolRegistry`] from the registered tools.

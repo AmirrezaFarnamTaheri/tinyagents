@@ -291,8 +291,9 @@ async fn harness_run_surfaces_structured_value_after_tool_round_trip() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(scripted))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(scripted)),
+        ))
         .register_tool(Arc::new(tinyagents_harness::testkit::FakeTool::returning(
             "lookup",
             "looked-up",
@@ -331,8 +332,12 @@ async fn harness_run_fails_when_final_text_is_not_valid_structured_output() {
     // structured output: extraction must fail the run closed.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(MockModel::constant("just some prose")))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::constant("just some prose")),
+            ),
+        ))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema("answer", object_schema())),
             ..RunPolicy::default()

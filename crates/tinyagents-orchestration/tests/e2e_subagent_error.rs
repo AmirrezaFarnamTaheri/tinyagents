@@ -53,10 +53,12 @@ async fn wait_for_failed_job(jobs: &SubAgentJobRegistry) {
 /// non-sensitive tool-failure surface before a sub-agent can propagate it.
 fn failing_child_harness() -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "child-model",
-        Arc::new(MockModel::with_tool_call("broken", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child-model",
+            Arc::new(MockModel::with_tool_call("broken", json!({}))),
+        ),
+    ));
     harness.register_tool(Arc::new(FakeTool::failing("broken", "boom")));
     harness
 }
@@ -125,13 +127,15 @@ async fn orchestrator_survives_a_failing_subagent_job() {
         "broken_worker",
         json!({ "input": "delegate" }),
     ));
-    orchestrator.register_model(
-        "parent-model",
-        Arc::new(ScriptedModel::new(vec![
-            delegation,
-            ModelResponse::assistant("job spawned"),
-        ])),
-    );
+    orchestrator.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "parent-model",
+            Arc::new(ScriptedModel::new(vec![
+                delegation,
+                ModelResponse::assistant("job spawned"),
+            ])),
+        ),
+    ));
 
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("orchestrator-run"), ()).with_events(recorder.sink());

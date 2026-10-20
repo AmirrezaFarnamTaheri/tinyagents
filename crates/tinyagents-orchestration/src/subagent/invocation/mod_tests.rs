@@ -33,7 +33,12 @@ struct NonDefaultContext {
 
 fn child_harness<Ctx: Send + Sync>(answer: &str) -> AgentHarness<(), Ctx> {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant(answer)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(MockModel::constant(answer)),
+        ),
+    ));
     harness
 }
 
@@ -125,13 +130,15 @@ async fn subagent_tool_returns_job_id_before_child_completion() {
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let mut child_harness = AgentHarness::new();
-    child_harness.register_model(
-        "blocked",
-        Arc::new(BlockedModel {
-            started: started.clone(),
-            release: release.clone(),
-        }),
-    );
+    child_harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "blocked",
+            Arc::new(BlockedModel {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        ),
+    ));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(child_harness))),
         ChildDataPolicy::new(|_: &()| ()),

@@ -17,7 +17,12 @@ use tinyinference_llm::providers::MockModel;
 
 fn tool() -> SubAgentTool<(), ()> {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
     SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -91,7 +96,12 @@ impl Middleware<(), ()> for MetadataProbe {
 async fn child_run_metadata_names_the_parent_call_and_job() {
     let seen = Arc::new(Mutex::new(None));
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
     harness.push_middleware(Arc::new(MetadataProbe(seen.clone())));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
@@ -131,7 +141,12 @@ async fn child_run_metadata_names_the_parent_call_and_job() {
 async fn child_run_metadata_preserves_non_object_parent_metadata() {
     let seen = Arc::new(Mutex::new(None));
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
     harness.push_middleware(Arc::new(MetadataProbe(seen.clone())));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),

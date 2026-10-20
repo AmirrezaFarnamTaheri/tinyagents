@@ -31,12 +31,12 @@ async fn live_openai_subagent_times_out_on_tiny_budget() {
     // Child agent backed by a real model, with a 1ms wall-clock cap. A real
     // network call cannot complete in 1ms, so the per-call budget trips.
     let mut child: AgentHarness<()> = AgentHarness::new();
-    child
-        .register_model(
+    child.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
             "openai",
             Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),
-        )
-        .set_default_model("openai");
+        ),
+    ));
     child.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_wall_clock_ms(Some(1)),
         ..RunPolicy::default()

@@ -23,9 +23,9 @@ use std::sync::Arc;
 
 use crate::cache::ResponseCache;
 use crate::host::HostCapabilities;
+use crate::host::ModelResolver;
 use crate::limits::RunLimits;
 use crate::middleware::MiddlewareStack;
-use crate::model_registry::ModelRegistry;
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::run_queue::QueueMode;
 use crate::tool::{ToolRegistry, ToolTimeoutSettings};
@@ -728,15 +728,18 @@ impl Default for RunPolicy {
 /// ```
 /// use std::sync::Arc;
 /// use tinyinference_llm::providers::MockModel;
+/// use tinyagents_harness::host::FixedModelResolver;
 /// use tinyagents_harness::runtime::AgentHarness;
 ///
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
-/// harness.register_model("mock", Arc::new(MockModel::constant("hello")));
-/// assert_eq!(harness.models().default_name(), Some("mock"));
+/// harness.with_model_resolver(Arc::new(FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello")))));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
-    /// Name-keyed registry of chat models with an optional default.
-    pub(crate) models: ModelRegistry<State>,
+    /// Host-supplied resolver for local SDK turns.
+    pub(crate) model_resolver: Option<Arc<dyn ModelResolver<State>>>,
+    /// One directly supplied model, supporting borrowed state without
+    /// imposing an object lifetime on the routing trait.
+    pub(crate) fixed_model: Option<Arc<dyn tinyinference_llm::model::ChatModel<State>>>,
     /// Name-keyed registry of tools exposed to the model.
     pub(crate) tools: ToolRegistry<State, Ctx>,
     /// Ordered middleware stack wrapping agent, model, and tool execution.
@@ -773,18 +776,6 @@ pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// [`AgentHarness::with_toolset`]. See that method's doc comment for
     /// exactly which turn behavior this changes.
     pub(crate) toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
-    /// Capability bundles installed via [`AgentHarness::with_capability`]
-    /// (gap G3), in installation order. Kept so each new `with_capability`
-    /// call can rebuild [`Self::toolset`]'s
-    /// [`crate::capability::CapabilityToolSet`] layer from the complete,
-    /// still-accumulating list rather than nesting one per call.
-    pub(crate) capabilities: Vec<crate::capability::Capability<State, Ctx>>,
-    /// The toolset chain that was installed (via [`AgentHarness::with_toolset`],
-    /// or `None`) before the first [`AgentHarness::with_capability`] call.
-    /// Captured once so every later `with_capability` rebuild of
-    /// [`Self::toolset`] keeps composing with it, instead of losing it to
-    /// the first capability's rebuild.
-    pub(crate) capability_base_toolset: Option<Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>>,
     /// Alternate loop engine selected when [`RunPolicy::execution`] is
     /// [`LoopExecution::Graph`] (A5). See
     /// [`crate::agent_loop::phases::LoopDriver`] and

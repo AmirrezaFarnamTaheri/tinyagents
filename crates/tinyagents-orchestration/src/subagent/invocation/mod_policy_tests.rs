@@ -26,7 +26,12 @@ fn tool_over(harness: AgentHarness<(), ()>) -> SubAgentTool<(), ()> {
 
 fn constant(answer: &str) -> AgentHarness<(), ()> {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant(answer)));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(MockModel::constant(answer)),
+        ),
+    ));
     harness
 }
 
@@ -51,13 +56,15 @@ fn payload(result: &tinytools::ToolResult) -> Value {
 #[tokio::test]
 async fn timeout_cancels_the_child_and_marks_the_job_incomplete() {
     let mut harness = AgentHarness::new();
-    harness.register_model(
-        "child",
-        Arc::new(BlockedModel {
-            started: Arc::new(tokio::sync::Semaphore::new(0)),
-            release: Arc::new(tokio::sync::Semaphore::new(0)),
-        }),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(BlockedModel {
+                started: Arc::new(tokio::sync::Semaphore::new(0)),
+                release: Arc::new(tokio::sync::Semaphore::new(0)),
+            }),
+        ),
+    ));
     let tool = tool_over(harness)
         .with_policy(SubAgentPolicy::default().with_timeout(Duration::from_millis(50)));
     let result = call_inline(&tool).await;
@@ -85,7 +92,12 @@ impl ChatModel<()> for FailingModel {
 async fn failing_calls(max_attempts: usize) -> usize {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(FailingModel(calls.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(FailingModel(calls.clone())),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
         ..RunPolicy::default()
@@ -270,7 +282,9 @@ fn probe_harness(
 ) {
     let token = Arc::new(std::sync::Mutex::new(None));
     let mut harness = AgentHarness::new();
-    harness.register_model("child", model);
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("child", model),
+    ));
     harness.register_tool_dispatch(Arc::new(ProbeTool {
         token: token.clone(),
         hang,
@@ -348,7 +362,12 @@ async fn wait_terminal(tool: &SubAgentTool<(), ()>) -> SubAgentJob {
 async fn background_mode_retries_and_the_job_link_follows_the_final_attempt() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(FailingModel(calls.clone())));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "child",
+            Arc::new(FailingModel(calls.clone())),
+        ),
+    ));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
         ..RunPolicy::default()
@@ -426,7 +445,9 @@ impl ChatModel<()> for UsageModel {
 #[tokio::test]
 async fn a_token_overrun_keeps_the_output_applies_the_result_policy_and_is_incomplete() {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(UsageModel));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("child", Arc::new(UsageModel)),
+    ));
     let tool =
         tool_over(harness)
             .with_policy(SubAgentPolicy::default().with_budget(

@@ -143,7 +143,9 @@ fn harness_with(
     attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "primary", primary,
+    )));
     harness.with_policy(RunPolicy {
         limits,
         retry: RetryPolicy::default()
@@ -163,12 +165,18 @@ fn harness_with_chain(
     attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary);
-    let mut models = vec!["primary".to_string()];
-    for (name, model) in others {
-        harness.register_model(name, model);
-        models.push(name.to_string());
-    }
+    let models = std::iter::once("primary".to_string())
+        .chain(others.iter().map(|(name, _)| (*name).to_string()))
+        .collect::<Vec<_>>();
+    harness.with_model_resolver(Arc::new(
+        crate::host::PrebuiltModelResolver::new(
+            primary,
+            others
+                .into_iter()
+                .map(|(name, model)| (name.to_string(), model)),
+        )
+        .with_primary_name("primary"),
+    ));
     harness.with_policy(RunPolicy {
         limits,
         retry: RetryPolicy::default()
@@ -812,10 +820,10 @@ async fn non_streaming_calls_ignore_the_idle_timeout() {
     // A buffered call has no inter-event gaps to measure: a 300s call under a
     // 1s idle timeout must still complete.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "slow",
         Arc::new(SlowModel::new(Duration::from_secs(300), "done")),
-    );
+    )));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default()
             .with_stream_idle_timeout_ms(Some(1_000))

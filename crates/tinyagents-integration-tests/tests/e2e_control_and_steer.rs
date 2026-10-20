@@ -112,7 +112,12 @@ impl Middleware<(), ()> for TwoControlMiddleware {
 async fn higher_precedence_control_wins_and_is_journaled() {
     for interrupt_first in [true, false] {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.register_model("mock", Arc::new(MockModel::constant("hi")));
+        harness.with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::constant("hi")),
+            ),
+        ));
         harness.push_middleware(Arc::new(TwoControlMiddleware { interrupt_first }));
 
         let recorder = EventRecorder::new();
@@ -150,10 +155,12 @@ async fn stop_with_final_control_ends_run_before_tools() {
     // The model asks for a tool it would normally execute and loop on, but the
     // control middleware stops the run at the checkpoint after the model call.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_tool_call("lookup", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::with_tool_call("lookup", json!({}))),
+        ),
+    ));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "out")));
     harness.push_middleware(Arc::new(StopControlMiddleware));
 
@@ -191,7 +198,12 @@ async fn stop_with_final_control_ends_run_before_tools() {
 #[tokio::test]
 async fn interrupt_control_surfaces_as_interrupted_error() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("hi")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("hi")),
+        ),
+    ));
     harness.push_middleware(Arc::new(InterruptControlMiddleware));
 
     let err = harness
@@ -211,7 +223,12 @@ async fn interrupt_control_surfaces_as_interrupted_error() {
 #[tokio::test]
 async fn preloaded_cancel_steering_cancels_a_real_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
 
     // Attach a steering handle already carrying a Cancel command; the agent loop
     // drains it at the checkpoint before the first model call and ends the run.

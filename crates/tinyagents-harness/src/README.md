@@ -23,26 +23,23 @@ the module map below.
 | `blocking` (private) | `run_blocking`, the helper that moves synchronous file/DB work off the tokio runtime. |
 | `cache` | Prompt, response, and layout caches for repeated/replayed requests. |
 | `cancel` | Cooperative, runtime-agnostic run cancellation (`CancellationToken`). See [`cancel/README.md`](cancel/README.md). |
-| `capability` | `Capability` bundles (instructions, toolset, middleware, model defaults, exposure, `defer_loading`) composed as one named unit, plus `CapabilityToolSet` / `LoadCapabilityTool` for on-demand loading. |
 | `config` | Crate-owned session configuration, decoupled from any host's config schema. |
 | `context` | `RunContext` — the unit of recursion: run configuration and runtime context threaded through every nested layer. |
 | `cost` | Additive cost accounting (`CostTotals`) that rolls a child run's cost up into its parent. |
 | `error` | The crate-wide `TinyAgentsError` type and `Result` alias every fallible surface funnels through. |
 | `events` | The typed observability layer (`AgentEvent`, sinks, listeners) — the live in-process event surface. |
 | `finish_reason` (private) | Shared helper that recognises provider spellings of an output-cap stop (`length`, `max_tokens`, `MAX_TOKENS`). |
-| `handoff` | Progressive-disclosure handoff cache for oversized tool results, keeping bloated payloads out of sub-agent history. |
 | `host` | Host capability traits — the seams a host implements to supply product-specific behavior to a generic runtime. |
 | `ids` | Identifier newtypes (`RunId`, `CallId`, …) and lifecycle enums used to correlate a recursive run tree. |
 | `limits` | Run-scoped limit enforcement (model/tool call caps, wall clock) that keeps recursion bounded. |
 | `media` (feature `media`) | `GenerateImageTool` / `GenerateVideoTool`, tools over the `tinyinference-image` / `tinyinference-video` generators. |
 | `middleware` | The middleware stack wrapping every level of the recursion identically. See [`middleware/README.md`](middleware/README.md). |
-| `model_registry` | Runtime-owned executable model registry, name resolution, and fallback ordering. |
+| `host` | The resolver port and fixed/prebuilt implementations hosts use to supply models for execution. |
 | `multimodal` (feature `multimodal`) | Attachment resolution for `[IMAGE:…]` / `[FILE:…]` markers into model-readable bytes. |
 | `no_progress` | Detects a stuck turn (identical failing/successful tool calls) and escalates through a nudge/halt ladder. See [`no_progress/README.md`](no_progress/README.md). |
 | `observability` | Durable observability — journals, status stores, sinks — making the live event stream persistent. See [`observability/README.md`](observability/README.md). |
 | `prompt` | Prompt assembly — templates and `PromptBuilder` turning runtime values into the final request. |
 | `providers` | Model adapters whose behavior depends on TinyAgents-specific prompt dialects (e.g. Claude Code/Agent SDK). |
-| `retriever` | Provider-neutral retrieval contracts (`Retriever`) for injecting ranked context into a prompt. See [`retriever/README.md`](retriever/README.md). |
 | `retry` | Retry/backoff, model fallback, and rate-limiting policies applied uniformly to every model call. See [`retry/README.md`](retry/README.md). |
 | `run_queue` | A generic multi-lane FIFO queue (steer/followup/collect) for messages arriving during an active run. See [`run_queue/README.md`](run_queue/README.md). |
 | `runtime` | The harness runtime facade (`AgentHarness`) and invocation-local runtime wiring. See [`runtime/README.md`](runtime/README.md). |
@@ -62,13 +59,11 @@ the module map below.
 ## How the pieces fit together
 
 1. **Configure**: a host builds a `RunContext` (`context`) carrying its
-   `StoreRegistry` (`store`), `ModelRegistry` (`model_registry`),
-   `ToolRegistry` (`tool`), limits (`limits`), cancellation token (`cancel`),
+   `StoreRegistry` (`store`), model resolver (`host`), `ToolRegistry` (`tool`), limits (`limits`), cancellation token (`cancel`),
    and event sink (`events`).
 2. **Run**: `agent_loop` drives the model ⇄ tool cycle for one turn,
-   consulting `retry`/`model_registry` on provider failure, `no_progress` and
-   `summarization` to keep the loop productive and in-budget, `handoff` to
-   keep oversized tool results out of history, and `middleware` around every
+   consulting `retry` and the configured resolver on provider failure, `no_progress` and
+   `summarization` to keep the loop productive and in-budget, and `middleware` around every
    step.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation
    (`SubAgent` / `SubAgentTool` in `tinyagents-orchestration`), so the same

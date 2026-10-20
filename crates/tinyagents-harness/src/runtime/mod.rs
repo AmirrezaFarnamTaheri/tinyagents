@@ -40,12 +40,11 @@ pub use types::*;
 use std::sync::Arc;
 
 use crate::cache::ResponseCache;
+use crate::host::ModelResolver;
 use crate::middleware::{
     AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
 };
-use crate::model_registry::ModelRegistry;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
-use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
 /// Installs a host-selected recursion ceiling without widening the active
@@ -60,11 +59,40 @@ pub fn install_depth<State: Send + Sync, Ctx: Send + Sync>(
 }
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
+    /// Resolves one direct SDK model request through this harness's configured
+    /// model port. Hosted invocations use their invocation-local resolver in
+    /// the agent loop instead.
+    pub async fn resolve_model_for_request(
+        &self,
+        ctx: &crate::context::RunContext<Ctx>,
+        request: &tinyinference_llm::model::ModelRequest,
+    ) -> crate::error::Result<(
+        Option<String>,
+        Arc<dyn tinyinference_llm::model::ChatModel<State>>,
+    )> {
+        let binding = self.resolve_local_model(ctx, request).await?;
+        Ok((Some(binding.resolved.name), binding.model))
+    }
+
+    /// Returns the profile a direct SDK request would reach without dispatching
+    /// a model call. Hosts with dynamic routing can decline synchronous preview.
+    pub fn preview_model_profile_for_request(
+        &self,
+        request: &tinyinference_llm::model::ModelRequest,
+    ) -> Option<tinyinference_llm::model::ModelProfile> {
+        crate::agent_loop::model_call::preview_local_model_profile(
+            self.model_resolver.as_ref(),
+            self.fixed_model.as_ref(),
+            request,
+        )
+    }
+
     /// Creates an empty harness with default policy and no models, tools, or
     /// middleware registered.
     pub fn new() -> Self {
         Self {
-            models: ModelRegistry::new(),
+            model_resolver: None,
+            fixed_model: None,
             tools: ToolRegistry::new(),
             middleware: MiddlewareStack::new(),
             policy: RunPolicy::default(),
@@ -73,27 +101,25 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             output_validator: None,
             deferred_tool_handler: None,
             toolset: None,
-            capabilities: Vec::new(),
-            capability_base_toolset: None,
             loop_driver: None,
         }
     }
 
-    /// Registers a model under `name`. The first registered model becomes the
-    /// registry default unless one is already set. Returns `&mut Self` for
-    /// chaining.
-    pub fn register_model(
-        &mut self,
-        name: impl Into<String>,
-        model: Arc<dyn ChatModel<State>>,
-    ) -> &mut Self {
-        self.models.register(name, model);
+    /// Supplies the resolver used for direct SDK turns. Hosted invocations
+    /// continue to use their invocation-local host resolver.
+    pub fn with_model_resolver(&mut self, resolver: Arc<dyn ModelResolver<State>>) -> &mut Self {
+        self.model_resolver = Some(resolver);
         self
     }
 
-    /// Sets the default model name used when a request specifies no override.
-    pub fn set_default_model(&mut self, name: impl Into<String>) -> &mut Self {
-        self.models.set_default(name);
+    /// Supplies a single model directly when the state type carries a
+    /// non-static borrow and therefore cannot be used through the resolver
+    /// trait object.
+    pub fn with_model(
+        &mut self,
+        model: Arc<dyn tinyinference_llm::model::ChatModel<State>>,
+    ) -> &mut Self {
+        self.fixed_model = Some(model);
         self
     }
 
@@ -291,93 +317,6 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// [`Self::with_toolset`].
     pub fn toolset(&self) -> Option<&Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>>> {
         self.toolset.as_ref()
-    }
-
-    /// Installs a [`crate::capability::Capability`] bundle (gap G3): its
-    /// toolset, middleware, and model-request defaults are applied to this
-    /// harness, and its [`crate::capability::Capability::exposure`]/
-    /// [`crate::capability::Capability::defer_loading`] settings are honored
-    /// by the [`crate::capability::CapabilityToolSet`] this method installs.
-    ///
-    /// May be called more than once; every installed capability accumulates
-    /// (see [`Self::capabilities`]) and [`Self::toolset`] is rebuilt each
-    /// time from the complete list, so a `defer_loading` capability's
-    /// [`crate::capability::LoadCapabilityTool`] always covers every deferred
-    /// capability installed so far, under one shared load state.
-    ///
-    /// # What this changes
-    ///
-    /// - **Toolset**: composes a fresh
-    ///   [`crate::capability::CapabilityToolSet`] over every installed
-    ///   capability with whatever toolset was already installed via
-    ///   [`Self::with_toolset`] *before* the first `with_capability` call
-    ///   (captured once, in [`Self::capability_base_toolset`]) through
-    ///   [`crate::tool::toolset::CombinedToolSet`]. As with
-    ///   [`Self::with_toolset`], dispatch for a capability's own tools is not
-    ///   automatically bridged into [`Self::tools`] — bridge explicitly with
-    ///   [`crate::tool::toolset::ToolSetDispatchBridge`] and
-    ///   [`Self::register_tool_dispatch`] for a tool that must be callable,
-    ///   not just advertised. The synthetic `load_capability` tool is the one
-    ///   exception: it is registered directly into [`Self::tools`] (it needs
-    ///   no `RunContext`/`State` to execute), so it is callable immediately.
-    /// - **Middleware**: each capability's middleware is appended, in
-    ///   installation order, via [`Self::push_middleware`].
-    /// - **Model defaults**: each capability's
-    ///   [`crate::capability::ModelRequestDefaults`], if set, is applied onto
-    ///   [`Self::policy`] via
-    ///   [`crate::capability::ModelRequestDefaults::apply_to`] — a later
-    ///   capability's set fields win over an earlier one's.
-    ///
-    /// Returns `&mut Self` for chaining.
-    pub fn with_capability(
-        &mut self,
-        capability: crate::capability::Capability<State, Ctx>,
-    ) -> &mut Self
-    where
-        State: 'static,
-        Ctx: 'static,
-    {
-        if self.capabilities.is_empty() {
-            self.capability_base_toolset = self.toolset.take();
-        }
-        for middleware in capability.middleware.clone() {
-            self.push_middleware(middleware);
-        }
-        if let Some(defaults) = &capability.model_defaults {
-            defaults.apply_to(&mut self.policy);
-        }
-        self.capabilities.push(capability);
-
-        let capability_toolset =
-            crate::capability::CapabilityToolSet::new(self.capabilities.clone());
-
-        // The `load_capability` tool needs no `RunContext`/`State` to run, so
-        // it is registered directly into `self.tools` — the one part of a
-        // capability's contribution that is callable, not just advertised,
-        // without a caller-supplied dispatch bridge (see the doc comment
-        // above). `Self::register_tool` silently replaces a prior
-        // registration under the same name, so re-registering on every call
-        // keeps it in sync with the full, still-accumulating capability list.
-        if let Some(load_tool) = capability_toolset.load_tool() {
-            self.register_tool(load_tool);
-        }
-
-        let capability_toolset: Arc<dyn crate::tool::toolset::ToolSet<State, Ctx>> =
-            Arc::new(capability_toolset);
-        self.toolset = Some(match &self.capability_base_toolset {
-            Some(base) => Arc::new(crate::tool::toolset::CombinedToolSet::new(vec![
-                base.clone(),
-                capability_toolset,
-            ])),
-            None => capability_toolset,
-        });
-
-        self
-    }
-
-    /// Returns a reference to the model registry.
-    pub fn models(&self) -> &ModelRegistry<State> {
-        &self.models
     }
 
     /// Returns a reference to the tool registry.

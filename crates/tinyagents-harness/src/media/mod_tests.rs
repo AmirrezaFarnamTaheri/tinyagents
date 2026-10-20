@@ -460,13 +460,13 @@ async fn video_timeout_stays_resumable_through_agent_harness() {
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_tool_timeout_settings(ToolTimeoutSettings::new(1, 1, 1, 0));
-    harness.register_model(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
         "mock",
         Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", GENERATE_VIDEO_TOOL_NAME, json!({ "prompt": "x" })),
             text_response("recovered"),
         ])),
-    );
+    )));
     harness.register_tool(Arc::new(video));
 
     let run = harness

@@ -27,7 +27,9 @@ where
     M: tinyinference_llm::model::ChatModel<()> + 'static,
 {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("model", Arc::new(model));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("model", Arc::new(model)),
+    ));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_wall_clock_ms(Some(timeout_ms)),
         ..RunPolicy::default()

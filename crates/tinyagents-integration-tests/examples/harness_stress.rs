@@ -216,7 +216,12 @@ async fn main() {
 
 fn build_harness() -> AgentHarness<()> {
     let mut harness = AgentHarness::new();
-    harness.register_model("mock", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
+            "mock",
+            Arc::new(MockModel::constant("done")),
+        ),
+    ));
     harness
 }
 

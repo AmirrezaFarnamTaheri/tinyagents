@@ -13,6 +13,7 @@
 //! up front instead, through the existing
 //! [`AgentEvent::ModelOverrideSkipped`] diagnostic.
 
+use super::model_call::model_is_eligible;
 use super::*;
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
@@ -49,30 +50,55 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// call; a rejection puts it back when `request.model` still carries the
     /// rejected name, so that name never reaches resolution or an adapter that
     /// honours `request.model`. A model a middleware picked is left alone.
-    pub(super) fn apply_steered_model_switch(
+    pub(super) async fn apply_steered_model_switch(
         &self,
         ctx: &mut RunContext<Ctx>,
         request: &mut ModelRequest,
         model_before_switch: &Option<String>,
-    ) {
+        cached_candidate: Option<Arc<dyn ChatModel<State>>>,
+    ) -> Result<()> {
         let Some(handle) = ctx.steering.clone() else {
-            return;
+            return Ok(());
         };
         let Some(requested) = handle.model_override() else {
-            return;
+            return Ok(());
         };
         let hosted = !matches!(
             crate::runtime::host_invocation_binding::<State, Ctx>(ctx),
             Ok(None)
         );
-        let eligible = !hosted
-            && self.models.get(&requested).is_some_and(|model| {
-                model_eligible(
-                    model.as_ref(),
-                    request.required_capabilities.as_ref(),
-                    false,
-                )
-            });
+        let candidate = if hosted {
+            None
+        } else if cached_candidate.is_some() {
+            cached_candidate
+        } else if let Some(resolver) = self.model_resolver.as_ref() {
+            let (budget, bound) = self.model_call_budget(ctx);
+            match ctx
+                .bounded(budget, resolver.resolve_named(&requested), || {
+                    format!(
+                        "steered model resolution for run `{}` exceeded its {bound}",
+                        ctx.run_id()
+                    )
+                })
+                .await
+            {
+                Ok(candidate) => candidate,
+                Err(
+                    error @ (TinyAgentsError::Cancelled
+                    | TinyAgentsError::Timeout(_)
+                    | TinyAgentsError::CallTimeout(_)),
+                ) => return Err(error),
+                Err(_) => None,
+            }
+        } else {
+            self.fixed_model.clone().filter(|model| {
+                model.profile().and_then(|profile| profile.model.as_deref())
+                    == Some(requested.as_str())
+            })
+        };
+        let eligible = candidate.as_ref().is_some_and(|model| {
+            model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+        });
         if eligible {
             if request.model.as_deref() != Some(requested.as_str()) {
                 match request.model.as_deref() {
@@ -92,15 +118,28 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 request.model = Some(requested);
             }
-            return;
+            return Ok(());
         }
         if request.model.as_deref() == Some(requested.as_str()) {
             request.model = model_before_switch.clone();
         }
+        let resolve = super::model_call::local_resolve_request(request);
         let resolved = self
-            .models
-            .resolve_request(request, None, None)
-            .map_or_else(|| "<default>".to_string(), |binding| binding.resolved.name);
+            .model_resolver
+            .as_ref()
+            .and_then(|resolver| resolver.selected_name(&resolve))
+            .or_else(|| {
+                self.model_resolver
+                    .as_ref()
+                    .and_then(|resolver| resolver.preview(&resolve))
+                    .and_then(|model| model.profile().and_then(|profile| profile.model.clone()))
+            })
+            .or_else(|| {
+                self.fixed_model
+                    .as_ref()
+                    .and_then(|model| model.profile().and_then(|profile| profile.model.clone()))
+            })
+            .unwrap_or_else(|| "<default>".to_string());
         tracing::warn!(
             target: "tinyagents::steering",
             run_id = %ctx.run_id(),
@@ -123,6 +162,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 accepted: false,
             });
         }
+        Ok(())
     }
 
     /// Reports a steered switch as applied (`Steered { accepted: true }`, once

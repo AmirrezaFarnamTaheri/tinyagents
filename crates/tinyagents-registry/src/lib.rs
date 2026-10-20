@@ -34,7 +34,7 @@ pub mod router;
 
 pub use tinyagents_harness::error::{Result, TinyAgentsError};
 
-pub use capability::CapabilityRegistry;
+pub use capability::{Capability, CapabilityRegistry};
 pub use catalog::{
     ModelCapabilities, ModelCatalog, ModelCatalogEntry, ModelCatalogSnapshot, ModelCatalogSource,
 };

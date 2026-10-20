@@ -85,9 +85,9 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
     let jobs = SubAgentJobRegistry::new();
     for (name, description, system_prompt) in specs {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness
-            .register_model("model", model.clone())
-            .set_default_model("model");
+        harness.with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("model", model.clone()),
+        ));
         let subagent =
             SubAgent::new(name, description, Arc::new(harness)).with_system_prompt(system_prompt);
         let dispatch = Arc::new(
@@ -123,8 +123,9 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
     // registered names.
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
     orchestrator
-        .register_model("model", model.clone())
-        .set_default_model("model")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named("model", model.clone()),
+        ))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema(
                 "agent_selection",
@@ -229,9 +230,9 @@ async fn live_openai_orchestrator_designs_subagents_via_registry() {
         .join("\n\n");
 
     let mut composer: AgentHarness<()> = AgentHarness::new();
-    composer
-        .register_model("model", model)
-        .set_default_model("model");
+    composer.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("model", model),
+    ));
     let composed = composer
         .invoke_default(
             &(),

@@ -127,7 +127,7 @@ fn rules(value: Value) -> ToolRules {
 
 fn harness_with(model: Arc<ScriptedModel>, policy: ToolRulePolicy) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("scripted", model as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model as _)));
     harness.with_policy(RunPolicy {
         tool_rules: policy,
         ..RunPolicy::default()
@@ -271,14 +271,9 @@ async fn indirect_target_resolution_obeys_run_cancellation() {
     let cancellation = crate::cancel::CancellationToken::new();
     let ctx = RunContext::new(RunConfig::new("cancel-target-resolution"), ())
         .with_cancellation(cancellation.clone());
-    harness.register_model(
-        "scripted",
-        Arc::new(ScriptedModel::new(vec![calls(vec![(
-            "target",
-            "blocked_target",
-            json!({}),
-        )])])) as _,
-    );
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        ScriptedModel::new(vec![calls(vec![("target", "blocked_target", json!({}))])]),
+    ) as _)));
     let mut run = Box::pin(harness.invoke_in_context(&(), ctx, vec![Message::user("go")]));
 
     tokio::select! {
@@ -311,14 +306,9 @@ async fn indirect_target_resolution_obeys_run_deadline() {
         ] }))),
         ..RunPolicy::default()
     });
-    harness.register_model(
-        "scripted",
-        Arc::new(ScriptedModel::new(vec![calls(vec![(
-            "target",
-            "blocked_target",
-            json!({}),
-        )])])) as _,
-    );
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        ScriptedModel::new(vec![calls(vec![("target", "blocked_target", json!({}))])]),
+    ) as _)));
     let ctx = RunContext::new(
         RunConfig::new("deadline-target-resolution").with_timeout_ms(500),
         (),
@@ -471,7 +461,7 @@ async fn normalized_arguments_are_checked_against_the_rules_again() {
     ] })));
     let execute = RuleTool::dispatcher("execute");
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("scripted", model as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model as _)));
     harness.with_policy(RunPolicy {
         invalid_args: crate::runtime::InvalidArgsPolicy::NormalizeThenReturnToolError,
         tool_rules: policy,
@@ -615,7 +605,7 @@ async fn a_rewrite_target_carries_its_own_approval_rule() {
         ModelResponse::assistant("never reached"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("scripted", model as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model as _)));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Rewrite {
             tool_name: "send".to_string(),

@@ -97,6 +97,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agent_loop::ModelBinding;
 use crate::cache::{ResponseCache, cache_key};
 use crate::context::{LoopTarget, MiddlewareControl, RunConfig, RunContext};
 use crate::error::{Result, TinyAgentsError};
@@ -106,7 +107,6 @@ use crate::middleware::{
     AgentBaseCall, AgentRun, BoxAgentFuture, BoxModelFuture, BoxToolFuture, ModelBaseCall,
     ToolBaseCall,
 };
-use crate::model_registry::{ResolvedModelBinding, model_eligible};
 use crate::runtime::{AgentHarness, EndStrategy, InvalidArgsPolicy, UnknownToolPolicy};
 use crate::structured::{StructuredExtractor, StructuredStrategy};
 use crate::terminal::{TerminalClass, TerminalOutcome, TimeoutPhase};
@@ -125,7 +125,7 @@ mod handoff_transform;
 mod host_budget;
 mod lifecycle;
 mod mixed_turn;
-mod model_call;
+pub(crate) mod model_call;
 mod model_switch;
 mod model_turn;
 mod nested;

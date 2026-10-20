@@ -34,12 +34,12 @@ async fn live_openai_parent_composes_child_subagent() {
 
     // Child agent: a focused "math expert" sub-agent driven by a real model.
     let mut child: AgentHarness<()> = AgentHarness::new();
-    child
-        .register_model(
+    child.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
             "openai",
             Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),
-        )
-        .set_default_model("openai");
+        ),
+    ));
 
     let subagent = Arc::new(
         SubAgent::new(
@@ -62,12 +62,12 @@ async fn live_openai_parent_composes_child_subagent() {
     parent.register_tool_dispatch(tool);
     parent.register_tool_dispatch(Arc::new(SubAgentJobsTool::new(jobs.clone())));
     parent.register_tool_dispatch(Arc::new(SubAgentMessageTool::new(jobs.clone())));
-    parent
-        .register_model(
+    parent.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named(
             "openai",
             Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),
-        )
-        .set_default_model("openai");
+        ),
+    ));
 
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("live-parent-run"), ()).with_events(recorder.sink());

@@ -20,7 +20,7 @@ use crate::middleware::{LoggingMiddleware, Middleware, ModelFallbackMiddleware};
 use crate::retry::{FallbackPolicy, RetryPolicy};
 use crate::runtime::{AgentHarness, AgentInvocation, AgentTurnRequest, RunPolicy};
 use crate::testkit::ScriptedModel;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use sha2::Digest;
 use tinyagents_definition::{
     AgentDefinition, DefinitionRegistry, DefinitionRegistryError, InMemoryDefinitionRegistry,
@@ -56,6 +56,11 @@ struct RedactDeltaMiddleware;
 /// than racing a pre-resolution checkpoint.
 struct PendingResolver {
     started: Arc<tokio::sync::Notify>,
+}
+
+struct PendingNamedFallbackResolver {
+    primary: Arc<dyn ChatModel<()>>,
+    named_started: Arc<tokio::sync::Notify>,
 }
 
 struct FirstThenPendingResolver {
@@ -562,6 +567,33 @@ impl crate::host::ModelResolver<()> for PendingResolver {
 }
 
 #[async_trait]
+impl crate::host::ModelResolver<()> for PendingNamedFallbackResolver {
+    async fn resolve(
+        &self,
+        _request: &crate::host::ModelResolveRequest,
+    ) -> crate::error::Result<Arc<dyn ChatModel<()>>> {
+        Ok(self.primary.clone())
+    }
+
+    async fn resolve_named(
+        &self,
+        _name: &str,
+    ) -> crate::error::Result<Option<Arc<dyn ChatModel<()>>>> {
+        self.named_started.notify_one();
+        std::future::pending().await
+    }
+
+    fn selected_name(&self, request: &crate::host::ModelResolveRequest) -> Option<String> {
+        Some(
+            request
+                .model_pin
+                .clone()
+                .unwrap_or_else(|| "primary".to_owned()),
+        )
+    }
+}
+
+#[async_trait]
 impl crate::host::ModelResolver<()> for FirstThenPendingResolver {
     async fn resolve(
         &self,
@@ -966,21 +998,10 @@ impl Tool for InjectedArgumentTool {
 #[test]
 fn new_harness_is_empty_with_default_policy() {
     let harness: AgentHarness<()> = AgentHarness::new();
-    assert!(harness.models().default_name().is_none());
+    assert!(harness.model_resolver.is_none());
     assert_eq!(harness.tools().names().len(), 0);
     assert!(harness.middleware().is_empty());
     assert_eq!(harness.policy(), &RunPolicy::default());
-}
-
-#[test]
-fn register_first_model_becomes_default() {
-    let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness
-        .register_model("a", Arc::new(MockModel::constant("a")))
-        .register_model("b", Arc::new(MockModel::constant("b")));
-    assert_eq!(harness.models().default_name(), Some("a"));
-    harness.set_default_model("b");
-    assert_eq!(harness.models().default_name(), Some("b"));
 }
 
 #[test]
@@ -1027,7 +1048,7 @@ fn install_depth_only_narrows_the_existing_limit() {
 #[test]
 fn default_matches_new() {
     let harness: AgentHarness<()> = AgentHarness::default();
-    assert!(harness.models().default_name().is_none());
+    assert!(harness.model_resolver.is_none());
 }
 
 #[tokio::test]
@@ -1081,8 +1102,8 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
     );
     yield_until(|| progress.len() == 2).await;
     assert!(
-        harness.models().default_name().is_none(),
-        "host resolution does not mutate SDK model defaults"
+        harness.model_resolver.is_none(),
+        "host resolution does not mutate the SDK resolver"
     );
 }
 
@@ -1229,6 +1250,79 @@ async fn initial_host_model_resolution_is_cancelled_while_the_resolver_is_pendin
     };
     assert_eq!(error.kind, crate::runtime::HostedErrorKind::Cancelled);
     assert_eq!(error.timeout_bound, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_named_fallback_resolution_obeys_the_model_call_deadline() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(PendingNamedFallbackResolver {
+        primary: Arc::new(RetryableFailingModel),
+        named_started: started.clone(),
+    }));
+    harness.with_policy(RunPolicy {
+        limits: RunLimits::default().with_max_model_call_ms(Some(10)),
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
+        fallback: Some(FallbackPolicy::new(["primary", "backup"])),
+        ..RunPolicy::default()
+    });
+
+    let error = harness
+        .invoke_default(&(), vec![tinyinference_llm::message::Message::user("go")])
+        .await
+        .expect_err("the named fallback resolver remains pending");
+    assert!(
+        matches!(
+            error,
+            crate::error::TinyAgentsError::Timeout(_)
+                | crate::error::TinyAgentsError::CallTimeout(_)
+        ),
+        "got {error:?}"
+    );
+    assert!(
+        started.notified().now_or_never().is_some(),
+        "fallback lookup was entered"
+    );
+}
+
+#[tokio::test]
+async fn pending_named_fallback_resolution_is_cancelled_with_the_run() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(Arc::new(PendingNamedFallbackResolver {
+        primary: Arc::new(RetryableFailingModel),
+        named_started: started.clone(),
+    }));
+    harness.with_policy(RunPolicy {
+        retry: RetryPolicy::default()
+            .with_max_attempts(1)
+            .with_backoff_sleep(false),
+        fallback: Some(FallbackPolicy::new(["primary", "backup"])),
+        ..RunPolicy::default()
+    });
+    let token = crate::CancellationToken::new();
+    let invocation = harness.invoke_in_context(
+        &(),
+        RunContext::new(RunConfig::new("named-fallback-cancel"), ())
+            .with_cancellation(token.clone()),
+        vec![tinyinference_llm::message::Message::user("go")],
+    );
+    tokio::pin!(invocation);
+    let error = tokio::select! {
+        _ = started.notified() => {
+            token.cancel();
+            tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+                .await.expect("cancellation drops the pending resolver")
+                .expect_err("cancelled fallback resolution cannot succeed")
+        }
+        result = &mut invocation => panic!("pending named resolver unexpectedly finished: {result:?}"),
+    };
+    assert!(
+        matches!(error, crate::error::TinyAgentsError::Cancelled),
+        "got {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -1524,7 +1618,9 @@ async fn hosted_model_fallback_rebinds_through_the_host_resolver_not_the_local_r
         resolver.clone(),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("host-backup", Arc::new(MockModel::constant("local bypass")));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(
+        MockModel::constant("local bypass"),
+    ))));
     harness.push_middleware(Arc::new(FallbackGuidance));
     harness.push_model_middleware(Arc::new(ModelFallbackMiddleware::new(["host-backup"])));
 
@@ -3103,7 +3199,7 @@ async fn retryable_classifier_changes_the_model_visible_result_without_redispatc
 async fn explicit_model_paths_accept_borrowed_state() {
     async fn exercise<'state>(state: &'state str) {
         let mut harness: AgentHarness<&'state str> = AgentHarness::new();
-        harness.register_model("borrowed", Arc::new(BorrowedStateModel));
+        harness.with_model(Arc::new(BorrowedStateModel));
 
         let unary = harness
             .invoke(

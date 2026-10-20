@@ -446,7 +446,9 @@ async fn router_live_push_closed_before_agent_turn_never_reaches_provider() {
 
     let model = Arc::new(ScriptedModel::new(vec![ModelResponse::assistant("done")]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     let context = RunContext::new(RunConfig::new("parent-turn"), ()).with_run_queue(queue);
     harness
         .invoke_in_context(&(), context, vec![Message::user("start")])
@@ -490,7 +492,9 @@ async fn router_live_push_reaches_provider_when_parent_remains_open() {
         ModelResponse::assistant("completion handled"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(
+        tinyagents_harness::host::FixedModelResolver::named("mock", model.clone()),
+    ));
     let context = RunContext::new(RunConfig::new("parent-turn"), ()).with_run_queue(queue);
     harness
         .invoke_in_context(&(), context, vec![Message::user("start")])

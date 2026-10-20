@@ -49,9 +49,9 @@ were all merged into `runtime-comparison`.
   The loop-as-graph piece (A5) landed only partially — see (b).
 - **Phase 6** (tool ecosystem) — landed. The `ToolSet` trait plus
   `Combined`/`Filtered`/`Prefixed`/`Renamed`/`Prepared`/`ApprovalRequired`/
-  `ExternalToolSet` (B3), transcript-carried tool add/remove (B6), and the
-  `Capability` bundle (`instructions`/`toolset`/`middleware`/`model_defaults`/
-  `exposure`/`defer_loading`) (G3) all shipped. The MCP client crate (B4) and
+  `ExternalToolSet` (B3) and transcript-carried tool add/remove (B6) shipped.
+  The former G3 capability bundle was removed in TinyAgents #62; the registry
+  retains only its stored data type. The MCP client crate (B4) and
   provider-executed tool content parts (B7) are OpenHuman, out of scope.
 - **Phase 7** (models, providers, evals) — landed partially. `ModelProfile`
   behaviour fields including `thinking_tags` (F1), the models.dev catalog
@@ -230,7 +230,6 @@ Builds the vocabulary that A1–A4 and B1–B2 share; everything later
 | `ToolSet<State,Ctx>` trait with `Combined`, `Filtered`, `Prefixed`, `Renamed`, `Prepared`, `ApprovalRequired`, `External`; `ToolRegistry` becomes one `ToolSet`; per-tool `prepare` | M | B3 | `agent/tool_policy.rs` and `tinyagents/middleware` tool filtering shrink to predicates |
 | `tinytools-mcp` crate (stdio / HTTP / SSE, prefixes, `process_tool_call`, sampling, elicitation, config loading) implementing `ToolSet` | L | B4 | `mcp/` keeps server config, auth and UI; evaluate reusing its transport |
 | Transcript-carried `SystemMessage{sections, tools_added, tools_removed}`, `replay_system_state`, `declare_tool_changes` before `ModelStarted`, `ModelProfile.mid_conversation_system_messages` | M | B6 | tool loadout changes stop busting the cache |
-| `Capability{instructions, tools, middleware, model_defaults, exposure}` bundle in `tinyagents-registry`, referenced by `AgentDefinition`, `defer_loading` | M | G3 | `skills/` discovery produces `Capability` values |
 | Provider-executed tool parts in `ContentBlock` | S | B7 | — |
 
 ## Phase 7: models, providers, evals (2–3 weeks)

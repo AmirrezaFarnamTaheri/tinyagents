@@ -102,7 +102,10 @@ fn fixture_with(
         Box::new(summarizer),
     )));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        Arc::clone(&model) as _,
+    )));
     harness.register_tool(Arc::new(FakeTool::returning("read", big_output())));
     harness.push_middleware(mw.clone());
     harness.push_model_middleware(mw.clone());
@@ -398,7 +401,10 @@ async fn a_provider_overflow_compacts_once_and_retries() {
         Box::new(summarizer),
     ));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone() as _);
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "mock",
+        model.clone() as _,
+    )));
     harness.register_tool(Arc::new(FakeTool::returning("read", big_output())));
     harness.push_middleware(mw.clone());
     harness.push_model_middleware(mw.clone());

@@ -23,8 +23,7 @@ use tinyagents_harness::runtime::{AgentHarness, RunPolicy};
 use tinyagents_harness::testkit::{FakeTool, Trajectory};
 use tinyinference_llm::message::{AssistantMessage, ContentBlock, Message};
 use tinyinference_llm::model::{
-    CapabilitySet, ChatModel, ModelHint, ModelProfile, ModelRequest, ModelResolutionSource,
-    ModelResponse,
+    CapabilitySet, ChatModel, ModelProfile, ModelRequest, ModelResolutionSource, ModelResponse,
 };
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::tool::ToolCall;
@@ -105,11 +104,7 @@ impl Middleware<(), ()> for RequireJsonSchemaMiddleware {
             json_schema: true,
             ..CapabilitySet::default()
         });
-        request.model_hints.push(ModelHint {
-            model: "capable".to_string(),
-            priority: 1,
-            reason: Some("needs json schema".to_string()),
-        });
+        request.model = Some("capable".to_string());
         Ok(())
     }
 }
@@ -120,8 +115,12 @@ async fn single_turn_response_completes_with_one_model_call() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(MockModel::constant("hello there")))
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::constant("hello there")),
+            ),
+        ))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
         }));
@@ -142,33 +141,34 @@ async fn single_turn_response_completes_with_one_model_call() {
 }
 
 #[tokio::test]
-async fn required_capabilities_select_capable_model() {
+async fn explicit_model_override_uses_the_named_capable_route() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "incapable",
-            Arc::new(ProfiledIntegrationModel {
-                profile: ModelProfile::default(),
-                text: "incapable",
-            }),
-        )
-        .set_default_model("incapable")
-        .register_model(
-            "capable",
-            Arc::new(ProfiledIntegrationModel {
-                profile: ModelProfile {
-                    json_schema: true,
-                    ..ModelProfile::default()
-                },
-                text: "capable",
-            }),
-        )
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::PrebuiltModelResolver::new(
+                Arc::new(ProfiledIntegrationModel {
+                    profile: ModelProfile::default(),
+                    text: "incapable",
+                }),
+                [(
+                    "capable".to_string(),
+                    Arc::new(ProfiledIntegrationModel {
+                        profile: ModelProfile {
+                            json_schema: true,
+                            ..ModelProfile::default()
+                        },
+                        text: "capable",
+                    }) as Arc<dyn ChatModel<()>>,
+                )],
+            )
+            .with_primary_name("incapable"),
+        ))
         .push_middleware(Arc::new(RequireJsonSchemaMiddleware));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("pick a model")])
         .await
-        .expect("capable hinted model satisfies required capabilities");
+        .expect("named route satisfies the request's required capabilities");
 
     assert_eq!(run.text(), Some("capable".to_string()));
     let resolved = run
@@ -177,7 +177,7 @@ async fn required_capabilities_select_capable_model() {
         .resolved_model
         .expect("resolved model metadata");
     assert_eq!(resolved.name, "capable");
-    assert_eq!(resolved.source, ModelResolutionSource::Hint);
+    assert_eq!(resolved.source, ModelResolutionSource::RequestOverride);
 }
 
 #[tokio::test]
@@ -186,14 +186,15 @@ async fn multi_step_tool_loop_calls_tool_then_finishes() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("call-1", "lookup", json!({ "q": "x" })),
-                text_response("done", 4, 2),
-            ])),
-        )
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![
+                    tool_call_response("call-1", "lookup", json!({ "q": "x" })),
+                    text_response("done", 4, 2),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -223,11 +224,12 @@ async fn max_model_calls_limit_returns_limit_exceeded() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // A model that always asks for a tool would loop forever without a cap.
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_tool_call("spin", json!({}))),
-        )
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_tool_call("spin", json!({}))),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("spin", "again")))
         .with_policy(RunPolicy {
             limits: RunLimits::default().with_max_model_calls(1),
@@ -249,14 +251,15 @@ async fn max_model_calls_limit_returns_limit_exceeded() {
 async fn usage_accumulates_across_model_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
-                tool_call_response("call-1", "lookup", json!({})),
-                text_response("done", 4, 2),
-            ])),
-        )
-        .set_default_model("mock")
+        .with_model_resolver(Arc::new(
+            tinyagents_harness::host::FixedModelResolver::named(
+                "mock",
+                Arc::new(MockModel::with_responses(vec![
+                    tool_call_response("call-1", "lookup", json!({})),
+                    text_response("done", 4, 2),
+                ])),
+            ),
+        ))
         .register_tool(Arc::new(FakeTool::returning("lookup", "out")));
 
     let run = harness

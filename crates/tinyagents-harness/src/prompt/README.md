@@ -42,8 +42,8 @@ KV-cache/prompt-cache keeps hitting.
   reports byte offsets for reusable prefix boundaries. Pass the result to
   `PromptBuilder::push_tiered_system_prompt` to mark stable/context segments
   cacheable and the volatile tail non-cacheable.
-- Free rendering helpers: `render_heading`, `render_optional_section`,
-  `render_tool_catalogue`, `render_retrieved_documents`.
+- Free rendering helpers: `render_heading`, `render_optional_section`, and
+  `render_tool_catalogue`.
 - Model-guidance helpers: `needs_execution_discipline`,
   `execution_discipline_for`, and `execution_discipline_for_profile` select the
   exported `EXECUTION_DISCIPLINE` block by model family, falling back from an
@@ -98,6 +98,3 @@ KV-cache/prompt-cache keeps hitting.
   with `cache_segments` populated; downstream, `crate::cache` and
   `crate::middleware`'s `PromptCacheGuardMiddleware` read those segments to
   detect prefix invalidation across calls.
-- `render_retrieved_documents` accepts `crate::retriever::RetrievedDocument`,
-  connecting this module to the harness's retrieval surface without a hard
-  dependency in the other direction.

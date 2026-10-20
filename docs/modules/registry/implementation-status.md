@@ -114,43 +114,13 @@ in Phase 1c — see below.
   an explicit default instead, returning `TinyAgentsError::ModelNotFound` if
   `name` is not registered.
 
-## Capability bundle (gap G3)
+## Capability data
 
-`CapabilityRegistry::register_capability(name, Capability<State, Ctx>)`
-(`capability/mod.rs`) registers a
-`tinyagents_harness::capability::Capability<State, Ctx>` — instructions +
-toolset + middleware + model defaults + exposure + `defer_loading`, the
-runtime-level unit Pydantic AI v2's `AbstractCapability` occupies
-(`docs/runtime-comparison/pydantic-ai.md` §4). The bundle type itself lives
-in `tinyagents-harness::capability` rather than in `tinyagents-registry` or
-the dependency-free `tinyagents-definition` crate: it composes
-`tool::toolset::ToolSet<State, Ctx>` and `middleware::Middleware<State, Ctx>`
-trait objects that are native to `tinyagents-harness`, and
-`tinyagents-definition` has zero dependency on `tinyagents-harness` by
-design (that asymmetry is what keeps the crate graph acyclic). Since
-`CapabilityRegistry<State>` carries no `Ctx` type parameter (none of its
-other stored kinds need one), registry storage for this specific
-`Ctx`-generic bundle goes through type-erased `Box<dyn Any>` storage instead
-of adding a `Ctx` parameter to the whole registry for one feature; see
-`capability/mod.rs`'s `register_capability`/`capability` doc comments for the
-erasure mechanics.
-
-`Capability::from_spec(serde_json::Value)` builds a bundle from data (no
-toolset/middleware — those are still wired programmatically). Hosts choose
-which JSON-declared capabilities to install and retain control of the
-available tool, model, and subagent handles.
-
-On the harness side, `AgentHarness::with_capability(capability)` installs a
-bundle: its middleware is appended in installation order, its model defaults
-are applied onto the harness's `RunPolicy`, and its toolset is
-folded into a `CapabilityToolSet` combined with whatever toolset was already
-installed via `with_toolset` before the first `with_capability` call. When
-any installed capability has `defer_loading: true`, a synthetic
-`load_capability` tool (`LOAD_CAPABILITY_TOOL_NAME`) is auto-registered so a
-model can bring a deferred capability's tools into scope on demand; the
-resulting mid-run tool-set change is recorded through the B6 transcript
-patch mechanism (`agent_loop/tool_changes.rs`) rather than silently
-reshaping the next request.
+`tinyagents_registry::Capability<State, Ctx>` is the registry-owned value for
+named instructions, toolsets, and middleware. The registry keeps it type-erased
+because each value has its own `Ctx` type. It is stored data only; the retired
+harness capability loader, model defaults, exposure policy, and deferred
+`load_capability` tool are no longer part of TinyAgents.
 
 ## Why the gap
 

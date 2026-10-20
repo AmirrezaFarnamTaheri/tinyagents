@@ -85,9 +85,8 @@ pub async fn run_unary_summary<Ctx: Send + Sync + 'static>(
 
     let mut harness: AgentHarness<(), Ctx> = AgentHarness::new();
     harness.with_policy(policy);
-    harness
-        .register_model(model_name, model)
-        .set_default_model(model_name);
+    let _ = model_name;
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
     let run = harness
         .invoke_in_context(
             &(),

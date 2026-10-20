@@ -2,9 +2,9 @@
 //! addressable by name — the data structure that lets a workflow reference
 //! sub-capabilities it didn't hardcode.
 //!
-//! This layer is deliberately distinct from the harness'
-//! [`tinyagents_harness::model_registry::ModelRegistry`] and
-//! [`tinyagents_harness::tool::ToolRegistry`], which are per-run executable stores.
+//! This layer is the named catalog. Hosts adapt selected models through the
+//! harness model resolver port and can project tools into a per-run
+//! [`tinyagents_harness::tool::ToolRegistry`].
 //! The [`CapabilityRegistry`] is a *capability catalog*: it owns named models,
 //! tools, agents, graphs, routers, and reducers so host code can resolve
 //! capabilities by name.
@@ -39,16 +39,6 @@ where
     State: Send + Sync,
 {
     pub(crate) models: HashMap<String, Arc<dyn ChatModel<State>>>,
-    /// Canonical model names in first-registration order.
-    ///
-    /// `models` is a `HashMap`, whose iteration order is randomized per
-    /// process; without this, [`CapabilityRegistry::to_model_registry`]'s
-    /// "first-registered model becomes the default" choice
-    /// ([`tinyagents_harness::model_registry::ModelRegistry::register`])
-    /// would silently vary per run. `register_model`/`replace_model` append a
-    /// name here the first time it is registered; re-registering an existing
-    /// name (via `replace_model`) does not move it.
-    pub(crate) model_order: Vec<String>,
     pub(crate) tools: HashMap<String, Arc<dyn Tool>>,
     /// Declarative agent definitions keyed by their stable id. Execution is
     /// host-owned through graph's explicit `AgentInvoker` boundary.
@@ -58,7 +48,7 @@ where
     /// Alias map, keyed by `(kind, alias)` -> canonical name.
     pub(crate) aliases: HashMap<(ComponentKind, String), String>,
     /// Capability bundles (gap G3), type-erased since
-    /// `tinyagents_harness::capability::Capability<State, Ctx>` is generic
+    /// `crate::Capability<State, Ctx>` is generic
     /// over `Ctx`, a dimension this registry does not otherwise carry — see
     /// [`crate::CapabilityRegistry::register_capability`]'s doc comment for
     /// why. Keyed by canonical name, same as every other kind here.

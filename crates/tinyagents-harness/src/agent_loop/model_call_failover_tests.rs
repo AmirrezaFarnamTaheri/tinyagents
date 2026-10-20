@@ -111,8 +111,15 @@ fn harness_with_primary(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary);
-    harness.register_model("backup", backup.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary,
+        [(
+            "backup".to_string(),
+            backup.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -129,8 +136,15 @@ fn harness(
     max_attempts: usize,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary.clone());
-    harness.register_model("backup", backup.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [(
+            "backup".to_string(),
+            backup.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(max_attempts)
@@ -267,8 +281,15 @@ impl ChatModel<()> for Windowed {
 
 fn windowed_harness(primary: &Arc<Windowed>, sibling: &Arc<Windowed>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", primary.clone());
-    harness.register_model("sibling", sibling.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        primary.clone(),
+        [(
+            "sibling".to_string(),
+            sibling.clone() as Arc<dyn ChatModel<()>>,
+        )],
+    )
+    .with_primary_name("primary");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(2)
@@ -383,7 +404,10 @@ async fn plain_auth_failure_is_retried_on_the_next_call() {
 
 fn single_model_harness(model: &Arc<ScriptedOutcomes>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("primary", model.clone());
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named(
+        "primary",
+        model.clone(),
+    )));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)
@@ -432,9 +456,15 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     let b = ScriptedOutcomes::failing(400, "bad request", false);
     let c = ScriptedOutcomes::failing(400, "bad request", false);
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("a", a.clone());
-    harness.register_model("b", b.clone());
-    harness.register_model("c", c.clone());
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    )
+    .with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
             .with_max_attempts(1)
