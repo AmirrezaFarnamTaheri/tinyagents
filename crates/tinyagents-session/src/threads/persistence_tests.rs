@@ -83,6 +83,7 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
             "agent:x",
             ThreadMessagePatch {
                 extra_metadata: Some(json!({"success": true})),
+                ..Default::default()
             },
         )
         .await
@@ -116,6 +117,92 @@ async fn memory_store_preserves_title_labels_and_metadata_patch() {
             .working_dir
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn concurrent_metadata_merge_patches_preserve_each_other_and_existing_metadata() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    store
+        .append_message(
+            "one",
+            ThreadMessage {
+                extra_metadata: json!({"voice": {"transcript": "spoken"}}),
+                ..message("user:receipt", "hello")
+            },
+        )
+        .await
+        .unwrap();
+
+    let (reaction, receipt) = tokio::join!(
+        store.update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"reactions": {"actor-reaction": {"value": "👍"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+        store.update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"readReceipts": {"reader": {"timestamp": "2026-10-20T00:00:00Z"}}}
+                })),
+                ..Default::default()
+            },
+        ),
+    );
+    reaction.unwrap();
+    receipt.unwrap();
+
+    let stored = store.get_messages("one").await.unwrap();
+    let metadata = &stored[0].extra_metadata;
+    assert_eq!(metadata["voice"]["transcript"], "spoken");
+    assert_eq!(
+        metadata["channelActivity"]["reactions"]["actor-reaction"]["value"],
+        "👍"
+    );
+    assert_eq!(
+        metadata["channelActivity"]["readReceipts"]["reader"]["timestamp"],
+        "2026-10-20T00:00:00Z"
+    );
+}
+
+#[tokio::test]
+async fn metadata_merge_patch_null_removes_only_the_named_member() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    store
+        .append_message(
+            "one",
+            ThreadMessage {
+                extra_metadata: json!({"channelActivity": {"reactions": {"gone": {}, "kept": {}}}}),
+                ..message("user:receipt", "hello")
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_message(
+            "one",
+            "user:receipt",
+            ThreadMessagePatch {
+                merge_extra_metadata: Some(json!({
+                    "channelActivity": {"reactions": {"gone": null}}
+                })),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let messages = store.get_messages("one").await.unwrap();
+    let reactions = &messages[0].extra_metadata["channelActivity"]["reactions"];
+    assert!(reactions.get("gone").is_none());
+    assert!(reactions.get("kept").is_some());
 }
 
 #[tokio::test]
@@ -274,6 +361,7 @@ async fn update_message_rewrites_only_the_patched_message_and_keeps_appends_work
             "b",
             ThreadMessagePatch {
                 extra_metadata: Some(json!({"k": 1})),
+                ..Default::default()
             },
         )
         .await

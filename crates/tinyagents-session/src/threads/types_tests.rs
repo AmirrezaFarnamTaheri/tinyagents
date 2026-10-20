@@ -32,12 +32,21 @@ fn conversation_thread_serde_uses_camel_case_and_defaults_labels() {
 fn conversation_message_patch_defaults_to_no_changes() {
     let patch: ThreadMessagePatch = serde_json::from_value(json!({})).unwrap();
     assert!(patch.extra_metadata.is_none());
+    assert!(patch.merge_extra_metadata.is_none());
 
     let patch_with_metadata: ThreadMessagePatch =
         serde_json::from_value(json!({"extraMetadata": {"source": "mock"}})).unwrap();
     assert_eq!(
         patch_with_metadata.extra_metadata,
         Some(json!({"source": "mock"}))
+    );
+    assert!(patch_with_metadata.merge_extra_metadata.is_none());
+
+    let merge_patch: ThreadMessagePatch =
+        serde_json::from_value(json!({"mergeExtraMetadata": {"channelActivity": {}}})).unwrap();
+    assert_eq!(
+        merge_patch.merge_extra_metadata,
+        Some(json!({"channelActivity": {}}))
     );
 }
 
