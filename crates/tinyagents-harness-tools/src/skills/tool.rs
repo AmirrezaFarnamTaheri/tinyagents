@@ -235,8 +235,9 @@ impl UseSkillTool {
             catalog.pack_index_markdown()
         );
         let binding_handle = handle.clone();
-        let binding = ToolCallBinding::new(move |outer, args| binding_handle.bind_call(outer, args))
-            .with_metadata(handle.clone());
+        let binding =
+            ToolCallBinding::new(move |outer, args| binding_handle.bind_call(outer, args))
+                .with_metadata(handle.clone());
         Self {
             handle,
             catalog,

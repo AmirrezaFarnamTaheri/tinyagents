@@ -111,7 +111,10 @@ fn binding_exposes_typed_registration_metadata_without_changing_call_binding() {
     })
     .with_metadata(String::from("registry metadata"));
 
-    assert_eq!(binding.metadata::<String>().map(String::as_str), Some("registry metadata"));
+    assert_eq!(
+        binding.metadata::<String>().map(String::as_str),
+        Some("registry metadata")
+    );
     assert!(binding.metadata::<usize>().is_none());
 
     let outer: Arc<dyn Tool> = Arc::new(Target);
