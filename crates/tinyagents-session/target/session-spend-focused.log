@@ -3,3 +3,7 @@
    Compiling tinyagents-storage-kit v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-storage-kit)
    Compiling tinystoragedrivers-connect v2.0.0 (https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0#e14eef3f)
    Compiling tinyagents-harness v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-harness)
+   Compiling tinystoragedrivers-document v2.0.0 (https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0#e14eef3f)
+   Compiling tinystoragedrivers-queue v2.0.0 (https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0#e14eef3f)
+   Compiling tinystoragedrivers-testkit v2.0.0 (https://github.com/senamakel/tinystoragedrivers?tag=v2.0.0#e14eef3f)
+   Compiling tinyagents-tasks v2.2.0 (/home/enamakel/work/openhuman/worktrees/epic-8131-115-agents/vendor/tinyagents/crates/tinyagents-tasks)
