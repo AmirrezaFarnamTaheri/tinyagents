@@ -23,4 +23,6 @@ cp vendor/tinyagents/crates/tinyagents-session/src/run_ledger/drivers/fixtures/g
   vendor/tinyagents/target/legacy-31cc-source/crates/tinyagents-session/examples/generate_storage_fixture.rs
 cd vendor/tinyagents/target/legacy-31cc-source
 cargo run --locked -p tinyagents-session --example generate_storage_fixture -- legacy-31cc-session.json
+cp legacy-31cc-session.json \
+  ../../../../vendor/tinyagents/crates/tinyagents-session/src/run_ledger/drivers/fixtures/legacy-31cc-session.json
 ```
