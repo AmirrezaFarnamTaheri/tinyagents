@@ -122,23 +122,24 @@ struct ProbeBackend {
     observed: Arc<Observations>,
 }
 impl StorageBackend for ProbeBackend {
-    fn driver(&self) -> &'static str {
-        self.inner.driver()
-    }
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
-    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
+    fn for_scope(
+        &self,
+        scope: &Scope,
+    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         let scoped = self.inner.for_scope(scope)?;
-        Ok(ScopedStorage::new(
-            scope.clone(),
-            self.driver(),
+        Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(ProbeDocs {
                 inner: scoped.documents().clone(),
                 observed: self.observed.clone(),
             }),
             scoped.streams().clone(),
+            scoped.kv().clone(),
             scoped.blobs().clone(),
+            scoped.queues().clone(),
+            scoped.secrets().clone(),
         ))
     }
 }

@@ -100,21 +100,18 @@ struct GateBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for GateBackend {
-    fn driver(&self) -> &'static str {
-        self.inner.driver()
-    }
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }
     fn for_scope(
         &self,
         scope: &tinystoragedrivers_types::Scope,
-    ) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, StorageError> {
+    ) -> std::result::Result<tinyagents_storage_kit::Storage, StorageError> {
         if let Some((entered, release)) = self.gate.lock().unwrap().take() {
             let _ = entered.send(());
             let _ = release.recv();
         }
-        self.inner.for_scope(scope)
+        tinystoragedrivers_api::StorageBackend::for_scope(&self.inner, scope)
     }
 }
 

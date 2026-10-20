@@ -294,15 +294,14 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
 struct Unbindable;
 
 impl StorageBackend for Unbindable {
-    fn driver(&self) -> &'static str {
-        "unbindable"
-    }
-
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         tinystoragedrivers_types::Capabilities::default()
     }
 
-    fn for_scope(&self, _scope: &Scope) -> Result<ScopedStorage, StorageError> {
+    fn for_scope(
+        &self,
+        _scope: &Scope,
+    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         Err(StorageError::unavailable("database is down"))
     }
 }
@@ -475,24 +474,25 @@ impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
 }
 
 impl StorageBackend for Flaky {
-    fn driver(&self) -> &'static str {
-        "flaky"
-    }
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.storage.capabilities()
     }
-    fn for_scope(&self, scope: &Scope) -> Result<ScopedStorage, StorageError> {
+    fn for_scope(
+        &self,
+        scope: &Scope,
+    ) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         let inner = self.storage.for_scope(scope)?;
-        Ok(ScopedStorage::new(
-            scope.clone(),
-            "flaky",
+        Ok(tinyagents_storage_kit::Storage::new(
             Arc::new(FlakyDocs {
                 inner: Arc::clone(inner.documents()),
                 down: Arc::clone(&self.down),
                 reject_declaration: self.reject_declaration,
             }),
             Arc::clone(inner.streams()),
+            Arc::clone(inner.kv()),
             Arc::clone(inner.blobs()),
+            Arc::clone(inner.queues()),
+            Arc::clone(inner.secrets()),
         ))
     }
 }
@@ -557,16 +557,12 @@ struct NativeRefusal {
     marker: Arc<NativeFailure>,
 }
 impl StorageBackend for NativeRefusal {
-    /// Names the scope-refusing fixture backend.
-    fn driver(&self) -> &'static str {
-        "native-refusal"
-    }
     /// Advertises no optional native capabilities.
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         Default::default()
     }
     /// Refuses admission with the same source Arc supplied by the test.
-    fn for_scope(&self, _: &Scope) -> Result<ScopedStorage, StorageError> {
+    fn for_scope(&self, _: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
         Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
     }
 }
