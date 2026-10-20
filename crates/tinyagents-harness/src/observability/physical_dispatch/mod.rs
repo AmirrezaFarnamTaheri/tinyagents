@@ -60,6 +60,10 @@ impl<State: Send + Sync> ChatModel<State> for ObservedChatModel<State> {
         self.inner.tracks_physical_attempts()
     }
 
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        self.inner.has_pre_invocation_admission_gate()
+    }
+
     async fn invoke(
         &self,
         state: &State,

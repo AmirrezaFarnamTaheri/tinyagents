@@ -287,6 +287,12 @@ impl ChatModel<()> for ControlledChatModel {
         self.model.tracks_physical_attempts()
     }
 
+    fn has_pre_invocation_admission_gate(&self) -> bool {
+        self.options.admission.is_some()
+            || self.options.monetary_budget.is_some()
+            || self.model.has_pre_invocation_admission_gate()
+    }
+
     async fn invoke(
         &self,
         state: &(),
