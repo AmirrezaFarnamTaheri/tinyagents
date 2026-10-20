@@ -127,13 +127,10 @@ fn tool_result_text(messages: &[Message], call_id: &str) -> Option<String> {
 async fn approval_required_call_defers_the_run_after_its_siblings_execute() {
     let recorder = EventRecorder::new();
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             mixed_batch(),
             response(Vec::new(), "never reached"),
-        ])),
-    );
+        ])),)));
     let delete = RecordingTool::approval_gated("delete", "deleted");
     let lookup = RecordingTool::plain("lookup", "found");
     harness.register_tool(delete.clone());
@@ -192,13 +189,10 @@ async fn deferred_run(
     crate::middleware::AgentRun,
 ) {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             mixed_batch(),
             response(Vec::new(), "all done"),
-        ])),
-    );
+        ])),)));
     let delete = RecordingTool::approval_gated("delete", "deleted");
     let lookup = RecordingTool::plain("lookup", "found");
     harness.register_tool(delete.clone());
@@ -332,9 +326,7 @@ async fn resume_refuses_an_incomplete_resolution_and_names_the_missing_ids() {
 #[tokio::test]
 async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resume() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             response(
                 vec![ToolCall::new(
                     "call-ext",
@@ -344,8 +336,7 @@ async fn external_tool_call_is_deferred_and_its_host_result_is_injected_on_resum
                 "",
             ),
             response(Vec::new(), "clicked"),
-        ])),
-    );
+        ])),)));
     harness.register_external_tool(tinyinference_llm::tool::ToolSchema {
         name: "browser_click".into(),
         description: "Click at a screen coordinate (runs in the client).".into(),
@@ -404,13 +395,10 @@ impl crate::tool::DeferredToolHandler for ApproveAllHandler {
 async fn inline_handler_resolves_deferrals_without_surfacing_them() {
     let recorder = EventRecorder::new();
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             mixed_batch(),
             response(Vec::new(), "all done"),
-        ])),
-    );
+        ])),)));
     let delete = RecordingTool::approval_gated("delete", "deleted");
     harness.register_tool(delete.clone());
     harness.register_tool(RecordingTool::plain("lookup", "found"));
@@ -464,10 +452,7 @@ impl crate::tool::DeferredToolHandler for SilentHandler {
 #[tokio::test]
 async fn inline_handler_that_leaves_calls_unresolved_fails_the_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![mixed_batch()])),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![mixed_batch()])),)));
     harness.register_tool(RecordingTool::approval_gated("delete", "deleted"));
     harness.register_tool(RecordingTool::plain("lookup", "found"));
     harness.with_deferred_tool_handler(Arc::new(SilentHandler));
@@ -509,17 +494,14 @@ impl Tool for SelfDeferringTool {
 async fn tool_raising_approval_required_defers_with_its_metadata() {
     let recorder = EventRecorder::new();
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![response(
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![response(
             vec![ToolCall::new(
                 "call-wire",
                 "wire_money",
                 json!({"amount": 500}),
             )],
             "",
-        )])),
-    );
+        )])),)));
     harness.register_tool(Arc::new(SelfDeferringTool));
 
     let ctx = RunContext::new(RunConfig::new("exec-defer"), ()).with_events(recorder.sink());
@@ -561,13 +543,10 @@ async fn human_approval_middleware_defer_outcome_produces_the_deferred_exit() {
     use crate::middleware::library::{ApprovalOutcome, HumanApprovalMiddleware};
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             mixed_batch(),
             response(Vec::new(), "all done"),
-        ])),
-    );
+        ])),)));
     // Neither tool declares approval in its policy; the middleware decides.
     let delete = RecordingTool::plain("delete", "deleted");
     let lookup = RecordingTool::plain("lookup", "found");
@@ -613,13 +592,10 @@ async fn human_approval_middleware_deny_outcome_answers_the_model_without_runnin
     use crate::middleware::library::{ApprovalOutcome, HumanApprovalMiddleware};
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             mixed_batch(),
             response(Vec::new(), "understood"),
-        ])),
-    );
+        ])),)));
     let delete = RecordingTool::plain("delete", "deleted");
     harness.register_tool(delete.clone());
     harness.register_tool(RecordingTool::plain("lookup", "found"));
@@ -682,13 +658,10 @@ fn finish_only_batch() -> ModelResponse {
 
 fn terminate_harness(first: ModelResponse) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             first,
             response(Vec::new(), "model saw the results"),
-        ])),
-    );
+        ])),)));
     harness.register_tool(RecordingTool::plain("lookup", "found"));
     harness.register_tool(Arc::new(FinishTool));
     harness

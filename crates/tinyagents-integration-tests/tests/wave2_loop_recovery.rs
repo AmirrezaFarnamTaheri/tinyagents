@@ -102,10 +102,7 @@ impl Tool for WeatherTool {
 #[tokio::test]
 async fn an_unknown_tool_name_recovers_by_default() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(TwoTurnModel::new(ToolCall::new("c1", "nope", json!({})))),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(TwoTurnModel::new(ToolCall::new("c1", "nope", json!({})))),)));
     harness.register_tool(Arc::new(WeatherTool));
 
     let run = harness
@@ -131,14 +128,11 @@ async fn an_unknown_tool_name_recovers_by_default() {
 #[tokio::test]
 async fn invalid_tool_arguments_recover_by_default() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(TwoTurnModel::new(ToolCall::new(
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(TwoTurnModel::new(ToolCall::new(
             "c1",
             "weather",
             json!({ "city": 5 }),
-        ))),
-    );
+        ))),)));
     harness.register_tool(Arc::new(WeatherTool));
 
     let run = harness
@@ -160,10 +154,7 @@ async fn invalid_tool_arguments_recover_by_default() {
 #[tokio::test]
 async fn the_fail_variants_are_still_available() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(TwoTurnModel::new(ToolCall::new("c1", "nope", json!({})))),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(TwoTurnModel::new(ToolCall::new("c1", "nope", json!({})))),)));
     harness.register_tool(Arc::new(WeatherTool));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Fail,

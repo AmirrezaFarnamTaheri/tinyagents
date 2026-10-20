@@ -57,7 +57,7 @@ async fn task_state_checkpoints_carry_the_task_and_files_across_compactions() {
         .with_keep_recent_tokens(400),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", Arc::clone(&model) as _);
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::clone(&model) as _)));
     harness.register_tool(Arc::new(FakeTool::returning("shell", "r".repeat(800))));
     harness.push_middleware(mw.clone());
     harness.push_model_middleware(mw.clone());

@@ -41,8 +41,8 @@ async fn main() -> Result<()> {
     // Build the harness once and share it into the node via an Arc.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("openai", Arc::new(model))
-        .set_default_model("openai");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        ;
     let harness = Arc::new(harness);
 
     let graph = GraphBuilder::<ChatState, ChatState>::overwrite()

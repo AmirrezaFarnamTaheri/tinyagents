@@ -62,10 +62,7 @@ fn single_unknown_tool_event(events: &[AgentEvent]) -> (String, String) {
 #[tokio::test]
 async fn fail_policy_errors_on_unregistered_tool() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_tool_call("missing", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("missing", json!({}))),)));
     // `ReturnToolError` is the default now (a hallucinated tool name is a
     // routine model mistake), so a hard stop has to be asked for.
     harness.with_policy(RunPolicy {
@@ -89,13 +86,10 @@ async fn fail_policy_errors_on_unregistered_tool() {
 #[tokio::test]
 async fn return_tool_error_recovers_and_emits_event() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "missing", json!({})),
             text_response("recovered"),
-        ])),
-    );
+        ])),)));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         ..RunPolicy::default()
@@ -131,13 +125,10 @@ async fn return_tool_error_preserves_original_arguments() {
     let original = json!({ "query": "weather", "n": 3 });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "search", original.clone()),
             text_response("recovered"),
-        ])),
-    );
+        ])),)));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         ..RunPolicy::default()
@@ -173,13 +164,10 @@ async fn rewrite_retargets_to_real_tool() {
     let fake = Arc::new(FakeTool::returning("lookup", "out"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "missing", json!({})),
             text_response("done"),
-        ])),
-    );
+        ])),)));
     harness.register_tool(fake.clone());
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Rewrite {
@@ -210,13 +198,10 @@ async fn rewrite_retargets_to_real_tool() {
 #[tokio::test]
 async fn rewrite_to_missing_target_falls_back_to_tool_error() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "missing", json!({})),
             text_response("recovered"),
-        ])),
-    );
+        ])),)));
     // Rewrite target "nope" is itself unregistered → fall back to tool-error.
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Rewrite {
@@ -259,10 +244,7 @@ async fn recovery_is_bounded_by_tool_call_limit() {
     // MockModel::with_tool_call repeats the same unknown call on every
     // invocation, so without a bound the loop would spin forever.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_tool_call("missing", json!({}))),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("missing", json!({}))),)));
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::ReturnToolError,
         limits: RunLimits::default().with_max_tool_calls(3),

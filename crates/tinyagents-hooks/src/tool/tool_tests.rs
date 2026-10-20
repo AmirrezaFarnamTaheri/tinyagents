@@ -171,14 +171,11 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
             serde_json::json!({}),
         ));
     let mut harness: AgentHarness<(), Host> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             response,
             ModelResponse::assistant("done"),
-        ])),
-    );
-    harness.set_default_model("mock");
+        ])),)));
+    harness;
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_nested_depth(1),
         ..RunPolicy::default()

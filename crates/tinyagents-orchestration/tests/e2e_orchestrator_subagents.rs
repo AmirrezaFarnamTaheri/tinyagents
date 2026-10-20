@@ -53,8 +53,8 @@ fn specialist(
 ) -> SubAgentTool<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("model", model)
-        .set_default_model("model");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)))
+        ;
     let subagent = SubAgent::new(name, description, Arc::new(harness))
         .with_system_prompt(format!("You are the {name}."));
     SubAgentTool::new(
@@ -122,13 +122,10 @@ async fn orchestrator_resolves_and_runs_only_the_chosen_subagents() -> Result<()
     //    of the three registered names (deliberately skipping `coder`).
     let mut orchestrator: AgentHarness<()> = AgentHarness::new();
     orchestrator
-        .register_model(
-            "model",
-            Arc::new(ScriptedModel::replies(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec![
                 r#"{"agents":["researcher","summarizer"]}"#,
-            ])),
-        )
-        .set_default_model("model")
+            ])),)))
+        
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::json_schema(
                 "agent_selection",

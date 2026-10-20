@@ -78,7 +78,7 @@ fn text_response(text: &str) -> ModelResponse {
 /// A child harness whose model always answers with `answer`.
 fn child_harness(answer: &str) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("child-model", Arc::new(MockModel::constant(answer)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant(answer)))));
     harness
 }
 
@@ -112,13 +112,10 @@ async fn parent_drives_subagent_and_composes_answer() {
     // the final answer.
     let mut parent: AgentHarness<()> = AgentHarness::new();
     parent.register_tool_dispatch(tool);
-    parent.register_model(
-        "parent-model",
-        Arc::new(MockModel::with_responses(vec![
+    parent.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "researcher", json!({ "input": "what is rust?" })),
             text_response("Based on the researcher: a systems language."),
-        ])),
-    );
+        ])),)));
 
     // Wire the parent run's events into a shared recorder so we can assert on
     // the trajectory (the sub-agent tool really ran) afterward.

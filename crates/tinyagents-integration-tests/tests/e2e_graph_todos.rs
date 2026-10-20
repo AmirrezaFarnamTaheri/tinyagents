@@ -34,9 +34,7 @@ async fn model_drives_the_todo_tool_and_list_persists_to_the_thread() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
                 // First turn: write the plan via the `todo` tool.
                 tool_call_response(
                     "call-1",
@@ -56,9 +54,8 @@ async fn model_drives_the_todo_tool_and_list_persists_to_the_thread() {
                     ] }),
                 ),
                 text_response("done"),
-            ])),
-        )
-        .set_default_model("mock")
+            ])),)))
+        
         .register_tool(Arc::new(TodoTool::new(store.clone())));
 
     let run = harness

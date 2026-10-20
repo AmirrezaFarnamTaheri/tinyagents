@@ -82,7 +82,7 @@ async fn live_openai_response_cache_hits_on_repeated_question() {
 
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("openai", counting);
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(counting)));
     harness.with_response_cache(cache);
 
     // A short, deterministic question. The harness builds the `ModelRequest`

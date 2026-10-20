@@ -30,7 +30,7 @@ fn harness(responses: Vec<ModelResponse>, retries: u32) -> (AgentHarness<()>, Ar
     let other = Arc::new(FakeTool::returning("write_file", "written"));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(ScriptedModel::new(responses)) as _)
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(responses)) as _)))
         .register_tool(Arc::clone(&tool) as _)
         .register_tool(other as _);
     harness.with_policy(RunPolicy {

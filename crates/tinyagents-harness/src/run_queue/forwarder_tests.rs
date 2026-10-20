@@ -212,8 +212,8 @@ async fn collect_reaches_the_next_model_boundary_as_additional_context() {
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("scripted", model.clone())
-        .set_default_model("scripted");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
+        ;
     harness
         .invoke_in_context(
             &(),

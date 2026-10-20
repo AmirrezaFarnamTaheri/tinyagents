@@ -60,7 +60,7 @@ async fn before_model_sees_the_target_model_profile() {
     let model = Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(profile.clone()));
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model);
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
     harness.push_middleware(Arc::new(SeenProfiles(seen.clone())));
 
     harness
@@ -86,14 +86,8 @@ async fn later_middleware_sees_model_selected_by_earlier_middleware() {
     };
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "first",
-        Arc::new(ScriptedModel::replies(vec!["wrong"]).with_profile(first_profile)),
-    );
-    harness.register_model(
-        "second",
-        Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(second_profile.clone())),
-    );
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["wrong"]).with_profile(first_profile)),)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["done"]).with_profile(second_profile.clone())),)));
     harness.push_middleware(Arc::new(SelectModel("second")));
     harness.push_middleware(Arc::new(SeenProfiles(seen.clone())));
 

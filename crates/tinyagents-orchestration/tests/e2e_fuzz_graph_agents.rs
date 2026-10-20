@@ -292,7 +292,7 @@ fn text_response(text: impl Into<String>) -> ModelResponse {
 
 fn child_harness(answer: String) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("child", Arc::new(ScriptedModel::replies(vec![answer])));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec![answer])))));
     harness
 }
 
@@ -335,7 +335,7 @@ fn parent_harness(scenario: Scenario, node: &str) -> (AgentHarness<()>, SubAgent
     } else {
         vec![tool_call_response(calls), text_response(final_answer)]
     };
-    harness.register_model("parent", Arc::new(ScriptedModel::new(responses)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(responses)))));
     (harness, jobs)
 }
 

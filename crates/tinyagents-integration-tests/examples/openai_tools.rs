@@ -72,8 +72,8 @@ async fn main() -> Result<()> {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("openai", Arc::new(model))
-        .set_default_model("openai")
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        
         .register_tool(Arc::new(WeatherTool));
 
     let question = "What is the weather in Paris right now? Use the tool.";

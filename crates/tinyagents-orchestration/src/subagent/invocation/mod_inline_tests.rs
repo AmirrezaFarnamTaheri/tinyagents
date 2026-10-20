@@ -18,7 +18,7 @@ use tinyinference_llm::providers::MockModel;
 
 fn constant_tool(answer: &str) -> SubAgentTool<(), ()> {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant(answer)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant(answer)))));
     SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -127,13 +127,10 @@ async fn inline_mode_observes_parent_cancellation_mid_run() {
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let release = Arc::new(tokio::sync::Semaphore::new(0));
     let mut harness = AgentHarness::new();
-    harness.register_model(
-        "worker",
-        Arc::new(BlockedModel {
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(BlockedModel {
             started: started.clone(),
             release,
-        }),
-    );
+        }),)));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -168,13 +165,10 @@ fn schema_advertises_the_mode_argument() {
 async fn dropping_an_inline_call_settles_its_job() {
     let started = Arc::new(tokio::sync::Semaphore::new(0));
     let mut harness = AgentHarness::new();
-    harness.register_model(
-        "worker",
-        Arc::new(BlockedModel {
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(BlockedModel {
             started: started.clone(),
             release: Arc::new(tokio::sync::Semaphore::new(0)),
-        }),
-    );
+        }),)));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -217,7 +211,7 @@ async fn dropping_an_inline_call_settles_its_job() {
 #[tokio::test]
 async fn a_panicking_inline_child_marks_its_job_failed() {
     let mut harness = AgentHarness::new();
-    harness.register_model("worker", Arc::new(PanickingModel));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(PanickingModel))));
     let tool = Arc::new(SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),

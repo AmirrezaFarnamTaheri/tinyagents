@@ -52,11 +52,8 @@ async fn live_durable_graph_checkpoints_then_resumes_across_model_call() {
     // A real OpenAI-backed harness; the graph node owns a shared handle to it.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "openai",
-            Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),
-        )
-        .set_default_model("openai");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
+        ;
     let harness = Arc::new(harness);
 
     let checkpointer = Arc::new(InMemoryCheckpointer::<QaState>::new());

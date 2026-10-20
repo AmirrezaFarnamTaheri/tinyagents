@@ -307,8 +307,8 @@ async fn run_once(
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("live", model.clone())
-        .set_default_model("live")
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
+        
         .register_tool(Arc::new(ReadNote))
         .push_middleware(Arc::new(Capture {
             listener: listener.clone(),
@@ -507,8 +507,8 @@ async fn live_search_promotes_typed_schema_before_the_real_call() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("live", model.clone())
-        .set_default_model("live")
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
+        
         .register_tool(Arc::new(LiveTool {
             name: "stock_quote",
             description: "Fetch the trading price of a stock ticker.",

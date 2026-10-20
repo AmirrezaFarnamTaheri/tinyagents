@@ -165,13 +165,10 @@ struct Rig {
 /// Three sleeping tools (alpha slowest, gamma fastest) behind one probe wrap.
 fn rig(mode: Mode, concurrent_safe: bool) -> Rig {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model(
-        "mock",
-        Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
             batch_response(),
             crate::testkit::text_response("done").with_usage(Usage::new(4, 2)),
-        ])),
-    );
+        ])),)));
     let ran = Arc::new(Mutex::new(Vec::new()));
     let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let max_seen = Arc::new(std::sync::atomic::AtomicUsize::new(0));

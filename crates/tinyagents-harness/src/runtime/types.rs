@@ -731,7 +731,7 @@ impl Default for RunPolicy {
 /// use tinyagents_harness::runtime::AgentHarness;
 ///
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
-/// harness.register_model("mock", Arc::new(MockModel::constant("hello")));
+/// harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello")))));
 /// assert_eq!(harness.models().default_name(), Some("mock"));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {

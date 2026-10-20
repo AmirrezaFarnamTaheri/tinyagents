@@ -42,8 +42,8 @@ fn harness_for(
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(MockModel::with_responses(responses)))
-        .set_default_model("mock");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(responses)))))
+        ;
     if matches!(execution, LoopExecution::Graph) {
         harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));
     }
@@ -239,14 +239,11 @@ async fn nested_tool_calls_do_not_emit_message_appended_on_the_graph_driver() {
 async fn iter_stepping_announces_appends_once_and_never_the_input() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup"),
                 ModelResponse::assistant("done"),
-            ])),
-        )
-        .set_default_model("mock")
+            ])),)))
+        
         .register_tool(Arc::new(FakeTool::returning("lookup", "out")));
     let harness = Arc::new(harness);
     let recorder = EventRecorder::new();
@@ -313,14 +310,11 @@ async fn a_checkpoint_resume_in_a_fresh_runtime_neither_reannounces_input_nor_du
     let build = |armed: bool| {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness
-            .register_model(
-                "mock",
-                Arc::new(MockModel::with_responses(vec![
+            .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
                     tool_call_response("c1", "lookup"),
                     ModelResponse::assistant("done"),
-                ])),
-            )
-            .set_default_model("mock")
+                ])),)))
+            
             .register_tool(Arc::new(FakeTool::returning("lookup", "out")))
             .push_middleware(Arc::new(PauseOnce(std::sync::atomic::AtomicBool::new(
                 armed,
@@ -451,14 +445,11 @@ async fn an_interrupt_after_the_tool_batch_retracts_instead_of_closing_the_turn(
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup"),
                 ModelResponse::assistant("done"),
-            ])),
-        )
-        .set_default_model("mock")
+            ])),)))
+        
         .register_tool(Arc::new(FakeTool::returning("lookup", "out")))
         .push_middleware(Arc::new(PauseAfterTools(
             std::sync::atomic::AtomicBool::new(true),
@@ -504,13 +495,10 @@ async fn an_interrupt_after_the_tool_batch_retracts_instead_of_closing_the_turn(
     // turn numbering continuing from the checkpoint.
     let mut second: AgentHarness<()> = AgentHarness::new();
     second
-        .register_model(
-            "mock",
-            Arc::new(MockModel::with_responses(vec![ModelResponse::assistant(
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![ModelResponse::assistant(
                 "done",
-            )])),
-        )
-        .set_default_model("mock")
+            )])),)))
+        
         .register_tool(Arc::new(FakeTool::returning("lookup", "out")));
     let rt2 = Arc::new(LoopRuntime::for_run(
         Arc::new(second),
@@ -552,8 +540,8 @@ async fn a_node_error_in_the_iterator_closes_its_turn_and_announces_partial_resu
     // Provider error in the model node.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", Arc::new(FailingModel))
-        .set_default_model("mock");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(FailingModel))))
+        ;
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("model-error"), ()).with_events(recorder.sink());
     let mut iter = Arc::new(harness)

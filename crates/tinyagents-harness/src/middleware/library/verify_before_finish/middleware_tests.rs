@@ -61,7 +61,7 @@ async fn drive(
 ) -> (AgentRun, Vec<tinyinference_llm::model::ModelRequest>) {
     let model = Arc::new(ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.register_model("mock", model.clone());
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "found")));
     harness.register_tool(Arc::new(FakeTool::returning("todo", "listed")));
     harness.push_middleware(Arc::new(mw));

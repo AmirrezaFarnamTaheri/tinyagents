@@ -32,11 +32,8 @@ async fn live_openai_subagent_surfaces_tool_failure() {
     // Child agent backed by a real model, with a single tool that always fails.
     let mut child: AgentHarness<()> = AgentHarness::new();
     child
-        .register_model(
-            "openai",
-            Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),
-        )
-        .set_default_model("openai");
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
+        ;
     child.register_tool(Arc::new(FakeTool::failing("lookup", "upstream 500")));
 
     let subagent = SubAgent::new(

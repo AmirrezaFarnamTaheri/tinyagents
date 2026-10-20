@@ -146,7 +146,7 @@ async fn graceful_runs_the_tool_then_finishes_with_the_first_answer() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
         .register_tool(search.clone())
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::auto("result", schema())),
@@ -181,7 +181,7 @@ async fn early_finishes_immediately_and_never_runs_the_accompanying_tool() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
         .register_tool(search.clone())
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::auto("result", schema())),
@@ -212,7 +212,7 @@ async fn exhaustive_ignores_the_first_output_tool_and_waits_for_a_clean_turn() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
         .register_tool(search.clone())
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::auto("result", schema())),
@@ -250,7 +250,7 @@ async fn prompted_mode_injects_the_schema_into_the_system_prompt_and_extracts_fr
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::auto("result", schema())),
             structured_strategy_override: Some(StructuredStrategyOverride::Prompted {
@@ -291,7 +291,7 @@ async fn tool_call_union_records_which_variant_matched() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .register_model("mock", model.clone())
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
         .with_policy(RunPolicy {
             default_response_format: Some(ResponseFormat::auto(
                 "result",

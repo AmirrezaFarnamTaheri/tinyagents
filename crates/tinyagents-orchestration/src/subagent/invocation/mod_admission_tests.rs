@@ -29,13 +29,10 @@ fn blocked_tool(policy: SpawnPolicy) -> (Arc<SubAgentTool<(), ()>>, Gate, Gate) 
     let started: Gate = Arc::new(tokio::sync::Semaphore::new(0));
     let release: Gate = Arc::new(tokio::sync::Semaphore::new(0));
     let mut harness = AgentHarness::new();
-    harness.register_model(
-        "worker",
-        Arc::new(BlockedModel {
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(BlockedModel {
             started: started.clone(),
             release: release.clone(),
-        }),
-    );
+        }),)));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -46,7 +43,7 @@ fn blocked_tool(policy: SpawnPolicy) -> (Arc<SubAgentTool<(), ()>>, Gate, Gate) 
 
 fn constant_tool(policy: SpawnPolicy) -> SubAgentTool<(), ()> {
     let mut harness = AgentHarness::new();
-    harness.register_model("child", Arc::new(MockModel::constant("done")));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("done")))));
     SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
@@ -273,7 +270,7 @@ async fn dropping_an_inline_call_releases_its_slot() {
 #[tokio::test]
 async fn a_panicking_background_child_releases_its_slot() {
     let mut harness = AgentHarness::new();
-    harness.register_model("worker", Arc::new(PanickingModel));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(PanickingModel))));
     let tool = SubAgentTool::new(
         Arc::new(SubAgent::new("worker", "works", Arc::new(harness))),
         ChildDataPolicy::new(|_: &()| ()),
