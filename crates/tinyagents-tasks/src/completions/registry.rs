@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
-use tinystoragedrivers_core::DocumentStore;
+use tinyagents_storage_kit::DocumentStore;
 
 use super::{CompletionRouter, CompletionStore, DriverCompletionStore, InMemoryCompletionStore};
 

@@ -29,10 +29,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tinystoragedrivers_core::primitives::{self, Kv};
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, ErrorKind, StorageError, StreamStore,
-};
+use tinyagents_storage_kit::primitives::{self, Kv};
+use tinyagents_storage_kit::{CollectionSpec, DocumentStore, ErrorKind, StorageError, StreamStore};
 use tokio::sync::OnceCell;
 
 use super::{AppendStore, SchemaAdmission, Store};

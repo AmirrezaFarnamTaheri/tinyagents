@@ -39,9 +39,9 @@ tracing = "0.1"
 # host's graph holds one set of port types with no [patch] to reconcile them.
 tinystoragedrivers-core = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
 tinystoragedrivers-sqlite = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
-tinystoragedrivers-types = { version = "1.0.0", path = "../tinystoragedrivers/crates/tinystoragedrivers-types" }
-tinystoragedrivers-api = { version = "1.0.0", path = "../tinystoragedrivers/crates/tinystoragedrivers-api" }
-tinystoragedrivers-testkit = { version = "1.0.0", path = "../tinystoragedrivers/crates/tinystoragedrivers-testkit" }
+tinystoragedrivers-types = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "6d6ec635be0f36339731eed73fac5c89bde36e84" }
+tinystoragedrivers-api = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "6d6ec635be0f36339731eed73fac5c89bde36e84" }
+tinystoragedrivers-testkit = { version = "1.0.0", git = "https://github.com/senamakel/tinystoragedrivers", rev = "6d6ec635be0f36339731eed73fac5c89bde36e84" }
 tinyagents-storage-kit = { path = "crates/tinyagents-storage-kit" }
 uuid = { version = "1", features = ["v4"] }
 

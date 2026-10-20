@@ -1,8 +1,8 @@
 use super::*;
 use crate::tool::discover::EmbeddingToolRanker;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 use tinyinference_embeddings::{EmbeddingModel, Result as EmbedResult};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 use tinytools::{RankCandidate, RankContext, ToolRanker};
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {

@@ -52,8 +52,8 @@ use tinyagents_session::run_ledger::{WorkflowLeaseClaim, WorkflowRun, WorkflowRu
 
 fn refusal() -> WorkflowPersistenceError {
     WorkflowPersistenceError::Ledger(
-        tinystoragedrivers_core::StorageError::new(
-            tinystoragedrivers_core::ErrorKind::Unavailable,
+        tinyagents_storage_kit::StorageError::new(
+            tinyagents_storage_kit::ErrorKind::Unavailable,
             "registration backend unavailable",
         )
         .into(),

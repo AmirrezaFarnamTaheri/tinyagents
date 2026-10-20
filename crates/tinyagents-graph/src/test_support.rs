@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use tinystoragedrivers_core::{Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 use crate::checkpoint::DriverCheckpointer;

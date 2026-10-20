@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::*;
 use crate::store::TaskStore;
 use crate::types::{OrchestrationTaskKind, OrchestrationTaskStatus};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(

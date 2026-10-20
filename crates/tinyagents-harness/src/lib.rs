@@ -167,7 +167,7 @@ pub use steering::{
     RecentRequestIds, RequestIdError, SteeringCommand, SteeringCommandKind, SteeringHandle,
     SteeringOutcome, SteeringPolicy,
 };
-pub use storage::storage_schema;
+pub use storage::{collections, storage_schema};
 pub use terminal::{TerminalClass, TerminalOutcome, TerminalReason, TimeoutPhase};
 pub use tool::ToolRegistry;
 pub use turn_stop::{TurnFailureClass, TurnStop, TurnStopKind};

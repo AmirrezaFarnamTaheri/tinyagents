@@ -652,7 +652,7 @@ async fn read_refuses_keys_outside_the_two_namespaces() {
 
 #[tokio::test]
 async fn artifacts_land_on_a_host_supplied_blob_store() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
     let scoped = MemoryStorage::new()
         .for_scope(&Scope::new("host").expect("scope"))

@@ -9,7 +9,7 @@ use crate::ids::RunId;
 use crate::observability::replay::read_run_events_page;
 use crate::store::{AppendStore, DriverAppendStore};
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
 
 fn storage() -> ScopedStorage {
     MemoryStorage::new().for_scope(&Scope::local()).unwrap()

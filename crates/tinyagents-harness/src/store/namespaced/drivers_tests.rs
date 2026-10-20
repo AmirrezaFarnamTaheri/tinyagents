@@ -3,7 +3,7 @@ use super::*;
 use crate::store::Store as FlatStore;
 use crate::store::conformance::run_namespaced_store_conformance;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(

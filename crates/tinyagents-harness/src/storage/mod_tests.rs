@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Filter, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
     StorageBackend, WriteOptions,
 };
@@ -23,14 +23,14 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
         .unwrap();
 }
 
-async fn migrate(storage: &ScopedStorage) -> tinystoragedrivers_core::MigrationReport {
+async fn migrate(storage: &ScopedStorage) -> tinyagents_storage_kit::MigrationReport {
     let registry = Registry::compose([storage_schema()]).unwrap();
     // `prepare` needs a backend; the scoped handle's documents are enough here.
-    for spec in tinystoragedrivers_core::primitives::collection_specs() {
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     for item in storage_schema().items {
-        if let tinystoragedrivers_core::Item::Collection { spec, .. } = item {
+        if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
@@ -63,7 +63,7 @@ fn the_schema_composes_and_names_everything_the_harness_owns() {
         schema
             .items
             .iter()
-            .all(|item| item.scope() == tinystoragedrivers_core::ScopeClass::Agent)
+            .all(|item| item.scope() == tinyagents_storage_kit::ScopeClass::Agent)
     );
     Registry::compose([schema]).unwrap();
 }
@@ -247,7 +247,7 @@ async fn migrating_twice_changes_nothing() {
 
 #[test]
 fn the_journal_stream_seals_on_finish_and_is_kept_for_thirty_days() {
-    use tinystoragedrivers_core::{Item, SealPolicy, SealWhen};
+    use tinyagents_storage_kit::{Item, SealPolicy, SealWhen};
     let item = storage_schema()
         .items
         .into_iter()
@@ -256,7 +256,7 @@ fn the_journal_stream_seals_on_finish_and_is_kept_for_thirty_days() {
     let Item::Stream { seal, scope, .. } = item else {
         panic!("harness.journal is a stream");
     };
-    assert_eq!(scope, tinystoragedrivers_core::ScopeClass::Agent);
+    assert_eq!(scope, tinyagents_storage_kit::ScopeClass::Agent);
     assert_eq!(
         seal,
         SealPolicy::new(SealWhen::OnFinish).retaining_ms(30 * 24 * 60 * 60 * 1000)

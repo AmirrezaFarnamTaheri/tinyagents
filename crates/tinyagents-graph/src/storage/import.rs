@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 use tinyagents_harness::ids::now_ms;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Key, Leases, Migrations, Precondition,
     Query, Result, ScopedStorage, Sort, WriteOptions, primitives,
 };
@@ -25,7 +25,7 @@ const PAGE: usize = 200;
 async fn legacy_rows(
     storage: &ScopedStorage,
     collection: &str,
-) -> Result<Vec<tinystoragedrivers_core::Versioned<Value>>> {
+) -> Result<Vec<tinyagents_storage_kit::Versioned<Value>>> {
     let docs = storage.documents();
     docs.ensure_collection(&CollectionSpec::new(collection))
         .await?;

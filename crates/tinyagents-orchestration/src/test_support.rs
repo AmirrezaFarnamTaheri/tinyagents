@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use tinyagents_session::run_ledger::DriverRunLedger;
-use tinystoragedrivers_core::{Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_sqlite::SqliteStorage;
 
 /// A run ledger over the SQLite file `ledger.sqlite` in `dir`.

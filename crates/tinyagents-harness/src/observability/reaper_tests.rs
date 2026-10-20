@@ -5,7 +5,7 @@ use crate::events::HarnessRunStatus;
 use crate::ids::{ComponentId, ExecutionStatus, HarnessPhase};
 use crate::observability::{DriverStatusStore, mint_run_id};
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn store() -> DriverStatusStore {
     let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();

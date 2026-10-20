@@ -154,7 +154,7 @@ impl<K: Eq + Hash + Clone + Send + Sync> std::fmt::Debug for TaskStoreRegistry<K
 /// a restart is a far smaller harm than refusing to run orchestration at all, so
 /// a host whose backend is briefly unavailable can still spawn work.
 pub fn open_driver_task_store_or_memory(
-    docs: Arc<dyn tinystoragedrivers_core::DocumentStore>,
+    docs: Arc<dyn tinyagents_storage_kit::DocumentStore>,
 ) -> Arc<dyn TaskStore> {
     let store = match DriverTaskStore::new(docs) {
         Ok(store) => store,

@@ -1,6 +1,6 @@
 use super::*;
 use std::sync::Arc;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn key(parent: &str) -> SubagentTaskKey {
     SubagentTaskKey {
@@ -222,7 +222,7 @@ async fn import_fills_missing_parts_without_replacing_committed_state() {
 
 #[tokio::test]
 async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
-    use tinystoragedrivers_core::{Kv, Precondition};
+    use tinyagents_storage_kit::{Kv, Precondition};
     let backend = MemoryStorage::new();
     let scoped = backend.for_scope(&Scope::local()).unwrap();
     let docs = Arc::clone(scoped.documents());
@@ -239,7 +239,7 @@ async fn raw_kv_records_reopen_without_changing_host_legacy_namespace() {
         .unwrap();
     let id = Key::of([OWNER, NS, &name]).unwrap();
     docs.put(
-        tinystoragedrivers_core::primitives::KV,
+        tinyagents_storage_kit::primitives::KV,
         id.as_str(),
         serde_json::json!({"owner": OWNER, "ns": NS, "key": name, "value": {"pause": persisted}}),
         Precondition::Absent,

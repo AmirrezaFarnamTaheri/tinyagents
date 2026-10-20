@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
     ScopedStorage, StorageBackend,
 };
@@ -20,7 +20,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
 async fn migrate(storage: &ScopedStorage) {
     let registry = Registry::compose([storage_schema()]).unwrap();
     for item in storage_schema().items {
-        if let tinystoragedrivers_core::Item::Collection { spec, .. } = item {
+        if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
@@ -107,7 +107,7 @@ async fn v1_task_records_become_bare_snake_case_documents_under_key_ids() {
     assert_eq!(row.meta.created_ms, 1_700_000_000_005_i64);
     let kept = storage
         .documents()
-        .query_all("tasks.records", &tinystoragedrivers_core::Query::all())
+        .query_all("tasks.records", &tinyagents_storage_kit::Query::all())
         .await
         .unwrap();
     assert_eq!(kept.len(), 1, "an undecodable record is dropped");
@@ -179,7 +179,7 @@ async fn v1_completions_move_with_unwrapped_bodies_and_ms_times() {
     assert_eq!(row.meta.created_ms, 1_700_000_000_005_i64);
     let kept = storage
         .documents()
-        .query_all("tasks.completions", &tinystoragedrivers_core::Query::all())
+        .query_all("tasks.completions", &tinyagents_storage_kit::Query::all())
         .await
         .unwrap();
     assert_eq!(kept.len(), 1);

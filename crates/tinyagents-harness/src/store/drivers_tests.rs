@@ -1,9 +1,9 @@
 use super::*;
 use crate::store::conformance::run_store_conformance;
 use serde_json::json;
-use tinystoragedrivers_core::{Kv, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{Kv, MemoryStorage, Scope, StorageBackend};
 
-fn scoped(storage: &MemoryStorage, scope: &str) -> tinystoragedrivers_core::ScopedStorage {
+fn scoped(storage: &MemoryStorage, scope: &str) -> tinyagents_storage_kit::ScopedStorage {
     storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
 }
 
@@ -82,7 +82,7 @@ async fn entries_are_tsd_kv_documents_of_the_owner() {
     let kv = Kv::ns(&docs, "harness", "ns").unwrap();
     assert_eq!(kv.get::<Value>("k").await.unwrap(), Some(json!({"v": 1})));
     let raw = docs
-        .get(tinystoragedrivers_core::primitives::KV, "harness/ns/k")
+        .get(tinyagents_storage_kit::primitives::KV, "harness/ns/k")
         .await
         .unwrap()
         .expect("the entry sits under Key::of([owner, ns, key])");

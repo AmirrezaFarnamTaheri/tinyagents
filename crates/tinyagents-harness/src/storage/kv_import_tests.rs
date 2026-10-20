@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::json;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     Kv, MemoryStorage, Migrations, Precondition, Scope, ScopedStorage, StorageBackend,
 };
 
@@ -51,7 +51,7 @@ async fn a_flat_v1_store_moves_into_tsd_kv_with_the_value_unwrapped() {
     );
     let left = storage
         .documents()
-        .count("harness_store", &tinystoragedrivers_core::Filter::default())
+        .count("harness_store", &tinyagents_storage_kit::Filter::default())
         .await
         .unwrap();
     assert_eq!(left, 0, "the v1 rows are removed once copied");

@@ -6,7 +6,7 @@ mod kv;
 mod kv_import;
 mod steps;
 
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, SealPolicy, SealWhen,
 };
 
@@ -92,6 +92,12 @@ pub fn storage_schema() -> Schema {
         schema = schema.step(steps::blobs(BLOB_STEP_IDS[index], from, to));
     }
     schema
+}
+
+/// Collections owned by the harness; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
 }
 
 const BLOB_STEP_IDS: [&str; 5] = [

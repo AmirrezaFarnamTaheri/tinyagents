@@ -31,7 +31,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tinystoragedrivers_core::{BlobStore, Capability, MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{BlobStore, Capability};
 
 use super::policy::{ArtifactRedactor, Redacted};
 
@@ -352,26 +352,6 @@ impl ToolResultArtifactStore {
             max_readable_bytes,
             retention: None,
         }
-    }
-
-    /// A store over a private in-memory blob store: the default for library
-    /// users with no storage backend. Nothing outlives the process.
-    pub fn in_memory(
-        session_key: impl Into<String>,
-        redactor: Arc<dyn ArtifactRedactor>,
-        read_tool: impl Into<String>,
-        max_readable_bytes: u64,
-    ) -> Self {
-        let scoped = MemoryStorage::new()
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
-        Self::new(
-            scoped.blobs().clone(),
-            session_key,
-            redactor,
-            read_tool,
-            max_readable_bytes,
-        )
     }
 
     /// Give every artifact a lifetime. Blobs carry no modification time, so

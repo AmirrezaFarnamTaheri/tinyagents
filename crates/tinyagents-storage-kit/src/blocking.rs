@@ -19,7 +19,7 @@ use std::thread;
 
 use tokio::sync::mpsc;
 
-use tinystoragedrivers_types::{ErrorKind, Result, StorageError};
+use tinystoragedrivers_types::{Result, StorageError};
 
 type Job = Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -34,16 +34,19 @@ thread_local! {
 /// stops the thread once in-flight work finishes.
 ///
 /// ```
-/// use tinystoragedrivers_core::{Blocking, MemoryStorage, Precondition, Scope, StorageBackend};
+/// use tinystoragedrivers_api::StorageBackend;
+/// use tinystoragedrivers_testkit::memory_backend;
+/// use tinyagents_storage_kit::{Blocking, Precondition};
+/// use tinystoragedrivers_types::Scope;
 /// use serde_json::json;
 ///
 /// let bridge = Blocking::new()?;
-/// let docs = MemoryStorage::new().for_scope(&Scope::local())?.documents().clone();
+/// let docs = memory_backend().for_scope(&Scope::new("local")?)?.documents().clone();
 /// let version = bridge.run(async move {
 ///     docs.put("settings", "theme", json!({"dark": true}), Precondition::None).await
 /// })??;
 /// assert_eq!(version.0, 1);
-/// # Ok::<(), tinystoragedrivers_core::StorageError>(())
+/// # Ok::<(), tinystoragedrivers_types::StorageError>(())
 /// ```
 #[derive(Clone)]
 pub struct Blocking {
@@ -153,7 +156,3 @@ fn on_multi_thread_worker() -> bool {
 fn startup_error(what: &'static str) -> impl FnOnce(std::io::Error) -> StorageError {
     move |error| StorageError::backend(what).with_source(error)
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

@@ -2,7 +2,7 @@ use super::*;
 use crate::testkit::conformance::task_cache_contract;
 use serde_json::json;
 use tinyagents_harness::ids::NodeId;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn docs(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(

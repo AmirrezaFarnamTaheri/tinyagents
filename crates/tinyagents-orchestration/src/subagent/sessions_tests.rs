@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tinyagents_harness::context::{RunConfig, RunContext};
 use tinyagents_harness::ids::new_call_id;
 use tinyagents_harness::tool::ToolDispatch;
+use tinyagents_storage_kit::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 use tinyagents_tasks::TaskStore;
-use tinystoragedrivers_core::{DocumentStore, MemoryStorage, Scope, StorageBackend};
 
 fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(

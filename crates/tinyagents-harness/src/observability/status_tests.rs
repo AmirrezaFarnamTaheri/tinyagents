@@ -11,9 +11,9 @@ use crate::observability::{
     StoreEventJournal,
 };
 use crate::store::{AppendStore, DriverAppendStore};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
-fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinystoragedrivers_core::ScopedStorage {
+fn scoped(storage: &dyn StorageBackend, scope: &str) -> tinyagents_storage_kit::ScopedStorage {
     storage.for_scope(&Scope::new(scope).unwrap()).unwrap()
 }
 
@@ -103,7 +103,7 @@ async fn status_store_round_trips_and_answers_queries() {
 
 #[tokio::test]
 async fn undecodable_record_is_skipped_and_does_not_hide_valid_runs() {
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
     let storage = MemoryStorage::new();
     let docs = Arc::clone(scoped(&storage, "local").documents());
     let store = DriverStatusStore::new(docs.clone());

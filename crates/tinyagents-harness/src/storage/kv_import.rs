@@ -13,7 +13,7 @@
 //! already written (a newer value) is never overwritten by the stale v1 row.
 
 use serde_json::Value;
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query, Result,
     ScopedStorage, Sort, WriteOptions,
 };

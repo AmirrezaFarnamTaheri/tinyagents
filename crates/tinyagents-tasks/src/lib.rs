@@ -47,7 +47,7 @@ pub use recovery::{
     build_restart_recovery_note, recovery_children,
 };
 pub use runtime::{DetachedAbortEvent, DetachedTaskRegistry};
-pub use storage::storage_schema;
+pub use storage::{collections, storage_schema};
 pub use store::{InMemoryTaskStore, TaskStore};
 pub use store_registry::{
     TaskStoreRegistry, TaskStoreRegistryError, open_driver_task_store_or_memory,

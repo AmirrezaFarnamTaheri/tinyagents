@@ -104,7 +104,7 @@ async fn authoritative_registration_refuses_synchronous_success() {
 #[tokio::test(flavor = "current_thread")]
 async fn explicit_driver_scopes_isolate_workflows_without_local_files() {
     use tinyagents_session::run_ledger::DriverRunLedger;
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
     let backend = MemoryStorage::new();
     let first = LedgerWorkflowStore::new(Arc::new(DriverRunLedger::new(
         backend

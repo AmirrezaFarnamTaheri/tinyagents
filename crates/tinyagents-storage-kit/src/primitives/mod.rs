@@ -13,15 +13,20 @@
 //!
 //! ```
 //! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-//! use tinystoragedrivers_core::primitives::{self, Counters};
-//! use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+//! use std::sync::Arc;
+//! use tinystoragedrivers_api::StorageBackend;
+//! use tinystoragedrivers_testkit::memory_backend;
+//! use tinyagents_storage_kit::primitives::Counters;
+//! use tinystoragedrivers_types::{CollectionSpec, Scope};
 //!
-//! let storage = MemoryStorage::new().for_scope(&Scope::local())?;
-//! primitives::ensure(&storage).await?;
+//! let storage = memory_backend().for_scope(&Scope::new("local")?)?;
+//! for spec in [CollectionSpec::new("tsd.counters")] {
+//!     storage.documents().ensure_collection(&spec).await?;
+//! }
 //! let counters = Counters::new(storage.documents());
 //! assert_eq!(counters.next("cron", "runs").await?, 1);
 //! assert_eq!(counters.next("cron", "runs").await?, 2);
-//! # Ok::<(), tinystoragedrivers_core::StorageError>(())
+//! # Ok::<(), tinystoragedrivers_types::StorageError>(())
 //! # }).unwrap();
 //! ```
 
@@ -58,3 +63,10 @@ pub fn collection_specs() -> Vec<CollectionSpec> {
     ]
 }
 
+/// Declare the shared primitive collections in this scope.
+pub async fn ensure(storage: &crate::ScopedStorage) -> tinystoragedrivers_types::Result<()> {
+    for spec in collection_specs() {
+        storage.documents().ensure_collection(&spec).await?;
+    }
+    Ok(())
+}

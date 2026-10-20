@@ -207,7 +207,7 @@ async fn in_memory_append_unbounded_by_default() {
 
 #[tokio::test]
 async fn read_window_returns_a_bounded_slice_for_both_backends() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
     let scoped = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
     let driver = DriverAppendStore::new(Arc::clone(scoped.streams()));
     let memory = InMemoryAppendStore::new();

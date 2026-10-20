@@ -5,7 +5,7 @@
 mod dto;
 mod steps;
 
-use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
+use tinyagents_storage_kit::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass};
 
 pub(crate) use dto::{CompletionDoc, TaskDoc, history_id_key, task_id_key, to_ms};
 
@@ -70,6 +70,12 @@ pub fn storage_schema() -> Schema {
         .step(steps::records())
         .step(steps::history())
         .step(steps::completions())
+}
+
+/// Collections owned by tasks; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
 }
 
 #[cfg(test)]

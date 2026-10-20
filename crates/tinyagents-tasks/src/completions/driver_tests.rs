@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::*;
 use crate::completions::{CompletionResult, RecordOutcome};
 use crate::completions::{CompletionRouter, CompletionStatus, InMemoryCompletionStore, NotifyMode};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
 fn record(task: &str, parent: &str) -> CompletionRecord {
     CompletionRecord::new(
@@ -130,7 +130,7 @@ async fn the_store_keeps_the_latest_record_per_task() {
 #[tokio::test]
 async fn migration_listing_fails_on_corrupt_records_while_legacy_listing_skips_them() {
     use serde_json::json;
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
 
     let storage = MemoryStorage::new();
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
@@ -257,7 +257,7 @@ async fn a_cancelled_parent_stays_cancelled_after_a_reopen() {
 
 #[tokio::test]
 async fn an_unreadable_record_is_skipped_without_hiding_the_rest() {
-    use tinystoragedrivers_core::Precondition;
+    use tinyagents_storage_kit::Precondition;
     let storage = MemoryStorage::new();
     let docs = docs_of(&storage, "local");
     let store = DriverCompletionStore::new(docs.clone()).unwrap();

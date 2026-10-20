@@ -115,10 +115,9 @@ impl Counters {
 }
 
 fn id(owner: &str, name: &str) -> Result<String> {
-    Ok(Key::of([owner, name])?.as_str().to_owned())
+    super::super::composite_key([owner, name])
 }
 
 fn unreachable_declined() -> StorageError {
     StorageError::backend("counter update declined unexpectedly")
 }
-

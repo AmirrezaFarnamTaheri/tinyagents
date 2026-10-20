@@ -9,7 +9,7 @@ use crate::observability::{
     DriverStatusStore, FanOutSink, JournalSink, StoreEventJournal, mint_run_id,
 };
 use crate::store::{AppendStore, DriverAppendStore};
-use tinystoragedrivers_core::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Scope, ScopedStorage, StorageBackend};
 
 fn storage() -> ScopedStorage {
     MemoryStorage::new().for_scope(&Scope::local()).unwrap()

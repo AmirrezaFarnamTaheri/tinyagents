@@ -8,7 +8,7 @@ use crate::testkit::conformance::{
 };
 use serde::Serialize;
 use serde_json::json;
-use tinystoragedrivers_core::{MemoryStorage, Precondition, Scope, StorageBackend};
+use tinyagents_storage_kit::{MemoryStorage, Precondition, Scope, StorageBackend};
 
 fn docs(storage: &MemoryStorage, scope: &str) -> Arc<dyn DocumentStore> {
     Arc::clone(
@@ -338,7 +338,7 @@ async fn the_lease_lives_in_tsd_leases_and_its_epoch_moves_on_every_new_tenure()
     let cp = DriverCheckpointer::<i32>::with_namespace(Arc::clone(&docs), "flows");
     let minute = Duration::from_secs(60);
     let (owner, key) = cp.lease_key("t");
-    let leases = tinystoragedrivers_core::Leases::new(&docs);
+    let leases = tinyagents_storage_kit::Leases::new(&docs);
 
     assert!(cp.try_claim("t", "a", minute).await.unwrap());
     let first = leases.current(owner, &key).await.unwrap().unwrap();

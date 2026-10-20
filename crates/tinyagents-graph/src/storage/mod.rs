@@ -6,7 +6,7 @@ mod import;
 mod steps;
 mod types;
 
-use tinystoragedrivers_core::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, primitives};
+use tinyagents_storage_kit::{CollectionSpec, IndexSpec, Owner, Schema, ScopeClass, primitives};
 
 pub use import::{import_legacy_leases, import_legacy_task_cache};
 pub(crate) use types::{
@@ -109,6 +109,12 @@ pub fn storage_schema() -> Schema {
         schema = schema.step(step);
     }
     schema
+}
+
+/// Collections owned by graph; callers declare these on their chosen backend.
+#[must_use]
+pub fn collections() -> Vec<CollectionSpec> {
+    storage_schema().collections()
 }
 
 #[cfg(test)]

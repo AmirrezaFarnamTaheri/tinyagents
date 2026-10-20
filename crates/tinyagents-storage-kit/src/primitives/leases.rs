@@ -505,6 +505,5 @@ impl Leases {
 }
 
 fn id(owner: &str, key: &str) -> Result<String> {
-    Ok(Key::of([owner, key])?.as_str().to_owned())
+    super::super::composite_key([owner, key])
 }
-

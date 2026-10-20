@@ -1,6 +1,6 @@
 use super::*;
 use tinyagents_session::run_ledger::{DriverRunLedger, LedgerError};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     CollectionSpec, ErrorKind, Fence, MemoryStorage, Precondition, Scope, ScopedStorage,
     StorageBackend,
 };
@@ -256,7 +256,7 @@ struct RefusedAuthority(ErrorKind);
 impl RefusedAuthority {
     fn error<T>(&self) -> WorkflowPersistenceResult<T> {
         Err(WorkflowPersistenceError::Ledger(
-            tinystoragedrivers_core::StorageError::new(self.0, "configured authority refused")
+            tinyagents_storage_kit::StorageError::new(self.0, "configured authority refused")
                 .into(),
         ))
     }
@@ -300,7 +300,7 @@ async fn configured_refusal_never_uses_legacy_initialise_or_drive() {
     for kind in [
         ErrorKind::Unavailable,
         ErrorKind::Fenced,
-        ErrorKind::Unsupported(tinystoragedrivers_core::Capability::Transactions),
+        ErrorKind::Unsupported(tinyagents_storage_kit::Capability::Transactions),
     ] {
         let engine = WorkflowEngine::new_async(
             Arc::new(RefusedAuthority(kind)),

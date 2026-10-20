@@ -10,10 +10,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::ErrorKind;
 use tinystoragedrivers_types::{
     Page, Precondition, Query, Result, Version, Versioned, WriteOptions, validate_collection,
 };
-use tinystoragedrivers_types::ErrorKind;
 
 /// How long [`Repo::update`] keeps retrying a lost compare-and-swap.
 ///
@@ -82,13 +82,16 @@ impl Default for RetryPolicy {
 /// ```
 /// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
 /// use serde::{Deserialize, Serialize};
-/// use tinystoragedrivers_core::primitives::Repo;
-/// use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+/// use tinystoragedrivers_api::StorageBackend;
+/// use tinystoragedrivers_testkit::memory_backend;
+/// use tinyagents_storage_kit::primitives::Repo;
+/// use tinystoragedrivers_types::{CollectionSpec, Scope};
 ///
 /// #[derive(Serialize, Deserialize, PartialEq, Debug)]
 /// struct Job { runs: u32 }
 ///
-/// let storage = MemoryStorage::new().for_scope(&Scope::local())?;
+/// let storage = memory_backend().for_scope(&Scope::new("local")?)?;
+/// storage.documents().ensure_collection(&CollectionSpec::new("jobs")).await?;
 /// let jobs = Repo::<Job>::new(storage.documents(), "cron.jobs")?;
 /// jobs.update("nightly", |job| Ok(Some(Job { runs: job.map_or(1, |j| j.runs + 1) }))).await?;
 /// let (job, _version) = jobs
@@ -96,7 +99,7 @@ impl Default for RetryPolicy {
 ///     .await?
 ///     .unwrap();
 /// assert_eq!(job.runs, 2);
-/// # Ok::<(), tinystoragedrivers_core::StorageError>(())
+/// # Ok::<(), tinystoragedrivers_types::StorageError>(())
 /// # }).unwrap();
 /// ```
 pub struct Repo<T> {
@@ -347,4 +350,3 @@ fn decode<T: DeserializeOwned>(found: Versioned<serde_json::Value>) -> Result<Ve
         meta: found.meta,
     })
 }
-

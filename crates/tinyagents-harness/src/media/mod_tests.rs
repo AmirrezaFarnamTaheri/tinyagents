@@ -649,7 +649,7 @@ async fn artifact_subdirectory_must_stay_below_the_output_root() {
 
 #[tokio::test]
 async fn a_host_blob_store_receives_the_artifacts_with_their_content_type() {
-    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+    use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
 
     let scoped = MemoryStorage::new()
         .for_scope(&Scope::new("host").unwrap())

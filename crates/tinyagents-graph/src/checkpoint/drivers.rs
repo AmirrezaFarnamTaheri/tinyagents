@@ -37,7 +37,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     DocumentStore, DocumentStoreExt, ErrorKind, Filter, Leases, Query, Repo, Sort, StorageError,
     Versioned, WriteOptions,
 };

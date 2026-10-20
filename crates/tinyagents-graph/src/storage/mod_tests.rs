@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
 use tinyagents_harness::ids::{GraphId, NodeId, now_ms};
-use tinystoragedrivers_core::{
+use tinyagents_storage_kit::{
     DocumentStoreExt, MemoryStorage, MigrateOptions, Precondition, Query, Registry, Scope,
     ScopeClass, ScopedStorage, StorageBackend,
 };
@@ -25,7 +25,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
 async fn migrate(storage: &ScopedStorage) {
     let registry = Registry::compose([storage_schema()]).unwrap();
     for item in storage_schema().items {
-        if let tinystoragedrivers_core::Item::Collection { spec, .. } = item {
+        if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
