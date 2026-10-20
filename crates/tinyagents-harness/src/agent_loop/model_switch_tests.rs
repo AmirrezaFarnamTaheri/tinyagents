@@ -126,8 +126,11 @@ fn two_models(
 ) -> (AgentHarness<()>, Arc<ScriptedModel>, Arc<ScriptedModel>) {
     let (a, b) = (Arc::new(a), Arc::new(b));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(a.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(b.clone())));
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
+    ).with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     (harness, a, b)
 }
@@ -213,8 +216,11 @@ async fn mid_run_switch_applies_to_the_next_call_and_stays_sticky() {
         ModelResponse::assistant("done"),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(a)));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(b.clone())));
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>)],
+    ).with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.register_tool(Arc::new(FakeTool::returning("lookup", "ok")));
     let recorder = EventRecorder::new();
 
@@ -449,8 +455,13 @@ fn failover_harness(
     models: Vec<(&str, Arc<dyn ChatModel<()>>)>,
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    for (name, model) in models {
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
+    let mut models = models.into_iter();
+    if let Some((primary_name, primary)) = models.next() {
+        let resolver = crate::host::PrebuiltModelResolver::new(
+            primary,
+            models.map(|(name, model)| (name.to_string(), model)),
+        ).with_primary_name(primary);
+        harness.with_model_resolver(Arc::new(resolver));
     }
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default()
