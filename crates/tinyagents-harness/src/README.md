@@ -59,11 +59,10 @@ the module map below.
 ## How the pieces fit together
 
 1. **Configure**: a host builds a `RunContext` (`context`) carrying its
-   `StoreRegistry` (`store`), `ModelRegistry` (`model_registry`),
-   `ToolRegistry` (`tool`), limits (`limits`), cancellation token (`cancel`),
+   `StoreRegistry` (`store`), model resolver (`host`), `ToolRegistry` (`tool`), limits (`limits`), cancellation token (`cancel`),
    and event sink (`events`).
 2. **Run**: `agent_loop` drives the model ⇄ tool cycle for one turn,
-   consulting `retry`/`model_registry` on provider failure, `no_progress` and
+   consulting `retry` and the configured resolver on provider failure, `no_progress` and
    `summarization` to keep the loop productive and in-budget, and `middleware` around every
    step.
 3. **Recurse**: a tool can wrap a whole nested `AgentHarness` invocation

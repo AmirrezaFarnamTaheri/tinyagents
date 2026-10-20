@@ -1027,7 +1027,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// the same gate here a primary failure could silently fall back to a model
     /// that can't call tools, lacks vision, or has a smaller context window
     /// (issue #4641). `allow_retired` is `false` to match
-    /// `ModelRegistry::resolve_request`. Every skipped candidate is recorded as
+    /// hosted model selection. Every skipped candidate is recorded as
     /// visited and surfaced as [`AgentEvent::FallbackSkipped`]. With
     /// `larger_than = Some(n)` a candidate must also declare a
     /// `max_input_tokens` strictly greater than `n` (context-overflow failover).
