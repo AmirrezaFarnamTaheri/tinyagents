@@ -34,6 +34,8 @@ struct PermitState {
     committed: AtomicUsize,
     active: AtomicUsize,
     checks: AtomicUsize,
+    physical_attempts: AtomicUsize,
+    physical_attempt_limit: AtomicUsize,
     refuse_commit: std::sync::atomic::AtomicBool,
     refuse_recheck: std::sync::atomic::AtomicBool,
 }
@@ -61,6 +63,14 @@ impl PhysicalDispatchPermit for TestPermit {
             .is_ok()
         {
             self.state.committed.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn mark_physical_attempt(&self) -> Result<(), DispatchRefusal> {
+        let attempt = self.state.physical_attempts.fetch_add(1, Ordering::SeqCst);
+        if attempt >= self.state.physical_attempt_limit.load(Ordering::SeqCst) {
+            return Err(DispatchRefusal::new(DispatchRefusalReason::CallLimit));
         }
         Ok(())
     }
@@ -129,6 +139,8 @@ impl ScriptedAdmission {
                 committed: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 checks: AtomicUsize::new(0),
+                physical_attempts: AtomicUsize::new(0),
+                physical_attempt_limit: AtomicUsize::new(usize::MAX),
                 refuse_commit: std::sync::atomic::AtomicBool::new(false),
                 refuse_recheck: std::sync::atomic::AtomicBool::new(false),
             }),
