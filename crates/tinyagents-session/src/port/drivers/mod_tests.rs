@@ -5,8 +5,29 @@ use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_sqlite::SqliteStorage;
 
+fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
+    let bindings = [
+        ("plain", "test-bound-plain"),
+        ("a", "test-bound-a"),
+        ("b", "test-bound-b"),
+        ("agent", "test-bound-agent"),
+        ("agent-1", "test-bound-agent-1"),
+        ("other", "test-bound-other"),
+        ("alice", "test-bound-alice"),
+        ("bob", "test-bound-bob"),
+        ("prepared-actor", "test-bound-prepared-actor"),
+        ("contract-store-agent", "test-bound-contract-store"),
+        ("contract-iso-a", "test-bound-contract-iso-a"),
+        ("contract-iso-b", "test-bound-contract-iso-b"),
+    ]
+    .into_iter()
+    .map(|(agent, label)| (agent.to_owned(), Scope::new(label).unwrap()))
+    .collect();
+    crate::testkit::mapped_storage_factory(backend, bindings)
+}
+
 fn memory() -> DriverSessionStores {
-    DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap()).unwrap()
+    DriverSessionStores::new(storage_factory(Arc::new(MemoryStorage::new()))).unwrap()
 }
 
 #[test]
@@ -80,7 +101,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
                 .doc["value"],
             "retained"
         );
-        let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+        let provider = DriverSessionStores::new(storage_factory(Arc::clone(&backend))).unwrap();
         session_store_conformance(&provider).await;
         session_store_isolation_conformance(&provider).await;
     }
@@ -88,7 +109,7 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
 
 fn sqlite(dir: &tempfile::TempDir) -> DriverSessionStores {
     let storage = SqliteStorage::open(dir.path().join("sessions.db")).unwrap();
-    DriverSessionStores::new(Arc::new(storage), Scope::new("local").unwrap()).unwrap()
+    DriverSessionStores::new(storage_factory(Arc::new(storage))).unwrap()
 }
 
 #[tokio::test]
