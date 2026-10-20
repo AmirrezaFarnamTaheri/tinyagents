@@ -63,8 +63,8 @@ reachable under `session::`, `session::run_ledger::`, and
 - **Store port** — `SessionStoreProvider`, `AgentStores`, `TurnStates`,
   `InMemorySessionStores`, `DriverSessionStores`, and `RebindableSessionStores` over a `tinystoragedrivers` backend — see
   [`docs/modules/session/store-port.md`](../../../docs/modules/session/store-port.md)
-- **Legacy import** — `legacy::import_workspace` and
-  `DriverRunLedger::import_legacy_database` (feature `legacy-import`)
+- **Legacy import handoff** — workspace discovery and parsing moved to the
+  host; see [`docs/legacy-import-handoff.md`](../docs/legacy-import-handoff.md).
 - **Testkit** — `testkit::conformance::run_ledger_conformance` and
   `transcript_history_conformance`: contract suites certifying that a run
   ledger workspace or a `TranscriptHistory` implementation behaves like the
@@ -85,9 +85,9 @@ reachable under `session::`, `session::run_ledger::`, and
 | `tsd.counters` (`history`, `messages` / `tool_calls`) | dense message and tool-call id counters; a failed commit leaves a gap |
 | run-ledger collections | agent and workflow runs, run events and telemetry, teams, members, tasks |
 
-A classic `sessions.db`, `session_raw/` transcripts and turn-state JSON import
-through the `legacy` module (feature `legacy-import`), id-preserving and
-only-if-absent.
+Classic `sessions.db`, `session_raw/` transcript and turn-state import is a
+host responsibility. Session storage declarations still migrate records
+already held by the admitted backend.
 
 ## Operational constraints
 

@@ -1,4 +1,3 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 //! Tests for team service: creation, member lifecycle, task coordination,
 //! and messaging flow.
 
@@ -7,6 +6,7 @@ use std::thread;
 
 use chrono::Utc;
 use tempfile::TempDir;
+use tinystoragedrivers_testkit::MemoryBackend;
 use tinyagents_session::run_ledger::{
     AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember, AgentTeamMemberStatus,
     AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskUpsert, AgentTeamUpsert,
@@ -15,10 +15,11 @@ use tinyagents_session::run_ledger::{
 
 use super::*;
 
-fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
+fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();
     TeamService::new(
-        SessionTeamLedger::new(std::sync::Arc::new(crate::test_support::ledger_in(&ledger_backend)),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(
+            &ledger_backend,
         )))
         .unwrap(),
     )

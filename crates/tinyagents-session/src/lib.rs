@@ -54,13 +54,6 @@ use crate::testkit::MemoryStorage;
 //! [`threads`] is the product-facing chat log: threads and messages with a
 //! cross-thread inverted index. See `src/threads/README.md`.
 //!
-//! # Migrating a classic workspace
-//!
-//! Workspaces written before the storage-port migration kept a SQLite
-//! `sessions.db`, JSONL transcripts and turn-state JSON files.
-//! [`legacy::import_workspace`] (feature `legacy-import`, on by default) moves
-//! all of it into the ports, read-only, id-preserving and only-if-absent.
-//!
 //! # Example
 //!
 //! ```
