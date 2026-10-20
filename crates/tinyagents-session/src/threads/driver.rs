@@ -113,24 +113,6 @@ impl DriverConversationStore {
         }
     }
 
-    /// A process-lifetime store over the memory driver, for library hosts that
-    /// have no storage backend. Nothing is written to disk and nothing survives
-    /// the process; plain append is fully prepared.
-    ///
-    /// # Panics
-    /// Never in practice: the memory driver accepts every declaration.
-    pub async fn in_memory() -> Self {
-        use tinystoragedrivers_types::{MemoryStorage, Scope, StorageBackend};
-        let backend = MemoryStorage::new();
-        let scoped = backend
-            .for_scope(&Scope::new("local").expect("static scope"))
-            .expect("memory scope");
-        Self::prepare_append_schema(scoped.documents().as_ref())
-            .await
-            .expect("memory driver accepts declarations");
-        Self::new(scoped)
-    }
-
     /// The `conversations.threads` declaration.
     ///
     /// There are no required secondary indexes, TTL or full-text fields.
