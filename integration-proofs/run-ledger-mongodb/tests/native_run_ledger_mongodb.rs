@@ -17,10 +17,14 @@ use tinyagents_session::{
         drivers::{QuiescentSource, SourceOwner},
     },
 };
-use tinystoragedrivers_core::{
-    CollectionSpec, ErrorKind, Fence, Precondition, Scope, StorageBackend,
-};
-use tinystoragedrivers_mongodb::MongoStorage;
+use std::sync::Arc;
+
+use tinystoragedrivers_api::{DocumentStore, Storage, StorageBackend, StreamStore};
+use tinystoragedrivers_connect::MongoConnection;
+use tinystoragedrivers_document::mongodb::{MongoDocuments, MongoStreams};
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::{ErrorKind, Scope};
+use tinyagents_storage_kit::ScopedStorage;
 
 /// Validate the explicitly opted-in unauthenticated loopback Mongo endpoint.
 fn endpoint() -> String {
@@ -43,12 +47,24 @@ fn endpoint() -> String {
     value
 }
 /// Create a UUID database and prepare its native Mongo schema.
-async fn backend() -> (String, String, MongoStorage) {
+async fn backend(scope: &Scope) -> (String, String, ScopedStorage) {
     let url = endpoint();
     let database = format!("tinyagents_ledger_{}", uuid::Uuid::new_v4().simple());
-    let backend = MongoStorage::connect(&url, &database).await.unwrap();
-    backend.prepare_schema().await.unwrap();
-    (url, database, backend)
+    let connection = MongoConnection::connect(&url, &database).await.unwrap();
+    let documents =
+        Arc::new(MongoDocuments::new(connection.clone(), scope.clone())) as Arc<dyn DocumentStore>;
+    let streams =
+        Arc::new(MongoStreams::new(connection, scope.clone())) as Arc<dyn StreamStore>;
+    let memory = MemoryBackend::new().for_scope(scope).unwrap();
+    let storage = Storage::new(
+        documents,
+        streams,
+        memory.kv().clone(),
+        memory.blobs().clone(),
+        memory.queues().clone(),
+        memory.secrets().clone(),
+    );
+    (url, database, ScopedStorage::new(storage, scope.clone()))
 }
 /// Build the event shared by the sequence-boundary import and append cases.
 fn event() -> RunEventAppend {
@@ -98,8 +114,9 @@ fn source(ledger: &DriverRunLedger, root: &tempfile::TempDir, sequence: i64) -> 
 #[tokio::test]
 #[ignore = "local Mongo replica set: explicit loopback URL and --ignored required"]
 async fn terminal_event_append_uses_the_actual_mongo_bson_converter() {
-    let (_, _, backend) = backend().await;
-    let ledger = DriverRunLedger::new(backend.for_scope(&Scope::new("alice").unwrap()).unwrap());
+    let scope = Scope::new("alice").unwrap();
+    let (_, _, storage) = backend(&scope).await;
+    let ledger = DriverRunLedger::new(storage);
     let root = tempfile::tempdir().unwrap();
     let source = source(&ledger, &root, i64::MAX - 1);
     let bytes = std::fs::read(source.path()).unwrap();
@@ -130,9 +147,9 @@ async fn terminal_event_append_uses_the_actual_mongo_bson_converter() {
 #[tokio::test]
 #[ignore = "local Mongo replica set: explicit loopback URL and --ignored required"]
 async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
-    let (url, database, backend) = backend().await;
     let scope = Scope::new("alice").unwrap();
-    let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
+    let (url, database, storage) = backend(&scope).await;
+    let ledger = DriverRunLedger::new(storage);
     let root = tempfile::tempdir().unwrap();
     let source = source(&ledger, &root, i64::MAX);
     let bytes = std::fs::read(source.path()).unwrap();
@@ -140,8 +157,23 @@ async fn terminal_event_import_uses_the_actual_mongo_bson_converter() {
         .import_agent_family(&source, "import-boundary")
         .await
         .unwrap();
-    let reopened = MongoStorage::connect(&url, &database).await.unwrap();
-    let peer = DriverRunLedger::new(reopened.for_scope(&scope).unwrap());
+    let reopened = MongoConnection::connect(&url, &database).await.unwrap();
+    let documents = Arc::new(MongoDocuments::new(reopened.clone(), scope.clone()))
+        as Arc<dyn DocumentStore>;
+    let streams = Arc::new(MongoStreams::new(reopened, scope.clone())) as Arc<dyn StreamStore>;
+    let memory = MemoryBackend::new().for_scope(&scope).unwrap();
+    let peer_storage = ScopedStorage::new(
+        Storage::new(
+            documents,
+            streams,
+            memory.kv().clone(),
+            memory.blobs().clone(),
+            memory.queues().clone(),
+            memory.secrets().clone(),
+        ),
+        scope.clone(),
+    );
+    let peer = DriverRunLedger::new(peer_storage);
     assert!(
         matches!(peer.append_run_event(event()).await.unwrap_err(), LedgerError::Driver(error) if error.kind() == ErrorKind::Serialization)
     );

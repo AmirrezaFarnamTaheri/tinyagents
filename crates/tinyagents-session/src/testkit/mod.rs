@@ -17,7 +17,7 @@
 //! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
 //! use tinystoragedrivers_testkit::memory_backend;
-//! use tinyagents_storage_kit::{Scope, ScopedStorage};
+//! use tinyagents_storage_kit::{Scope, ScopedStorage, StorageBackend};
 //!
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let backend = memory_backend();
