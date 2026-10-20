@@ -400,7 +400,20 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     ));
                     profile
                 } else {
-                    self.preview_model_profile(&patch_request)
+                    match self.resolve_local_model(ctx, &patch_request).await {
+                        Ok(binding) => {
+                            let profile = binding.model.profile().cloned();
+                            *resolution_cache.lock().unwrap() = Some((
+                                patch_request.model.clone(),
+                                patch_request.model_hints.clone(),
+                                patch_request.required_capabilities.clone(),
+                                binding,
+                            ));
+                            profile
+                        }
+                        Err(TinyAgentsError::ModelNotFound(_)) => None,
+                        Err(error) => return Err(error),
+                    }
                 };
 
             // B6: re-consult the toolset chain and declare any live change as a
@@ -553,7 +566,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
             let hosted_binding = match cached {
                 Some(binding) => Some(binding),
-                None => self.resolve_host_model(ctx, &request).await?,
+                None => match self.resolve_host_model(ctx, &request).await? {
+                    Some(binding) => Some(binding),
+                    None => None,
+                },
             };
             let binding = if let Some(binding) = hosted_binding {
                 binding
