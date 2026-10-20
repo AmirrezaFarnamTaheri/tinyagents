@@ -174,20 +174,33 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         request: &ModelRequest,
     ) -> Result<ModelBinding<State>> {
         let resolve = local_resolve_request(request);
-        let model = if let Some(resolver) = self.model_resolver.as_ref() {
+        let (model, selected_name) = if let Some(resolver) = self.model_resolver.as_ref() {
             let (budget, bound) = self.model_call_budget(ctx);
-            ctx.bounded(budget, resolver.resolve(&resolve), || {
+            let mut model = ctx.bounded(budget, resolver.resolve(&resolve), || {
                 format!("local model resolution for run `{}` exceeded its {bound}", ctx.run_id())
-            }).await?
+            }).await?;
+            let mut selected_name = resolver.selected_name(&resolve);
+            if !model_is_eligible(model.as_ref(), request.required_capabilities.as_ref())
+                && (request.model.is_some() || !request.model_hints.is_empty())
+            {
+                let mut default_request = crate::host::ModelResolveRequest::new("local");
+                if let Some(required) = request.required_capabilities.clone() {
+                    default_request = default_request.with_required_capabilities(required);
+                }
+                model = resolver.resolve(&default_request).await?;
+                selected_name = resolver.selected_name(&default_request);
+            }
+            (model, selected_name)
         } else if let Some(model) = self.fixed_model.clone() {
-            model
+            let selected_name = model.profile().and_then(|profile| profile.model.clone());
+            (model, selected_name)
         } else {
             return Err(TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into())));
         };
         ensure_model_eligible(model.as_ref(), request)?;
-        let name = model.profile().and_then(|p| p.model.clone())
+        let name = selected_name
+            .or_else(|| model.profile().and_then(|profile| profile.model.clone()))
             .or_else(|| request.model.clone())
-            .or_else(|| request.model_hints.first().map(|hint| hint.model.clone()))
             .unwrap_or_else(|| "default".into());
         Ok(ModelBinding {
             resolved: ResolvedModel {

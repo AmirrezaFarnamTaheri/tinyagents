@@ -243,6 +243,13 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
     fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
         None
     }
+
+    /// The selected configured name, when the resolver can identify it
+    /// without changing its answer. This carries observability and fallback
+    /// identity alongside the executable model.
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        None
+    }
 }
 
 // ── FixedModelResolver ────────────────────────────────────────────────────────
@@ -301,6 +308,10 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
 
     fn preview(&self, _req: &ModelResolveRequest) -> Option<Arc<dyn ChatModel<State>>> {
         Some(Arc::clone(&self.model))
+    }
+
+    fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
+        self.model.profile().and_then(|profile| profile.model.clone())
     }
 }
 
@@ -389,6 +400,17 @@ impl<State: Send + Sync> ModelResolver<State> for PrebuiltModelResolver<State> {
         let route = req.model_pin().or(hinted_route.as_deref());
         Some(route.and_then(|name| self.routes.get(name)).cloned()
             .unwrap_or_else(|| Arc::clone(&self.primary)))
+    }
+
+    fn selected_name(&self, req: &ModelResolveRequest) -> Option<String> {
+        let hinted_route = req.model_hint.as_deref().map(str::trim)
+            .filter(|hint| !hint.is_empty()).map(|hint| format!("hint:{hint}"));
+        let route = req.model_pin().or(hinted_route.as_deref());
+        if let Some(name) = route.filter(|name| self.routes.contains_key(*name)) {
+            return Some(name.to_owned());
+        }
+        self.primary_name.clone()
+            .or_else(|| self.primary.profile().and_then(|profile| profile.model.clone()))
     }
 }
 
