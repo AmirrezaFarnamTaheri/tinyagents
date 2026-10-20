@@ -3,7 +3,6 @@ use super::*;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use std::future::Ready;
 use tinyagents_harness::CancellationToken;
 use tinyagents_harness::ids::TaskId;
 use tinyagents_harness::run_queue::QueueLane;
@@ -29,17 +28,6 @@ impl SubagentIdentity for Meta {
 }
 
 type Registry = DetachedTaskRegistry<Meta, DetachedSubagentStatus>;
-
-struct RecordingFallback(Arc<std::sync::Mutex<Option<(String, QueueLane, String)>>>);
-
-impl SteerFallback<Meta> for RecordingFallback {
-    type Future = Ready<()>;
-
-    fn enqueue(self, metadata: Meta, lane: QueueLane, text: String) -> Self::Future {
-        *self.0.lock().unwrap() = Some((metadata.agent_id().to_string(), lane, text));
-        std::future::ready(())
-    }
-}
 
 fn registry(steering: SteeringRegistry) -> Registry {
     DetachedTaskRegistry::new(steering, 256, DetachedSubagentStatus::is_terminal)
@@ -172,6 +160,24 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_r
     assert_eq!(receipt.route, Some(SteerRoute::Registry));
     assert!(!receipt.duplicate, "a rejected terminal steer keeps its request id");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn terminal_transition_after_snapshot_is_rejected_by_live_handle_check() {
+    let steering = SteeringRegistry::default();
+    let reg = registry(steering);
+    let tx = add(&reg, "t1", "p1", None);
+    let task_id = TaskId::new("t1");
+
+    let snapshot = reg.snapshot(&task_id, "p1").unwrap();
+    assert!(!snapshot.status.is_terminal());
+    tx.send(DetachedSubagentStatus::Failed { error: "e".into() })
+        .unwrap();
+
+    assert!(matches!(
+        live_handle_or_fallback(&reg, &task_id, SteerAccess::Owner("p1")),
+        Err(SteerError::Unknown)
+    ));
 }
 
 #[tokio::test]
