@@ -440,11 +440,11 @@ pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageEr
     .await?;
 
     with_migration_lease(storage, "session", |lease| async move {
-        crate::run_ledger::import_legacy_ledger(storage).await?;
+        crate::import_legacy_ledger(storage).await?;
         let registry = Registry::compose([
             schema::storage_schema(),
-            crate::run_ledger::ledger_storage_schema(),
-            crate::run_ledger::history_storage_schema(),
+            crate::ledger_storage_schema(),
+            crate::history_storage_schema(),
             crate::threads::conversations_storage_schema(),
         ])?;
         registry.migrate(storage, &MigrateOptions::new()).await?;
@@ -468,8 +468,8 @@ pub fn collections() -> Vec<CollectionSpec> {
     }
     for schema in [
         schema::storage_schema(),
-        crate::run_ledger::ledger_storage_schema(),
-        crate::run_ledger::history_storage_schema(),
+        crate::ledger_storage_schema(),
+        crate::history_storage_schema(),
         crate::threads::conversations_storage_schema(),
     ] {
         for item in schema.items {
