@@ -102,6 +102,12 @@ pub struct ThreadMessagePatch {
     /// untouched.
     #[serde(default)]
     pub extra_metadata: Option<Value>,
+    /// Recursively merges a JSON Merge Patch into the latest `extraMetadata`.
+    /// Object members are merged, arrays/scalars are replaced, and `null`
+    /// removes an object member. Applied inside the driver's compare-and-swap
+    /// retry so concurrent patches are not based on a stale host-side read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_extra_metadata: Option<Value>,
 }
 
 /// A single match returned by
