@@ -46,15 +46,27 @@ impl MemoryStorage {
     pub(crate) fn new() -> Self {
         Self::default()
     }
-}
 
-#[cfg(test)]
-impl tinyagents_storage_kit::StorageBackend for MemoryStorage {
-    fn for_scope(
+    pub(crate) fn for_scope(
         &self,
         scope: &tinyagents_storage_kit::Scope,
     ) -> tinyagents_storage_kit::error::Result<tinyagents_storage_kit::ScopedStorage> {
-        tinyagents_storage_kit::StorageBackend::for_scope(self.0.as_ref(), scope)
+        let storage = tinystoragedrivers_api::StorageBackend::for_scope(self, scope)?;
+        Ok(tinyagents_storage_kit::ScopedStorage::new(storage, scope.clone()))
+    }
+}
+
+#[cfg(test)]
+impl tinystoragedrivers_api::StorageBackend for MemoryStorage {
+    fn capabilities(&self) -> tinyagents_storage_kit::Capabilities {
+        tinystoragedrivers_api::StorageBackend::capabilities(self.0.as_ref())
+    }
+
+    fn for_scope(
+        &self,
+        scope: &tinyagents_storage_kit::Scope,
+    ) -> tinyagents_storage_kit::error::Result<tinystoragedrivers_api::Storage> {
+        tinystoragedrivers_api::StorageBackend::for_scope(self.0.as_ref(), scope)
     }
 }
 
