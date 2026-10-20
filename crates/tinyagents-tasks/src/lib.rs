@@ -24,8 +24,6 @@ mod status;
 mod storage;
 mod store;
 mod store_registry;
-#[cfg(test)]
-mod test_support;
 mod tool;
 mod types;
 

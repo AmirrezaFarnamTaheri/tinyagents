@@ -16,10 +16,11 @@
 //! use std::sync::Arc;
 //! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
-//! use tinyagents_storage_kit::{MemoryStorage, Scope, StorageBackend};
+//! use tinystoragedrivers_testkit::memory_backend;
+//! use tinyagents_storage_kit::{Scope, StorageBackend};
 //!
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
-//! let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+//! let storage = memory_backend().for_scope(&Scope::local()).unwrap();
 //! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
 //! # });
 //! ```
@@ -44,11 +45,12 @@ pub use in_memory_transcript::InMemoryTranscriptHistory;
 pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
     use crate::port::{DriverSessionStores, SessionStoreProvider};
     use std::sync::Arc;
-    use tinystoragedrivers_types::MemoryStorage;
+    use tinystoragedrivers_testkit::memory_backend;
+    use tinyagents_storage_kit::{Scope, StorageBackend};
 
     DriverSessionStores::new(
-        Arc::new(MemoryStorage::new()),
-        tinystoragedrivers_types::Scope::local(),
+        Arc::new(memory_backend()),
+        Scope::local(),
     )
     .expect("driver session stores over memory")
     .for_agent("test")

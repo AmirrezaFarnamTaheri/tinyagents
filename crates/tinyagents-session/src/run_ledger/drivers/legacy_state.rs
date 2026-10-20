@@ -25,7 +25,7 @@ use super::storage::{HISTORY_OWNER, LEDGER_OWNER, key, workflow_lease_key};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinyagents_storage_kit::primitives::{self, LEASES};
-use tinyagents_storage_kit::{Counters, Migrations, ScopedStorage};
+use tinyagents_storage_kit::{Counters, Migrations, ScopedStorage, MIGRATIONS_COLLECTION};
 use tinyagents_storage_kit::{
     CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Precondition, Query, Result, Sort,
 };
@@ -88,7 +88,7 @@ pub async fn import_legacy_ledger(storage: &ScopedStorage) -> Result<LegacyLedge
     storage
         .documents()
         .ensure_collection(&CollectionSpec::new(
-            tinystoragedrivers_types::MIGRATIONS_COLLECTION,
+            MIGRATIONS_COLLECTION,
         ))
         .await?;
     let mut report = LegacyLedgerImport::default();
