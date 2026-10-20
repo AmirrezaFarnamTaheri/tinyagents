@@ -16,7 +16,7 @@ use crate::observability::{
 };
 use crate::runtime::AgentHarness;
 use async_trait::async_trait;
-use futures::{StreamExt, poll};
+use futures::StreamExt;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -552,27 +552,26 @@ async fn streaming_agent_turn_preserves_typed_admission_refusal() {
 }
 
 #[tokio::test]
-async fn lazy_openai_stream_rechecks_committed_admission_before_http_dispatch() {
-    assert_lazy_openai_stream_rechecks_committed_admission(false).await;
+async fn lazy_stream_rechecks_committed_admission_before_local_http_dispatch() {
+    assert_lazy_stream_rechecks_committed_admission(false).await;
 }
 
 #[tokio::test]
-async fn lazy_openai_stream_rechecks_budgeted_admission_before_http_dispatch() {
-    assert_lazy_openai_stream_rechecks_committed_admission(true).await;
+async fn lazy_stream_rechecks_budgeted_admission_before_local_http_dispatch() {
+    assert_lazy_stream_rechecks_committed_admission(true).await;
 }
 
-async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budget: bool) {
-    use tinyinference_llm::providers::openai::OpenAiModel;
-
+async fn assert_lazy_stream_rechecks_committed_admission(with_money_budget: bool) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind local fake provider");
-    let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+    let endpoint = listener.local_addr().unwrap();
     let counts = Arc::new(Counts::default());
     let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
-    let provider = Arc::new(ArmLateRefusalAfterStreamConstruction {
-        inner: Arc::new(OpenAiModel::new("test-key").with_base_url(endpoint)),
+    let provider = Arc::new(LazyHttpModel {
+        endpoint,
         permit_state: admission.permits.clone(),
+        counts: counts.clone(),
     });
     let money_budget = with_money_budget.then(|| {
         ModelBudget::new(
@@ -595,7 +594,7 @@ async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budge
             .invoke_streaming(
                 &(),
                 (),
-                RunConfig::new("lazy-openai-dispatch"),
+                RunConfig::new("lazy-local-http-dispatch"),
                 vec![tinyinference_llm::message::Message::user("hello")],
             )
             .await
@@ -612,7 +611,7 @@ async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budge
         }
         connection = listener.accept() => {
             turn.abort();
-            panic!("provider received an HTTP connection after the permit's late deadline refusal: {connection:?}");
+            panic!("local provider received a connection after late deadline refusal: {connection:?}");
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
             turn.abort();
@@ -621,6 +620,7 @@ async fn assert_lazy_openai_stream_rechecks_committed_admission(with_money_budge
     }
     assert!(admission.permits.stream_constructed.load(Ordering::SeqCst));
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+    assert_eq!(counts.provider.load(Ordering::SeqCst), 0);
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 0);
 }
 
