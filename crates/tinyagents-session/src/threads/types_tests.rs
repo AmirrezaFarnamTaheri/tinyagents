@@ -85,8 +85,8 @@ fn run_reply_id_is_deterministic_and_recognised_as_such() {
 
 #[test]
 fn client_generated_ids_are_not_deterministic() {
-    // These are client-owned UI ids, not stable request keys. They are not
-    // transcript-correlated assistant replies or append-idempotency keys.
+    // User ids are not transcript-correlated assistant replies. The user:
+    // prefix is a separate append-idempotency contract.
     assert!(!is_deterministic_message_id(
         "user:5f1d0c3e-1f8b-4c1a-9c2e-2a7b6d4e8f90"
     ));
