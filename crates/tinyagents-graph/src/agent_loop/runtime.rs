@@ -365,7 +365,7 @@ where
                         && *cached_hints == key.1
                         && *cached_capabilities == key.2
                     {
-                        return Ok(binding.model.profile().cloned());
+                        return Ok(binding.1.profile().cloned());
                     }
                     let binding = harness.resolve_model_for_request(request).await?;
                     let profile = binding.1.profile().cloned();
@@ -394,7 +394,7 @@ where
                     .then_some(binding)
             },
         )
-        .or_else(|| None);
+        ;
     let binding = match binding {
         Some(binding) => binding,
         None => harness.resolve_model_for_request(&request).await?,
@@ -436,7 +436,7 @@ where
     ctx.active_model_call = Some(call_id.clone());
     ctx.begin_model_call();
     let base = DirectModelBase {
-        model: binding.model.as_ref(),
+        model: binding.1.as_ref(),
     };
     let wrapped = match harness
         .middleware()
