@@ -7,24 +7,23 @@
 //!
 //! See `types` for the data definitions. This module provides registration,
 //! lookup, aliasing, duplicate validation, and conveniences for handing the
-//! catalog's models and tools to a harness ([`to_model_registry`] /
-//! [`to_tool_registry`]).
+//! catalog's tools to a harness ([`to_tool_registry`]).
 //!
-//! [`to_model_registry`]: CapabilityRegistry::to_model_registry
 //! [`to_tool_registry`]: CapabilityRegistry::to_tool_registry
 
 mod types;
+mod value;
 
 use std::sync::Arc;
 
 use crate::component::{ComponentKind, ComponentMetadata};
 use tinyagents_harness::error::{Result, TinyAgentsError};
-use tinyagents_harness::model_registry::ModelRegistry;
 use tinyagents_harness::tool::ToolRegistry;
 use tinyinference_llm::model::ChatModel;
 use tinytools::Tool;
 
 pub use types::*;
+pub use value::Capability;
 
 impl<State: Send + Sync> CapabilityRegistry<State> {
     /// Creates an empty registry.
@@ -331,8 +330,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     // Registration: capability bundles (gap G3)
     // -----------------------------------------------------------------------
 
-    /// Registers a [`tinyagents_harness::capability::Capability`] bundle
-    /// under its own [`Capability::name`](tinyagents_harness::capability::Capability::name).
+    /// Registers a [`Capability`] bundle under its own name.
     ///
     /// # Why `Ctx` is a method type parameter, not stored on `Self`
     ///
@@ -341,12 +339,9 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// definitions — is `Ctx`-free: `Arc<dyn ChatModel<State>>`, `Arc<dyn
     /// tinytools::Tool>`, and `AgentDefinition` none of them name a `Ctx`
     /// type. A `Capability`,
-    /// however, composes `tinyagents_harness::tool::toolset::ToolSet<State,
-    /// Ctx>` and `tinyagents_harness::middleware::Middleware<State, Ctx>`
-    /// trait objects (see `tinyagents-harness`'s `capability` module doc
-    /// comment for why `Capability` itself cannot live in
-    /// `tinyagents-definition`, the lower crate that would otherwise be the
-    /// natural home for a registry-stored declarative bundle).
+    /// however, composes harness `ToolSet<State, Ctx>` and `Middleware<State,
+    /// Ctx>` trait objects, so its owning type lives here rather than in the
+    /// lower `tinyagents-definition` crate.
     ///
     /// Adding a `Ctx` type parameter to `CapabilityRegistry<State>` itself —
     /// so every one of its dozen kinds carries a `Ctx` dimension only this
@@ -365,7 +360,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// already registered under this name.
     pub fn register_capability<Ctx>(
         &mut self,
-        capability: tinyagents_harness::capability::Capability<State, Ctx>,
+        capability: Capability<State, Ctx>,
     ) -> Result<&mut Self>
     where
         State: 'static,
@@ -383,7 +378,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     /// for why `Ctx` is a method type parameter.
     pub fn replace_capability<Ctx>(
         &mut self,
-        capability: tinyagents_harness::capability::Capability<State, Ctx>,
+        capability: Capability<State, Ctx>,
     ) -> &mut Self
     where
         State: 'static,
@@ -405,7 +400,7 @@ impl<State: Send + Sync> CapabilityRegistry<State> {
     pub fn capability<Ctx>(
         &self,
         name: &str,
-    ) -> Option<&tinyagents_harness::capability::Capability<State, Ctx>>
+    ) -> Option<&Capability<State, Ctx>>
     where
         State: 'static,
         Ctx: Send + Sync + 'static,
