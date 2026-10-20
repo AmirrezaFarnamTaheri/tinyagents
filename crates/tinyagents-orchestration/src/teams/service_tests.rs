@@ -122,7 +122,6 @@ async fn start_member_runs_and_completes_claimed_task() {
 
 #[tokio::test]
 async fn a_member_cannot_start_a_second_task_while_its_first_task_is_running() {
-    let dir = TempDir::new().unwrap();
     // Independent handles prove the admission fence is durable and shared,
     // rather than a mutex local to one TeamService instance.
     let ledger_backend = MemoryBackend::new();
