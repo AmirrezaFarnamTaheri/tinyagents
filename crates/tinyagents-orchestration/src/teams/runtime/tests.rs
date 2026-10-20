@@ -8,7 +8,7 @@ use tinystoragedrivers_testkit::MemoryBackend;
 use super::*;
 use crate::teams::{NewMember, SessionTeamLedger, TeamService};
 
-fn team(dir: &TempDir) -> (SessionTeamLedger, String, String) {
+fn team(_dir: &TempDir) -> (SessionTeamLedger, String, String) {
     let ledger_backend = MemoryBackend::new();
     let ledger =
         SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap();
