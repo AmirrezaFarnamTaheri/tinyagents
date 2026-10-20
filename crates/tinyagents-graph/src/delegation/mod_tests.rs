@@ -1226,7 +1226,7 @@ fn serialized_state_shape_is_pinned() {
     assert_eq!(
         json,
         r#"{"plan":"PLAN","executions":[{"index":0,"prompt":"P0","result":"R0"},{"index":1,"prompt":"P1","result":"R1"}],"reviews":["review-0","review-1"],"revisions":1,"approved":true,"final_output":"FINAL","cancelled":false,"human_approved":true,"denied":false,"schema_version":1}"#,
-        "DelegationState's on-disk shape changed; see this test's doc comment"
+        "DelegationState's serialized shape changed; see this test's doc comment"
     );
 
     // And it decodes back to an equal value, so the pin covers both directions.
