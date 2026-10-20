@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tinyinference_llm::model::ChatModel;
 use tinyinference_llm::model::budget::{BeforeDispatch, Budget, BudgetedModel, CallBudget};
+use tinyinference_llm::model::DispatchCheckedModel;
 use tinyinference_llm::model::{
     DeferredHandle, DeferredStatus, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
 };
@@ -89,7 +90,10 @@ fn wrap_model_with_policies(
                 None => Arc::new(budgeted),
             }
         }
-        None => observed,
+        None => match before_dispatch {
+            Some(hook) => Arc::new(DispatchCheckedModel::new(observed, hook)),
+            None => observed,
+        },
     }
 }
 
@@ -134,13 +138,6 @@ impl ControlledChatModel {
             hook,
         );
 
-        if self.options.monetary_budget.is_none()
-            && let Some(permit) = permit.as_ref()
-            && let Err(refusal) = permit.mark_dispatched()
-        {
-            return Err(refusal.into());
-        }
-
         match wrapped.invoke(state, request).await {
             Ok(response) => Ok(response),
             Err(error) => match dispatch_outcome
@@ -182,12 +179,6 @@ impl ControlledChatModel {
             self.options.observer.clone(),
             hook,
         );
-        if self.options.monetary_budget.is_none()
-            && let Some(permit) = permit.as_ref()
-            && let Err(refusal) = permit.mark_dispatched()
-        {
-            return Err(refusal.into());
-        }
         let stream = match wrapped.stream(state, request).await {
             Ok(stream) => stream,
             Err(error) => {
@@ -215,6 +206,7 @@ impl BeforeDispatch for AdmissionBeforeDispatch {
         match self.permit.mark_dispatched() {
             Ok(()) => Ok(()),
             Err(refusal) => {
+                super::dispatch_admission::record_invocation_refusal(refusal);
                 *self
                     .outcome
                     .lock()

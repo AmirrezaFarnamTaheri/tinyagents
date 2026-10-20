@@ -1190,6 +1190,37 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         model_name: &str,
         shape: &super::dialect::CallShape,
     ) -> Result<ModelResponse> {
+        let (result, refusal) = crate::cost::with_dispatch_outcome_scope(
+            self.invoke_model_streaming_once_scoped(
+                state,
+                ctx,
+                model,
+                request,
+                call_id,
+                deltas_emitted,
+                model_name,
+                shape,
+            ),
+        )
+        .await;
+        match refusal {
+            Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
+            None => result,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn invoke_model_streaming_once_scoped(
+        &self,
+        state: &State,
+        ctx: &mut RunContext<Ctx>,
+        model: &Arc<dyn ChatModel<State>>,
+        request: &ModelRequest,
+        call_id: &CallId,
+        deltas_emitted: &mut usize,
+        model_name: &str,
+        shape: &super::dialect::CallShape,
+    ) -> Result<ModelResponse> {
         let recovery = &shape.recovery;
         // Start the first-event window before opening the provider stream so
         // a provider that hangs while establishing the stream is bounded too.
@@ -1200,13 +1231,10 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let first_event_deadline =
             first_event_timeout.map(|window| tokio::time::Instant::now() + window);
         let open_stream = async {
-            let (result, refusal) =
-                crate::cost::with_dispatch_outcome_scope(model.stream(state, request.clone()))
-                    .await;
-            match refusal {
-                Some(refusal) => Err(TinyAgentsError::PhysicalDispatchAdmission(refusal)),
-                None => result.map_err(TinyAgentsError::from),
-            }
+            model
+                .stream(state, request.clone())
+                .await
+                .map_err(TinyAgentsError::from)
         };
         let stream_result = async {
             match first_event_deadline {
