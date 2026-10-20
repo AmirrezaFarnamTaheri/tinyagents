@@ -2089,7 +2089,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "toml",
  "tracing",
@@ -2109,7 +2109,7 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "tracing",
 ]
@@ -2147,8 +2147,8 @@ dependencies = [
  "tinyinference-video",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools 0.6.0",
- "tinytools-agent 0.6.0",
+ "tinytools",
+ "tinytools-agent",
  "tokio",
  "toml",
  "tracing",
@@ -2183,7 +2183,7 @@ dependencies = [
  "tinyagents-orchestration",
  "tinyagents-tasks",
  "tinyinference-llm",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "tracing",
  "uuid",
@@ -2203,7 +2203,7 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-harness-tools",
  "tinyinference-llm",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "tracing",
 ]
@@ -2232,7 +2232,7 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
 ]
 
@@ -2275,7 +2275,7 @@ dependencies = [
  "tinyinference-llm",
  "tinystoragedrivers-core",
  "tinystoragedrivers-sqlite",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "tracing",
  "uuid",
@@ -2293,7 +2293,7 @@ dependencies = [
  "tinyagents-definition",
  "tinyagents-harness",
  "tinyinference-llm",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
 ]
 
@@ -2314,7 +2314,7 @@ dependencies = [
  "tinyagents-session",
  "tinyinference-llm",
  "tinystoragedrivers-core",
- "tinytools 0.6.0",
+ "tinytools",
  "tokio",
  "tracing",
 ]
@@ -2339,7 +2339,7 @@ dependencies = [
  "tinystoragedrivers-core",
  "tinystoragedrivers-file",
  "tinystoragedrivers-sqlite",
- "tinytools-agent 0.6.0",
+ "tinytools-agent",
  "tokio",
  "tracing",
  "uuid",
@@ -2421,7 +2421,7 @@ dependencies = [
  "thiserror",
  "tinyinference-core",
  "tinyinference-providers",
- "tinytools-agent 0.5.0",
+ "tinytools-agent",
  "tokio",
  "tracing",
 ]
@@ -2550,17 +2550,6 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.5.0"
-source = "git+https://github.com/tinyhumansai/tinytools?rev=bd60b9b52f1998b4483b9cf107a72d3338e672f8#bd60b9b52f1998b4483b9cf107a72d3338e672f8"
-dependencies = [
- "anyhow",
- "async-trait",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "tinytools"
 version = "0.6.0"
 dependencies = [
  "anyhow",
@@ -2571,23 +2560,12 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.5.0"
-source = "git+https://github.com/tinyhumansai/tinytools?rev=bd60b9b52f1998b4483b9cf107a72d3338e672f8#bd60b9b52f1998b4483b9cf107a72d3338e672f8"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "tinytools 0.5.0",
-]
-
-[[package]]
-name = "tinytools-agent"
 version = "0.6.0"
 dependencies = [
  "regex",
  "serde",
  "serde_json",
- "tinytools 0.6.0",
+ "tinytools",
  "tracing",
 ]
 
