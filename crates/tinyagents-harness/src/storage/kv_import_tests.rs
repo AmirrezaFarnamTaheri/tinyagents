@@ -77,12 +77,10 @@ async fn the_import_runs_once_and_never_overwrites_newer_v2_values() {
         .unwrap();
     assert_eq!(moved, 0, "an existing v2 entry is kept, not counted");
     assert_eq!(kv.get::<String>("a").await.unwrap().as_deref(), Some("new"));
-    assert!(
-        Migrations::new(&storage)
-            .done("session", "kv_import_session_kv")
-            .await
-            .unwrap()
-    );
+    assert!(Migrations::new(&storage)
+        .done("session", "kv_import_session_kv")
+        .await
+        .unwrap());
 
     // Done is recorded: new legacy rows are not picked up by a second call.
     seed(
@@ -188,10 +186,8 @@ async fn a_missing_legacy_collection_is_a_completed_import() {
         .await
         .unwrap();
     assert_eq!(moved, 0);
-    assert!(
-        Migrations::new(&storage)
-            .done("harness", "kv_import_harness_store")
-            .await
-            .unwrap()
-    );
+    assert!(Migrations::new(&storage)
+        .done("harness", "kv_import_harness_store")
+        .await
+        .unwrap());
 }
