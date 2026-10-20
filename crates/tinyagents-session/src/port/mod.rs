@@ -50,8 +50,6 @@
 mod drivers;
 mod memory;
 mod types;
-#[cfg(feature = "legacy-import")]
-mod workspace;
 
 use std::sync::Arc;
 
@@ -61,10 +59,6 @@ pub use drivers::{
 };
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use types::AgentStores;
-#[cfg(feature = "legacy-import")]
-pub use types::WorkspaceStores;
-#[cfg(feature = "legacy-import")]
-pub use workspace::STORE_DIR;
 
 pub use tinyagents_harness::store::{AppendStore, Store};
 

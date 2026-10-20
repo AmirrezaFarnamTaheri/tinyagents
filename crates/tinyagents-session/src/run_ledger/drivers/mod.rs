@@ -12,10 +12,6 @@ mod entry_tree;
 mod events;
 mod history;
 mod history_retention;
-#[cfg(feature = "legacy-import")]
-mod import;
-#[cfg(feature = "legacy-import")]
-mod legacy_import;
 mod legacy_state;
 mod retention;
 mod schema;
@@ -23,13 +19,6 @@ mod steps;
 mod steps_history;
 mod storage;
 mod team;
-#[cfg(feature = "legacy-import")]
-pub use crate::legacy::{LegacySourceSnapshot, QuiescentSource, SourceOwner};
-#[cfg(feature = "legacy-import")]
-pub use import::AgentImportReport;
-#[cfg(feature = "legacy-import")]
-pub use legacy_import::{ImportCounts, LegacyDatabaseReport};
-
 pub use legacy_state::{LegacyLedgerImport, import_legacy_ledger};
 pub use schema::{history_storage_schema, ledger_storage_schema};
 use std::sync::Arc;

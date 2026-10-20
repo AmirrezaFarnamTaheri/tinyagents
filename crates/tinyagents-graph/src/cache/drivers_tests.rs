@@ -25,10 +25,9 @@ async fn memory_backend_passes_the_task_cache_contract() {
 }
 
 #[tokio::test]
-async fn sqlite_backend_passes_the_task_cache_contract() {
+async fn testkit_backend_passes_the_task_cache_contract() {
     let dir = tempfile::tempdir().unwrap();
-    let storage =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("cache.sqlite")).unwrap();
+    let storage = crate::test_support::memory_backend(&dir.path().join("cache.sqlite"));
     task_cache_contract(DriverTaskCache::new(docs(&storage, "local"))).await;
 }
 
@@ -37,14 +36,14 @@ async fn entries_persist_across_handles_and_reopened_files() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("cache.sqlite");
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = crate::test_support::memory_backend(&path);
         let cache = DriverTaskCache::new(docs(&storage, "local"));
         cache
             .put(&key("g", "n", "h"), json!(7), None)
             .await
             .unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = crate::test_support::memory_backend(&path);
     let reopened = DriverTaskCache::new(docs(&storage, "local"));
     assert_eq!(
         reopened.get(&key("g", "n", "h")).await.unwrap(),
