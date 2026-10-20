@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|tinystoragedrivers-(core|sqlite|document|kv|blob|queue|secrets|connect)'
+blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|^tinystoragedrivers$|tinystoragedrivers-(core|sqlite|document|kv|blob|queue|secrets|connect)'
 root=$(pwd -P)
 
 has_blocked_dependency() {
@@ -18,6 +18,7 @@ self_test() {
     'tinystoragedrivers-testkit v2.0.0')
   forbidden=$(printf '%s\n' \
     'rusqlite v0.31.0' \
+    'tinystoragedrivers v2.0.0' \
     'tinystoragedrivers-document v2.0.0')
   if has_blocked_dependency <<<"$benign" >/dev/null; then
     echo 'storage-engine dependency check rejected a port or testkit crate' >&2
@@ -36,7 +37,7 @@ mapfile -t packages < <(
     jq -r --arg root "$root" '
       .packages[]
       | select(.manifest_path | startswith($root + "/crates/"))
-      | select(any(.targets[]; any(.kind[]; . == "lib")))
+      | select(any(.targets[]; any(.kind[]; IN("lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"))))
       | .name
     ' | sort -u
 )
@@ -52,4 +53,5 @@ for package in "${packages[@]}"; do
     printf 'normal/build dependency tree for %s contains a storage engine:\n%s\n' "$package" "$matches" >&2
     exit 1
   fi
+  printf 'checked %s\n' "$package"
 done

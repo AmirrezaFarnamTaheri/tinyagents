@@ -28,8 +28,12 @@ tinytools = { path = "../../vendor/tinytools/crates/tinytools", version = "0.5.0
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread", "time", "test-util"] }
 
 [dev-dependencies]
-tinystoragedrivers-core = { workspace = true }
-tinystoragedrivers-sqlite = { workspace = true }
+tinyagents-storage-kit = { path = "../tinyagents-storage-kit" }
+tinystoragedrivers-api = { workspace = true }
+tinystoragedrivers-connect = { workspace = true }
+tinystoragedrivers-document = { workspace = true }
+tinystoragedrivers-testkit = { workspace = true }
+tinystoragedrivers-types = { workspace = true }
 
 [features]
 default = []
