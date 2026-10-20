@@ -16,7 +16,7 @@ fn storage_pair(
         .for_scope(&Scope::new(name).unwrap())
         .unwrap();
     let sessions = Arc::new(SessionStore::new(storage.documents()).unwrap());
-    let settings = super::settings::store(storage.documents()).unwrap();
+    let settings = super::super::settings::store(storage.documents()).unwrap();
     (storage, sessions, settings)
 }
 

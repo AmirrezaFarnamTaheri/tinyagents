@@ -108,8 +108,8 @@ async fn claim_is_exclusive_released_on_failure_and_committed_after_acceptance()
 
 #[tokio::test]
 async fn reservations_coordinate_for_same_handle_but_not_different_scopes() {
-    let (_storage_a, a) = new_store();
-    let b = Arc::new(SessionStore::new(&a.kv.docs).unwrap());
+    let (storage_a, a) = new_store();
+    let b = Arc::new(SessionStore::new(storage_a.documents()).unwrap());
     let (_storage_other, other) = another_scope("separate-claude-code-scope");
     let fp = ["same-fingerprint".to_owned()];
     let (_, claim) = a.claim_delivered("thread", &fp).await.unwrap();
