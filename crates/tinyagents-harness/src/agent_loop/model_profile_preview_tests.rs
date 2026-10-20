@@ -98,3 +98,33 @@ async fn later_middleware_sees_model_selected_by_earlier_middleware() {
 
     assert_eq!(seen.lock().unwrap().as_slice(), [Some(second_profile)]);
 }
+
+#[test]
+fn profile_preview_uses_the_eligible_default_for_an_ineligible_pin() {
+    use crate::host::{ModelResolver, PrebuiltModelResolver};
+    use tinyinference_llm::model::{CapabilitySet, ModelRequest};
+
+    let primary = Arc::new(ScriptedModel::replies(vec!["primary"]).with_profile(ModelProfile {
+        model: Some("primary".into()),
+        tool_calling: true,
+        ..ModelProfile::default()
+    }));
+    let pinned = Arc::new(ScriptedModel::replies(vec!["pinned"]).with_profile(ModelProfile {
+        model: Some("pinned".into()),
+        tool_calling: false,
+        ..ModelProfile::default()
+    }));
+    let resolver: Arc<dyn ModelResolver<()>> = Arc::new(
+        PrebuiltModelResolver::new(primary, [("pinned".to_owned(), pinned)])
+            .with_primary_name("primary"),
+    );
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.with_model_resolver(resolver);
+
+    let request = ModelRequest::default()
+        .with_model("pinned")
+        .with_required_capabilities(CapabilitySet { tool_calling: true, ..CapabilitySet::default() });
+    let profile = harness.preview_model_profile_for_request(&request)
+        .expect("eligible primary profile is previewed");
+    assert_eq!(profile.model.as_deref(), Some("primary"));
+}
