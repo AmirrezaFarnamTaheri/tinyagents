@@ -261,8 +261,6 @@ pub(crate) struct OverrideTool {
     pub(crate) description: Option<String>,
     pub(crate) parameters: Option<Value>,
     pub(crate) policy_transform: Option<Arc<dyn Fn(ToolPolicy) -> ToolPolicy + Send + Sync>>,
-    /// Overrides [`Tool::exposure`] instead of delegating to `inner`.
-    pub(crate) exposure_override: Option<ToolExposure>,
 }
 
 impl OverrideTool {
@@ -273,15 +271,7 @@ impl OverrideTool {
             description: None,
             parameters: None,
             policy_transform: None,
-            exposure_override: None,
         }
-    }
-
-    /// Overrides [`Tool::exposure`] with `exposure` instead of delegating to
-    /// `inner`.
-    pub(crate) fn with_exposure(mut self, exposure: ToolExposure) -> Self {
-        self.exposure_override = Some(exposure);
-        self
     }
 
     pub(crate) fn with_name(mut self, name: impl Into<String>) -> Self {
@@ -378,8 +368,7 @@ impl Tool for OverrideTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        self.exposure_override
-            .unwrap_or_else(|| self.inner.exposure())
+        self.inner.exposure()
     }
 
     // A renamed or prefixed tool is still the same tool to the host's tool
