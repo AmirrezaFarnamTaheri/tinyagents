@@ -35,15 +35,19 @@ async fn prepared_append(backend: &dyn StorageBackend) {
     let bob = Scope::new("bob").unwrap();
     let raw = backend.for_scope(&alice).unwrap();
     DriverConversationStore::prepare_append_schema(raw.documents().as_ref())
-        .await.unwrap();
+        .await
+        .unwrap();
     raw.documents()
         .ensure_collection(&CollectionSpec::new(PENDING_COLLECTION))
         .await
         .unwrap();
-    let a = DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
+    let a =
+        DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
     let b = DriverConversationStore::new_validate_only(ScopedStorage::new(raw, alice));
     let bob_storage = backend.for_scope(&bob).unwrap();
-    DriverConversationStore::prepare_append_schema(bob_storage.documents().as_ref()).await.unwrap();
+    DriverConversationStore::prepare_append_schema(bob_storage.documents().as_ref())
+        .await
+        .unwrap();
     let other = DriverConversationStore::new_validate_only(ScopedStorage::new(bob_storage, bob));
     a.ensure_thread(request("same")).await.unwrap();
     other.ensure_thread(request("same")).await.unwrap();

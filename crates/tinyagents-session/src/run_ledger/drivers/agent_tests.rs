@@ -251,12 +251,17 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
     let backend = MemoryStorage::new();
     let scope = Scope::new("alice").unwrap();
     let native = backend.for_scope(&scope).unwrap();
+    let ports = tinystoragedrivers_api::StorageBackend::for_scope(&backend, &scope).unwrap();
     let refused = ScopedStorage::new(
-        scope.clone(),
-        "memory",
-        native.documents().clone(),
-        Arc::new(RefusingProjection(native.streams().clone())),
-        native.blobs().clone(),
+        tinystoragedrivers_api::Storage::new(
+            ports.documents().clone(),
+            Arc::new(RefusingProjection(native.streams().clone())),
+            ports.kv().clone(),
+            ports.blobs().clone(),
+            ports.queues().clone(),
+            ports.secrets().clone(),
+        ),
+        scope,
     );
     let a = DriverRunLedger::new(refused);
     a.upsert_agent_run(run("run")).await.unwrap();

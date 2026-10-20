@@ -5,7 +5,7 @@
 //! `tinystoragedrivers-api`.
 
 pub use tinystoragedrivers_api::{
-    BlobStore, DocumentStore, DocumentWatch, KvStore, Storage,
+    BlobStore, DocumentStore, DocumentWatch, KvStore, QueueStore, SecretStore, Storage,
     StorageBackend as PortStorageBackend, StreamStore,
 };
 pub use tinystoragedrivers_types::*;
@@ -36,6 +36,12 @@ impl ScopedStorage {
     }
     pub fn blobs(&self) -> &std::sync::Arc<dyn BlobStore> {
         self.storage.blobs()
+    }
+    pub fn queues(&self) -> &std::sync::Arc<dyn QueueStore> {
+        self.storage.queues()
+    }
+    pub fn secrets(&self) -> &std::sync::Arc<dyn SecretStore> {
+        self.storage.secrets()
     }
 }
 

@@ -102,9 +102,7 @@ impl DocumentStore for NoPostCommitReads {
 }
 
 fn wrapped(native: &ScopedStorage) -> DriverRunLedger {
-    DriverRunLedger::new(ScopedStorage::new(
-        native.scope().clone(),
-        "memory",
+    let storage = tinyagents_storage_kit::Storage::new(
         Arc::new(NoPostCommitReads {
             inner: native.documents().clone(),
             committed: AtomicBool::new(false),
@@ -112,8 +110,12 @@ fn wrapped(native: &ScopedStorage) -> DriverRunLedger {
             raced: AtomicBool::new(false),
         }),
         native.streams().clone(),
+        native.kv().clone(),
         native.blobs().clone(),
-    ))
+        native.queues().clone(),
+        native.secrets().clone(),
+    );
+    DriverRunLedger::new(ScopedStorage::new(storage, native.scope().clone()))
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ async fn memory_store() -> DriverConversationStore {
     let scoped = backend
         .for_scope(&Scope::new("session-fixture-planner").unwrap())
         .unwrap();
-    DriverConversationStore::prepare_append_schema(scoped.documents())
+    DriverConversationStore::prepare_append_schema(scoped.documents().as_ref())
         .await
         .unwrap();
     DriverConversationStore::new(scoped)
