@@ -4,7 +4,6 @@ use crate::testkit::conformance::{session_store_conformance, session_store_isola
 use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_sqlite::SqliteStorage;
-use tinystoragedrivers_types::MemoryStorage;
 
 fn memory() -> DriverSessionStores {
     DriverSessionStores::new(Arc::new(MemoryStorage::new()), Scope::new("local").unwrap()).unwrap()
@@ -418,7 +417,7 @@ impl FlakyDocs {
     }
 }
 
-#[tinystoragedrivers_types::async_trait]
+#[async_trait::async_trait]
 impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()

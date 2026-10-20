@@ -2,7 +2,6 @@ use super::*;
 use crate::testkit::MemoryStorage;
 use serde_json::Value;
 use tinystoragedrivers_api::StorageBackend;
-use tinystoragedrivers_types::MemoryStorage;
 
 #[tokio::test]
 async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes() {

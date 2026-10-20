@@ -6,7 +6,8 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
-use tinystoragedrivers_types::{DocumentStoreExt, Scope, WriteOptions};
+use tinystoragedrivers_api::DocumentStoreExt;
+use tinystoragedrivers_types::{Scope, WriteOptions};
 
 fn scoped() -> ScopedStorage {
     let backend = memory_backend();

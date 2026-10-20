@@ -22,7 +22,7 @@ struct ProbeDocs {
 #[error("original retired actor")]
 struct Retired;
 
-#[tinystoragedrivers_types::async_trait]
+#[async_trait::async_trait]
 impl DocumentStore for ProbeDocs {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
