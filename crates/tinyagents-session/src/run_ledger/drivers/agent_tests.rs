@@ -191,9 +191,9 @@ async fn independent_event_allocators_replay_without_duplicates_and_keep_cursor_
 }
 
 #[derive(Debug)]
-struct RefusingProjection(Arc<dyn tinystoragedrivers_types::StreamStore>);
+struct RefusingProjection(Arc<dyn tinystoragedrivers_api::StreamStore>);
 #[async_trait::async_trait]
-impl tinystoragedrivers_types::StreamStore for RefusingProjection {
+impl tinystoragedrivers_api::StreamStore for RefusingProjection {
     async fn append(
         &self,
         stream: &str,

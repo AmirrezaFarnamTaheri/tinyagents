@@ -410,7 +410,7 @@ struct Flaky {
 
 #[derive(Debug)]
 struct FlakyDocs {
-    inner: Arc<dyn tinystoragedrivers_types::DocumentStore>,
+    inner: Arc<dyn tinystoragedrivers_api::DocumentStore>,
     down: Arc<std::sync::atomic::AtomicBool>,
     reject_declaration: bool,
 }
@@ -431,7 +431,7 @@ impl FlakyDocs {
 }
 
 #[tinystoragedrivers_types::async_trait]
-impl tinystoragedrivers_types::DocumentStore for FlakyDocs {
+impl tinystoragedrivers_api::DocumentStore for FlakyDocs {
     fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
         self.inner.capabilities()
     }

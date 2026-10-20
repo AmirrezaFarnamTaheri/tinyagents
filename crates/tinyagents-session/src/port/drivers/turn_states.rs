@@ -24,8 +24,8 @@ use tinyagents_storage_kit::primitives::Repo;
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
-    CollectionSpec, ErrorKind, Filter, IndexSpec, Key,
-    Precondition, Query, StorageError, Versioned, WriteOptions,
+    CollectionSpec, ErrorKind, Filter, IndexSpec, Key, Precondition, Query, StorageError,
+    Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;
 

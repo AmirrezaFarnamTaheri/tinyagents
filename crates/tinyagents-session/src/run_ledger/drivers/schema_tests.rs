@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tinystoragedrivers_types::DocumentStoreExt;
+use tinystoragedrivers_api::DocumentStoreExt;
 use tinystoragedrivers_types::{
     Item, MemoryStorage, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
     StorageBackend, WriteOptions,
@@ -48,7 +48,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, parts: &[&str], recor
 }
 
 async fn migrate(storage: &ScopedStorage) {
-    for spec in tinystoragedrivers_types::primitives::collection_specs() {
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     for schema in [ledger_storage_schema(), history_storage_schema()] {

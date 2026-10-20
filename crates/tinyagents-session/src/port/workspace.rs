@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use tinystoragedrivers_sqlite::SqliteStorage;
-use tinystoragedrivers_types::StorageBackend;
+use tinyagents_storage_kit::StorageBackend;
 
 use super::AgentStores;
 use super::types::WorkspaceInner;

@@ -87,12 +87,12 @@ impl DocumentStore for BoundedQueries {
 
 #[derive(Debug)]
 struct ArrivingReceipts {
-    inner: Arc<dyn tinystoragedrivers_types::StreamStore>,
+    inner: Arc<dyn tinystoragedrivers_api::StreamStore>,
     ledger: DriverRunLedger,
     generated: std::sync::atomic::AtomicUsize,
 }
 #[async_trait::async_trait]
-impl tinystoragedrivers_types::StreamStore for ArrivingReceipts {
+impl tinystoragedrivers_api::StreamStore for ArrivingReceipts {
     async fn append(
         &self,
         stream: &str,

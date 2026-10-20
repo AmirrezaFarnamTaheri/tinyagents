@@ -254,14 +254,14 @@ async fn a_status_store_survives_a_reopened_sqlite_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("status.sqlite");
     {
-        let storage = crate::test_support::shared_memory_backend(&path).unwrap();
+        let storage = crate::test_support::shared_memory_backend(&path);
         let store = DriverStatusStore::new(Arc::clone(scoped(&storage, "local").documents()));
         let mut status = HarnessRunStatus::new(RunId::new("run.durable"), ComponentId::new("m"))
             .with_thread(ThreadId::new("thread-d"));
         status.mark_running(HarnessPhase::Model);
         store.put_status(status).await.unwrap();
     }
-    let storage = crate::test_support::shared_memory_backend(&path).unwrap();
+    let storage = crate::test_support::shared_memory_backend(&path);
     let store = DriverStatusStore::new(Arc::clone(scoped(&storage, "local").documents()));
     assert_eq!(store.list_by_thread("thread-d").await.unwrap().len(), 1);
     assert_eq!(store.list_active().await.unwrap().len(), 1);

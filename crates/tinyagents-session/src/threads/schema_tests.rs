@@ -88,7 +88,7 @@ async fn migrate(storage: &ScopedStorage) {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
-    for spec in tinystoragedrivers_types::primitives::collection_specs() {
+    for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
     Registry::compose([conversations_storage_schema()])

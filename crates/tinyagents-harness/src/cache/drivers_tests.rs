@@ -65,10 +65,10 @@ async fn memory_backend_round_trips_expires_and_counts() {
 }
 
 #[tokio::test]
-async fn sqlite_backend_round_trips_expires_and_counts() {
+async fn testkit_backend_round_trips_expires_and_counts() {
     let dir = tempfile::tempdir().unwrap();
     let storage =
-        crate::test_support::shared_memory_backend(dir.path().join("cache.sqlite")).unwrap();
+        crate::test_support::shared_memory_backend(dir.path().join("cache.sqlite"));
     round_trips_expires_and_counts(DriverResponseCache::new(docs(&storage, "local"))).await;
 }
 
@@ -77,13 +77,13 @@ async fn entries_survive_a_dropped_handle_and_a_reopened_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("responses.sqlite");
     {
-        let storage = crate::test_support::shared_memory_backend(&path).unwrap();
+        let storage = crate::test_support::shared_memory_backend(&path);
         DriverResponseCache::new(docs(&storage, "local"))
             .put("k", ModelResponse::assistant("persisted"))
             .await
             .unwrap();
     }
-    let storage = crate::test_support::shared_memory_backend(&path).unwrap();
+    let storage = crate::test_support::shared_memory_backend(&path);
     let reopened = DriverResponseCache::new(docs(&storage, "local"));
     assert_eq!(
         reopened.get("k").await.unwrap().unwrap().text(),

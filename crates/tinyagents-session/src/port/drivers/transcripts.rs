@@ -39,8 +39,8 @@ use tinyagents_storage_kit::primitives::{Leases, Repo};
 use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
-    CREATED_FIELD, CollectionSpec, ErrorKind, Filter,
-    ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
+    CREATED_FIELD, CollectionSpec, ErrorKind, Filter, ID_FIELD, IndexSpec, Key, Query, Sort,
+    StorageError, WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};
 

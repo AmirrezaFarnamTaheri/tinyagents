@@ -108,7 +108,7 @@ impl StorageBackend for GateBackend {
     fn for_scope(
         &self,
         scope: &tinystoragedrivers_types::Scope,
-    ) -> std::result::Result<tinystoragedrivers_types::ScopedStorage, StorageError> {
+    ) -> std::result::Result<tinyagents_storage_kit::ScopedStorage, StorageError> {
         if let Some((entered, release)) = self.gate.lock().unwrap().take() {
             let _ = entered.send(());
             let _ = release.recv();

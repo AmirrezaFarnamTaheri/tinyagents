@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use serde_json::Value;
 use tinyagents_storage_kit::Blocking;
 use tinystoragedrivers_api::{DocumentStore, StreamStore};
@@ -11,7 +12,6 @@ use tinystoragedrivers_types::{
     Capabilities, CollectionSpec, ErrorKind, Filter, Page, Precondition, Query, Result, Sort,
     StorageError, StreamEntry, Version, Versioned,
 };
-use async_trait::async_trait;
 
 use super::super::AgentStores;
 use super::{DriverAppendStore, DriverStore, DriverTranscriptLocator, DriverTurnStates};

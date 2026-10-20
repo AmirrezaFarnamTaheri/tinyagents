@@ -79,7 +79,7 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+            _: Arc<dyn tinyagents_storage_kit::StorageBackend>,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(
@@ -202,7 +202,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+            _: Arc<dyn tinyagents_storage_kit::StorageBackend>,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(tinystoragedrivers_types::StorageError::fenced(
@@ -211,7 +211,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(LegacyFactory);
-    let backend: Arc<dyn tinystoragedrivers_types::StorageBackend> =
+    let backend: Arc<dyn tinyagents_storage_kit::StorageBackend> =
         Arc::new(tinystoragedrivers_types::MemoryStorage::new());
     assert!(
         provider

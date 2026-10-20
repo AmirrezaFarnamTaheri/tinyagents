@@ -323,7 +323,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        backend: Arc<dyn tinyagents_storage_kit::StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         (**self).bind_actor_with_schema_admission(backend, admission)
