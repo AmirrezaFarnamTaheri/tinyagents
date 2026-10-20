@@ -14,6 +14,7 @@
 //! depend on this composition layer.
 
 pub mod parallel;
+pub mod run_progress_ledger;
 pub mod status;
 pub mod subagent;
 pub mod teams;
