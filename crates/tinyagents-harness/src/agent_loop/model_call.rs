@@ -49,7 +49,7 @@ fn ensure_model_eligible<State: Send + Sync>(
     model: &dyn ChatModel<State>, request: &ModelRequest,
 ) -> Result<()> {
     if model_is_eligible(model, request.required_capabilities.as_ref()) { Ok(()) }
-    else { Err(TinyAgentsError::Model("resolved model is not eligible for this call".into())) }
+    else { Err(TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into()))) }
 }
 
 /// Converts a configured stream window to a [`Duration`]. `None` and a zero
@@ -206,8 +206,11 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             resolved: ResolvedModel {
                 name: name.clone(),
                 requested: request.model.clone(),
-                source: if request.model.is_some() { ModelResolutionSource::RequestOverride }
-                    else { ModelResolutionSource::RegistryDefault },
+                source: if request.model.as_deref() == Some(name.as_str()) {
+                    ModelResolutionSource::RequestOverride
+                } else {
+                    ModelResolutionSource::RegistryDefault
+                },
             },
             model,
         })
