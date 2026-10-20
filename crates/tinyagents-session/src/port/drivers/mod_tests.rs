@@ -148,75 +148,21 @@ fn stores_work_outside_any_runtime() {
 }
 
 #[test]
-fn an_agent_is_stored_under_its_principal_of_the_tenant() {
-    let provider = memory();
-    assert_eq!(provider.tenant(), &Scope::new("local").unwrap());
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().as_str(),
-        "local/agent:agent-7"
-    );
-    let tenant = Scope::new("u:alice").unwrap();
-    let provider =
-        DriverSessionStores::new(Arc::new(MemoryStorage::new()), tenant.clone()).unwrap();
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().as_str(),
-        "u:alice/agent:agent-7"
-    );
-    assert_eq!(
-        provider.scope_for("agent-7").unwrap().tenant_scope(),
-        Some(tenant)
-    );
-}
-
-#[test]
-fn an_agent_id_outside_the_segment_grammar_is_hashed_under_its_tenant() {
-    let provider = memory();
-    let spaced = provider.scope_for("has a space").unwrap();
-    assert!(spaced.as_str().starts_with("local/agent:~"), "{spaced}");
-    assert_eq!(spaced, provider.scope_for("has a space").unwrap());
-    assert_ne!(spaced, provider.scope_for("has  a space").unwrap());
-    let long = "a".repeat(300);
-    assert!(
-        provider
-            .scope_for(&long)
-            .unwrap()
-            .as_str()
-            .starts_with("local/agent:~")
-    );
-    assert_eq!(spaced.tenant_scope(), Some(Scope::new("local").unwrap()));
-}
-
-#[test]
-fn an_empty_agent_id_has_no_scope() {
-    let provider = memory();
-    assert!(provider.scope_for("").is_err());
-    assert!(provider.try_for_agent("").is_err());
-}
-
-#[test]
-fn a_provider_needs_a_tenant_scope() {
-    for scope in [
-        Scope::new("cluster").unwrap(),
-        Scope::new("local/agent:someone").unwrap(),
-    ] {
-        let error =
-            DriverSessionStores::new(Arc::new(MemoryStorage::new()), scope.clone()).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            tinystoragedrivers_types::ErrorKind::InvalidInput
-        );
-    }
-}
-
-#[test]
-fn two_tenants_on_one_backend_never_see_each_others_agents() {
+fn host_bound_factory_keeps_agents_in_their_supplied_scopes() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    let alice = DriverSessionStores::new(Arc::clone(&backend), Scope::new("u:alice").unwrap())
-        .unwrap()
-        .for_agent("a");
-    let bob = DriverSessionStores::new(backend, Scope::new("u:bob").unwrap())
-        .unwrap()
-        .for_agent("a");
+    let bindings = [
+        ("agent-a".to_owned(), Scope::new("host-selected-alpha").unwrap()),
+        ("agent-b".to_owned(), Scope::new("host-selected-beta").unwrap()),
+    ]
+    .into_iter()
+    .collect();
+    let provider = DriverSessionStores::new(crate::testkit::mapped_storage_factory(
+        Arc::clone(&backend),
+        bindings,
+    ))
+    .unwrap();
+    let alice = provider.for_agent("agent-a");
+    let bob = provider.for_agent("agent-b");
     alice
         .turn_states
         .put(&TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z"))
