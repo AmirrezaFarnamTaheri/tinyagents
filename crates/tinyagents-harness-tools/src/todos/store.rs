@@ -1,10 +1,10 @@
 //! CRUD for the per-thread todo list, on the harness
-//! [`Store`](tinyagents_harness::store::Store).
+//! `Store`.
 //!
 //! Each thread's list is a single serialized [`TodoList`] value under the
 //! [`TODOS_NAMESPACE`] namespace, keyed by the hex-encoded thread id. Every
 //! mutation runs `load → mutate → normalise → put` under a **per-thread async
-//! mutex** ([`thread_lock`]) so the read-modify-write is atomic within the
+//! mutex** (`thread_lock`) so the read-modify-write is atomic within the
 //! process (the same single-process caveat as
 //! [`GoalStore`](crate::goals::GoalStore)).
 //!

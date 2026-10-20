@@ -2,7 +2,7 @@
 //!
 //! A shell call can legitimately run for many minutes (a build, a test suite,
 //! a download), and until it exits the turn shows nothing. While it runs,
-//! [`with_exec_progress`] reports a status line through the harness's
+//! `with_exec_progress` reports a status line through the harness's
 //! [`ToolRunContext::report_progress`] seam every [`HEARTBEAT_INTERVAL`]: the
 //! elapsed time, how much output the command has written, and its last output
 //! line. The agent loop turns each report into `AgentEvent::ToolProgressDetail`
