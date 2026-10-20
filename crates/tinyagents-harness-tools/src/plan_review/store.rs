@@ -149,13 +149,13 @@ where
         {
             return false;
         }
-        if !state
+        if state
             .newest
             .get(&(
                 scope.clone(),
                 state.entries[request_id].snapshot.thread_id.clone(),
             ))
-            .is_some_and(|id| id == request_id)
+            .is_none_or(|id| id != request_id)
         {
             return false;
         }
@@ -209,7 +209,7 @@ where
             .lock()
             .newest
             .get(&(scope.clone(), thread_id.to_owned()))
-            .map(String::clone);
+            .cloned();
         id.is_some_and(|id| self.decide(scope, &id, resolution))
     }
     pub fn parked_review_for_thread(&self, scope: &S, thread_id: &str) -> Option<ParkedReview<S>> {
