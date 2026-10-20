@@ -55,6 +55,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &mut ModelRequest,
         model_before_switch: &Option<String>,
+        cached_candidate: Option<Arc<dyn ChatModel<State>>>,
     ) -> Result<()> {
         let Some(handle) = ctx.steering.clone() else {
             return Ok(());
@@ -68,6 +69,8 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         );
         let candidate = if hosted {
             None
+        } else if cached_candidate.is_some() {
+            cached_candidate
         } else if let Some(resolver) = self.model_resolver.as_ref() {
             let (budget, bound) = self.model_call_budget(ctx);
             match ctx.bounded(budget, resolver.resolve_named(&requested), || {
