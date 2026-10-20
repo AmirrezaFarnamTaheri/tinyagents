@@ -279,9 +279,7 @@ struct RetryingOpenAiModel {
 #[async_trait]
 impl ChatModel<()> for RetryingOpenAiModel {
     fn profile(&self) -> Option<&ModelProfile> {
-        <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::profile(
-            &self.inner,
-        )
+        <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::profile(&self.inner)
     }
 
     fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
