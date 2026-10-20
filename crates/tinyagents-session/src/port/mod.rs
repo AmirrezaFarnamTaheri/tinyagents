@@ -48,6 +48,7 @@
 //!   the file and SQLite building blocks, and a host crate decides to use them.
 
 mod drivers;
+#[cfg(any(test, feature = "testkit"))]
 mod memory;
 mod types;
 
@@ -57,6 +58,7 @@ pub use drivers::{
     DriverSessionStores, DriverTranscriptHistory, DriverTranscriptLocator, DriverTurnStates,
     RebindableSessionStores, SessionStoreRegistry, storage_schema,
 };
+#[cfg(any(test, feature = "testkit"))]
 pub use memory::{InMemorySessionStores, InMemoryTranscriptLocator, InMemoryTurnStates};
 pub use types::AgentStores;
 

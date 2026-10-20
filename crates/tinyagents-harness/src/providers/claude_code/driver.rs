@@ -297,7 +297,10 @@ pub(crate) struct TurnContext<'a> {
     /// off from the CLI's own tools. Persistence is host-bound, never file-based.
     #[cfg_attr(
         not(target_os = "macos"),
-        expect(dead_code, reason = "workspace path is consumed by the macOS Seatbelt profile")
+        expect(
+            dead_code,
+            reason = "workspace path is consumed by the macOS Seatbelt profile"
+        )
     )]
     pub workspace_dir: PathBuf,
     /// The user's project root. Claude Code runs here

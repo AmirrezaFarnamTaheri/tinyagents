@@ -154,7 +154,10 @@ async fn failed_session_removal_keeps_the_mapping_and_delivered_turns() {
     assert!(store.remove_if("thread", "session-a").await.is_err());
     faults.clear();
 
-    assert_eq!(store.get("thread").await.unwrap().as_deref(), Some("session-a"));
+    assert_eq!(
+        store.get("thread").await.unwrap().as_deref(),
+        Some("session-a")
+    );
     assert!(store.delivered("thread").await.unwrap().contains("turn"));
 }
 
@@ -174,7 +177,12 @@ async fn failed_delivery_write_releases_the_reservation_for_retry() {
     assert!(already.is_empty());
 
     faults.fail_operation_nth("documents.put", 1, ErrorKind::Backend);
-    assert!(store.record_delivered("thread", &fingerprint).await.is_err());
+    assert!(
+        store
+            .record_delivered("thread", &fingerprint)
+            .await
+            .is_err()
+    );
     drop(claim);
     faults.clear();
 
@@ -208,11 +216,13 @@ async fn legacy_import_merges_matching_session_and_never_overwrites_newer_state(
     assert!(store.delivered("same").await.unwrap().contains("old-turn"));
     assert!(store.delivered("same").await.unwrap().contains("new-turn"));
     assert_eq!(store.get("orphan").await.unwrap(), None);
-    assert!(store
-        .delivered("orphan")
-        .await
-        .unwrap()
-        .contains("orphan-turn"));
+    assert!(
+        store
+            .delivered("orphan")
+            .await
+            .unwrap()
+            .contains("orphan-turn")
+    );
     import_legacy_sessions(&store, old_release_fixture)
         .await
         .unwrap();
