@@ -205,6 +205,9 @@ async fn probed_store(
     DriverConversationStore::prepare_schema(scoped.documents().as_ref())
         .await
         .expect("conversation schema");
+    DriverConversationStore::prepare_append_schema(scoped.documents().as_ref())
+        .await
+        .expect("append intent schema");
     let injected_thread = inject_thread_after_first_delete
         .map(|id| DriverConversationStore::ensure(None, &request(id)));
     let docs = Arc::new(DeleteProbeDocs {

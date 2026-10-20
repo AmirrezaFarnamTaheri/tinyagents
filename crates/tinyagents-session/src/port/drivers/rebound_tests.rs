@@ -298,7 +298,7 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .unwrap();
         let independent = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
             expected_backend,
-            "new",
+            "gated",
         ))
         .unwrap()
         .for_agent("racing-agent");
