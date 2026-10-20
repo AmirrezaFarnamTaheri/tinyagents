@@ -34,7 +34,7 @@ the module map below.
 | `limits` | Run-scoped limit enforcement (model/tool call caps, wall clock) that keeps recursion bounded. |
 | `media` (feature `media`) | `GenerateImageTool` / `GenerateVideoTool`, tools over the `tinyinference-image` / `tinyinference-video` generators. |
 | `middleware` | The middleware stack wrapping every level of the recursion identically. See [`middleware/README.md`](middleware/README.md). |
-| `model_registry` | Runtime-owned executable model registry, name resolution, and fallback ordering. |
+| `host` | The resolver port and fixed/prebuilt implementations hosts use to supply models for execution. |
 | `multimodal` (feature `multimodal`) | Attachment resolution for `[IMAGE:…]` / `[FILE:…]` markers into model-readable bytes. |
 | `no_progress` | Detects a stuck turn (identical failing/successful tool calls) and escalates through a nudge/halt ladder. See [`no_progress/README.md`](no_progress/README.md). |
 | `observability` | Durable observability — journals, status stores, sinks — making the live event stream persistent. See [`observability/README.md`](observability/README.md). |
