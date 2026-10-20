@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Scope, StorageBackend};
+use crate::{Migrations, Scope, StorageBackend};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tinystoragedrivers_testkit::MemoryBackend;
 

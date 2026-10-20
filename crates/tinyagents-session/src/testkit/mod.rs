@@ -17,10 +17,12 @@
 //! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
 //! use tinystoragedrivers_testkit::memory_backend;
-//! use tinyagents_storage_kit::{Scope};
+//! use tinyagents_storage_kit::{Scope, ScopedStorage};
 //!
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
-//! let storage = memory_backend().for_scope(&Scope::new("local").unwrap()).unwrap();
+//! let backend = memory_backend();
+//! let scope = Scope::new("test-ledger").unwrap();
+//! let storage = ScopedStorage::new(backend.for_scope(&scope)?, scope);
 //! run_ledger_conformance(Arc::new(DriverRunLedger::new(storage))).await;
 //! # });
 //! ```
@@ -34,6 +36,24 @@
 //! to touch a filesystem.
 
 pub mod conformance;
+
+/// Makes a test-only host factory from explicit agent-to-scope bindings.
+///
+/// Scope labels in this map are arbitrary test values; this helper does not
+/// encode or validate product identity conventions.
+#[cfg(test)]
+pub(crate) fn mapped_storage_factory(
+    backend: std::sync::Arc<dyn tinystoragedrivers_api::StorageBackend>,
+    scopes: std::collections::HashMap<String, tinyagents_storage_kit::Scope>,
+) -> crate::port::AgentStorageFactory {
+    std::sync::Arc::new(move |agent_id| {
+        let scope = scopes.get(agent_id).cloned().ok_or_else(|| {
+            tinyagents_storage_kit::StorageError::invalid_input("test agent scope is not mapped")
+        })?;
+        let storage = backend.for_scope(&scope)?;
+        Ok(tinyagents_storage_kit::ScopedStorage::new(storage, scope))
+    })
+}
 
 /// Legacy-compatible constructor for tests that need a real, six-port memory
 /// backend. This adapter is compiled only with the session testkit.
@@ -82,12 +102,14 @@ pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::Transcrip
     use crate::port::{DriverSessionStores, SessionStoreProvider};
     use std::sync::Arc;
     use tinystoragedrivers_testkit::memory_backend;
-    use tinyagents_storage_kit::{Scope};
+    use tinyagents_storage_kit::Scope;
 
-    DriverSessionStores::new(
+    let scope = Scope::new("test-transcript").unwrap();
+    let factory = mapped_storage_factory(
         Arc::new(memory_backend()),
-        Scope::new("local").unwrap(),
-    )
+        [("test".to_owned(), scope)].into_iter().collect(),
+    );
+    DriverSessionStores::new(factory)
     .expect("driver session stores over memory")
     .for_agent("test")
     .transcripts

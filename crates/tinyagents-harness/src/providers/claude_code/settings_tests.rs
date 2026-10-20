@@ -49,11 +49,7 @@ async fn legacy_settings_import_only_fills_an_empty_target() {
         serde_json::from_slice::<serde_json::Value>(&serialized_by_released_writer).unwrap(),
         serde_json::from_slice::<serde_json::Value>(old_release_fixture).unwrap()
     );
-    assert!(
-        import_legacy(&kv, old_release_fixture)
-            .await
-            .unwrap()
-    );
+    assert!(import_legacy(&kv, old_release_fixture).await.unwrap());
     assert!(load(&kv).await.unwrap().full_access);
     assert!(
         !import_legacy(&kv, br#"{"full_access":false}"#)
