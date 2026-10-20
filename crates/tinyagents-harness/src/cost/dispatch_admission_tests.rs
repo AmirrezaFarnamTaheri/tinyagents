@@ -33,6 +33,7 @@ type Action = Result<(), DispatchRefusalReason>;
 struct PermitState {
     committed: AtomicUsize,
     active: AtomicUsize,
+    checks: AtomicUsize,
     refuse_commit: std::sync::atomic::AtomicBool,
     refuse_recheck: std::sync::atomic::AtomicBool,
 }
@@ -44,6 +45,7 @@ struct TestPermit {
 
 impl PhysicalDispatchPermit for TestPermit {
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal> {
+        self.state.checks.fetch_add(1, Ordering::SeqCst);
         if self.state.refuse_commit.load(Ordering::SeqCst)
             || (self.committed.load(Ordering::SeqCst)
                 && self.state.refuse_recheck.load(Ordering::SeqCst))
@@ -126,6 +128,7 @@ impl ScriptedAdmission {
             permits: Arc::new(PermitState {
                 committed: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
+                checks: AtomicUsize::new(0),
                 refuse_commit: std::sync::atomic::AtomicBool::new(false),
                 refuse_recheck: std::sync::atomic::AtomicBool::new(false),
             }),
@@ -585,7 +588,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     harness.register_model("controlled", Arc::new(controlled));
     let server_permit_state = admission.permits.clone();
     let server_listener = listener.clone();
-    let mut server = tokio::spawn(async move {
+    let server = tokio::spawn(async move {
         let (mut socket, _) = server_listener
             .accept()
             .await
@@ -633,7 +636,7 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
         }
         connection = tokio::time::timeout(std::time::Duration::from_secs(2), listener.accept()) => {
             turn.abort();
-            panic!("local provider received a retry connection after late deadline refusal: {connection:?}");
+            panic!("local provider received a retry connection after late deadline refusal (permit checks {}): {connection:?}", admission.permits.checks.load(Ordering::SeqCst));
         }
         _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
             turn.abort();
