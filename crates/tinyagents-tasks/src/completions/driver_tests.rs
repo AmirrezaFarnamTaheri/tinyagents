@@ -26,9 +26,9 @@ fn docs_of(storage: &dyn StorageBackend, scope: &str) -> Arc<dyn DocumentStore> 
     )
 }
 
-/// A router over the SQLite file at `path`, opened afresh (a simulated restart).
+/// A router over the testkit backend keyed by `path`.
 fn open_router(path: &std::path::Path) -> CompletionRouter {
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(path).unwrap();
+    let storage = crate::test_support::memory_backend(path);
     let store = DriverCompletionStore::new(docs_of(&storage, "local")).unwrap();
     CompletionRouter::new(Arc::new(store))
 }
