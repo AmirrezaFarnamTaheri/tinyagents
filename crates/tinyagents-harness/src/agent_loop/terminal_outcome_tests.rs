@@ -64,7 +64,7 @@ impl ChatModel<()> for PendingModel {
 
 fn harness_with(model: Arc<dyn ChatModel<()>>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model)));
     harness
 }
 

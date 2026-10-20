@@ -83,7 +83,7 @@ async fn mock_provider_reuses_a_cached_single_turn_response() {
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
         
         .with_response_cache(cache.clone());
 
@@ -121,7 +121,7 @@ async fn mock_provider_receives_one_stable_prompt_prefix_key_across_a_tool_loop(
     policy.cache.protect_prompt_prefix = true;
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model.clone())))
         
         .register_tool(Arc::new(FakeTool::returning("lookup", "result")))
         .with_policy(policy);
@@ -169,7 +169,7 @@ async fn tool_loop_compacts_old_results_and_runs_all_lifecycle_hooks() {
     let hooks = Arc::new(LoggingMiddleware::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(ScriptedModel::new(vec![
                 tool_turn(vec![ToolCall::new("one", "lookup", json!({"n": 1}))]),
                 tool_turn(vec![ToolCall::new("two", "lookup", json!({"n": 2}))]),
                 text_turn("complete"),
@@ -210,7 +210,7 @@ async fn subagent_session_keeps_context_across_multiple_turns() {
         "second answer",
     ]));
     let mut child_harness: AgentHarness<()> = AgentHarness::new();
-    child_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(child_model.clone())));
+    child_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("child", child_model.clone())));
     let child = Arc::new(SubAgent::new(
         "researcher",
         "researches",
@@ -252,7 +252,7 @@ async fn mock_fuzz_matrix_composes_regular_and_subagent_tools() {
             }
             if use_subagent {
                 let mut child_harness: AgentHarness<()> = AgentHarness::new();
-                child_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["child result"])),)));
+                child_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("child", Arc::new(ScriptedModel::replies(vec!["child result"])),)));
                 let child = Arc::new(SubAgent::new(
                     "delegate",
                     "delegates",
@@ -274,7 +274,7 @@ async fn mock_fuzz_matrix_composes_regular_and_subagent_tools() {
                 vec![tool_turn(calls), text_turn("final")]
             };
             harness
-                .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(responses)))))
+                .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("parent", Arc::new(ScriptedModel::new(responses)))))
                 
                 .with_policy(RunPolicy::default());
 

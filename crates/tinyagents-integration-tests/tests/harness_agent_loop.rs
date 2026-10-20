@@ -120,7 +120,7 @@ async fn single_turn_response_completes_with_one_model_call() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))))
         
         .push_middleware(Arc::new(CaptureMiddleware {
             listener: listener.clone(),
@@ -145,12 +145,12 @@ async fn single_turn_response_completes_with_one_model_call() {
 async fn required_capabilities_select_capable_model() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ProfiledIntegrationModel {
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("incapable", Arc::new(ProfiledIntegrationModel {
                 profile: ModelProfile::default(),
                 text: "incapable",
             }),)))
         
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(ProfiledIntegrationModel {
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("capable", Arc::new(ProfiledIntegrationModel {
                 profile: ModelProfile {
                     json_schema: true,
                     ..ModelProfile::default()
@@ -180,7 +180,7 @@ async fn multi_step_tool_loop_calls_tool_then_finishes() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({ "q": "x" })),
                 text_response("done", 4, 2),
             ])),)))
@@ -214,7 +214,7 @@ async fn max_model_calls_limit_returns_limit_exceeded() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // A model that always asks for a tool would loop forever without a cap.
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)))
         
         .register_tool(Arc::new(FakeTool::returning("spin", "again")))
         .with_policy(RunPolicy {
@@ -237,7 +237,7 @@ async fn max_model_calls_limit_returns_limit_exceeded() {
 async fn usage_accumulates_across_model_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({})),
                 text_response("done", 4, 2),
             ])),)))

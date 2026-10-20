@@ -379,7 +379,7 @@ async fn registered_pack_dispatch_runs_through_the_harness_with_admitted_target_
     ));
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 response,
                 testkit::text_response("finished"),
             ])),)))
@@ -426,7 +426,7 @@ async fn harness_rule_denial_blocks_the_pinned_inner_tool_before_typed_dispatch(
     });
     let mut harness: AgentHarness<(), String> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 testkit::tool_call_response(ToolCall::new(
                     "denied-call",
                     USE_SKILL,
@@ -756,7 +756,7 @@ async fn generic_binding_applies_tool_rules_to_the_selected_packed_tool() {
         ["a_one"],
     ));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", model)));
     harness.register_tool(Arc::new(UseSkillTool::new(handle, CATALOG)));
     harness.with_policy(tinyagents_harness::runtime::RunPolicy {
         tool_rules: tinyagents_harness::tool::ToolRulePolicy::new(rules),

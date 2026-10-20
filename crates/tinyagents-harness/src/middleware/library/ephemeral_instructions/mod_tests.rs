@@ -244,7 +244,7 @@ async fn native_tool_corrections_reach_the_next_request_without_entering_history
     let queue = EphemeralInstructionQueue::new();
     let captured = Arc::new(Mutex::new(Vec::new()));
     let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             response,
             ModelResponse::assistant("done"),
         ])),)));
@@ -306,7 +306,7 @@ async fn model_control_jump_keeps_corrections_for_the_next_dispatched_request() 
     let queue = EphemeralInstructionQueue::new();
     let captured = Arc::new(Mutex::new(Vec::new()));
     let mut harness: crate::runtime::AgentHarness<()> = crate::runtime::AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             response,
             ModelResponse::assistant("done"),
         ])),)));

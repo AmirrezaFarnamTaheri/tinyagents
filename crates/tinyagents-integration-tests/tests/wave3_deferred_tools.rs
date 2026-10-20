@@ -76,7 +76,7 @@ fn assistant(tool_calls: Vec<ToolCall>, text: &str) -> ModelResponse {
 
 fn harness(delete: Arc<DeleteTool>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             assistant(
                 vec![
                     ToolCall::new("call-delete", "delete", json!({"path": "/tmp/x"})),
@@ -143,7 +143,7 @@ async fn deferred_run_survives_a_json_round_trip_and_resumes_in_a_fresh_harness(
     });
     let mut second_harness = harness(delete2.clone());
     // The resumed leg only needs the final answer from the model.
-    second_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![assistant(
+    second_harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![assistant(
             Vec::new(),
             "done",
         )])),)));

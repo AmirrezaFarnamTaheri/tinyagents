@@ -217,7 +217,7 @@ fn tool_message_ids(messages: &[Message]) -> Vec<String> {
 #[tokio::test]
 async fn tool_result_call_id_is_overwritten_with_the_admitted_id() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_calls_response(vec![ToolCall::new("call_abc", "wrong_id", json!({}))]),
             text_response("done"),
         ])),)));
@@ -241,7 +241,7 @@ async fn tool_result_call_id_is_overwritten_with_the_admitted_id() {
 async fn concurrent_admission_failure_emits_no_tool_started() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
             ToolCall::new("c1", "echo_a", json!({})),
             ToolCall::new("c2", "echo_b", json!({})),
             ToolCall::new("c3", "echo_c", json!({})),
@@ -288,7 +288,7 @@ async fn concurrent_admission_failure_emits_no_tool_started() {
 async fn serial_tool_error_becomes_a_model_visible_result() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_calls_response(vec![ToolCall::new("c1", "flaky", json!({}))]),
             text_response("recovered"),
         ])),)));
@@ -323,7 +323,7 @@ async fn serial_tool_error_becomes_a_model_visible_result() {
 async fn concurrent_tool_error_becomes_a_model_visible_result() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_calls_response(vec![
                 ToolCall::new("c1", "flaky", json!({})),
                 ToolCall::new("c2", "echo_a", json!({})),
@@ -358,7 +358,7 @@ async fn concurrent_tool_error_becomes_a_model_visible_result() {
 async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
             ToolCall::new("c1", "fatal", json!({})),
         ])])),)));
     harness.register_tool(Arc::new(ErringTool {
@@ -407,7 +407,7 @@ async fn fatal_tool_error_emits_tool_failed_and_clears_active_calls() {
 async fn duplicate_call_ids_do_not_clear_each_others_active_entry() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             // A provider that reuses one id across two calls in the same turn.
             tool_calls_response(vec![
                 ToolCall::new("dup", "echo_a", json!({})),
@@ -459,7 +459,7 @@ async fn duplicate_call_ids_do_not_clear_each_others_active_entry() {
 #[tokio::test]
 async fn unknown_tool_recovery_emits_started_and_completed() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_calls_response(vec![ToolCall::new("c1", "missing", json!({}))]),
             text_response("recovered"),
         ])),)));
@@ -500,7 +500,7 @@ async fn before_tool_rejection_surfaces_as_a_middleware_error() {
     // error, is what surfaces while budget remains.
     let calls = Arc::new(AtomicUsize::new(0));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_calls_response(vec![
             ToolCall::new("c1", "echo_a", json!({})),
         ])])),)));
     harness.register_tool(Arc::new(EchoTool {
@@ -527,7 +527,7 @@ async fn before_tool_rejection_surfaces_as_a_middleware_error() {
 async fn injected_arguments_are_stripped_before_validation() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_calls_response(vec![ToolCall::new(
                 "c1",
                 "injected",

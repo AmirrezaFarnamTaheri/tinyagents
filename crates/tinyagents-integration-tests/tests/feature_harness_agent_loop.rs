@@ -88,7 +88,7 @@ async fn parallel_tool_calls_in_one_turn_all_execute() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 multi_tool_call_response(vec![
                     ToolCall::new("c1", "alpha", json!({ "n": 1 })),
                     ToolCall::new("c2", "beta", json!({ "n": 2 })),
@@ -134,7 +134,7 @@ async fn max_tool_calls_limit_returns_limit_exceeded() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // A model that always requests a tool would loop forever without a cap.
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)))
         
         .register_tool(Arc::new(FakeTool::returning("spin", "again")))
         .with_policy(RunPolicy {
@@ -165,7 +165,7 @@ async fn tool_round_trip_emits_lifecycle_events_in_order() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup", json!({})),
                 text_response("final"),
             ])),)))
@@ -202,7 +202,7 @@ async fn tool_round_trip_emits_lifecycle_events_in_order() {
 async fn invoke_with_status_reports_completed_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup", json!({})),
                 text_response("done"),
             ])),)))
@@ -240,7 +240,7 @@ async fn tools_are_dispatched_by_name() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "beta", json!({})),
                 text_response("ok"),
             ])),)))

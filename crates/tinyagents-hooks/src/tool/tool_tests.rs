@@ -171,7 +171,7 @@ async fn nested_tool_calls_cannot_bypass_hook_denials() {
             serde_json::json!({}),
         ));
     let mut harness: AgentHarness<(), Host> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             response,
             ModelResponse::assistant("done"),
         ])),)));

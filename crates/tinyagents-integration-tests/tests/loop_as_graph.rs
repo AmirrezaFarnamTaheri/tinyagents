@@ -54,7 +54,7 @@ fn tool_call_response(id: &str, name: &str, arguments: serde_json::Value) -> Mod
 fn harness_for(execution: LoopExecution, model: Arc<MockModel>) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model)))
         ;
     if matches!(execution, LoopExecution::Graph) {
         harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));
@@ -400,7 +400,7 @@ where
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model)))
         
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")))
         .push_middleware(Arc::new(pause_middleware::PauseOnce::new()));
@@ -492,7 +492,7 @@ async fn iter_steps_node_by_node_and_honors_override_next() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", model)))
         
         .register_tool(Arc::new(FakeTool::returning("lookup", "tool-output")));
     let harness = Arc::new(harness);
@@ -625,7 +625,7 @@ async fn graph_reresolves_when_before_model_adds_a_model_hint() {
     )]));
     let mut harness = harness_for(LoopExecution::Graph, default);
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(hinted)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("hinted", hinted)))
         
         .push_middleware(Arc::new(SelectHint));
 
@@ -750,7 +750,7 @@ async fn a_failing_after_agent_keeps_the_original_error_in_both_engines() {
     for execution in [LoopExecution::Direct, LoopExecution::Graph] {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness
-            .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(BoomModel))))
+            .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(BoomModel))))
             ;
         if matches!(execution, LoopExecution::Graph) {
             harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));

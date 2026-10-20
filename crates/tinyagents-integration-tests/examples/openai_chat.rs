@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(model))))
         ;
 
     let question = "In one sentence, what is a Rust trait?";

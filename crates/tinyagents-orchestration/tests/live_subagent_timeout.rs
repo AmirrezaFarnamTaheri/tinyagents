@@ -32,7 +32,7 @@ async fn live_openai_subagent_times_out_on_tiny_budget() {
     // network call cannot complete in 1ms, so the per-call budget trips.
     let mut child: AgentHarness<()> = AgentHarness::new();
     child
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
         ;
     child.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_wall_clock_ms(Some(1)),

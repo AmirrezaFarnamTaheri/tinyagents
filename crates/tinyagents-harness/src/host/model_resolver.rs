@@ -264,12 +264,18 @@ pub trait ModelResolver<State: Send + Sync>: Send + Sync {
 /// about product tiers.
 pub struct FixedModelResolver<State: Send + Sync> {
     model: Arc<dyn ChatModel<State>>,
+    name: Option<String>,
 }
 
 impl<State: Send + Sync> FixedModelResolver<State> {
     /// Wraps `model` as the answer to every resolution request.
     pub fn new(model: Arc<dyn ChatModel<State>>) -> Self {
-        Self { model }
+        Self { model, name: None }
+    }
+
+    /// Wraps one model while preserving its configured runtime name.
+    pub fn named(name: impl Into<String>, model: Arc<dyn ChatModel<State>>) -> Self {
+        Self { model, name: Some(name.into()) }
     }
 
     /// The wrapped model.
@@ -284,6 +290,7 @@ impl<State: Send + Sync> Clone for FixedModelResolver<State> {
     fn clone(&self) -> Self {
         Self {
             model: Arc::clone(&self.model),
+            name: self.name.clone(),
         }
     }
 }
@@ -302,7 +309,8 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     }
 
     async fn resolve_named(&self, name: &str) -> Result<Option<Arc<dyn ChatModel<State>>>> {
-        let matches = self.model.profile().and_then(|profile| profile.model.as_deref()) == Some(name);
+        let matches = self.name.as_deref() == Some(name)
+            || self.model.profile().and_then(|profile| profile.model.as_deref()) == Some(name);
         Ok(matches.then(|| Arc::clone(&self.model)))
     }
 
@@ -311,7 +319,7 @@ impl<State: Send + Sync> ModelResolver<State> for FixedModelResolver<State> {
     }
 
     fn selected_name(&self, _req: &ModelResolveRequest) -> Option<String> {
-        self.model.profile().and_then(|profile| profile.model.clone())
+        self.name.clone().or_else(|| self.model.profile().and_then(|profile| profile.model.clone()))
     }
 }
 

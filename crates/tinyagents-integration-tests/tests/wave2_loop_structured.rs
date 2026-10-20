@@ -106,7 +106,7 @@ async fn structured_tool_strategy_does_not_force_the_schema_tool_when_real_tools
     ])]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model.clone())));
     harness.register_tool(Arc::new(FakeTool::returning("search", "hits")));
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
@@ -149,7 +149,7 @@ async fn structured_tool_strategy_still_forces_the_schema_tool_with_no_real_tool
     ])]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model.clone())));
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
             "result",
@@ -194,7 +194,7 @@ async fn a_structured_hit_does_not_discard_sibling_real_tool_calls() {
     let search = Arc::new(FakeTool::returning("search", "hits"));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model.clone())));
     harness.register_tool(search.clone());
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
@@ -230,7 +230,7 @@ async fn a_schema_name_colliding_with_a_registered_tool_fails_closed() {
     let model = Arc::new(RecordingModel::new(vec![ModelResponse::assistant("hi")]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model)));
     harness.register_tool(Arc::new(FakeTool::returning("result", "hits")));
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(
@@ -294,7 +294,7 @@ async fn a_schema_name_colliding_with_the_discovery_bridge_fails_closed() {
     let model = Arc::new(RecordingModel::new(vec![ModelResponse::assistant("hi")]));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model)));
     harness.register_tool(Arc::new(DeferredStockQuote));
     harness.with_policy(RunPolicy {
         default_response_format: Some(tinyinference_llm::model::ResponseFormat::auto(

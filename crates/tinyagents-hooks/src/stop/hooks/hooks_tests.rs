@@ -334,7 +334,7 @@ async fn stop_hook_pause_prevents_the_next_model_call_in_the_native_loop() {
     ));
     let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
         tinyagents_harness::runtime::AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", model.clone())));
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
         "model",
@@ -490,7 +490,7 @@ async fn stop_hook_on_a_child_run_pauses_only_that_child_before_another_call() {
     ));
     let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
         tinyagents_harness::runtime::AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", model.clone())));
     harness.register_tool(Arc::new(ReadTool));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
         "model",
@@ -521,7 +521,7 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
     let handle = context.steering.clone().unwrap();
     let mut harness: tinyagents_harness::runtime::AgentHarness<()> =
         tinyagents_harness::runtime::AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(tinyinference_llm::providers::MockModel::constant("done")),)));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", Arc::new(tinyinference_llm::providers::MockModel::constant("done")),)));
     harness.push_middleware(Arc::new(StopHookMiddleware::<Metrics>::new(
         "model",
         vec![Arc::new(Hook {
@@ -543,7 +543,7 @@ async fn stop_hook_on_a_final_response_reports_pause_without_a_leftover_command(
     handle.resume();
     let mut next: tinyagents_harness::runtime::AgentHarness<()> =
         tinyagents_harness::runtime::AgentHarness::new();
-    next.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(tinyinference_llm::providers::MockModel::constant("next")),)));
+    next.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("model", Arc::new(tinyinference_llm::providers::MockModel::constant("next")),)));
     let outcome = next
         .invoke_in_context_with_status(
             &(),

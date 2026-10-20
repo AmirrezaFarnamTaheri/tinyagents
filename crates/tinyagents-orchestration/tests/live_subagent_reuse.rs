@@ -31,7 +31,7 @@ async fn live_openai_subagent_reused_with_carried_context() {
     // A real OpenAI sub-agent we will reuse across two turns.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(OpenAiModel::from_env().expect("OPENAI_API_KEY present")),)))
         ;
 
     let subagent = Arc::new(

@@ -378,7 +378,7 @@ mod run_policy_breakpoints {
             seen: Mutex::new(Vec::new()),
         });
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("rec", model.clone())));
         harness.push_middleware(Arc::new(DeclareSystemPrefix));
         harness.with_policy(RunPolicy {
             cache: policy,

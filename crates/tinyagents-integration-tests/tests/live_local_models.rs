@@ -649,7 +649,7 @@ async fn local_runtimes_complete_a_full_tool_loop() {
             let mut harness: AgentHarness<()> = AgentHarness::new();
             harness.register_tool(tool.clone());
             harness
-                .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(runtime.model()))))
+                .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("local", Arc::new(runtime.model()))))
                 
                 .with_policy(local_run_policy())
                 .push_middleware(Arc::new(ForceFirstToolCall::new()));

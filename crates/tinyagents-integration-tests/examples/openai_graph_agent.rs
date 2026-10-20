@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     // Build the harness once and share it into the node via an Arc.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("openai", Arc::new(model))))
         ;
     let harness = Arc::new(harness);
 

@@ -123,7 +123,7 @@ async fn token_budget_blocks_multi_call_run() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model))))
         
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(mw));
@@ -183,7 +183,7 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
     ]);
     let mut harness_a: AgentHarness<()> = AgentHarness::new();
     harness_a
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model_a))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model_a))))
         
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(
@@ -213,7 +213,7 @@ async fn shared_tracker_rolls_up_and_blocks_across_runs() {
     ]);
     let mut harness_b: AgentHarness<()> = AgentHarness::new();
     harness_b
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model_b))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model_b))))
         
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(
@@ -363,7 +363,7 @@ async fn below_threshold_run_completes_without_exceeding() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model))))
         
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(mw));
@@ -415,7 +415,7 @@ async fn budget_middleware_does_not_double_record_usage() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(model))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(model))))
         
         .register_tool(Arc::new(FakeTool::returning("noop", "ok")))
         .push_middleware(Arc::new(mw));
@@ -451,7 +451,7 @@ async fn input_reservation_blocks_oversized_call_in_a_live_run() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("unused")))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("unused")))))
         
         .push_middleware(Arc::new(mw));
 
@@ -492,7 +492,7 @@ async fn fitting_call_emits_reserved_and_reconciled_events() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![text_response("done", 3, 1)])),)))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![text_response("done", 3, 1)])),)))
         
         .push_middleware(Arc::new(mw));
 

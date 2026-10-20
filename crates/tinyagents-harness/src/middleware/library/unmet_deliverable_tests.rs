@@ -136,7 +136,7 @@ async fn an_unwritten_deliverable_holds_the_answer_once_and_permits_a_fix() {
     let request = format!("Do the work and write it to {}", missing.display());
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
             tinyinference_llm::model::ModelResponse::assistant("here is what I found".to_string()),
             tool_round("c1", "writer"),
@@ -174,7 +174,7 @@ async fn an_unwritten_deliverable_holds_the_answer_once_and_permits_a_fix() {
 #[tokio::test]
 async fn a_request_naming_no_missing_file_is_left_alone() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
             tinyinference_llm::model::ModelResponse::assistant("done".to_string()),
             tinyinference_llm::model::ModelResponse::assistant("must not be reached".to_string()),
@@ -207,7 +207,7 @@ async fn install_holds_a_final_answer_while_the_named_file_is_missing() {
         ModelResponse::assistant("written and answered".to_string()),
     ]));
     let mut root: AgentHarness<()> = AgentHarness::new();
-    root.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(script)));
+    root.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", script)));
     root.register_tool(Arc::new(FakeTool::returning("writer", "ok")));
     root.with_policy(RunPolicy {
         limits: RunLimits::default()
@@ -238,7 +238,7 @@ async fn candidates_come_from_the_current_turns_request() {
     let _ = std::fs::remove_file(&old);
     let _ = std::fs::remove_file(&new);
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
             tinyinference_llm::model::ModelResponse::assistant("first answer".to_string()),
             tinyinference_llm::model::ModelResponse::assistant("second answer".to_string()),
@@ -409,7 +409,7 @@ async fn the_runs_state_is_dropped_when_the_turn_ends() {
     let _ = std::fs::remove_file(&missing);
     let middleware = Arc::new(UnmetDeliverableMiddleware::new(None));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(ScriptedModel::new(vec![
             tool_round("c0", "writer"),
             tinyinference_llm::model::ModelResponse::assistant("first answer".to_string()),
             tinyinference_llm::model::ModelResponse::assistant("second answer".to_string()),

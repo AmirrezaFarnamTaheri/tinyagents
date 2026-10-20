@@ -86,7 +86,7 @@ async fn harness_run_journals_redacted_replayable_events() {
     // varied lifecycle: run/model/tool boundaries plus completion.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named(MODEL_NAME, Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({ "q": "x" })),
                 text_response("done"),
             ])),)))
@@ -201,7 +201,7 @@ async fn harness_run_with_capture_exports_generation_and_tool_io() {
     // the tool-create Input/Output panels — the fix for tinyhumansai/tinyagents#6.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("capture-model", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({ "q": "weather" })),
                 text_response("all done"),
             ])),)))

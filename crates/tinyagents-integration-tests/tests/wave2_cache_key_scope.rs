@@ -63,7 +63,7 @@ async fn shared_cache_does_not_cross_serve_between_two_providers() {
     let local_calls = Arc::new(AtomicUsize::new(0));
 
     let mut hosted: AgentHarness<()> = AgentHarness::new();
-    hosted.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(IdentifiedModel {
+    hosted.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(IdentifiedModel {
             identity: "openai|gpt-5|https://api.openai.com/v1||abc".to_string(),
             answer: "hosted answer".to_string(),
             calls: hosted_calls.clone(),
@@ -71,7 +71,7 @@ async fn shared_cache_does_not_cross_serve_between_two_providers() {
     hosted.with_response_cache(cache.clone());
 
     let mut local: AgentHarness<()> = AgentHarness::new();
-    local.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(IdentifiedModel {
+    local.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(IdentifiedModel {
             identity: "ollama|llama3.2|http://localhost:11434/v1||no-credential".to_string(),
             answer: "local answer".to_string(),
             calls: local_calls.clone(),
@@ -106,7 +106,7 @@ async fn identical_identity_still_shares_the_cache() {
 
     let build = |calls: Arc<AtomicUsize>| {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(IdentifiedModel {
+        harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("chat", Arc::new(IdentifiedModel {
                 identity: identity.to_string(),
                 answer: "same answer".to_string(),
                 calls,

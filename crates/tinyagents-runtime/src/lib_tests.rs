@@ -815,7 +815,7 @@ async fn post_commit_errors_cannot_relabel_a_successful_turn() {
 #[tokio::test]
 async fn harness_driver_keeps_the_explicit_model_and_tool_snapshot_boundary() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("from harness")))));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("from harness")))));
     harness.register_tool(Arc::new(RegisteredTool));
     let snapshot = ToolSnapshot::new(harness.tools().declared_specs()).unwrap();
     let driver = Arc::new(HarnessDriver::new(Arc::new(harness), Arc::new(())));
@@ -836,7 +836,7 @@ async fn harness_driver_keeps_the_explicit_model_and_tool_snapshot_boundary() {
 #[tokio::test]
 async fn harness_driver_rejects_a_snapshot_not_registered_by_the_harness() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("unreachable")))));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("unreachable")))));
     let driver = Arc::new(HarnessDriver::new(Arc::new(harness), Arc::new(())));
     let mut session = SessionBuilder::new(driver)
         .tool_snapshot(tools("not-registered"))

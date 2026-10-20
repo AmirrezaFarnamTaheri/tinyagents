@@ -776,7 +776,7 @@ async fn agent_middleware_owns_context_and_observes_failed_partial_runs() {
     });
 
     let mut successful: AgentHarness<()> = AgentHarness::new();
-    successful.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("done")))));
+    successful.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("done")))));
     successful.push_agent_middleware(middleware.clone());
     let run = successful
         .invoke_default(&(), vec![Message::user("go")])
@@ -785,7 +785,7 @@ async fn agent_middleware_owns_context_and_observes_failed_partial_runs() {
     assert_eq!(run.messages[0].text(), "remembered by the host");
 
     let mut failing: AgentHarness<()> = AgentHarness::new();
-    failing.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(FailingModel {
+    failing.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(FailingModel {
             attempts: Mutex::new(0),
         }),)));
     failing.push_agent_middleware(middleware);
@@ -802,7 +802,7 @@ async fn agent_middleware_owns_context_and_observes_failed_partial_runs() {
 #[tokio::test]
 async fn wrap_middleware_fires_around_model_and_tool_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "lookup", json!({"q": "x"})),
             text_response("done", 4, 2),
         ])),)));
@@ -832,7 +832,7 @@ async fn wrap_model_short_circuit_skips_provider() {
     let model = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.push_model_middleware(Arc::new(ShortCircuitModelWrap));
 
     let run = harness
@@ -847,7 +847,7 @@ async fn wrap_model_short_circuit_skips_provider() {
 #[tokio::test]
 async fn single_model_call_no_tools() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -869,7 +869,7 @@ async fn empty_response_fails_the_run_when_guard_enabled() {
     // when the guard is enabled — it fails with a typed `EmptyResponse` so the
     // caller can re-prompt instead of silently succeeding on empty content.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("")))));
     harness.with_policy(RunPolicy {
         error_on_empty_response: true,
         ..RunPolicy::default()
@@ -890,7 +890,7 @@ async fn empty_response_terminates_normally_when_guard_disabled() {
     // The guard is opt-in: with the default policy an empty completion still
     // terminates the run with a blank final answer (preserved behavior).
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("")))));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -907,7 +907,7 @@ async fn reasoning_only_stop_retries_once_when_enabled() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         empty_response_retries: 1,
         ..RunPolicy::default()
@@ -942,7 +942,7 @@ async fn reasoning_only_stop_keeps_default_blank_final() {
         reasoning_only_stop_response(),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -959,7 +959,7 @@ async fn reasoning_only_stop_retry_exhaustion_respects_empty_guard() {
         reasoning_only_stop_response(),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         empty_response_retries: 1,
         error_on_empty_response: true,
@@ -984,7 +984,7 @@ async fn empty_response_retry_budget_resets_after_a_tool_turn() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::new(FakeTool::new("fake", "tool output")));
     harness.with_policy(RunPolicy {
         empty_response_retries: 1,
@@ -1008,7 +1008,7 @@ async fn empty_response_retry_does_not_replace_an_explicit_continuation() {
         text_response("done", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         empty_response_retries: 1,
         ..RunPolicy::default()
@@ -1036,7 +1036,7 @@ async fn empty_response_retry_does_not_replay_a_cached_blank() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
     harness.with_policy(RunPolicy {
         empty_response_retries: 1,
@@ -1068,7 +1068,7 @@ async fn empty_response_retry_ignores_a_blank_cached_before_opt_in() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
     let input = vec![Message::user("same request")];
 
@@ -1100,7 +1100,7 @@ async fn truncated_empty_retry_does_not_replay_a_cached_blank() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         // This test pins the cap ladder; keep reasoning on so the ladder runs.
         ..RunPolicy::default()
@@ -1131,7 +1131,7 @@ async fn truncated_empty_response_retries_then_succeeds() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     use crate::testkit::EventRecorder;
     let recorder = EventRecorder::new();
@@ -1185,7 +1185,7 @@ async fn truncated_empty_boost_does_not_leak_into_later_turns() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::new(FakeTool::new("fake", "tool output")));
     harness.with_policy(RunPolicy {
         // This test pins the cap ladder; keep reasoning on so the ladder runs.
@@ -1226,7 +1226,7 @@ async fn truncated_empty_retry_stops_at_the_cap_ceiling_and_nudges() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         // This test pins the cap ladder; keep reasoning on so the ladder runs.
         truncated_empty_retries: 4,
@@ -1333,7 +1333,7 @@ async fn truncated_empty_retry_yields_to_the_clock() {
         calls: Mutex::new(0),
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model as _)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_wall_clock_ms(Some(1_000)),
         truncated_empty_nudges: 1,
@@ -1394,7 +1394,7 @@ async fn truncated_empty_nudges_repeat_while_the_clock_allows_with_a_halving_cap
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         // This test pins the cap ladder; keep reasoning on so the ladder runs.
         limits: RunLimits::default().with_max_wall_clock_ms(Some(60_000)),
@@ -1445,7 +1445,7 @@ async fn truncated_empty_nudges_stop_at_their_limit_even_with_clock_left() {
     let responses: Vec<ModelResponse> = (0..12).map(|_| truncated_empty_response(2048)).collect();
     let model = Arc::new(crate::testkit::ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_wall_clock_ms(Some(60_000)),
         ..RunPolicy::default()
@@ -1473,7 +1473,7 @@ async fn truncated_empty_nudges_do_not_repeat_without_a_clock() {
     let responses: Vec<ModelResponse> = (0..6).map(|_| truncated_empty_response(2048)).collect();
     let model = Arc::new(crate::testkit::ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     let ctx = RunContext::new(
         RunConfig::new("truncated-no-clock").with_max_turn_output_tokens(2048),
         (),
@@ -1501,7 +1501,7 @@ async fn truncated_empty_retry_budget_is_restored_for_a_later_turn() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::new(FakeTool::new("fake", "tool output")));
 
     let run = harness
@@ -1523,7 +1523,7 @@ async fn truncated_empty_retry_budget_stays_unset_when_request_had_none() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -1550,7 +1550,7 @@ async fn truncated_empty_retries_exhausted_returns_blank_by_default() {
         truncated_empty_response(4096),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let ctx = RunContext::new(
         RunConfig::new("truncated-exhausted").with_max_turn_output_tokens(2048),
@@ -1584,7 +1584,7 @@ async fn truncated_empty_nudge_after_spent_retries_reaches_the_tool_call() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::new(FakeTool::new("fake", "tool output")));
 
     let ctx = RunContext::new(
@@ -1629,7 +1629,7 @@ async fn truncated_empty_nudge_asks_for_an_answer_when_no_tool_is_callable() {
         text_response("short answer", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -1659,7 +1659,7 @@ async fn truncated_empty_nudge_is_skipped_when_no_model_call_remains() {
         truncated_empty_response(4096),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_calls(2),
         ..RunPolicy::default()
@@ -1682,7 +1682,7 @@ async fn truncated_empty_retry_is_skipped_when_no_model_call_remains() {
         truncated_empty_response(2048),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_calls(1),
         ..RunPolicy::default()
@@ -1706,7 +1706,7 @@ async fn truncated_empty_nudge_disabled_by_zero_policy() {
         truncated_empty_response(4096),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         truncated_empty_nudges: 0,
         ..RunPolicy::default()
@@ -1731,7 +1731,7 @@ async fn truncated_empty_retries_exhausted_errors_when_guard_enabled() {
         truncated_empty_response(4096),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         error_on_empty_response: true,
         ..RunPolicy::default()
@@ -1756,7 +1756,7 @@ async fn truncated_empty_retry_disabled_by_zero_policy_even_with_clock() {
         text_response("unexpected recovery", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     harness.with_policy(RunPolicy {
         truncated_empty_retries: 0,
         truncated_empty_nudges: 0,
@@ -1780,7 +1780,7 @@ async fn length_finish_with_text_is_not_treated_as_truncated_empty() {
     partial.finish_reason = Some("length".to_string());
     let model = Arc::new(crate::testkit::ScriptedModel::new(vec![partial]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("hi")])
@@ -1836,7 +1836,7 @@ async fn length_truncation_rejects_only_the_last_native_call() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
 
     let recorder = crate::testkit::EventRecorder::new();
@@ -1886,7 +1886,7 @@ async fn length_truncated_tool_calls_run_when_the_guard_is_disabled() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
     harness.with_policy(RunPolicy {
         reject_truncated_tool_calls: false,
@@ -1914,7 +1914,7 @@ async fn max_tokens_finish_reason_counts_as_a_length_stop() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
 
     harness
@@ -1943,7 +1943,7 @@ async fn consecutive_length_truncated_tool_turns_are_bounded_and_raise_the_token
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
 
     let ctx = RunContext::new(
@@ -1983,7 +1983,7 @@ async fn truncated_tool_call_budget_resets_after_a_clean_tool_turn() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
 
     let ctx = RunContext::new(
@@ -2031,7 +2031,7 @@ async fn a_text_recovered_last_call_is_rejected_under_a_length_stop() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
     harness.with_policy(RunPolicy {
         text_dialect_recovery: crate::runtime::TextDialectRecovery::On,
@@ -2073,7 +2073,7 @@ async fn a_forced_text_dialect_call_cut_by_a_length_stop_is_rejected() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
     harness.with_policy(RunPolicy {
         tool_dialect: crate::config::ToolDispatcher::Xml,
@@ -2101,7 +2101,7 @@ async fn duplicate_provider_ids_reject_the_positional_last_call() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::clone(&tool) as _);
 
     let run = harness
@@ -2129,7 +2129,7 @@ async fn an_empty_max_tokens_reply_takes_the_truncated_empty_retry_path() {
         text_response("recovered", 4, 3),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
 
     let ctx = RunContext::new(
         RunConfig::new("max-tokens-empty").with_max_turn_output_tokens(2048),
@@ -2169,7 +2169,7 @@ async fn an_invalid_call_is_rejected_not_repaired_under_a_length_stop() {
         ]));
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness
-            .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+            .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
             .register_tool(Arc::clone(&tool) as _);
 
         harness
@@ -2274,7 +2274,7 @@ fn harness_with_terminating_tools(
 ) -> (AgentHarness<()>, Arc<crate::testkit::ScriptedModel>) {
     let model = Arc::new(crate::testkit::ScriptedModel::new(responses));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)));
     for tool in tools {
         harness.register_tool(Arc::new(tool));
     }
@@ -2417,7 +2417,7 @@ async fn return_direct_in_a_mixed_batch_still_ends_the_run() {
 #[tokio::test]
 async fn model_requests_tool_then_finishes() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "lookup", json!({"q": "x"})),
             text_response("done", 4, 2),
         ])),)));
@@ -2447,7 +2447,7 @@ async fn model_requests_tool_then_finishes() {
 #[tokio::test]
 async fn dynamic_toolset_change_folds_into_the_leading_system_message_by_default() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "search", json!({"q": "x"})),
             text_response("done", 4, 2),
         ])),)));
@@ -2514,7 +2514,7 @@ async fn dynamic_toolset_change_appends_exactly_one_patch_when_the_profile_allow
         mid_conversation_system_messages: true,
         ..ModelProfile::default()
     };
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ProfiledModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(ProfiledModel {
             inner: MockModel::with_responses(vec![
                 tool_call_response("call-1", "search", json!({"q": "x"})),
                 text_response("done", 4, 2),
@@ -2587,7 +2587,7 @@ async fn after_tool_receives_distinct_identity_for_same_named_calls() {
     ];
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             parallel_calls,
             text_response("done", 1, 1),
         ])),)));
@@ -2614,7 +2614,7 @@ async fn after_tool_receives_distinct_identity_for_same_named_calls() {
 async fn max_model_calls_limit_triggers_limit_exceeded() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // A model that always asks for the tool -> the loop would never stop.
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
     harness.register_tool(Arc::new(FakeTool::new("spin", "again")));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_calls(1),
@@ -2641,7 +2641,7 @@ async fn policy_model_call_limit_above_run_config_default_is_honored() {
     // survives past 25 calls and, once it does trip, reports the limit that
     // actually applies.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
     harness.register_tool(Arc::new(FakeTool::new("spin", "again")));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default()
@@ -2667,7 +2667,7 @@ async fn policy_model_call_limit_above_run_config_default_is_honored() {
 #[tokio::test]
 async fn max_tool_calls_limit_triggers_limit_exceeded() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
     harness.register_tool(Arc::new(FakeTool::new("spin", "again")));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default()
@@ -2690,7 +2690,7 @@ async fn max_tool_calls_limit_triggers_limit_exceeded() {
 async fn before_model_middleware_mutates_request() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // Echo returns the last user message; the middleware injects one.
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::echo()))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::echo()))));
     harness.push_middleware(Arc::new(InjectMiddleware { text: "injected" }));
 
     let run = harness
@@ -2729,7 +2729,7 @@ async fn prefix_mutating_middleware_refreshes_provider_cache_key() {
 
     let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         cache: CachePolicy {
             protect_prompt_prefix: true,
@@ -2790,7 +2790,7 @@ async fn prefix_mutating_wrap_middleware_refreshes_provider_cache_key() {
 
     let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         cache: CachePolicy {
             protect_prompt_prefix: true,
@@ -2866,7 +2866,7 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
 
     let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         cache: CachePolicy {
             protect_prompt_prefix: true,
@@ -2895,7 +2895,7 @@ async fn middleware_owned_cache_segments_are_preserved_and_fingerprinted() {
 #[tokio::test]
 async fn usage_accumulates_across_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "lookup", json!({})),
             text_response("done", 4, 2),
         ])),)));
@@ -2917,7 +2917,7 @@ async fn usage_accumulates_across_calls() {
 #[tokio::test]
 async fn tool_not_found_errors_under_the_fail_policy() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("missing", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("missing", json!({}))),)));
     // No tool registered.
     harness.with_policy(RunPolicy {
         unknown_tool: UnknownToolPolicy::Fail,
@@ -2937,7 +2937,7 @@ async fn tool_not_found_errors_under_the_fail_policy() {
 #[tokio::test]
 async fn unknown_tool_return_tool_error_recovers() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "missing", json!({})),
             text_response("recovered", 1, 1),
         ])),)));
@@ -2967,7 +2967,7 @@ async fn unknown_tool_return_tool_error_recovers() {
 async fn unknown_tool_rewrite_retargets_to_real_tool() {
     let lookup = Arc::new(FakeTool::new("lookup", "out"));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "missing", json!({})),
             text_response("done", 1, 1),
         ])),)));
@@ -2994,7 +2994,7 @@ async fn unknown_tool_rewrite_retargets_to_real_tool() {
 #[tokio::test]
 async fn invalid_tool_arguments_fail_before_tool_execution_under_the_fail_policy() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call(
             "strict_lookup",
             json!({ "query": 42, "extra": true }),
         )),)));
@@ -3023,7 +3023,7 @@ async fn invalid_tool_arguments_fail_before_tool_execution_under_the_fail_policy
 #[tokio::test]
 async fn invalid_tool_arguments_return_tool_error_recovers() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             // `query` is required to be a string; 42 violates the schema, so
             // admission must recover instead of running the tool or aborting.
             tool_call_response("call-1", "strict_lookup", json!({ "query": 42 })),
@@ -3064,7 +3064,7 @@ async fn invalid_tool_arguments_return_tool_error_recovers() {
 #[tokio::test]
 async fn normalized_json_string_arguments_execute_registered_tool() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response(
                 "call-1",
                 "strict_lookup",
@@ -3093,7 +3093,7 @@ async fn normalized_json_string_arguments_execute_registered_tool() {
 #[tokio::test]
 async fn normalized_non_object_executes_tool_without_required_fields() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "permissive", json!(null)),
             text_response("done", 1, 1),
         ])),)));
@@ -3123,7 +3123,7 @@ async fn normalization_preserves_a_decoded_but_schema_invalid_scalar() {
     // replaced with `{}`, letting the tool execute with fabricated empty
     // arguments instead of surfacing the model's real type mismatch.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "permissive", json!("true")),
             text_response("recovered", 1, 1),
         ])),)));
@@ -3159,7 +3159,7 @@ async fn normalization_preserves_a_decoded_but_schema_invalid_scalar() {
 #[tokio::test]
 async fn normalization_preserves_valid_primitive_arguments() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "string_echo", json!("hello")),
             text_response("done", 1, 1),
         ])),)));
@@ -3190,7 +3190,7 @@ async fn normalization_preserves_valid_primitive_arguments() {
 #[tokio::test]
 async fn normalization_decodes_required_only_object_schema() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "required_only", json!("{\"query\":\"rust\"}")),
             text_response("done", 1, 1),
         ])),)));
@@ -3215,7 +3215,7 @@ async fn normalization_decodes_required_only_object_schema() {
 #[tokio::test]
 async fn normalization_decodes_object_valued_enum_schema() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "object_enum", json!("{\"query\":\"rust\"}")),
             text_response("done", 1, 1),
         ])),)));
@@ -3240,7 +3240,7 @@ async fn normalization_decodes_object_valued_enum_schema() {
 #[tokio::test]
 async fn normalization_preserves_decoded_array_union_arguments() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "object_array", json!("[1,2]")),
             text_response("done", 1, 1),
         ])),)));
@@ -3271,7 +3271,7 @@ async fn normalization_preserves_decoded_array_union_arguments() {
 #[tokio::test]
 async fn normalization_preserves_decoded_invalid_object_for_validation() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response(
                 "call-1",
                 "optional_strict_object",
@@ -3318,7 +3318,7 @@ async fn normalization_preserves_decoded_invalid_object_for_validation() {
 #[tokio::test]
 async fn normalization_preserves_direct_invalid_object_for_validation() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "optional_strict_object", json!({"extra": true})),
             text_response("recovered", 1, 1),
         ])),)));
@@ -3349,7 +3349,7 @@ async fn normalization_preserves_direct_invalid_object_for_validation() {
 #[tokio::test]
 async fn normalization_preserves_required_field_validation_errors() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "strict_lookup", json!(null)),
             text_response("recovered", 1, 1),
         ])),)));
@@ -3381,7 +3381,7 @@ async fn malformed_tool_arguments_recover_as_error_tool_result() {
     // well-formed args, not unparseable ones), proving the leniency is
     // unconditional.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             invalid_tool_call_response("call-x", "strict_lookup", "{\"query\":"),
             text_response("recovered", 1, 1),
         ])),)));
@@ -3430,7 +3430,7 @@ async fn provider_invalid_arguments_recoverable_by_relaxed_json_are_repaired_and
 
     let tool = Arc::new(crate::testkit::FakeTool::returning("lookup", "found it"));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             // Unquoted object key: `tinytools_agent::repair::json::recover_object`
             // repairs this to `{"query":"weather"}`.
             invalid_tool_call_response("call-x", "lookup", "{query:\"weather\"}"),
@@ -3473,7 +3473,7 @@ async fn provider_invalid_arguments_recoverable_by_relaxed_json_are_repaired_and
 #[tokio::test]
 async fn structured_output_is_extracted() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant(r#"{"value":"hi","score":42}"#)),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant(r#"{"value":"hi","score":42}"#)),)));
     harness.with_policy(RunPolicy {
         default_response_format: Some(ResponseFormat::json_schema(
             "answer",
@@ -3497,7 +3497,7 @@ async fn auto_format_uses_provider_schema_for_native_model() {
     // MockModel advertises a permissive profile (native structured output), so
     // `Auto` resolves to provider-native schema mode and parses the JSON text.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant(r#"{"value":"native","score":1}"#)),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant(r#"{"value":"native","score":1}"#)),)));
     harness.with_policy(RunPolicy {
         default_response_format: Some(ResponseFormat::auto("answer", json!({"type": "object"}))),
         ..RunPolicy::default()
@@ -3518,7 +3518,7 @@ async fn auto_format_uses_tool_call_for_non_native_model() {
     // fallback; the structured value is read from the tool-call arguments and
     // the artificial tool call is treated as the final response.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ToolStructuredModel::new()))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("tool", Arc::new(ToolStructuredModel::new()))));
     harness.with_policy(RunPolicy {
         default_response_format: Some(ResponseFormat::auto("answer", json!({"type": "object"}))),
         ..RunPolicy::default()
@@ -3570,7 +3570,7 @@ impl ChatModel<()> for CutThenWholeStructuredModel {
 #[tokio::test]
 async fn a_length_cut_structured_output_call_is_retried_not_extracted() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(CutThenWholeStructuredModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("tool", Arc::new(CutThenWholeStructuredModel {
             profile: ToolStructuredModel::new().profile,
             calls: std::sync::atomic::AtomicUsize::new(0),
         }),)));
@@ -3602,7 +3602,7 @@ async fn pformat_dialect_recovers_the_structured_output_fallback_tool() {
     let model = Arc::new(PFormatStructuredModel::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())))
         .with_policy(RunPolicy {
             tool_dialect: crate::config::ToolDispatcher::Pformat,
             default_response_format: Some(ResponseFormat::auto(
@@ -3664,7 +3664,7 @@ async fn native_tool_dispatcher_requires_tool_calling_capability() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(incapable.clone())))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", incapable.clone())))
         
         .register_tool(Arc::new(FakeTool::new("lookup", "tool-output")))
         .with_policy(RunPolicy {
@@ -3729,7 +3729,7 @@ async fn native_tool_dispatcher_gates_on_the_post_middleware_tool_set() {
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(incapable.clone())))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", incapable.clone())))
         
         .push_middleware(Arc::new(InjectToolMiddleware))
         .with_policy(RunPolicy {
@@ -3772,7 +3772,7 @@ async fn native_tool_dispatcher_gates_on_auto_structured_output_with_no_ordinary
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(incapable.clone())))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", incapable.clone())))
         
         .with_policy(RunPolicy {
             tool_dialect: crate::config::ToolDispatcher::Native,
@@ -3832,7 +3832,7 @@ async fn retry_backoff_sleeps_the_documented_schedule() {
         timestamps: Mutex::new(Vec::new()),
     });
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("flaky", model.clone())));
     harness.with_policy(RunPolicy {
         retry: policy,
         ..RunPolicy::default()
@@ -3867,8 +3867,8 @@ async fn retry_then_fallback_succeeds() {
     let failing = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(failing.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("recovered")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", failing.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", Arc::new(MockModel::constant("recovered")))));
     harness.with_policy(RunPolicy {
         // 2 attempts on primary, then fall back to backup.
         retry: RetryPolicy::default().with_max_attempts(2),
@@ -3895,8 +3895,8 @@ async fn provider_budget_refusal_does_not_call_model_fallback() {
         "unexpected fallback",
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(fallback.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
     harness.with_policy(RunPolicy {
         fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
         ..RunPolicy::default()
@@ -3922,7 +3922,7 @@ async fn run_limits_max_retries_per_call_caps_a_looser_retry_policy() {
     let failing = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(failing.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", failing.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(5),
         limits: RunLimits::default().with_max_retries_per_call(1),
@@ -3946,8 +3946,8 @@ async fn a_provider_budget_refusal_stops_retries_and_model_fallback() {
         "unexpected fallback",
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(fallback.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(4),
         fallback: Some(FallbackPolicy::new(["primary", "fallback"])),
@@ -3977,7 +3977,7 @@ async fn retry_middleware_and_run_policy_retry_do_not_multiply_attempts() {
     let failing = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(failing.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", failing.clone())));
     // The middleware allows 3 attempts; the loop's own retry (if it fired
     // too) would allow another 5 — 15 total if the two layers multiplied.
     harness.push_model_middleware(Arc::new(crate::middleware::library::RetryMiddleware::new(
@@ -4009,7 +4009,7 @@ async fn provider_error_401_is_not_retried() {
         status: 401,
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", model.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(5),
         ..RunPolicy::default()
@@ -4033,7 +4033,7 @@ async fn provider_error_429_is_retried_up_to_max_attempts() {
         status: 429,
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", model.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(3),
         ..RunPolicy::default()
@@ -4050,7 +4050,7 @@ async fn provider_error_429_is_retried_up_to_max_attempts() {
 #[tokio::test]
 async fn non_retryable_or_exhausted_without_fallback_errors() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(FailingModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", Arc::new(FailingModel {
             attempts: Mutex::new(0),
         }),)));
     harness.with_policy(RunPolicy {
@@ -4079,8 +4079,8 @@ async fn fallback_chain_with_repeated_model_name_terminates() {
     let backup = Arc::new(FailingModel {
         attempts: Mutex::new(0),
     });
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(backup.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", backup.clone())));
     harness.with_policy(RunPolicy {
         retry: RetryPolicy::default().with_max_attempts(1),
         fallback: Some(FallbackPolicy::new(["primary", "backup", "primary"])),
@@ -4213,9 +4213,9 @@ async fn runtime_fallback_skips_capability_ineligible_candidate() {
     });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(primary.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(backup.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(tertiary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("primary", primary.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("backup", backup.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("tertiary", tertiary.clone())));
     harness.push_middleware(Arc::new(RequireCapsMiddleware {
         model: "primary",
         caps: CapabilitySet {
@@ -4280,7 +4280,7 @@ async fn native_tool_calling_model_does_not_execute_quoted_text_dialect_markup()
     });
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("native", model.clone())));
     harness.register_tool(tool.clone());
 
     let run = harness
@@ -4306,7 +4306,7 @@ async fn invoke_with_status_reports_completed() {
     use crate::ids::{ExecutionStatus, HarnessPhase};
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("ok")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("ok")))));
 
     let result = harness
         .invoke_with_status(&(), (), RunConfig::new("run-x"), vec![Message::user("hi")])
@@ -4449,7 +4449,7 @@ async fn invoke_streaming_fires_on_model_delta_per_delta_and_accumulates() {
     let reasonings = Arc::new(Mutex::new(Vec::new()));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::from_text_chunks(["Hel", "lo, ", "world"])),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::from_text_chunks(["Hel", "lo, ", "world"])),)));
     harness.push_middleware(Arc::new(DeltaRecorder {
         count: count.clone(),
         texts: texts.clone(),
@@ -4492,7 +4492,7 @@ async fn streamed_repetitive_narration_stops_the_live_model_call() {
         })
         .collect::<String>();
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::from_text_chunks([repeated])),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::from_text_chunks([repeated])),)));
 
     let error = harness
         .invoke_streaming(
@@ -4521,7 +4521,7 @@ async fn streaming_delta_transform_controls_final_run_and_cached_response() {
         ModelStreamItem::Completed(ModelResponse::assistant("raw-secret")),
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", model.clone())));
     harness.with_response_cache(Arc::new(InMemoryResponseCache::new()));
     harness.push_middleware(Arc::new(SecretRedactingDelta));
 
@@ -4585,7 +4585,7 @@ async fn streaming_turn_keeps_a_signed_thinking_signature_ahead_of_a_tool_call()
         .push(ToolCall::new("call-1", "lookup", json!({})));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::new(vec![
             ModelStreamItem::Started,
             ModelStreamItem::MessageDelta(MessageDelta::reasoning("let me think")),
             ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
@@ -4649,7 +4649,7 @@ async fn streaming_middleware_can_suppress_a_standalone_tool_delta() {
         .tool_calls
         .push(ToolCall::new("blocked-call", "blocked", json!({})));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::new(vec![
             ModelStreamItem::Started,
             ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
                 call_id: "blocked-call".to_string(),
@@ -4692,7 +4692,7 @@ async fn streaming_tool_delta_transform_controls_terminal_dispatch() {
         .tool_calls
         .push(ToolCall::new("raw-call", "blocked", json!({"raw": true})));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::new(vec![
             ModelStreamItem::Started,
             ModelStreamItem::ToolCallDelta(tinyinference_llm::tool::ToolDelta {
                 call_id: "raw-call".to_string(),
@@ -4730,7 +4730,7 @@ async fn invoke_streaming_forwards_reasoning_deltas_to_middleware_and_events() {
     let reasonings = Arc::new(Mutex::new(Vec::new()));
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::new(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::new(vec![
             ModelStreamItem::Started,
             ModelStreamItem::MessageDelta(MessageDelta::reasoning("think ")),
             ModelStreamItem::MessageDelta(MessageDelta::text("answer")),
@@ -4777,7 +4777,7 @@ async fn invoke_streaming_emits_model_delta_events() {
     use crate::testkit::{EventRecorder, StreamingMock};
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(StreamingMock::from_text_chunks(["a", "b"])),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", Arc::new(StreamingMock::from_text_chunks(["a", "b"])),)));
 
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("stream-run"), ()).with_events(recorder.sink());
@@ -4859,7 +4859,7 @@ impl Tool for CancelOnCallTool {
 async fn token_cancelled_before_run_yields_cancelled() {
     let invocations = Arc::new(Mutex::new(0usize));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(CountingToolModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(CountingToolModel {
             name: "cancel_me",
             invocations: invocations.clone(),
         }),)));
@@ -4886,7 +4886,7 @@ async fn cancelled_mid_run_stops_before_next_model_call() {
     let token = CancellationToken::new();
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(CountingToolModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(CountingToolModel {
             name: "cancel_me",
             invocations: invocations.clone(),
         }),)));
@@ -4935,7 +4935,7 @@ async fn cancelled_during_unary_model_call_drops_the_in_flight_call() {
     let started = Arc::new(tokio::sync::Notify::new());
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(BlockForeverModel {
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(BlockForeverModel {
             started: started.clone(),
         }),)));
 
@@ -4972,7 +4972,7 @@ async fn slow_model_call_is_timed_out_by_remaining_budget() {
     // (20ms), so the per-call timeout must interrupt it mid-flight and surface a
     // `Timeout` error rather than waiting for the model to return.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
 
     let config = RunConfig::new("timeout-run").with_timeout_ms(20);
     let err = harness
@@ -4988,7 +4988,7 @@ async fn fast_model_call_succeeds_under_same_budget() {
     // Control: under the same small timeout a fast model completes well within
     // the budget, proving the timeout only fires on genuinely slow calls.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("done")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fast", Arc::new(MockModel::constant("done")))));
 
     let config = RunConfig::new("fast-run").with_timeout_ms(20);
     let run = harness
@@ -5008,7 +5008,7 @@ async fn slow_streaming_model_call_is_timed_out() {
     // The streaming path must enforce the same per-call budget: the default
     // `stream` impl delegates to `invoke`, whose sleep exceeds the 20ms budget.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
 
     let config = RunConfig::new("timeout-stream-run").with_timeout_ms(20);
     let err = harness
@@ -5029,7 +5029,7 @@ async fn slow_tool_call_is_timed_out_by_remaining_budget() {
     // budget (20ms), so the same per-call timeout used for model calls must
     // interrupt it too.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("slow", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("slow", json!({}))),)));
     harness.register_tool(Arc::new(SlowTool {
         delay: Duration::from_millis(200),
     }));
@@ -5057,7 +5057,7 @@ async fn per_model_call_ceiling_times_out_a_slow_call_with_run_time_left() {
     // and must not skip the fallback chain the way a run-deadline timeout
     // does (I-1). One retry attempt is enough to prove that here.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(20)),
         retry: RetryPolicy::default()
@@ -5097,8 +5097,8 @@ async fn per_model_call_ceiling_consults_the_fallback_chain_instead_of_aborting(
     let slow = Arc::new(SlowModel::new(Duration::from_millis(200), "too late"));
     let fallback = Arc::new(ScriptedModel::replies(vec!["fallback answer"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(slow.clone())));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(fallback.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", slow.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("fallback", fallback.clone())));
     harness.with_policy(RunPolicy {
         fallback: Some(FallbackPolicy::new(["fallback"])),
         ..RunPolicy::default()
@@ -5138,7 +5138,7 @@ async fn per_model_call_ceiling_bounds_calls_without_any_run_deadline() {
     // With no run timeout and no policy wall clock, a model call used to be
     // awaited unbounded. The per-call ceiling alone must bound it.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(20)),
         retry: RetryPolicy::default()
@@ -5170,7 +5170,7 @@ async fn run_remainder_bounds_a_model_call_when_tighter_than_the_ceiling() {
     // deadline (20ms): the tighter source wins, and the error blames the
     // remaining wall-clock budget.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("slow", Arc::new(SlowModel::new(Duration::from_millis(200), "too late")),)));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_call_ms(Some(10_000)),
         ..RunPolicy::default()
@@ -5199,7 +5199,7 @@ async fn per_model_call_ceiling_does_not_bound_tool_calls() {
     // entire child run), so the run completes despite the tool outliving the
     // model-call ceiling many times over.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "slow", json!({})),
             text_response("done", 0, 0),
         ])),)));
@@ -5227,7 +5227,7 @@ async fn inherited_tool_timeout_is_enforced_without_a_run_deadline() {
     let settings = ToolTimeoutSettings::new(20, 1, 1_000, 0);
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_tool_timeout_settings(settings.clone());
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "policy_slow", json!({})),
             text_response("recovered", 2, 1),
         ])),)));
@@ -5261,7 +5261,7 @@ async fn tool_timeout_unwinds_wrap_middleware() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_tool_timeout_settings(ToolTimeoutSettings::new(10, 1, 1_000, 0));
     harness.push_tool_middleware(Arc::new(StampToolWrap));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "policy_slow", json!({})),
             text_response("recovered", 2, 1),
         ])),)));
@@ -5288,7 +5288,7 @@ async fn tool_timeout_resolves_after_wrap_middleware_mutation() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_tool_timeout_settings(ToolTimeoutSettings::new(10, 1, 1_000, 0));
     harness.push_tool_middleware(Arc::new(UnboundToolWrap));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "policy_slow", json!({})),
             text_response("done", 2, 1),
         ])),)));
@@ -5313,7 +5313,7 @@ async fn parallel_tool_timeouts_return_ordered_recoverable_errors() {
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness.with_tool_timeout_settings(ToolTimeoutSettings::new(10, 1, 1_000, 0));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![("call-a", "slow_a"), ("call-b", "slow_b")]),
             text_response("recovered", 2, 1),
         ])),)));
@@ -5352,7 +5352,7 @@ async fn response_cache_serves_repeated_request_without_calling_model() {
 
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_response_cache(cache.clone());
 
     // First run: cache miss, model invoked once.
@@ -5413,7 +5413,7 @@ async fn multi_turn_request_with_prior_assistant_turn_is_not_cached() {
     ]));
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_response_cache(cache.clone());
 
     let convo = vec![
@@ -5443,7 +5443,7 @@ async fn no_cache_attached_invokes_model_each_run() {
     // Control: without a cache the model is invoked on every run.
     let model = Arc::new(MockModel::echo());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
 
     harness
         .invoke_default(&(), vec![Message::user("hello")])
@@ -5492,7 +5492,7 @@ async fn request_cache_policy_overrides_run_policy_to_disable_caching() {
     let model = Arc::new(MockModel::echo());
     let cache = Arc::new(InMemoryResponseCache::new());
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_response_cache(cache.clone());
     harness.push_middleware(Arc::new(DisableCaching));
 
@@ -5545,7 +5545,7 @@ async fn hook_failure_delivers_on_error_exactly_once() {
     // compensating did it twice for one failure.
     let calls = Arc::new(Mutex::new(0usize));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hi")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hi")))));
     harness.push_middleware(Arc::new(FailingHookMiddleware {
         on_error_calls: calls.clone(),
     }));
@@ -5585,7 +5585,7 @@ async fn middleware_control_stops_loop_with_final_response() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // The model asks for a tool; without control the loop would execute it and
     // continue, but the control outcome stops the run first.
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("lookup", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("lookup", json!({}))),)));
     harness.register_tool(Arc::new(FakeTool::new("lookup", "out")));
     harness.push_middleware(Arc::new(EarlyStopMiddleware));
 
@@ -5644,7 +5644,7 @@ impl Middleware<(), ()> for InterruptMiddleware {
 #[tokio::test]
 async fn middleware_control_can_interrupt_run() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hi")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hi")))));
     harness.push_middleware(Arc::new(InterruptMiddleware));
 
     let err = harness
@@ -5700,7 +5700,7 @@ async fn tool_schemas_are_stable_across_turns() {
     };
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(model))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(model))));
     harness.register_tool(Arc::new(FakeTool::new("spin", "again")));
 
     let run = harness
@@ -5754,7 +5754,7 @@ async fn skipped_model_override_emits_diagnostic_event() {
     use crate::testkit::EventRecorder;
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("ok")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("ok")))));
     harness.push_middleware(Arc::new(OverrideModelMiddleware("missing-model")));
 
     let recorder = EventRecorder::new();
@@ -5782,8 +5782,8 @@ async fn honored_model_override_emits_no_diagnostic_event() {
     use crate::testkit::EventRecorder;
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("default")))));
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("special answer")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("default")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("special", Arc::new(MockModel::constant("special answer")))));
     harness.push_middleware(Arc::new(OverrideModelMiddleware("special")));
 
     let recorder = EventRecorder::new();
@@ -5876,7 +5876,7 @@ async fn concurrent_tool_failure_fails_every_started_sibling_before_returning() 
     use crate::testkit::EventRecorder;
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![multi_tool_call_response(
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![multi_tool_call_response(
             // "boom" fails fast and comes first in call order, so the fold
             // reaches its fatal error while "alpha" (slower, but already
             // resolved by the time `join_all` returns) is still an
@@ -5992,7 +5992,7 @@ fn probe_pair(
 #[tokio::test]
 async fn independent_tool_calls_in_one_turn_run_concurrently() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![("call-a", "alpha"), ("call-b", "beta")]),
             text_response("done", 4, 2),
         ])),)));
@@ -6019,7 +6019,7 @@ async fn max_tool_concurrency_bounds_how_many_tools_run_at_once() {
     // path. `max_seen` is an atomic high-water mark, so any window where 3+
     // ran together would be caught regardless of scheduling order.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![
                 ("call-a", "alpha"),
                 ("call-b", "beta"),
@@ -6060,7 +6060,7 @@ async fn max_tool_concurrency_bounds_how_many_tools_run_at_once() {
 #[tokio::test]
 async fn parallel_tool_results_keep_original_call_order_and_ids() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![("call-a", "alpha"), ("call-b", "beta")]),
             text_response("done", 4, 2),
         ])),)));
@@ -6089,7 +6089,7 @@ async fn parallel_tool_results_keep_original_call_order_and_ids() {
 #[tokio::test]
 async fn tool_wrap_middleware_no_longer_forces_serial_execution() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![("call-a", "alpha"), ("call-b", "beta")]),
             text_response("done", 4, 2),
         ])),)));
@@ -6117,7 +6117,7 @@ async fn tool_wrap_middleware_no_longer_forces_serial_execution() {
 #[tokio::test]
 async fn unknown_tool_recovery_keeps_its_slot_in_a_parallel_turn() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             multi_tool_call_response(vec![("call-x", "missing"), ("call-b", "beta")]),
             text_response("done", 4, 2),
         ])),)));
@@ -6183,7 +6183,7 @@ async fn collect_stream(items: Vec<AgentStreamItem>) -> (Vec<AgentEvent>, AgentS
 #[tokio::test]
 async fn invoke_stream_yields_events_then_completed() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))));
 
     let items: Vec<AgentStreamItem> = harness
         .invoke_stream(
@@ -6223,7 +6223,7 @@ async fn invoke_stream_yields_events_then_completed() {
 #[tokio::test]
 async fn invoke_stream_in_context_preserves_caller_context() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))));
     let ctx = RunContext::new(
         RunConfig::new("caller-run").with_thread("caller-thread"),
         (),
@@ -6258,7 +6258,7 @@ async fn invoke_stream_in_context_preserves_caller_context() {
 #[tokio::test]
 async fn invoke_stream_in_context_unsubscribes_channel_listener() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))));
     let events = EventSink::new();
     let ctx = RunContext::new(RunConfig::new("shared-events-run"), ()).with_events(events.clone());
 
@@ -6278,7 +6278,7 @@ fn invoke_stream_in_context_stream_is_send() {
     fn assert_send<T: Send>(_value: T) {}
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello there")))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::constant("hello there")))));
     let ctx = RunContext::new(RunConfig::new("send-stream-run"), ());
 
     assert_send(harness.invoke_stream_in_context(&(), ctx, vec![Message::user("hi")]));
@@ -6287,7 +6287,7 @@ fn invoke_stream_in_context_stream_is_send() {
 #[tokio::test]
 async fn invoke_stream_surfaces_tool_lifecycle() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "spin", json!({})),
             text_response("done", 5, 2),
         ])),)));
@@ -6329,7 +6329,7 @@ async fn invoke_stream_surfaces_tool_lifecycle() {
 async fn invoke_stream_yields_failed_terminal_on_error() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     // A model that always asks for the tool, capped so the loop trips the limit.
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_tool_call("spin", json!({}))),)));
     harness.register_tool(Arc::new(FakeTool::new("spin", "again")));
     harness.with_policy(RunPolicy {
         limits: RunLimits::default().with_max_model_calls(1),
@@ -6367,7 +6367,7 @@ async fn invoke_stream_scripted_incremental_deltas_surface_reasoning() {
         ModelStreamItem::Completed(ModelResponse::assistant("hello")),
     ];
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::streaming_script(script)))));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::streaming_script(script)))));
 
     let items: Vec<AgentStreamItem> = harness
         .invoke_stream(
@@ -6439,7 +6439,7 @@ async fn tool_completed_event_carries_outcome() {
     }
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "boom", json!({})),
             text_response("done", 1, 1),
         ])),)));
@@ -6486,7 +6486,7 @@ async fn tool_started_event_carries_input_when_capture_enabled() {
     // completion, so `ToolStarted` must carry the same captured input the
     // policy already puts on `ToolCompleted`.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "echo", json!({ "q": "weather" })),
             text_response("done", 1, 1),
         ])),)));
@@ -6525,7 +6525,7 @@ async fn tool_started_event_has_no_input_when_capture_disabled() {
     // Default policy is payload-free: `ToolStarted.input` stays `None` so no
     // tool argument is captured unless the host opts in.
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("c1", "echo", json!({ "q": "weather" })),
             text_response("done", 1, 1),
         ])),)));
@@ -6568,7 +6568,7 @@ fn continuing(text: &str, nudge: &str) -> ModelResponse {
 #[tokio::test]
 async fn continue_turn_keeps_the_floor_and_appends_the_nudge() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             continuing("let me look that up", "(next)"),
             ModelResponse::assistant("found it".to_string()),
         ])),)));
@@ -6593,7 +6593,7 @@ async fn continue_turn_keeps_the_floor_and_appends_the_nudge() {
 #[tokio::test]
 async fn no_continue_turn_ends_on_the_first_tool_less_reply() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             ModelResponse::assistant("done".to_string()),
             ModelResponse::assistant("never reached".to_string()),
         ])),)));
@@ -6612,7 +6612,7 @@ async fn no_continue_turn_ends_on_the_first_tool_less_reply() {
 #[tokio::test]
 async fn an_endless_continue_is_bounded_by_max_model_calls() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             continuing("still going", "(next)"),
             continuing("still going", "(next)"),
             continuing("still going", "(next)"),
@@ -6700,7 +6700,7 @@ impl Tool for ArgumentRecordingTool {
 #[tokio::test]
 async fn echoed_schema_arguments_are_unwrapped_before_validation() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response(
                 "call-1",
                 "strict_lookup",
@@ -6754,7 +6754,7 @@ async fn wrapped_arguments_are_unwrapped_from_every_known_envelope_key() {
         json!({ "input": { "query": "rust" } }),
     ] {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "strict_lookup", envelope.clone()),
                 text_response("done", 1, 1),
             ])),)));
@@ -6783,7 +6783,7 @@ async fn wrapped_arguments_are_unwrapped_from_every_known_envelope_key() {
 #[tokio::test]
 async fn echo_unwrap_leaves_a_tool_that_really_takes_properties_alone() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response(
                 "call-1",
                 "schema_shaped",
@@ -6812,7 +6812,7 @@ async fn echo_unwrap_leaves_a_tool_that_really_takes_properties_alone() {
 #[tokio::test]
 async fn echo_unwrap_is_skipped_when_the_inner_value_is_still_invalid() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response(
                 "call-1",
                 "strict_lookup",
@@ -6888,7 +6888,7 @@ async fn resolved_profile_schema_transform_is_applied_to_tool_schemas() {
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.register_tool(Arc::new(DefsTool));
 
     harness
@@ -6924,7 +6924,7 @@ async fn resolved_profile_schema_transform_is_applied_to_the_structured_output_s
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         default_response_format: Some(ResponseFormat::auto(
             "answer",
@@ -6969,7 +6969,7 @@ async fn default_structured_mode_prompted_injects_schema_into_the_system_segment
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         default_response_format: Some(ResponseFormat::auto(
             "answer",
@@ -7048,7 +7048,7 @@ async fn thinking_level_map_resolves_a_named_reasoning_effort() {
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.push_middleware(Arc::new(RequestReasoningEffort(ReasoningEffort::High)));
 
     harness
@@ -7087,7 +7087,7 @@ async fn thinking_level_map_does_not_override_an_explicit_budget() {
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
 
     struct ExplicitBudget;
     #[async_trait]
@@ -7139,7 +7139,7 @@ async fn thinking_tags_are_split_out_of_a_unary_response_into_a_thinking_block()
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])
@@ -7168,7 +7168,7 @@ async fn a_model_without_thinking_tags_configured_leaves_text_untouched() {
         "<think>not a reasoning tag here</think>plain text",
     )]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
 
     let run = harness
         .invoke_default(&(), vec![Message::user("go")])
@@ -7197,7 +7197,7 @@ async fn streaming_ignores_leading_whitespace_on_the_first_text_delta_only() {
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", model)));
 
     let run = harness
         .invoke_streaming(
@@ -7218,7 +7218,7 @@ async fn streaming_without_the_profile_flag_keeps_leading_whitespace() {
 
     let model = Arc::new(StreamingMock::from_text_chunks(["   Hello", ", world"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("stream", model)));
 
     let run = harness
         .invoke_streaming(
@@ -7390,7 +7390,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn agent_loop_writes_started_then_completed_around_a_tool_call() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({"q": "x"})),
                 text_response("done", 4, 2),
             ])),)));
@@ -7416,7 +7416,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn crash_between_started_and_settled_leaves_an_unresolved_row() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_call_response(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_call_response(
                 "call-1",
                 "hang",
                 json!({}),
@@ -7580,7 +7580,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn ledger_started_failure_aborts_the_run_under_the_default_policy() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_call_response(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_call_response(
                 "call-1",
                 "lookup",
                 json!({}),
@@ -7604,7 +7604,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn ledger_started_failure_is_ignored_under_the_continue_policy() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "lookup", json!({})),
                 text_response("done", 4, 2),
             ])),)));
@@ -7669,7 +7669,7 @@ mod tool_effects_test {
     async fn resume_deferred_settles_the_deferred_row_completed_without_a_synthesized_crash_answer()
     {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("call-1", "wire", json!({})),
                 text_response("all done", 4, 2),
             ])),)));
@@ -7723,7 +7723,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn resume_deferred_settles_the_deferred_row_failed_when_the_retry_errors() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![tool_call_response(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![tool_call_response(
                 "call-1",
                 "wire",
                 json!({}),
@@ -7762,7 +7762,7 @@ mod tool_effects_test {
     #[tokio::test]
     async fn resume_deferred_reconciles_a_crashed_sibling_but_excludes_the_call_it_resolves() {
         let mut harness: AgentHarness<()> = AgentHarness::new();
-        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![text_response(
+        harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![text_response(
                 "all done", 4, 2,
             )])),)));
         harness.register_tool(Arc::new(FakeTool::new("approve_tool", "approved-result")));
@@ -7879,7 +7879,7 @@ async fn tiered_system_messages_become_one_cacheable_segment_each() {
     // fingerprint must cover both, in order.
     let model = Arc::new(crate::testkit::ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         cache: CachePolicy {
             protect_prompt_prefix: true,
@@ -8656,7 +8656,7 @@ async fn run_policy_default_reasoning_reaches_every_request() {
 
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::Low)),
         ..RunPolicy::default()
@@ -8697,7 +8697,7 @@ async fn run_policy_default_reasoning_goes_through_the_profile_map() {
         }),
     );
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::High)),
         ..RunPolicy::default()
@@ -8724,7 +8724,7 @@ async fn request_reasoning_wins_over_the_run_policy_default() {
 
     let model = Arc::new(ScriptedModel::replies(vec!["done"]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model.clone())));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::Low)),
         ..RunPolicy::default()
@@ -8866,7 +8866,7 @@ fn structured_mixed_harness(
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(model)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", model)))
         .register_tool(tool)
         .with_policy(RunPolicy {
             end_strategy,
@@ -8943,7 +8943,7 @@ async fn graceful_mixed_turn_without_truncation_still_finishes_in_one_call() {
 #[tokio::test]
 async fn dynamic_toolset_fold_is_reported_as_a_transcript_rewrite() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
             tool_call_response("call-1", "search", json!({"q": "x"})),
             text_response("done", 4, 2),
         ])),)));
@@ -8986,7 +8986,7 @@ async fn a_dead_call_retry_preserves_configured_reasoning_effort() {
     ]));
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::clone(&model) as _)))
+        .with_model_resolver(Arc::new(crate::host::FixedModelResolver::named("mock", Arc::clone(&model) as _)))
         .register_tool(Arc::new(FakeTool::new("fake", "tool output")));
     harness.with_policy(RunPolicy {
         default_reasoning: Some(ReasoningConfig::effort(ReasoningEffort::High)),

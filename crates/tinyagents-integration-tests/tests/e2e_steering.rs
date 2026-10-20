@@ -24,7 +24,7 @@ use tinyinference_llm::message::Message;
 fn harness_with_scripted(replies: Vec<&str>) -> (AgentHarness<(), ()>, Arc<ScriptedModel>) {
     let model = Arc::new(ScriptedModel::replies(replies));
     let mut harness = AgentHarness::<(), ()>::new();
-    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(model.clone())));
+    harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("scripted", model.clone())));
     harness;
     (harness, model)
 }

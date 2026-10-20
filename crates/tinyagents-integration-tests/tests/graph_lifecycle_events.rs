@@ -42,7 +42,7 @@ fn harness_for(
 ) -> AgentHarness<()> {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(responses)))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(responses)))))
         ;
     if matches!(execution, LoopExecution::Graph) {
         harness.with_loop_driver(Arc::new(GraphLoopDriver::new()));
@@ -239,7 +239,7 @@ async fn nested_tool_calls_do_not_emit_message_appended_on_the_graph_driver() {
 async fn iter_stepping_announces_appends_once_and_never_the_input() {
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup"),
                 ModelResponse::assistant("done"),
             ])),)))
@@ -310,7 +310,7 @@ async fn a_checkpoint_resume_in_a_fresh_runtime_neither_reannounces_input_nor_du
     let build = |armed: bool| {
         let mut harness: AgentHarness<()> = AgentHarness::new();
         harness
-            .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+            .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                     tool_call_response("c1", "lookup"),
                     ModelResponse::assistant("done"),
                 ])),)))
@@ -445,7 +445,7 @@ async fn an_interrupt_after_the_tool_batch_retracts_instead_of_closing_the_turn(
 
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![
                 tool_call_response("c1", "lookup"),
                 ModelResponse::assistant("done"),
             ])),)))
@@ -495,7 +495,7 @@ async fn an_interrupt_after_the_tool_batch_retracts_instead_of_closing_the_turn(
     // turn numbering continuing from the checkpoint.
     let mut second: AgentHarness<()> = AgentHarness::new();
     second
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::with_responses(vec![ModelResponse::assistant(
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(MockModel::with_responses(vec![ModelResponse::assistant(
                 "done",
             )])),)))
         
@@ -540,7 +540,7 @@ async fn a_node_error_in_the_iterator_closes_its_turn_and_announces_partial_resu
     // Provider error in the model node.
     let mut harness: AgentHarness<()> = AgentHarness::new();
     harness
-        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(FailingModel))))
+        .with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::named("mock", Arc::new(FailingModel))))
         ;
     let recorder = EventRecorder::new();
     let ctx = RunContext::new(RunConfig::new("model-error"), ()).with_events(recorder.sink());
