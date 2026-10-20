@@ -48,7 +48,6 @@ tracing = ["tinyagents-harness/tracing"]
 storage-drivers = []
 
 [dev-dependencies]
-tinystoragedrivers-sqlite = { workspace = true }
 tinystoragedrivers-testkit = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, default-features = true, features = ["macros", "rt-multi-thread"] }

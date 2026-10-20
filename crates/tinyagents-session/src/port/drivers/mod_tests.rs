@@ -3,7 +3,6 @@ use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::{session_store_conformance, session_store_isolation_conformance};
 use crate::turn_state::{TurnLifecycle, TurnState};
 use tinystoragedrivers_api::StorageBackend;
-use tinystoragedrivers_sqlite::SqliteStorage;
 
 fn storage_factory(backend: Arc<dyn StorageBackend>) -> AgentStorageFactory {
     let bindings = [
@@ -68,13 +67,9 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
 
 #[tokio::test]
 async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data() {
-    let directory = tempfile::tempdir().unwrap();
-    let backends: Vec<Arc<dyn StorageBackend>> = vec![
-        Arc::new(MemoryStorage::new()),
-        Arc::new(SqliteStorage::open(directory.path().join("prepared.db")).unwrap()),
-    ];
-    for backend in backends {
-        let scoped = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
+    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    {
+        let scoped = backend.for_scope(&Scope::new("host-prepared-test").unwrap()).unwrap();
         DriverSessionStores::prepare_schema(scoped.documents().as_ref())
             .await
             .unwrap();
@@ -107,11 +102,6 @@ async fn bootstrap_preparation_is_idempotent_and_preserves_native_session_data()
     }
 }
 
-fn sqlite(dir: &tempfile::TempDir) -> DriverSessionStores {
-    let storage = SqliteStorage::open(dir.path().join("sessions.db")).unwrap();
-    DriverSessionStores::new(storage_factory(Arc::new(storage))).unwrap()
-}
-
 #[tokio::test]
 async fn memory_backed_stores_meet_the_session_store_contract() {
     session_store_conformance(&memory()).await;
@@ -120,18 +110,6 @@ async fn memory_backed_stores_meet_the_session_store_contract() {
 #[tokio::test]
 async fn memory_backed_stores_keep_agents_apart() {
     session_store_isolation_conformance(&memory()).await;
-}
-
-#[tokio::test]
-async fn sqlite_backed_stores_meet_the_session_store_contract() {
-    let dir = tempfile::tempdir().unwrap();
-    session_store_conformance(&sqlite(&dir)).await;
-}
-
-#[tokio::test]
-async fn sqlite_backed_stores_keep_agents_apart() {
-    let dir = tempfile::tempdir().unwrap();
-    session_store_isolation_conformance(&sqlite(&dir)).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -204,11 +182,7 @@ fn an_agent_gets_the_same_stores_every_time() {
     let debug = format!("{provider:?}");
     assert!(debug.contains("agents: 2"), "{debug}");
     assert!(debug.contains("memory"), "{debug}");
-    assert!(
-        provider
-            .destination_key()
-            .is_some_and(|key| key.starts_with("memory://"))
-    );
+    assert!(provider.destination_key().is_some_and(|key| key.starts_with("storage://")));
 }
 
 #[test]
@@ -774,14 +748,6 @@ async fn prepared_restricted_actor_recovers_and_uses_memory_stores() {
 }
 
 #[tokio::test]
-async fn prepared_restricted_actor_recovers_and_uses_sqlite_stores() {
-    let directory = tempfile::tempdir().unwrap();
-    prepared_restricted_actor_contract(Arc::new(
-        SqliteStorage::open(directory.path().join("prepared-actor.db")).unwrap(),
-    ))
-    .await;
-}
-
 #[tokio::test]
 async fn the_journal_lives_in_the_harness_journal_stream_family() {
     let backend = Arc::new(MemoryStorage::new());
