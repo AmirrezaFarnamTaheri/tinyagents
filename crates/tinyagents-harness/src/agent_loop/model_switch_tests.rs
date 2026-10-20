@@ -670,7 +670,6 @@ async fn switch_wins_over_a_model_chosen_by_before_model_middleware() {
         ScriptedModel::replies(vec!["from a"]),
         ScriptedModel::replies(vec!["from b"]),
     );
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(Arc::new(ScriptedModel::replies(vec!["from c"])))));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: false,
@@ -698,7 +697,14 @@ async fn rejected_switch_keeps_the_model_a_middleware_picked() {
     let c = Arc::new(
         ScriptedModel::replies(vec!["from c"]).with_profile(tool_capable("openai", "gpt-5-mini")),
     );
-    harness.with_model_resolver(Arc::new(crate::host::FixedModelResolver::new(c.clone())));
+    let resolver = crate::host::PrebuiltModelResolver::new(
+        a.clone(),
+        [
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
+        ],
+    ).with_primary_name("a");
+    harness.with_model_resolver(Arc::new(resolver));
     harness.push_middleware(Arc::new(Tweak {
         model: Some("c"),
         tool_calling: true,
