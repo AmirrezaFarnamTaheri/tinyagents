@@ -122,7 +122,7 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
     let path = dir.path().join("embeddings.sqlite");
     let first = bag();
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = crate::test_support::shared_memory_backend(&path).unwrap();
         let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
         EmbeddingToolRanker::new(first.clone(), SIGNATURE)
             .with_cache(cache)
@@ -132,7 +132,7 @@ async fn a_ranker_warms_from_a_sqlite_file_after_a_restart() {
     }
     assert_eq!(first.calls.load(Ordering::SeqCst), 2, "catalogue + intent");
 
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = crate::test_support::shared_memory_backend(&path).unwrap();
     let cache = Arc::new(DriverEmbeddingCache::new(docs(&storage, "local")));
     let warm = bag();
     let hits = EmbeddingToolRanker::new(warm.clone(), SIGNATURE)

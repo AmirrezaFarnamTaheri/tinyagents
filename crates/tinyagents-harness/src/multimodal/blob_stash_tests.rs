@@ -123,7 +123,7 @@ async fn attachments_survive_a_reopened_sqlite_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("stash.sqlite");
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = crate::test_support::shared_memory_backend(&path).unwrap();
         stash_on(
             &scoped(&storage, "local"),
             u64::MAX,
@@ -133,7 +133,7 @@ async fn attachments_survive_a_reopened_sqlite_file() {
         .await
         .unwrap();
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = crate::test_support::shared_memory_backend(&path).unwrap();
     let reopened = stash_on(
         &scoped(&storage, "local"),
         u64::MAX,

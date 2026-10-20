@@ -29,7 +29,7 @@ async fn memory_backend_passes_the_namespaced_conformance_suite() {
 async fn sqlite_backend_passes_the_namespaced_conformance_suite() {
     let dir = tempfile::tempdir().unwrap();
     let storage =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ns.sqlite")).unwrap();
+        crate::test_support::shared_memory_backend(dir.path().join("ns.sqlite")).unwrap();
     run_namespaced_store_conformance(&DriverNamespacedStore::new(docs(&storage, "local"))).await;
 }
 
@@ -39,7 +39,7 @@ async fn items_survive_a_reopened_file_with_their_timestamps() {
     let path = dir.path().join("ns.sqlite");
     let created;
     {
-        let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let storage = crate::test_support::shared_memory_backend(&path).unwrap();
         let store = DriverNamespacedStore::new(docs(&storage, "local"));
         store
             .put(&ns(&["users", "alice"]), "k", json!({"v": 1}))
@@ -52,7 +52,7 @@ async fn items_survive_a_reopened_file_with_their_timestamps() {
             .unwrap()
             .created_at_ms;
     }
-    let storage = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let storage = crate::test_support::shared_memory_backend(&path).unwrap();
     let store = DriverNamespacedStore::new(docs(&storage, "local"));
     let item = store
         .get(&ns(&["users", "alice"]), "k")
