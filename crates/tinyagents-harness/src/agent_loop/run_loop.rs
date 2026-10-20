@@ -379,7 +379,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                     Option<String>,
                     Vec<tinyinference_llm::model::ModelHint>,
                     Option<tinyinference_llm::model::CapabilitySet>,
-                    crate::agent_loop::ModelBinding<State>,
+                crate::agent_loop::ModelBinding<State>,
                 )>,
             ));
             // A pending steered model switch decides the model this call
@@ -558,16 +558,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             let binding = if let Some(binding) = hosted_binding {
                 binding
             } else {
-                self.models
-                    .resolve_request(&request, None, None)
-                    .ok_or_else(|| {
-                        TinyAgentsError::ModelNotFound(
-                            request
-                                .model
-                                .clone()
-                                .unwrap_or_else(|| "<default>".to_string()),
-                        )
-                    })?
+                self.resolve_local_model(ctx, &request).await?
             };
             ctx.model_profile = binding.model.profile().cloned();
             crate::middleware::library::rehome_ephemeral_system_instructions(

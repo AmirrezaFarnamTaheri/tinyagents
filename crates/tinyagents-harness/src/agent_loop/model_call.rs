@@ -22,6 +22,34 @@ use crate::no_progress::StreamTextStallDetector;
 use crate::retry::{FailoverDecision, FailoverReason, FailoverState, decide};
 use tinyinference_llm::cache::CachePolicy;
 
+fn local_resolve_request(request: &ModelRequest) -> crate::host::ModelResolveRequest {
+    let mut resolve = crate::host::ModelResolveRequest::new("local");
+    if let Some(pin) = request.model.as_deref() {
+        resolve = resolve.with_model_pin(pin);
+    } else if let Some(hint) = request.model_hints.first() {
+        resolve = resolve.with_model_hint(&hint.model);
+    }
+    if let Some(required) = request.required_capabilities.clone() {
+        resolve = resolve.with_required_capabilities(required);
+    }
+    resolve
+}
+
+fn ensure_model_eligible<State: Send + Sync>(
+    model: &dyn ChatModel<State>,
+    request: &ModelRequest,
+) -> Result<()> {
+    if model.profile().is_some_and(|profile| !profile.is_usable()) {
+        return Err(TinyAgentsError::Model("resolved model is retired".into()));
+    }
+    if let Some(required) = request.required_capabilities.as_ref()
+        && model.profile().is_some_and(|profile| !profile.satisfies(required))
+    {
+        return Err(TinyAgentsError::Model("resolved model lacks required capabilities".into()));
+    }
+    Ok(())
+}
+
 /// Converts a configured stream window to a [`Duration`]. `None` and a zero
 /// window both mean "no bound": a zero-length window would fail every stream
 /// before it could deliver anything.
@@ -31,7 +59,7 @@ fn positive_window(ms: Option<u64>) -> Option<Duration> {
 
 impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// Previews which model `request` would reach through the local
-    /// [`crate::model_registry::ModelRegistry`] and returns its capability
+    /// [`crate::host::ModelResolver`] and returns its capability
     /// profile, without dispatching anything.
     ///
     /// A pure registry lookup (no network call), so it is cheap enough to run
@@ -43,15 +71,15 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         &self,
         request: &ModelRequest,
     ) -> Option<tinyinference_llm::model::ModelProfile> {
-        self.models
-            .resolve_request(request, None, None)
-            .and_then(|binding| binding.model.profile().cloned())
+        let resolve = local_resolve_request(request);
+        self.model_resolver.as_ref()
+            .and_then(|resolver| resolver.preview(&resolve))
+            .and_then(|model| model.profile().cloned())
     }
 
     /// Resolves the model binding through the host's routing authority when
     /// this run is a hosted invocation; returns `None` for a plain SDK run so
-    /// the caller falls through to local [`crate::model_registry::ModelRegistry`]
-    /// resolution instead.
+    /// the caller falls through to the configured local resolver instead.
     ///
     /// The first call for a run (`ctx.depth() == 0`) is flagged
     /// [`as_team_lead`][crate::host::ModelResolveRequest::as_team_lead] so the
@@ -135,6 +163,35 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             },
             model,
         }))
+    }
+
+    pub(super) async fn resolve_local_model(
+        &self,
+        ctx: &RunContext<Ctx>,
+        request: &ModelRequest,
+    ) -> Result<ModelBinding<State>> {
+        let resolver = self.model_resolver.as_ref().ok_or_else(|| {
+            TinyAgentsError::ModelNotFound(request.model.clone().unwrap_or_else(|| "<default>".into()))
+        })?;
+        let resolve = local_resolve_request(request);
+        let (budget, bound) = self.model_call_budget(ctx);
+        let model = ctx.bounded(budget, resolver.resolve(&resolve), || {
+            format!("local model resolution for run `{}` exceeded its {bound}", ctx.run_id())
+        }).await?;
+        ensure_model_eligible(model.as_ref(), request)?;
+        let name = model.profile().and_then(|p| p.model.clone())
+            .or_else(|| request.model.clone())
+            .or_else(|| request.model_hints.first().map(|hint| hint.model.clone()))
+            .unwrap_or_else(|| "default".into());
+        Ok(ModelBinding {
+            resolved: ResolvedModel {
+                name: name.clone(),
+                requested: request.model.clone(),
+                source: if request.model.is_some() { ModelResolutionSource::RequestOverride }
+                    else { ModelResolutionSource::RegistryDefault },
+            },
+            model,
+        })
     }
     /// Invokes a model, consulting the local response cache around the
     /// retry/fallback path.
