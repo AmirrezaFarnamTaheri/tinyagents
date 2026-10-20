@@ -2,8 +2,8 @@ use super::*;
 
 use crate::teams::NewMember;
 use tempfile::TempDir;
-use tinystoragedrivers_testkit::MemoryBackend;
 use tinyagents_session::run_ledger::{AgentTeamMemberStatus, AgentTeamTaskStatus};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn service(dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();

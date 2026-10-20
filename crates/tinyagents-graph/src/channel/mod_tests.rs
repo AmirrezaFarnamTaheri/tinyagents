@@ -3,12 +3,12 @@
 //! graph (fan-out into aggregate channels), and concurrent-write conflict
 //! detection on non-aggregate channels.
 
-use tinystoragedrivers_testkit::MemoryBackend;
 use super::*;
 use crate::TinyAgentsError;
 use crate::builder::{GraphBuilder, NodeContext};
 use crate::command::{Command, NodeResult};
 use serde_json::{Value, json};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 // --- per-channel merge rules ---
 

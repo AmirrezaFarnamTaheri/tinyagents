@@ -1,10 +1,10 @@
-use tinystoragedrivers_testkit::MemoryBackend;
 use super::*;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
 use tinyagents_harness::CancellationToken;
 use tinyagents_session::run_ledger::{RunLedgerStore, WorkflowRunStatus};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 struct RegisteredExecutor;
 #[async_trait]
@@ -314,7 +314,7 @@ async fn ignored_synchronous_registration_refusal_cannot_leave_authoritative_dri
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
     let store = Arc::new(LedgerWorkflowStore::new(Arc::new(
-        crate::test_support::ledger_in(&ledger_backend)),
+        crate::test_support::ledger_in(&ledger_backend),
     )));
     let engine = WorkflowEngine::new_async(store, Arc::new(SyncRegistrationAttempt));
     let definition = tests::definition();

@@ -2,10 +2,10 @@
 //! cancellation, durable checkpoint/resume classification, the human-approval
 //! interrupt, and the on-disk shape of [`DelegationState`].
 
-use tinystoragedrivers_testkit::MemoryBackend;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use tinystoragedrivers_testkit::MemoryBackend;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

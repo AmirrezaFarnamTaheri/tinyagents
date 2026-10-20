@@ -238,8 +238,9 @@ async fn durable_task_memo_survives_a_file_checkpointer_restart() {
     let dir = tempfile::tempdir().unwrap();
     let effects = Arc::new(AtomicUsize::new(0));
     {
-        let cp: Arc<dyn Checkpointer<i32>> =
-            Arc::new(crate::test_support::dir_checkpointer::<i32>(&checkpoint_backend));
+        let cp: Arc<dyn Checkpointer<i32>> = Arc::new(
+            crate::test_support::dir_checkpointer::<i32>(&checkpoint_backend),
+        );
         let graph = interrupting_graph(effects.clone())
             .compile()
             .unwrap()
@@ -248,8 +249,9 @@ async fn durable_task_memo_survives_a_file_checkpointer_restart() {
         assert!(paused.is_interrupted());
         assert_eq!(effects.load(AtomicOrdering::SeqCst), 1);
     }
-    let cp: Arc<dyn Checkpointer<i32>> =
-        Arc::new(crate::test_support::dir_checkpointer::<i32>(&checkpoint_backend));
+    let cp: Arc<dyn Checkpointer<i32>> = Arc::new(crate::test_support::dir_checkpointer::<i32>(
+        &checkpoint_backend,
+    ));
     let graph = interrupting_graph(effects.clone())
         .compile()
         .unwrap()

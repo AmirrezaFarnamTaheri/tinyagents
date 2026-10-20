@@ -32,8 +32,7 @@ async fn authoritative_adapter_loads_persisted_ledger_without_runtime_bridge() {
 async fn independent_adapters_preserve_claim_revision_and_stale_owner_rules() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let first =
-        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let first = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let second =
         LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let initial = first.upsert(row()).await.unwrap();
@@ -131,8 +130,7 @@ mod refusal_tests;
 async fn invalid_lease_duration_refuses_before_touching_the_ledger() {
     let ledger_backend = MemoryBackend::new();
     let workspace = tempfile::tempdir().unwrap();
-    let store =
-        LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
+    let store = LedgerWorkflowStore::new(Arc::new(crate::test_support::ledger_in(&ledger_backend)));
     let lease = Duration::MAX;
     assert!(matches!(
         store.claim("workflow", "owner", lease).await,

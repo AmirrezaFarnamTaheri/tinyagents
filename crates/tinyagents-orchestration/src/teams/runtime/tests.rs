@@ -8,10 +8,8 @@ use crate::teams::{NewMember, SessionTeamLedger, TeamService};
 
 fn team(dir: &TempDir) -> (SessionTeamLedger, String, String) {
     let ledger_backend = MemoryBackend::new();
-    let ledger = SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(
-        &ledger_backend,
-    )))
-    .unwrap();
+    let ledger =
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap();
     let service = TeamService::new(ledger.clone());
     let team = service
         .create_team(

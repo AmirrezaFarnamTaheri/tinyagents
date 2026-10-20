@@ -6,22 +6,19 @@ use std::thread;
 
 use chrono::Utc;
 use tempfile::TempDir;
-use tinystoragedrivers_testkit::MemoryBackend;
 use tinyagents_session::run_ledger::{
     AgentTeam, AgentTeamListRequest, AgentTeamListResponse, AgentTeamMember, AgentTeamMemberStatus,
     AgentTeamMemberUpsert, AgentTeamStatus, AgentTeamTask, AgentTeamTaskUpsert, AgentTeamUpsert,
     ClaimOutcome, CompletionOutcome, RunEvent, RunEventAppend, RunEventListRequest,
 };
+use tinystoragedrivers_testkit::MemoryBackend;
 
 use super::*;
 
 fn service(_dir: &TempDir) -> TeamService<SessionTeamLedger> {
     let ledger_backend = MemoryBackend::new();
     TeamService::new(
-        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(
-            &ledger_backend,
-        )))
-        .unwrap(),
+        SessionTeamLedger::new(Arc::new(crate::test_support::ledger_in(&ledger_backend))).unwrap(),
     )
 }
 
