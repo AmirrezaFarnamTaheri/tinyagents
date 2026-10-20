@@ -1,4 +1,3 @@
-use tinystoragedrivers_api::StorageBackend;
 //! A [`SessionStoreProvider`] over `tinystoragedrivers` ports.
 //!
 //! A host opens one storage backend (SQLite on a desktop, MongoDB in the
@@ -46,10 +45,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 use tinyagents_storage_kit::{Blocking, ScopedStorage};
-use tinystoragedrivers_api::{DocumentStore};
-use tinystoragedrivers_types::{CollectionSpec, Scope, StorageError};
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
-use super::{AgentStores, SessionStoreProvider};
+use super::{AgentStorageFactory, AgentStores, SessionStoreProvider};
 
 pub use rebound::{RebindableSessionStores, SessionStoreRegistry};
 pub use schema::storage_schema;
@@ -60,12 +59,9 @@ pub use turn_states::DriverTurnStates;
 /// owner of its generation reservations.
 const KV_OWNER: &str = "session";
 
-/// A [`SessionStoreProvider`] keeping every agent's stores in one
-/// `tinystoragedrivers` backend, each agent in its own principal [`Scope`] of
-/// one tenant.
+/// A [`SessionStoreProvider`] that obtains already-bound storage from its host.
 pub struct DriverSessionStores {
-    backend: Arc<dyn StorageBackend>,
-    tenant: Scope,
+    factory: AgentStorageFactory,
     bridge: Blocking,
     agents: Mutex<HashMap<String, AgentStores>>,
     recover_on_open: bool,
@@ -80,7 +76,6 @@ impl std::fmt::Debug for DriverSessionStores {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let agents = self.agents.lock().unwrap_or_else(PoisonError::into_inner);
         f.debug_struct("DriverSessionStores")
-            .field("tenant", &self.tenant.as_str())
             .field("agents", &agents.len())
             .field("recover_on_open", &self.recover_on_open)
             .finish_non_exhaustive()
@@ -88,31 +83,18 @@ impl std::fmt::Debug for DriverSessionStores {
 }
 
 impl DriverSessionStores {
-    /// A provider over `backend` for `tenant`, with its own [`Blocking`] bridge.
-    ///
-    /// `tenant` is the tenant scope every agent of this provider lives under
-    /// ([`Scope::local`] for the desktop operator, [`Scope::tenant`] for a
-    /// user); an agent's stores are bound to `tenant.agent(id)`. The v1
-    /// constructor took no tenant and used the raw agent id as the scope.
+    /// A provider using the host's already-bound storage factory.
     ///
     /// # Errors
     ///
-    /// `InvalidInput` when `tenant` is not a tenant scope without a principal
-    /// (`cluster`, or one that already names an agent or module), or when the
-    /// bridge's runtime thread cannot start.
-    pub fn new(backend: Arc<dyn StorageBackend>, tenant: Scope) -> Result<Self, StorageError> {
-        check_tenant(&tenant)?;
-        Ok(Self::with_bridge(backend, tenant, Blocking::new()?))
+    /// Failure to start the blocking bridge.
+    pub fn new(factory: AgentStorageFactory) -> Result<Self, StorageError> {
+        Ok(Self::with_bridge(factory, Blocking::new()?))
     }
 
-    /// A provider over `backend` for `tenant` that runs its synchronous seams
-    /// on `bridge`, so several providers (or other sync adapters) can share
-    /// one thread.
-    ///
-    /// Unlike [`Self::new`] this does not check `tenant`: an unusable one makes
-    /// every [`SessionStoreProvider::for_agent`] answer with refusing stores.
-    pub fn with_bridge(backend: Arc<dyn StorageBackend>, tenant: Scope, bridge: Blocking) -> Self {
-        Self::with_bridge_and_schema_admission(backend, tenant, bridge, SchemaAdmission::Declare)
+    /// A provider using `bridge` for its synchronous seams.
+    pub fn with_bridge(factory: AgentStorageFactory, bridge: Blocking) -> Self {
+        Self::with_bridge_and_schema_admission(factory, bridge, SchemaAdmission::Declare)
     }
 
     /// Create a provider with an immutable document schema policy.
@@ -121,17 +103,13 @@ impl DriverSessionStores {
     /// policy does not grant a lease or prevent native internal lazy initialization.
     ///
     /// # Errors
-    /// `InvalidInput` for an unusable `tenant` (see [`Self::new`]), or failure
-    /// to start the blocking bridge.
+    /// Failure to start the blocking bridge.
     pub fn new_with_schema_admission(
-        backend: Arc<dyn StorageBackend>,
-        tenant: Scope,
+        factory: AgentStorageFactory,
         schema_admission: SchemaAdmission,
     ) -> Result<Self, StorageError> {
-        check_tenant(&tenant)?;
         Ok(Self::with_bridge_and_schema_admission(
-            backend,
-            tenant,
+            factory,
             Blocking::new()?,
             schema_admission,
         ))
@@ -139,14 +117,12 @@ impl DriverSessionStores {
 
     /// Share a bridge while keeping schema policy, caches and recovery independent.
     pub fn with_bridge_and_schema_admission(
-        backend: Arc<dyn StorageBackend>,
-        tenant: Scope,
+        factory: AgentStorageFactory,
         bridge: Blocking,
         schema_admission: SchemaAdmission,
     ) -> Self {
         Self {
-            backend,
-            tenant,
+            factory,
             bridge,
             agents: Mutex::new(HashMap::new()),
             recover_on_open: false,
@@ -245,19 +221,8 @@ impl DriverSessionStores {
         &self.bridge
     }
 
-    /// The scope agent `agent_id` is stored under: `tenant.agent(agent_id)`.
-    ///
-    /// # Errors
-    ///
-    /// `InvalidInput` for an empty id, or an unusable tenant.
-    pub fn scope_for(&self, agent_id: &str) -> Result<Scope, StorageError> {
-        super::agent_scope(&self.tenant, agent_id)
-    }
-
     fn scoped_storage(&self, agent_id: &str) -> Result<ScopedStorage, StorageError> {
-        let scope = self.scope_for(agent_id)?;
-        let storage = self.backend.for_scope(&scope)?;
-        Ok(ScopedStorage::new(storage, scope))
+        (self.factory)(agent_id)
     }
 
     /// The stores of `agent_id`, or the error that kept the backend from
@@ -379,11 +344,6 @@ impl DriverSessionStores {
     }
 }
 
-/// A provider's tenant must be a tenant scope without a principal.
-fn check_tenant(tenant: &Scope) -> Result<(), StorageError> {
-    super::agent_scope(tenant, "probe").map(drop)
-}
-
 impl SessionStoreProvider for DriverSessionStores {
     fn run_ledger_for_agent(
         &self,
@@ -412,19 +372,18 @@ impl SessionStoreProvider for DriverSessionStores {
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        self.bind_actor_with_schema_admission(backend, self.schema_admission)
+        self.bind_actor_with_schema_admission(factory, self.schema_admission)
     }
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
         admission: SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         let actor = Self::with_bridge_and_schema_admission(
-            backend,
-            self.tenant.clone(),
+            factory,
             self.bridge.clone(),
             admission,
         )

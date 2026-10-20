@@ -305,9 +305,9 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+        factory: AgentStorageFactory,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
-        (**self).bind_actor(backend)
+        (**self).bind_actor(factory)
     }
 
     fn conversations_for_agent(
@@ -327,10 +327,10 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_api::StorageBackend>,
+        factory: AgentStorageFactory,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
-        (**self).bind_actor_with_schema_admission(backend, admission)
+        (**self).bind_actor_with_schema_admission(factory, admission)
     }
 
     fn for_agent(&self, agent_id: &str) -> AgentStores {

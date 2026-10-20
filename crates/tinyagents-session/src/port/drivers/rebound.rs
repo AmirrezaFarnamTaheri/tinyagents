@@ -11,12 +11,11 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
-use tinystoragedrivers_api::StorageBackend;
-use tinystoragedrivers_types::{Scope, StorageError};
+use tinystoragedrivers_types::StorageError;
 
 use super::{AgentStores, SessionStoreProvider};
 use crate::DriverSessionStores;
-use crate::port::local_scope;
+use crate::port::AgentStorageFactory;
 use crate::port::{TurnState, TurnStates};
 use crate::transcript::{
     SessionAdoption, SessionRef, ThreadTranscripts, TranscriptHistory, TranscriptLocator,
@@ -50,11 +49,11 @@ impl SessionStoreRegistry {
     /// Rebinds every provider registered here, returning the number moved.
     pub fn rebind(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
     ) -> std::result::Result<usize, StorageError> {
         let stores = self.live();
         for store in &stores {
-            store.rebind(Arc::clone(&backend))?;
+            store.rebind(Arc::clone(&factory))?;
         }
         Ok(stores.len())
     }
@@ -65,52 +64,32 @@ pub struct RebindableSessionStores {
     current: RwLock<Arc<DriverSessionStores>>,
     live: Mutex<HashMap<String, Weak<LiveAgentStores>>>,
     recover_on_open: bool,
-    tenant: Scope,
+    factory: AgentStorageFactory,
 }
 
 impl RebindableSessionStores {
     /// Creates a provider registered in the process-wide registry.
     pub fn new(
-        backend: Arc<dyn StorageBackend>,
-        recover_on_open: bool,
-    ) -> std::result::Result<Arc<Self>, StorageError> {
-        Self::new_for_tenant(backend, local_scope(), recover_on_open)
-    }
-
-    /// Creates a process-registered provider whose agents remain under `tenant`.
-    pub fn new_for_tenant(
-        backend: Arc<dyn StorageBackend>,
-        tenant: Scope,
+        factory: AgentStorageFactory,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
         static PROCESS: std::sync::LazyLock<SessionStoreRegistry> =
             std::sync::LazyLock::new(SessionStoreRegistry::default);
-        Self::new_in_tenant(&PROCESS, backend, tenant, recover_on_open)
+        Self::new_in(&PROCESS, factory, recover_on_open)
     }
 
     /// Creates a provider registered only in `registry`.
     pub fn new_in(
         registry: &SessionStoreRegistry,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
         recover_on_open: bool,
     ) -> std::result::Result<Arc<Self>, StorageError> {
-        Self::new_in_tenant(registry, backend, local_scope(), recover_on_open)
-    }
-
-    /// Creates a registry-local provider whose tenant survives backend rebinds.
-    pub fn new_in_tenant(
-        registry: &SessionStoreRegistry,
-        backend: Arc<dyn StorageBackend>,
-        tenant: Scope,
-        recover_on_open: bool,
-    ) -> std::result::Result<Arc<Self>, StorageError> {
-        let driver =
-            DriverSessionStores::new(backend, tenant.clone())?.recover_on_open(recover_on_open);
+        let driver = DriverSessionStores::new(Arc::clone(&factory))?.recover_on_open(recover_on_open);
         let this = Arc::new(Self {
             current: RwLock::new(Arc::new(driver)),
             live: Mutex::new(HashMap::new()),
             recover_on_open,
-            tenant,
+            factory,
         });
         registry.register(&this);
         Ok(this)
@@ -126,7 +105,7 @@ impl RebindableSessionStores {
     /// subsequent calls through a live handle resolve against the new backend.
     pub fn rebind(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
     ) -> std::result::Result<(), StorageError> {
         // Serialize publication with agent registration so a concurrent
         // `for_agent` cannot attach to the old provider after this registry
@@ -134,7 +113,7 @@ impl RebindableSessionStores {
         let mut live_registry = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         live_registry.retain(|_, weak| weak.strong_count() > 0);
         let next = Arc::new(
-            DriverSessionStores::new(backend, self.tenant.clone())?
+            DriverSessionStores::new(Arc::clone(&factory))?
                 .recover_on_open(self.recover_on_open),
         );
         let live = live_registry
@@ -160,6 +139,9 @@ impl RebindableSessionStores {
                 .unwrap_or_else(PoisonError::into_inner) = stores;
         }
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
+        // Keep the new host resolver for any future provider rebinding.
+        // The factory field is immutable so providers are normally rebound via
+        // the new `next` instance supplied by the owning registry.
         Ok(())
     }
 }
@@ -443,17 +425,17 @@ impl SessionStoreProvider for RebindableSessionStores {
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
     ) -> std::result::Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
-        self.current().bind_actor(backend)
+        self.current().bind_actor(factory)
     }
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn StorageBackend>,
+        factory: AgentStorageFactory,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> std::result::Result<Option<Arc<dyn SessionStoreProvider>>, StorageError> {
         self.current()
-            .bind_actor_with_schema_admission(backend, admission)
+            .bind_actor_with_schema_admission(factory, admission)
     }
     fn run_ledger_for_agent(
         &self,
