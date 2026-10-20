@@ -54,6 +54,7 @@ struct FakeTool {
     external: bool,
     timeout: ToolTimeout,
     prepares_authorization: bool,
+    binding: Option<ToolCallBinding>,
 }
 
 impl FakeTool {
@@ -64,7 +65,13 @@ impl FakeTool {
             external: false,
             timeout: ToolTimeout::Inherit,
             prepares_authorization: false,
+            binding: None,
         }
+    }
+
+    fn with_binding(mut self, binding: ToolCallBinding) -> Self {
+        self.binding = Some(binding);
+        self
     }
 }
 
@@ -95,6 +102,11 @@ impl Tool for FakeTool {
     }
     fn timeout_policy(&self, _args: &Value) -> ToolTimeout {
         self.timeout
+    }
+    fn host_extension(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.binding
+            .as_ref()
+            .map(|binding| binding as &(dyn std::any::Any + Send + Sync))
     }
 }
 
@@ -260,6 +272,32 @@ async fn authorization_and_execution_use_the_same_packed_tool_after_rebind() {
         Some(json!({"authorized_tool": "authorized"}))
     );
     assert_eq!(result.text(), "authorized");
+}
+
+#[tokio::test]
+async fn erased_use_skill_exposes_its_shared_registry_handle() {
+    let handle = PackRegistryHandle::default();
+    let tool: Arc<dyn Tool> = Arc::new(UseSkillTool::new(handle.clone(), CATALOG));
+    let recovered = pack_registry_handle(tool.as_ref()).expect("registered use_skill handle");
+    let registry = Arc::new(vec![Box::new(FakeTool::plain("a_one")) as Box<dyn Tool>]);
+    recovered.bind(Arc::downgrade(&registry));
+
+    let result = tool
+        .execute(json!({"skill": "alpha", "tool": "a_one", "args": {}}))
+        .await
+        .unwrap();
+    assert_eq!(result.text(), "a_one:{}");
+}
+
+#[test]
+fn unrelated_tool_has_no_pack_registry_handle() {
+    let tool = FakeTool::plain("anything_else");
+    assert!(pack_registry_handle(&tool).is_none());
+
+    let binding = ToolCallBinding::new(|_, _| unreachable!("metadata lookup does not bind"))
+        .with_metadata(String::from("unrelated metadata"));
+    let tool = FakeTool::plain("another_tool").with_binding(binding);
+    assert!(pack_registry_handle(&tool).is_none());
 }
 
 #[tokio::test]
@@ -576,7 +614,8 @@ async fn an_unbound_handle_reports_the_registry_unavailable() {
 /// must be reachable, and rebinding it must repoint the handle.
 #[tokio::test]
 async fn a_tool_in_the_synthesised_set_is_reachable_and_rebinding_repoints() {
-    let (durable, handle) = bound_with_handle(vec![]);
+    let (durable, _) = bound_with_handle(vec![]);
+    let handle = pack_registry_handle(find(&durable, USE_SKILL)).expect("registered handle");
     let first: Arc<Vec<Box<dyn Tool>>> = Arc::new(vec![Box::new(FakeTool::plain("a_one"))]);
     handle.bind_synthesized(Arc::downgrade(&first));
     let use_skill = find(&durable, USE_SKILL);
@@ -624,8 +663,8 @@ fn resolve_registry_for_enforces_pack_membership() {
 
 #[tokio::test]
 async fn the_filtered_listing_omits_tools_the_session_cannot_call() {
-    let (_tools, handle) =
-        bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let (tools, _) = bound_with_handle(vec![FakeTool::plain("a_one"), FakeTool::plain("a_two")]);
+    let handle = pack_registry_handle(find(&tools, USE_SKILL)).expect("registered handle");
     let listing = render_pack_filtered(&CATALOG, "alpha", &handle, &|name| name == "a_one", "")
         .expect("one callable tool");
     assert!(listing.contains("## `a_one`"));
