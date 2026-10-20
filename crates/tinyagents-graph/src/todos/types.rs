@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Lifecycle state of a todo item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TodoStatus {
     /// Not started.
@@ -42,6 +43,7 @@ impl TodoStatus {
 
 /// One item on a thread's todo list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct TodoItem {
     /// The step, as the model wrote it.
