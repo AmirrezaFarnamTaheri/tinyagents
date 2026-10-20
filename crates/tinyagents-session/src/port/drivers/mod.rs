@@ -1,3 +1,4 @@
+use tinystoragedrivers_api::StorageBackend;
 //! A [`SessionStoreProvider`] over `tinystoragedrivers` ports.
 //!
 //! A host opens one storage backend (SQLite on a desktop, MongoDB in the
@@ -45,7 +46,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 use tinyagents_storage_kit::{Blocking, ScopedStorage};
-use tinystoragedrivers_api::{DocumentStore, StorageBackend};
+use tinystoragedrivers_api::{DocumentStore};
 use tinystoragedrivers_types::{CollectionSpec, Scope, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};

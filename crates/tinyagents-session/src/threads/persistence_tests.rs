@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
 use tinystoragedrivers_types::ErrorKind;
-use tinyagents_storage_kit::{Scope, StorageBackend};
+use tinyagents_storage_kit::{Scope};
 
 async fn memory_store() -> DriverConversationStore {
     let backend = tinystoragedrivers_testkit::memory_backend();

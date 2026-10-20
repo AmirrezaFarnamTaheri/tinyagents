@@ -1,4 +1,5 @@
 use super::*;
+use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use crate::testkit::conformance::session_store_conformance;
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
@@ -80,7 +81,7 @@ fn actor_factory_arc_forwarding_preserves_native_refusal_and_source() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinyagents_storage_kit::StorageBackend>,
+            _: Arc<dyn tinystoragedrivers_api::StorageBackend>,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(
@@ -151,7 +152,7 @@ fn checked_accessor_arc_forwards_native_refusal() {
 #[test]
 fn optional_run_ledger_provider_preserves_handle_and_defaults_to_none() {
     use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
-    use tinyagents_storage_kit::{Scope, StorageBackend};
+    use tinyagents_storage_kit::{Scope};
     struct LedgerProvider {
         sessions: InMemorySessionStores,
         ledger: Arc<dyn RunLedgerStore>,
@@ -203,7 +204,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
         fn bind_actor(
             &self,
-            _: Arc<dyn tinyagents_storage_kit::StorageBackend>,
+            _: Arc<dyn tinystoragedrivers_api::StorageBackend>,
         ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError>
         {
             Err(tinystoragedrivers_types::StorageError::fenced(
@@ -212,7 +213,7 @@ fn explicit_actor_policy_defaults_to_refusal_and_arc_forwards_native_error() {
         }
     }
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(LegacyFactory);
-    let backend: Arc<dyn tinyagents_storage_kit::StorageBackend> =
+    let backend: Arc<dyn tinystoragedrivers_api::StorageBackend> =
         Arc::new(MemoryStorage::new());
     assert!(
         provider

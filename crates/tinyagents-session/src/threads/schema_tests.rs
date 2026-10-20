@@ -1,4 +1,5 @@
 use super::*;
+use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use crate::threads::{
     ConversationPersistence, CreateConversationThread, DriverConversationStore, ThreadMessage,
@@ -9,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tinyagents_storage_kit::{
     CollectionSpec, Item, MigrateOptions, Precondition, Registry, Scope, ScopeClass,
-    ScopedStorage, StorageBackend, WriteOptions,
+    ScopedStorage, WriteOptions,
     schema::{StepBody, StreamStepFn},
 };
 

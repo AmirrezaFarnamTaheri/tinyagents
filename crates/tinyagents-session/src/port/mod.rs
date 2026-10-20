@@ -1,3 +1,4 @@
+use tinystoragedrivers_api::StorageBackend;
 //! The session store port: where a host plugs in its own storage.
 //!
 //! Everything an agent persists while it runs — its transcripts, its
@@ -319,7 +320,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinyagents_storage_kit::StorageBackend>,
+        backend: Arc<dyn tinystoragedrivers_api::StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         (**self).bind_actor_with_schema_admission(backend, admission)

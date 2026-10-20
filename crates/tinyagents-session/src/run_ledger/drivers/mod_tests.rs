@@ -3,7 +3,7 @@ use crate::testkit::MemoryStorage;
 use crate::run_ledger::LedgerError;
 use chrono::Duration;
 use serde_json::json;
-use tinyagents_storage_kit::{ErrorKind, StorageBackend};
+use tinyagents_storage_kit::{ErrorKind};
 
 /// Explicit handles share a backend while retaining separate tenant namespaces.
 pub(super) fn ledgers() -> (DriverRunLedger, DriverRunLedger) {

@@ -62,7 +62,7 @@ use crate::testkit::MemoryStorage;
 //!     DriverRunLedger, NewSessionMessage, SessionEnd, SessionHistoryStore, SessionStart,
 //! };
 //! use tinyagents_session::SessionStatus;
-//! use tinyagents_storage_kit::{Scope, StorageBackend};
+//! use tinyagents_storage_kit::{Scope};
 //!
 //! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = MemoryStorage::new().for_scope(&Scope::new("local").unwrap())?;

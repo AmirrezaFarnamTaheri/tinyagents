@@ -3,7 +3,7 @@ use crate::testkit::MemoryStorage;
 use serde_json::Value;
 use tinyagents_storage_kit::{
     CollectionSpec, DocumentStore, ErrorKind, Page, Precondition, ReadCheck,
-    StorageBackend, Version, Versioned, WriteOp, WriteResult,
+    Version, Versioned, WriteOp, WriteResult,
 };
 type NativeResult<T> = std::result::Result<T, StorageError>;
 

@@ -1,4 +1,5 @@
 use crate::testkit::MemoryStorage;
+use tinystoragedrivers_api::StorageBackend;
 use super::super::DriverRunLedger;
 use super::*;
 use crate::entry_tree::Entry;
@@ -12,7 +13,7 @@ use std::sync::Arc;
 use tinystoragedrivers_api::DocumentStoreExt;
 use tinyagents_storage_kit::{
     Item, MigrateOptions, Precondition, Registry, Scope, ScopedStorage,
-    StorageBackend, WriteOptions,
+    WriteOptions,
 };
 
 fn agent_storage(backend: &Arc<dyn StorageBackend>) -> ScopedStorage {

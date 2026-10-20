@@ -1,7 +1,8 @@
 use super::*;
+use tinystoragedrivers_api::StorageBackend;
 use crate::testkit::MemoryStorage;
 use serde_json::{Value, json};
-use tinyagents_storage_kit::{CollectionSpec, Scope, StorageBackend};
+use tinyagents_storage_kit::{CollectionSpec, Scope};
 
 // Explicit fixture preparation is owning bootstrap authority, not actor DDL.
 const PENDING_COLLECTION: &str = "conversations.appends";
@@ -128,7 +129,7 @@ async fn sqlite_prepared_native_append_reopens_and_preserves_classic_duplicate_s
 mod fixtures;
 use fixtures::{Action, Fault, Phase, actor, faulted};
 
-async fn canceled(backend: &dyn StorageBackend, phase: Phase) {
+async fn canceled(backend: &dyn phase: Phase) {
     let store = actor(backend).await;
     let fault = Fault::new(phase, Action::Pause);
     let interrupted = faulted(&store, fault.clone());

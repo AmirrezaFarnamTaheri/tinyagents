@@ -1,7 +1,7 @@
 use super::*;
 use crate::testkit::MemoryStorage;
 use serde_json::json;
-use tinyagents_storage_kit::{StorageBackend};
+use tinyagents_storage_kit::{};
 
 pub(super) fn run(id: &str) -> AgentRunUpsert {
     AgentRunUpsert {

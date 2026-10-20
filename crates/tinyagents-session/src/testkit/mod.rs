@@ -17,7 +17,7 @@
 //! use tinyagents_session::run_ledger::DriverRunLedger;
 //! use tinyagents_session::testkit::conformance::run_ledger_conformance;
 //! use tinystoragedrivers_testkit::memory_backend;
-//! use tinyagents_storage_kit::{Scope, StorageBackend};
+//! use tinyagents_storage_kit::{Scope};
 //!
 //! # tokio::runtime::Builder::new_multi_thread().enable_time().build().unwrap().block_on(async {
 //! let storage = memory_backend().for_scope(&Scope::new("local").unwrap()).unwrap();
@@ -82,7 +82,7 @@ pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::Transcrip
     use crate::port::{DriverSessionStores, SessionStoreProvider};
     use std::sync::Arc;
     use tinystoragedrivers_testkit::memory_backend;
-    use tinyagents_storage_kit::{Scope, StorageBackend};
+    use tinyagents_storage_kit::{Scope};
 
     DriverSessionStores::new(
         Arc::new(memory_backend()),
