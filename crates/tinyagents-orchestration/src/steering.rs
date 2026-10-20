@@ -125,11 +125,31 @@ fn send_registered(handle: &SteeringHandle, text: &str, lane: QueueLane) -> bool
     }
 }
 
+fn live_handle_or_fallback<M>(
+    registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
+    task_id: &TaskId,
+    access: SteerAccess<'_>,
+) -> Result<Option<SteeringHandle>, SteerError>
+where
+    M: Clone + Send + Sync + 'static,
+{
+    let result = match access {
+        SteerAccess::Owner(owner) => registry.steering_handle(task_id, owner),
+        SteerAccess::Trusted => registry.steering_handle_trusted(task_id),
+    };
+    match result {
+        Ok(handle) => Ok(Some(handle)),
+        Err(DetachedTaskRegistryError::NoSteeringHandle) => Ok(None),
+        Err(DetachedTaskRegistryError::AlreadyDone) => Err(SteerError::Unknown),
+        Err(error) => Err(error.into()),
+    }
+}
+
 /// Inject `text` into the running subagent `task_id`.
 ///
-/// Rejects an unsupported lane or unknown / unowned task, then prefers the
-/// live steering handle and falls back to the host when the child is finished
-/// or has no live handle. The text is never logged here.
+/// Rejects an unsupported lane or unknown, unowned, or terminal task, then
+/// prefers the live steering handle and falls back to the host when a live
+/// child has no handle. The text is never logged here.
 pub async fn steer_detached<M, F>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &str,
@@ -153,9 +173,8 @@ where
 /// Idempotent [`steer_detached`]: when `request_id` was already applied to
 /// `task_id`, returns a [`SteerReceipt`] with `duplicate: true` and delivers
 /// nothing. The last [`tinyagents_harness::steering::RecentRequestIds::DEFAULT_CAPACITY`] ids per task are
-/// remembered. Lane and ownership validation runs first, so a rejected steer
-/// never consumes its id and can be retried. A terminal task with retained
-/// metadata is delivered through the host fallback. A `request_id`
+/// remembered. Lane, ownership, and terminal validation runs first, so a
+/// rejected steer never consumes its id and can be retried. A `request_id`
 /// longer than [`RecentRequestIds::MAX_REQUEST_ID_BYTES`] is rejected with
 /// [`SteerError::RequestIdTooLong`].
 ///
@@ -187,9 +206,15 @@ where
         SteerAccess::Owner(owner) => registry.snapshot(&key, owner)?,
         SteerAccess::Trusted => registry.snapshot_trusted(&key)?,
     };
+    if snapshot.status.is_terminal() {
+        return Err(SteerError::Unknown);
+    }
     if request_id.is_some_and(|id| id.len() > RecentRequestIds::MAX_REQUEST_ID_BYTES) {
         return Err(SteerError::RequestIdTooLong);
     }
+    // A task may turn terminal between the retained snapshot and this live
+    // handle check. Resolve that race before claiming the request id.
+    let handle = live_handle_or_fallback(registry, &key, access)?;
     if let Some(request_id) = request_id
         && !registry.claim_steer_request(&key, request_id)?
     {
@@ -199,22 +224,14 @@ where
             duplicate: true,
         });
     }
-    let handle = match access {
-        SteerAccess::Owner(owner) => registry.steering_handle(&key, owner),
-        SteerAccess::Trusted => registry.steering_handle_trusted(&key),
-    };
     match handle {
-        Ok(handle) if !snapshot.status.is_terminal() && send_registered(&handle, &text, lane) => {
+        Some(handle) if send_registered(&handle, &text, lane) => {
             return Ok(SteerReceipt {
                 route: Some(SteerRoute::Registry),
                 duplicate: false,
             });
         }
-        Err(
-            DetachedTaskRegistryError::NoSteeringHandle | DetachedTaskRegistryError::AlreadyDone,
-        )
-        | Ok(_) => {}
-        Err(error) => return Err(error.into()),
+        Some(_) | None => {}
     }
     fallback.enqueue(snapshot.metadata, lane, text).await;
     Ok(SteerReceipt {
