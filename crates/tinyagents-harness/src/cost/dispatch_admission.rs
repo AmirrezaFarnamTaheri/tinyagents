@@ -177,8 +177,8 @@ pub trait PhysicalDispatchPermit: Send + Sync {
     /// before dispatch. This operation must be idempotent and must never count
     /// one permit twice. Dropping an uncommitted permit releases its reserved
     /// count slot; a committed permit remains held through call completion or
-    /// stream EOF/drop. Cloning the `Arc` does not release the slot until the
-    /// final clone is dropped.
+    /// stream completion, failure, EOF, or drop. Cloning the `Arc` does not
+    /// release the slot until the final clone is dropped.
     fn mark_dispatched(&self) -> Result<(), DispatchRefusal>;
 
     /// Accounts a concrete physical provider send after `mark_dispatched`.
