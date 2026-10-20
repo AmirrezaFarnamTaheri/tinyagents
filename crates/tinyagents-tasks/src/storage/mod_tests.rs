@@ -143,7 +143,8 @@ async fn opening_tasks_storage_runs_its_owner_migrations_before_returning() {
 
 #[tokio::test]
 async fn public_store_reads_documents_written_by_pre_migration_31cc_release() {
-    use crate::{DriverTaskStore, TaskId, TaskStore};
+    use crate::{DriverTaskStore, TaskStore};
+    use tinyagents_harness::ids::TaskId;
 
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/legacy-31cc-tasks.json")).unwrap();
@@ -171,7 +172,7 @@ async fn public_store_reads_documents_written_by_pre_migration_31cc_release() {
     let opened = open_storage(storage).await.unwrap();
     let store = DriverTaskStore::new(std::sync::Arc::clone(opened.documents())).unwrap();
     let id = TaskId::new("legacy-task-31cc");
-    let record = store.get(&id).unwrap().expect("record survives owner open");
+    let record = store.get(&id).unwrap();
     assert_eq!(record.status, crate::OrchestrationTaskStatus::Completed);
     assert_eq!(
         record.spec.thread_id.as_ref().map(|id| id.as_str()),

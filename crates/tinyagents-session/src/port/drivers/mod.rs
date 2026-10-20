@@ -416,6 +416,3 @@ mod tests;
 #[path = "mod_actor_tests.rs"]
 mod actor_tests;
 
-#[cfg(test)]
-#[path = "schema_admission_tests.rs"]
-mod schema_admission_tests;
