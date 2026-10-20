@@ -113,7 +113,7 @@ fn harness_with_primary(
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let resolver = crate::host::PrebuiltModelResolver::new(
         primary,
-        [("backup".to_string(), backup.clone())],
+        [("backup".to_string(), backup.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary");
     harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
@@ -134,7 +134,7 @@ fn harness(
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let resolver = crate::host::PrebuiltModelResolver::new(
         primary.clone(),
-        [("backup".to_string(), backup.clone())],
+        [("backup".to_string(), backup.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary");
     harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
@@ -275,7 +275,7 @@ fn windowed_harness(primary: &Arc<Windowed>, sibling: &Arc<Windowed>) -> AgentHa
     let mut harness: AgentHarness<()> = AgentHarness::new();
     let resolver = crate::host::PrebuiltModelResolver::new(
         primary.clone(),
-        [("sibling".to_string(), sibling.clone())],
+        [("sibling".to_string(), sibling.clone() as Arc<dyn ChatModel<()>>)],
     ).with_primary_name("primary");
     harness.with_model_resolver(Arc::new(resolver));
     harness.with_policy(RunPolicy {
@@ -444,8 +444,8 @@ async fn a_fallback_chosen_by_the_skip_hint_is_not_tried_twice() {
     let resolver = crate::host::PrebuiltModelResolver::new(
         a.clone(),
         [
-            ("b".to_string(), b.clone()),
-            ("c".to_string(), c.clone()),
+            ("b".to_string(), b.clone() as Arc<dyn ChatModel<()>>),
+            ("c".to_string(), c.clone() as Arc<dyn ChatModel<()>>),
         ],
     ).with_primary_name("a");
     harness.with_model_resolver(Arc::new(resolver));
