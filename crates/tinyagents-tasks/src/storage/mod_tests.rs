@@ -179,9 +179,16 @@ async fn opening_tasks_storage_migrates_a_v2_9_1_public_store_fixture() {
         record.spec.metadata.get("source").map(String::as_str),
         Some("v2.9.1-public-writer")
     );
-    assert_eq!(record.result.unwrap().text.as_deref(), Some("fixture completed"));
     assert_eq!(
-        store.history(&id).iter().map(|row| row.status).collect::<Vec<_>>(),
+        record.result.unwrap().text.as_deref(),
+        Some("fixture completed")
+    );
+    assert_eq!(
+        store
+            .history(&id)
+            .iter()
+            .map(|row| row.status)
+            .collect::<Vec<_>>(),
         [
             crate::OrchestrationTaskStatus::Pending,
             crate::OrchestrationTaskStatus::Running,
