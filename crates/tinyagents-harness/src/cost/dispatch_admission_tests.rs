@@ -16,9 +16,8 @@ use crate::observability::{
 };
 use crate::runtime::AgentHarness;
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{StreamExt, poll};
 use std::collections::VecDeque;
-use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
@@ -283,15 +282,24 @@ struct ArmLateRefusalAfterStreamConstruction {
 #[async_trait]
 impl ChatModel<()> for ArmLateRefusalAfterStreamConstruction {
     fn profile(&self) -> Option<&ModelProfile> {
-        self.inner.profile()
+        <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::profile(
+            &self.inner,
+        )
     }
 
     fn supports_input(&self, modality: InputModality, mime: &str, source: InputSource) -> bool {
-        self.inner.supports_input(modality, mime, source)
+        <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::supports_input(
+            &self.inner,
+            modality,
+            mime,
+            source,
+        )
     }
 
     fn cache_identity(&self) -> Option<String> {
-        self.inner.cache_identity()
+        <tinyinference_llm::providers::openai::OpenAiModel as ChatModel<()>>::cache_identity(
+            &self.inner,
+        )
     }
 
     async fn invoke(
