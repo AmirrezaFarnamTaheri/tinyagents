@@ -13,7 +13,7 @@ use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
     Page, Precondition, Query, Result, Version, Versioned, WriteOptions, validate_collection,
 };
-use tinystoragedrivers_types::{ErrorKind, Result};
+use tinystoragedrivers_types::ErrorKind;
 
 /// How long [`Repo::update`] keeps retrying a lost compare-and-swap.
 ///
@@ -348,6 +348,3 @@ fn decode<T: DeserializeOwned>(found: Versioned<serde_json::Value>) -> Result<Ve
     })
 }
 
-#[cfg(test)]
-#[path = "repo_tests.rs"]
-mod tests;

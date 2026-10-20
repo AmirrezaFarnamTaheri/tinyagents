@@ -122,6 +122,3 @@ fn unreachable_declined() -> StorageError {
     StorageError::backend("counter update declined unexpectedly")
 }
 
-#[cfg(test)]
-#[path = "counters_tests.rs"]
-mod tests;

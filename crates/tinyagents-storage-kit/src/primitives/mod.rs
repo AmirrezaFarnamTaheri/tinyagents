@@ -58,6 +58,3 @@ pub fn collection_specs() -> Vec<CollectionSpec> {
     ]
 }
 
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

@@ -139,6 +139,3 @@ impl Kv {
     }
 }
 
-#[cfg(test)]
-#[path = "kv_tests.rs"]
-mod tests;

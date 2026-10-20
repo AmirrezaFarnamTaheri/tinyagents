@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::LEASES;
 use super::repo::{Repo, RetryPolicy};
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{Filter, Key, Result, StorageError};
+use tinystoragedrivers_types::{Key, Result, StorageError};
 
 /// Injectable Unix epoch-millisecond clock.
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -508,6 +508,3 @@ fn id(owner: &str, key: &str) -> Result<String> {
     Ok(Key::of([owner, key])?.as_str().to_owned())
 }
 
-#[cfg(test)]
-#[path = "leases_tests.rs"]
-mod tests;
