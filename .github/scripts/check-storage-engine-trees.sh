@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|tinystoragedrivers-(document|kv|blob|queue|secrets|connect)|tinystoragedrivers'
+blocked='rusqlite|libsqlite3-sys|mongodb|bson|aws-sdk-s3|lapin|amq-protocol|sqlx|redb|sled|rocksdb|tinystoragedrivers-(core|sqlite|document|kv|blob|queue|secrets|connect)'
 root=$(pwd -P)
 
 has_blocked_dependency() {
