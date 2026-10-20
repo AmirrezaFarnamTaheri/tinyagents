@@ -13,7 +13,7 @@ opening code. OpenHuman #440 should take over these paths and behaviors:
 | Former source | Former entry point | Host responsibility |
 | --- | --- | --- |
 | `src/legacy/source.rs`, `rows.rs`, `workspace.rs` | `legacy::open_source`, `legacy::import_workspace` | Verify ownership/quiescence, read `session_db/sessions.db` as an immutable snapshot, enumerate old schema rows and coordinate the whole migration. |
-| `src/run_ledger/drivers/import.rs` | `DriverRunLedger::import_legacy_database` | Decode classic sessions, messages, tool calls, runs, events, telemetry, teams, tasks and entry-tree rows, then write them to the host-selected target. |
+| `src/run_ledger/drivers/import.rs` | `DriverRunLedger::import_legacy_database` | Decode classic sessions, messages, tool calls, runs, events, telemetry, teams and tasks, then write them to the host-selected target. The former entry-tree records have no target API after canonical TinyAgents removed that subsystem. |
 | `src/run_ledger/drivers/legacy_import.rs` | `DriverRunLedger::import_agent_family` | Preserve the operation-id receipt and all-or-none target batch behavior while the host owns source authorization and bytes. |
 | `src/legacy/transcripts.rs`, `transcripts_once.rs`, `fixtures.rs` | `legacy::import_transcripts`, `legacy::import_transcripts_once` | Read `session_raw/*.jsonl`, preserve stems and request identity, and track resumable completion. |
 | `src/legacy/turn_states.rs` | `legacy::import_turn_states` | Read the former `memory/conversations/turn_states/` JSON snapshots and write turn-state ports. |
@@ -26,10 +26,9 @@ by its own identity policy and can build `DriverSessionStores` with an
 as `record_session_start`, `record_message`, `record_tool_call`, and
 `record_session_end`; turn snapshots use `TurnStates`; transcripts use
 `TranscriptLocator::open_stem` and `TranscriptHistory::append_turn`; chat rows
-use `ConversationPersistence`. Imported entry trees use
-`RunLedgerStore::entry_import_legacy(session_id, entries)`, which accepts typed
-entries and performs target writes only. None of these methods accepts a path,
-SQLite connection, workspace, tenant grammar, or source authority.
+use `ConversationPersistence`. There is no entry-tree target API in this
+branch. None of these target methods accepts a path, SQLite connection,
+workspace, tenant grammar, or source authority.
 
 The source files are no longer present in this branch. Their importer tests
 were `src/legacy/{files_tests.rs,mod_tests.rs,rewrite_tests.rs,
