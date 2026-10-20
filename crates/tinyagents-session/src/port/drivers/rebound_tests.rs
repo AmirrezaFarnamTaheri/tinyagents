@@ -45,7 +45,7 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         Some(serde_json::json!("new-two"))
     );
     let fresh_driver =
-        DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "local"))
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "new"))
             .unwrap();
     assert_eq!(
         fresh_driver
@@ -57,7 +57,7 @@ async fn retained_and_cloned_handles_follow_rebind_without_crossing_agent_scopes
         Some(serde_json::json!("new-one"))
     );
     let old_driver =
-        DriverSessionStores::new(crate::testkit::fixed_scope_factory(old_backend, "local"))
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(old_backend, "old"))
             .unwrap();
     assert_eq!(
         old_driver
@@ -216,7 +216,7 @@ fn registration_waits_for_rebind_snapshot_and_then_binds_to_the_new_backend() {
             .await
             .unwrap();
         let direct =
-            DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "local"))
+            DriverSessionStores::new(crate::testkit::fixed_scope_factory(new_backend, "new"))
                 .unwrap();
         assert_eq!(
             direct
@@ -298,7 +298,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
         let backend = Arc::clone(backend);
         workers.push(std::thread::spawn(move || {
             barrier.wait();
-            provider.rebind(backend).unwrap();
+            provider.rebind(crate::testkit::fixed_scope_factory(backend, "candidate")).unwrap();
         }));
     }
     barrier.wait();
@@ -316,7 +316,7 @@ fn concurrent_rebinds_publish_one_consistent_backend_for_existing_and_new_handle
         let mut winner = None;
         for (index, backend) in candidate_backends.into_iter().enumerate() {
             let direct =
-                DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local"))
+                DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "gated"))
                     .unwrap();
             if direct
                 .for_agent("agent")
@@ -369,7 +369,7 @@ async fn tenant_is_preserved_across_rebind_without_crossing_other_tenants() {
     .unwrap();
     let retained = provider.for_agent("agent");
     let next = Arc::new(MemoryStorage::new());
-    registry.rebind(next.clone()).unwrap();
+    registry.rebind(crate::testkit::fixed_scope_factory(next.clone(), "tenant-rebind")).unwrap();
     retained
         .kv
         .put("n", "k", serde_json::json!("alice"))
