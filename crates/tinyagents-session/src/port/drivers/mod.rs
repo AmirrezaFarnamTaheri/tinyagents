@@ -33,7 +33,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
 #[cfg(test)]
 use tinyagents_storage_kit::Scope;
-use tinyagents_storage_kit::{Blocking, MigrateOptions, Registry, ScopedStorage};
+use tinyagents_storage_kit::{
+    Blocking, MigrateOptions, Registry, ScopedStorage, with_migration_lease,
+};
 use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
@@ -427,15 +429,29 @@ impl SessionStoreProvider for DriverSessionStores {
 /// Returns the first storage or migration error. Migration leases preserve
 /// resumability if an earlier step has already completed.
 pub async fn open_agent_storage(storage: &ScopedStorage) -> Result<(), StorageError> {
-    crate::run_ledger::import_legacy_ledger(storage).await?;
-    let registry = Registry::compose([
-        schema::storage_schema(),
-        crate::run_ledger::ledger_storage_schema(),
-        crate::run_ledger::history_storage_schema(),
-        crate::threads::conversations_storage_schema(),
-    ])?;
-    registry.migrate(storage, &MigrateOptions::new()).await?;
-    Ok(())
+    // This importer acquires the `session` migration lease itself; run it
+    // before taking that lease around the Registry migration below.
+    tinyagents_harness::storage::import_legacy_kv(
+        storage,
+        "session",
+        "session_kv",
+        tinyagents_harness::storage::LegacyKv::Flat,
+    )
+    .await?;
+
+    with_migration_lease(storage, "session", |lease| async move {
+        crate::run_ledger::import_legacy_ledger(storage).await?;
+        let registry = Registry::compose([
+            schema::storage_schema(),
+            crate::run_ledger::ledger_storage_schema(),
+            crate::run_ledger::history_storage_schema(),
+            crate::threads::conversations_storage_schema(),
+        ])?;
+        registry.migrate(storage, &MigrateOptions::new()).await?;
+        lease.renew().await?;
+        Ok(())
+    })
+    .await
 }
 
 #[cfg(test)]
