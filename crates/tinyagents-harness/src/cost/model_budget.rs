@@ -205,17 +205,29 @@ impl BeforeDispatch for AdmissionBeforeDispatch {
     fn check(&self) -> tinyinference_llm::Result<()> {
         match self.permit.mark_dispatched() {
             Ok(()) => Ok(()),
-            Err(refusal) => {
-                super::dispatch_admission::record_invocation_refusal(refusal);
-                *self
-                    .outcome
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
-                Err(tinyinference_llm::Error::Validation(
-                    "physical dispatch admission refused".to_owned(),
-                ))
-            }
+            Err(refusal) => Err(self.record_refusal(refusal)),
         }
+    }
+
+    fn physical_attempt(&self) -> tinyinference_llm::Result<()> {
+        match self.permit.mark_physical_attempt() {
+            Ok(()) => Ok(()),
+            Err(refusal) => Err(self.record_refusal(refusal)),
+        }
+    }
+}
+
+impl AdmissionBeforeDispatch {
+    fn record_refusal(
+        &self,
+        refusal: super::dispatch_admission::DispatchRefusal,
+    ) -> tinyinference_llm::Error {
+        super::dispatch_admission::record_invocation_refusal(refusal);
+        *self
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+        tinyinference_llm::Error::Validation("physical dispatch admission refused".to_owned())
     }
 }
 
