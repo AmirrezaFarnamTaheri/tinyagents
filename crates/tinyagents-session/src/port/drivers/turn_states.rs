@@ -20,9 +20,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use serde_json::Value;
-use tinystoragedrivers_types::primitives::Repo;
+use tinyagents_storage_kit::primitives::Repo;
+use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
-    Blocking, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, IndexSpec, Key,
+    CollectionSpec, ErrorKind, Filter, IndexSpec, Key,
     Precondition, Query, StorageError, Versioned, WriteOptions,
 };
 use tokio::sync::OnceCell;

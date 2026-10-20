@@ -15,10 +15,12 @@ use super::schema::{SCHEMA_VERSION, THREADS as COLLECTION, append_spec, stream_n
 use super::*;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinystoragedrivers_types::primitives::Repo;
+use tinyagents_storage_kit::primitives::Repo;
+use tinyagents_storage_kit::ScopedStorage;
+use tinystoragedrivers_api::{DocumentStore, StreamStore};
 use tinystoragedrivers_types::{
-    CollectionSpec, DocumentStore, ErrorKind, Filter, Key, Precondition, Query, ScopedStorage,
-    StorageError, StreamStore, Versioned, WriteOptions,
+    CollectionSpec, ErrorKind, Filter, Key, Precondition, Query, StorageError, Versioned,
+    WriteOptions,
 };
 mod append;
 mod pending;

@@ -13,7 +13,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tinystoragedrivers_types::Blocking;
+use tinyagents_storage_kit::Blocking;
 
 use tinyagents_harness::error::{Result, TinyAgentsError};
 use tinyagents_harness::summarization::{CompactionRecord, CompactionSink};

@@ -44,9 +44,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{DriverAppendStore, DriverStore, SchemaAdmission};
-use tinystoragedrivers_types::{
-    Blocking, CollectionSpec, DocumentStore, Scope, ScopedStorage, StorageBackend, StorageError,
-};
+use tinyagents_storage_kit::{Blocking, DocumentStoreExt, Scope, ScopedStorage, StorageBackend};
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
 use super::{AgentStores, SessionStoreProvider};
 

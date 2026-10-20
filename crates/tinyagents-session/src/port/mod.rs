@@ -108,7 +108,7 @@ pub trait SessionStoreProvider: Send + Sync {
     /// retain their native sources; hosts must propagate a configured refusal.
     fn bind_actor(
         &self,
-        _backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        _backend: Arc<dyn tinyagents_storage_kit::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         Ok(None)
     }
@@ -143,7 +143,7 @@ pub trait SessionStoreProvider: Send + Sync {
     /// Native actor admission errors, retaining their sources.
     fn bind_actor_with_schema_admission(
         &self,
-        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        backend: Arc<dyn tinyagents_storage_kit::StorageBackend>,
         admission: tinyagents_harness::store::SchemaAdmission,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         match admission {
@@ -301,7 +301,7 @@ impl<P: SessionStoreProvider + ?Sized> SessionStoreProvider for Arc<P> {
 
     fn bind_actor(
         &self,
-        backend: Arc<dyn tinystoragedrivers_types::StorageBackend>,
+        backend: Arc<dyn tinyagents_storage_kit::StorageBackend>,
     ) -> Result<Option<Arc<dyn SessionStoreProvider>>, tinystoragedrivers_types::StorageError> {
         (**self).bind_actor(backend)
     }

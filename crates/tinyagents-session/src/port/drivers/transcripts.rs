@@ -35,9 +35,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tinyagents_harness::store::SchemaAdmission;
-use tinystoragedrivers_types::primitives::{Leases, Repo};
+use tinyagents_storage_kit::primitives::{Leases, Repo};
+use tinyagents_storage_kit::{Blocking, DocumentStoreExt};
+use tinystoragedrivers_api::DocumentStore;
 use tinystoragedrivers_types::{
-    Blocking, CREATED_FIELD, CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter,
+    CREATED_FIELD, CollectionSpec, ErrorKind, Filter,
     ID_FIELD, IndexSpec, Key, Query, Sort, StorageError, WriteOptions,
 };
 use tokio::sync::{Mutex, OnceCell};

@@ -24,11 +24,11 @@
 use super::storage::{HISTORY_OWNER, LEDGER_OWNER, key, workflow_lease_key};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_types::primitives::{self, LEASES};
+use tinyagents_storage_kit::primitives::{self, LEASES};
 use tinystoragedrivers_types::{
-    CollectionSpec, Counters, Cursor, ErrorKind, Filter, ID_FIELD, Migrations, Precondition, Query,
-    Result, ScopedStorage, Sort,
+    CollectionSpec, Cursor, ErrorKind, Filter, ID_FIELD, Precondition, Query, Result, Sort,
 };
+use tinyagents_storage_kit::{Counters, Migrations, ScopedStorage};
 
 const STEP: &str = "legacy_state_import";
 const PAGE: usize = 200;

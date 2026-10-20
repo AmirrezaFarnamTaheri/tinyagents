@@ -10,7 +10,7 @@ use super::DriverRunLedger;
 use super::dto::Stored;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use tinystoragedrivers_types::primitives::{self, Repo};
+use tinyagents_storage_kit::primitives::{self, Repo};
 
 use tinystoragedrivers_types::{
     CollectionSpec, DocumentStoreExt, Filter, IndexSpec, Key, MIGRATIONS_COLLECTION, Query, Sort,
