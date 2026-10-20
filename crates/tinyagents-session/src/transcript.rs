@@ -75,16 +75,11 @@ mod adoption;
 mod background;
 mod display;
 mod history;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod jsonl;
 pub mod legacy;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod legacy_md;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod markdown;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod paths;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod reader;
 mod session;
 pub mod spend;
@@ -93,13 +88,11 @@ pub(crate) mod test_locator;
 mod turn_lock;
 mod types;
 pub mod view;
-#[cfg_attr(not(feature = "legacy-import"), allow(dead_code, unused_imports))]
 mod writer;
 
 pub use adoption::SessionAdoption;
 pub use background::append_background_message_in;
 pub use display::BACKGROUND_METADATA_KEY;
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
 pub(crate) use display::with_background as display_with_background_row;
 pub(crate) use display::{display_from_session, display_message_of, partial_display_message};
 pub(crate) use history::same_transcript_messages;
@@ -108,7 +101,6 @@ pub use history::{
     TruncateCut,
 };
 pub(crate) use jsonl::stamped_rows;
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
 pub(crate) use reader::{read_transcript, read_transcript_display};
 pub use session::{SessionRef, session_stem};
 pub use turn_lock::{SessionTurnGuard, lock_session_turn};
@@ -118,7 +110,6 @@ pub use types::{
     ThreadTranscript, ThreadTranscripts, ToolFailure, TranscriptMediaRef, TranscriptMessage,
     TranscriptMeta, TranscriptPart, TranscriptToolCall, TurnUsage, UsageCostSource,
 };
-#[cfg_attr(not(feature = "legacy-import"), allow(unused_imports))]
 pub(crate) use writer::write_transcript_with_tools;
 #[cfg(test)]
 pub(crate) use writer::{

@@ -35,6 +35,7 @@ tinyagents-storage-kit = { workspace = true }
 
 [features]
 default = []
+testkit = []
 # Tracing instrumentation is now always compiled in (via the `tracing` crate
 # dependency above). This feature is retained as a no-op so downstream
 # feature forwards keep compiling.

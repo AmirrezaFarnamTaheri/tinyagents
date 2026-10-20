@@ -265,7 +265,7 @@ async fn reopened_driver_keeps_terminal_and_stale_continuations_cannot_reopen_it
     let file = directory.path().join("lifecycle.sqlite");
     let key = key("restart");
     let resume = {
-        let backend = crate::test_support::memory_backend_at(&file);
+        let backend = MemoryBackend::new();
         let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
         let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
         store
@@ -275,7 +275,7 @@ async fn reopened_driver_keeps_terminal_and_stale_continuations_cannot_reopen_it
         store.load(&key).await.unwrap().unwrap()
     };
     {
-        let backend = crate::test_support::memory_backend_at(&file);
+        let backend = MemoryBackend::new();
         let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
         let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
         assert_eq!(store.load(&key).await.unwrap(), Some(resume.clone()));
@@ -291,7 +291,7 @@ async fn reopened_driver_keeps_terminal_and_stale_continuations_cannot_reopen_it
             SubagentTerminalPersistenceDisposition::Inserted
         );
     }
-    let backend = crate::test_support::memory_backend_at(&file);
+    let backend = MemoryBackend::new();
     let docs = backend.for_scope(&Scope::new("local").unwrap()).unwrap();
     let store = DocumentSubagentPersistence::new(Arc::clone(docs.documents())).unwrap();
     assert_eq!(

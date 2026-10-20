@@ -117,6 +117,10 @@ impl DocumentStore for Refused {
 
 #[async_trait]
 impl StreamStore for Refused {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::none()
+    }
+
     async fn append(&self, _stream: &str, _value: Value) -> Result<u64> {
         Err(self.error())
     }

@@ -117,6 +117,7 @@ pub mod fts;
 pub mod port;
 pub mod retention;
 pub mod run_ledger;
+#[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod threads;
 pub mod transcript;

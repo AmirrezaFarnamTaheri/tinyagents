@@ -317,16 +317,6 @@ impl Tree {
 
     /// Record a named branch label unless the tree already has one by that name.
     /// Returns whether it was new.
-    #[cfg(feature = "legacy-import")]
-    pub(super) fn import_label(&mut self, name: &str, tip: &EntryId) -> bool {
-        if self.labels.contains_key(name) {
-            return false;
-        }
-        self.labels.insert(name.into(), tip.clone());
-        self.named.insert(name.into());
-        true
-    }
-
     pub(super) fn rebuild_index(&mut self) -> Result<()> {
         let mut tips: BTreeSet<_> = self.tips().into_iter().collect();
         tips.extend(self.labels.values().cloned());

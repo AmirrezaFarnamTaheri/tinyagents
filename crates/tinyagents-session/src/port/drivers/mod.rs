@@ -235,14 +235,12 @@ impl DriverSessionStores {
     /// declare collections in it. Used by host-side one-time bookkeeping (the
     /// legacy import marker in `tsd.migrations`) that sits beside the session
     /// collections.
-    #[cfg(feature = "legacy-import")]
     pub(crate) fn scoped_for(&self, agent_id: &str) -> Result<(ScopedStorage, bool), StorageError> {
         let scoped = self.backend.for_scope(&self.scope_for(agent_id)?)?;
         Ok((scoped, self.schema_admission == SchemaAdmission::Declare))
     }
 
     /// The bridge this provider runs synchronous seams on.
-    #[cfg(feature = "legacy-import")]
     pub(crate) fn bridge(&self) -> &Blocking {
         &self.bridge
     }
