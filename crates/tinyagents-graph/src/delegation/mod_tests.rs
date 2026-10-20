@@ -1106,7 +1106,6 @@ fn decode_json_err_only_tags_schema_for_the_record_context() {
 
 #[test]
 fn decode_json_err_classifies_data_errors_as_schema_and_others_as_corrupt() {
-    let checkpoint_backend = MemoryBackend::new();
     use crate::checkpoint::decode_json_err;
 
     // `Category::Data`: syntactically valid JSON that doesn't match the

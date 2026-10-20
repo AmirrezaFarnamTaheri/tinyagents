@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use tinyagents_harness::ids::ExecutionStatus;
 use tinyagents_harness::retry::RetryPolicy;
+use tinystoragedrivers_testkit::MemoryBackend;
 
 fn memory() -> Arc<dyn Checkpointer<i32>> {
     Arc::new(InMemoryCheckpointer::<i32>::new())

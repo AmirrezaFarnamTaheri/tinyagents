@@ -6,7 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript};
+use super::{read_transcript, TranscriptHistory, TranscriptLocator, TranscriptTurn};
 
 /// An empty driver-backed locator (the production store, over memory).
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {
@@ -21,7 +21,10 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
             let path = entry.path();
             if path.is_dir() {
                 visit(&path, files)?;
-            } else if path.extension().is_some_and(|extension| extension == "jsonl") {
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+            {
                 files.push(path);
             }
         }
