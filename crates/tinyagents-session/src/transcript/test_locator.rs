@@ -6,7 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript};
+use super::{TranscriptLocator, TranscriptTurn, read_transcript};
 use crate::port::SessionStoreProvider;
 
 /// An empty driver-backed locator (the production store, over memory).
@@ -32,11 +32,9 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
         Ok(())
     }
 
-    let locator = Arc::new(
-        crate::port::InMemorySessionStores::new()
-            .for_agent("fixture")
-            .transcripts,
-    );
+    let locator = crate::port::InMemorySessionStores::new()
+        .for_agent("fixture")
+        .transcripts;
     let raw = workspace.join("session_raw");
     let mut files = Vec::new();
     if raw.exists() {
@@ -66,7 +64,7 @@ pub(crate) fn imported_locator(workspace: &Path) -> Arc<dyn TranscriptLocator> {
             })
             .expect("seed fixture transcript");
     }
-    Arc::new(locator)
+    locator
 }
 
 /// [`thread_spend_in`](super::spend::thread_spend_in) over the fixtures
