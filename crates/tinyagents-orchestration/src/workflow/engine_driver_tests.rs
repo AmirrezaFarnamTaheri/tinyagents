@@ -179,7 +179,7 @@ async fn configured_refusal_never_uses_legacy_initialise_or_drive() {
     let existed_before = ambient_db.exists();
     for kind in [
         ErrorKind::Unavailable,
-        ErrorKind::Fenced,
+        ErrorKind::Conflict,
         ErrorKind::Unsupported(tinyagents_storage_kit::Capability::Transactions),
     ] {
         let engine = WorkflowEngine::new_async(
