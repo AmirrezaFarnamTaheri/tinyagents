@@ -46,9 +46,9 @@ fn bootstrap_manifest_contains_all_session_document_indexes() {
     assert_eq!(
         specs[1].indexes,
         vec![
-            IndexSpec::new("by_thread", ["thread_id", "_created_ms"]),
-            IndexSpec::new("by_agent_name", ["agent_name", "_created_ms"]),
-            IndexSpec::new("by_agent_id", ["agent_id", "_created_ms"]),
+            IndexSpec::new("by_thread", ["thread_id", "created_ms"]),
+            IndexSpec::new("by_agent_name", ["agent_name", "created_ms"]),
+            IndexSpec::new("by_agent_id", ["agent_id", "created_ms"]),
         ]
     );
     assert_eq!(specs[2].name, "session.turn_states");

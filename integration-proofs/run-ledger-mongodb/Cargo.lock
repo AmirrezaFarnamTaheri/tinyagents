@@ -2371,14 +2371,10 @@ dependencies = [
 name = "tinyagents-native-run-ledger-mongodb-proof"
 version = "0.0.0"
 dependencies = [
- "chrono",
  "reqwest",
- "rusqlite",
  "serde_json",
- "tempfile",
  "tinyagents-session",
  "tinyagents-storage-kit",
- "tinyinference-llm",
  "tinystoragedrivers-api",
  "tinystoragedrivers-connect",
  "tinystoragedrivers-document",
@@ -2395,7 +2391,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "data-encoding",
  "hex",
  "parking_lot",
  "serde",
@@ -2417,7 +2412,6 @@ dependencies = [
 name = "tinyagents-storage-kit"
 version = "2.2.0"
 dependencies = [
- "async-trait",
  "data-encoding",
  "serde",
  "serde_json",
@@ -2439,8 +2433,6 @@ dependencies = [
  "tinyagents-harness",
  "tinyagents-storage-kit",
  "tinyinference-llm",
- "tinystoragedrivers-api",
- "tinystoragedrivers-types",
  "tinytools",
  "tokio",
  "tracing",

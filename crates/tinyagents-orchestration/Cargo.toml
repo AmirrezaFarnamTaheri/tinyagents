@@ -30,8 +30,6 @@ tracing = { workspace = true }
 # `blocking` bridges the synchronous `TeamLedger` / `WorkflowStore` traits onto the
 # async run-ledger port.
 tinyagents-storage-kit = { workspace = true }
-tinystoragedrivers-api = { workspace = true }
-tinystoragedrivers-types = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
 [features]

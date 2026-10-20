@@ -75,7 +75,7 @@ fn the_schema_names_what_the_session_crate_owns() {
 }
 
 #[tokio::test]
-async fn transcripts_move_to_key_of_ids_and_created_at_becomes_metadata() {
+async fn transcripts_move_to_key_of_ids_and_keep_creation_time_in_the_body() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let storage = agent_storage(&backend);
     put_v1(
@@ -121,9 +121,13 @@ async fn transcripts_move_to_key_of_ids_and_created_at_becomes_metadata() {
         .await
         .unwrap()
         .expect("id is Key::of([stem])");
-    assert_eq!(index.meta.created_ms, 1_767_225_601_500);
+    assert!(
+        index.meta.created_ms > 0,
+        "the engine assigns new row metadata"
+    );
     assert_eq!(index.meta.schema, 2);
     assert!(index.doc.get("created_at").is_none());
+    assert_eq!(index.doc["created_ms"], 1_767_225_601_500_i64);
     assert_eq!(index.doc["thread_id"], "t");
     assert_eq!(index.doc["indexed_seq"], 3);
     assert_eq!(
@@ -139,9 +143,9 @@ async fn transcripts_move_to_key_of_ids_and_created_at_becomes_metadata() {
         .unwrap()
         .expect("id is Key::of([stem, zero-padded seq])");
     assert_eq!(entry.doc["seq"], 4);
-    assert_eq!(
-        entry.meta.created_ms, 1_700_000_000_000,
-        "history keeps its time"
+    assert!(
+        entry.meta.created_ms > 0,
+        "the engine assigns new row metadata"
     );
     for v1 in ["session_transcripts", "session_transcript_entries"] {
         assert_eq!(docs.count(v1, &Filter::default()).await.unwrap(), 0, "{v1}");

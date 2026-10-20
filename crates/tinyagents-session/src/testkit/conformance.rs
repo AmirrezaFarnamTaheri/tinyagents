@@ -345,7 +345,7 @@ fn contract_meta() -> TranscriptMeta {
 /// one message at a time; `append_turn` sets the logical set to exactly its
 /// `next` argument (the extension-vs-compaction *diff* is a storage-format
 /// optimization some backends make and others do not, but the resulting
-/// logical view — via [`content_view`], role/content only — must always equal
+/// logical view — via `content_view`, role/content only — must always equal
 /// `next`; per-message bookkeeping like `preserve_request_id` is legitimately
 /// backend-specific, since a file-backed history stamps it `true` on every
 /// row it reads back); idempotent re-import (calling `append_turn` again with

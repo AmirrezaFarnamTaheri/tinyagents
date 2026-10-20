@@ -3,7 +3,7 @@
 //! No host paths/backend lookup, FullText shortcut, or persistent process cache.
 //! Plain append uses a recoverable intent; edits and distributed leases remain unsupported.
 //!
-//! Threads are `conversations.threads` documents (schema v2, see [`super::dto`]).
+//! Threads are `conversations.threads` documents (schema v2, see the private `dto` module).
 //! A change to one thread document is one [`Repo::update`] loop. The loops that
 //! stay hand-written coordinate more than that one document: an append
 //! reconciles an intent, a stream row and the thread together, and a rewrite

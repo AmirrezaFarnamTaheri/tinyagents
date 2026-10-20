@@ -16,7 +16,7 @@ mod steps;
 ///
 /// | v1 | v2 |
 /// |---|---|
-/// | `session_transcripts` (id `<len>:<stem>` or `h:<sha>`) | `session.transcripts`, id `Key::of([stem])`; `created_at` (RFC 3339, indexed) becomes the record's `_created_ms`; unwritten reservation rows (`reserved_at`) are dropped |
+/// | `session_transcripts` (id `<len>:<stem>` or `h:<sha>`) | `session.transcripts`, id `Key::of([stem])`; `created_at` (RFC 3339) becomes application `created_ms` (indexed); unwritten reservation rows (`reserved_at`) are dropped |
 /// | `session_transcript_entries` (id `<len>:<stem>#<seq>`) | `session.transcript_entries`, id `Key::of([stem, "<seq>"])` with `seq` zero-padded |
 /// | `session_turn_states` (`{thread_id, request_id, lifecycle, turn: {camelCase}}`) | `session.turn_states`, id `Key::of([thread_id, request_id])`, bare snake_case body with `started_ms` / `updated_ms` (RFC 3339 to epoch ms) |
 ///

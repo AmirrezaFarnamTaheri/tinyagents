@@ -409,7 +409,7 @@ impl InMemoryTranscriptLocator {
 
 /// [`TurnStates`] held in memory, with the on-disk store's semantics:
 /// "latest" is the newest `started_at`, completed turns are kept up to
-/// [`COMPLETED_RETENTION`] per thread, and a completed turn is never
+/// the completed-turn retention limit per thread, and a completed turn is never
 /// overwritten by a conditional write.
 #[derive(Debug, Default)]
 pub struct InMemoryTurnStates {

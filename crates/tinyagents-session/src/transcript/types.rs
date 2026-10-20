@@ -138,7 +138,7 @@ pub struct TranscriptMessage {
     pub parts: Option<Vec<TranscriptPart>>,
     /// The legacy string this row was lifted from, if any; see [`LegacyText`].
     /// Serialized (only while it still describes the row; see
-    /// [`TranscriptMessageWire`]) so a store that round-trips the row through
+    /// `TranscriptMessageWire`) so a store that round-trips the row through
     /// serde keeps the original bytes of a non-canonical envelope.
     #[serde(default)]
     pub legacy: LegacyText,
