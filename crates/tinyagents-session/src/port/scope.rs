@@ -32,7 +32,7 @@ pub fn user_scope(id: &str) -> Result<Scope, StorageError> {
 pub fn agent_scope(tenant: &Scope, id: &str) -> Result<Scope, StorageError> {
     let tenant_text = tenant.as_str();
     if tenant_text != "local"
-        && (!tenant_text.starts_with("u:") || tenant_text[2..].contains('/'))
+        && (!tenant_text.starts_with("u:") || !valid_segment(&tenant_text[2..]))
     {
         return Err(StorageError::invalid_input(
             "agent scope requires a local or user tenant without a principal",
@@ -45,11 +45,7 @@ fn encode_segment(id: &str) -> Result<String, StorageError> {
     if id.is_empty() {
         return Err(StorageError::invalid_input("scope id must not be empty"));
     }
-    if id.len() <= MAX_SEGMENT_LEN
-        && id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
-        })
-    {
+    if is_plain_segment(id) {
         return Ok(id.to_owned());
     }
     let mut encoded = data_encoding::BASE32_NOPAD
@@ -57,6 +53,22 @@ fn encode_segment(id: &str) -> Result<String, StorageError> {
         .to_ascii_lowercase();
     encoded.truncate(HASH_CHARS);
     Ok(format!("~{encoded}"))
+}
+
+fn is_plain_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment.len() <= MAX_SEGMENT_LEN
+        && segment.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'@')
+        })
+}
+
+fn valid_segment(segment: &str) -> bool {
+    is_plain_segment(segment)
+        || segment.strip_prefix('~').is_some_and(|hash| {
+            hash.len() == HASH_CHARS
+                && hash.bytes().all(|byte| matches!(byte, b'a'..=b'z' | b'2'..=b'7'))
+        })
 }
 
 #[cfg(test)]

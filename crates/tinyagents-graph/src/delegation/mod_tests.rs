@@ -1,6 +1,6 @@
 //! Unit tests for the delegation graph: the revision loop and its budget,
 //! cancellation, durable checkpoint/resume classification, the human-approval
-//! interrupt, and the on-disk shape of [`DelegationState`].
+//! interrupt, and the persisted shape of [`DelegationState`].
 
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -121,7 +121,6 @@ async fn cancellation_short_circuits_to_finalize() {
 #[tokio::test]
 async fn human_gated_run_parks_on_interrupt_then_resume_approves() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let make_config = || DelegationConfig {
@@ -148,8 +147,8 @@ async fn human_gated_run_parks_on_interrupt_then_resume_approves() {
         "must not finalize while paused for human approval"
     );
 
-    // Simulated process restart: `resume_delegation` rebuilds a fresh graph
-    // from the same checkpointer + thread and re-enters via Command::resume.
+    // Reopen through a fresh graph and checkpointer handle over the same
+    // explicitly owned backend, then re-enter via Command::resume.
     let resumed = resume_delegation(make_config(), json!("approve_once"), flow_runner(0))
         .await
         .expect("resumes");
@@ -197,7 +196,6 @@ async fn concurrent_calls_for_the_same_thread_never_overlap() {
         }
     };
 
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let make_config = || DelegationConfig {
@@ -231,7 +229,6 @@ async fn run_delegation_rejects_require_review_approval() {
     // `.state` alone does) would silently hand back an unfinished state with
     // no signal that approval is pending. Reject the misuse instead of
     // discarding it.
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let config = DelegationConfig {
@@ -270,7 +267,6 @@ async fn human_gated_without_checkpointer_or_thread_id_is_rejected() {
         "error should name the misconfigured field: {err}"
     );
 
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let checkpointer_only = DelegationConfig {
@@ -297,7 +293,6 @@ async fn human_gated_without_checkpointer_or_thread_id_is_rejected() {
 #[tokio::test]
 async fn ttl_expiry_resume_with_deny_blocks_the_result() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let make_config = || DelegationConfig {
@@ -335,7 +330,6 @@ async fn ttl_expiry_resume_with_deny_blocks_the_result() {
 #[tokio::test]
 async fn durable_checkpointer_persists_thread_state() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let config = DelegationConfig {
@@ -427,7 +421,6 @@ fn schema_version_defaults_to_zero_and_step_records_round_trip() {
 #[tokio::test]
 async fn run_or_resume_starts_fresh_without_a_checkpoint() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let config = DelegationConfig {
@@ -446,7 +439,6 @@ async fn run_or_resume_starts_fresh_without_a_checkpoint() {
 #[tokio::test]
 async fn run_or_resume_continues_from_last_boundary_after_a_crash() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     // Count stage invocations across BOTH the crashed run and the resume, to
@@ -535,7 +527,6 @@ async fn run_or_resume_continues_from_last_boundary_after_a_crash() {
 #[tokio::test]
 async fn run_or_resume_is_idempotent_on_a_finalized_thread() {
     let checkpoint_backend = MemoryBackend::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let stage_runs = Arc::new(AtomicUsize::new(0));
@@ -598,7 +589,6 @@ async fn incompatible_checkpoint_expires_to_a_fresh_run() {
         final_output: Option<String>,
         cancelled: bool,
     }
-    let dir = tempfile::tempdir().unwrap();
     // Seed the store as the OLD state type under the thread.
     let legacy_cp: crate::checkpoint::DriverCheckpointer<LegacyState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
@@ -644,7 +634,6 @@ async fn checkpoint_below_current_schema_version_expires_to_fresh_run() {
     // A decodable but OLD-schema checkpoint (schema_version defaults to 0 —
     // e.g. a pre-#3884 record whose executions happened to be empty) must be
     // expired, not resumed: `schema_version` is a real guard, not just a doc.
-    let dir = tempfile::tempdir().unwrap();
     let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
     let checkpoint = Checkpoint::new(
@@ -699,7 +688,6 @@ async fn checkpoint_above_current_schema_version_also_expires_to_fresh_run() {
     // doesn't recognize, so an inequality check — not merely `<` — is what
     // catches this: resuming it under this binary's older semantics would be
     // silently wrong rather than loudly incompatible.
-    let dir = tempfile::tempdir().unwrap();
     let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
     let checkpoint = Checkpoint::new(
@@ -779,7 +767,6 @@ async fn cancelled_checkpoint_still_scheduling_finalize_is_resumed_not_terminal(
     // `finalize` ran. Treating `cancelled` as its own terminal signal
     // classified that live boundary as terminal and returned it unfinished,
     // never producing the cancellation summary.
-    let dir = tempfile::tempdir().unwrap();
     let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
     let checkpoint = Checkpoint::new(
@@ -831,7 +818,6 @@ async fn cancellation_at_the_approval_node_routes_to_finalize() {
     // decisionless retry interrupts again indefinitely, and an approving
     // resume finalizes successfully despite the cancellation.
     let cancel = CancellationToken::new();
-    let dir = tempfile::tempdir().unwrap();
     let cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
     let config = DelegationConfig {
@@ -939,7 +925,6 @@ async fn concurrent_resume_delegation_calls_for_the_same_thread_never_overlap() 
         }
     }
 
-    let dir = tempfile::tempdir().unwrap();
     let real_cp: Arc<dyn Checkpointer<DelegationState>> =
         Arc::new(crate::test_support::dir_checkpointer(&checkpoint_backend));
 
@@ -997,7 +982,6 @@ async fn resume_delegation_rejects_a_schema_mismatched_checkpoint() {
     // During a rollback/mixed-version deployment, serde can decode a newer
     // additive checkpoint by ignoring unknown fields, letting an older
     // binary consume the approval under outdated semantics.
-    let dir = tempfile::tempdir().unwrap();
     let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
     let checkpoint = Checkpoint::new(
@@ -1162,7 +1146,6 @@ async fn terminal_checkpoint_with_a_pending_interrupt_surfaces_it() {
     // A terminal-classified checkpoint that still carries an interrupt must
     // surface it, not silently drop `pending`. (The live routing never
     // produces this shape; the terminal branch is defensive.)
-    let dir = tempfile::tempdir().unwrap();
     let seed: crate::checkpoint::DriverCheckpointer<DelegationState> =
         crate::test_support::dir_checkpointer(&checkpoint_backend);
     let mut state = DelegationState::new_run();

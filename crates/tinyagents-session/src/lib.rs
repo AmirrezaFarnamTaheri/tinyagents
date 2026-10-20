@@ -1,4 +1,3 @@
-use crate::testkit::MemoryStorage;
 //! Durable session history and run ledger.
 //!
 //! Everything this crate persists goes through the `tinystoragedrivers` ports:
@@ -62,11 +61,15 @@ use crate::testkit::MemoryStorage;
 //!     DriverRunLedger, NewSessionMessage, SessionEnd, SessionHistoryStore, SessionStart,
 //! };
 //! use tinyagents_session::SessionStatus;
-//! use tinyagents_storage_kit::{Scope};
+//! use tinystoragedrivers_api::StorageBackend;
+//! use tinystoragedrivers_testkit::memory_backend;
+//! use tinyagents_storage_kit::ScopedStorage;
+//! use tinystoragedrivers_types::Scope;
 //!
 //! # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
-//! let storage = MemoryStorage::new().for_scope(&Scope::new("local").unwrap())?;
-//! let ledger = DriverRunLedger::new(storage);
+//! let scope = Scope::new("local")?;
+//! let storage = memory_backend().for_scope(&scope)?;
+//! let ledger = DriverRunLedger::new(ScopedStorage::new(storage, scope));
 //!
 //! ledger
 //!     .record_session_start(SessionStart {

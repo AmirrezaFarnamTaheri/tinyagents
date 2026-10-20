@@ -523,7 +523,7 @@ async fn channel_state_graph_round_trips_through_a_durable_checkpointer() {
         assert!(paused.is_interrupted());
     }
     // Fresh checkpointer over the same directory, simulating a process
-    // restart: the `binary_aggregate` channel must decode using the (still
+    // reopen: the `binary_aggregate` channel must decode using the (still
     // process-wide registered) `"sum"` reducer and the resumed run must
     // merge through it correctly.
     {
