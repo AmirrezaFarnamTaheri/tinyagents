@@ -8,3 +8,24 @@ warning: unused import: `TranscriptHistory`
    |
    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
+warning: `tinyagents-session` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 25.24s
+     Running unittests src/lib.rs (target/debug/deps/tinyagents_session-4afdd79a1e6d2bda)
+
+running 1 test
+
+thread 'transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once' (311530) panicked at crates/tinyagents-session/src/transcript/spend_tests.rs:410:5:
+assertion `left == right` failed
+  left: 50000
+ right: 60000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once ... FAILED
+
+failures:
+
+failures:
+    transcript::spend::tests::compacted_transcript_keeps_pre_compaction_spend_and_counts_each_record_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 518 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p tinyagents-session --lib`
