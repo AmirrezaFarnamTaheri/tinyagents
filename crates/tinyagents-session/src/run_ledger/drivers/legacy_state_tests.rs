@@ -8,7 +8,7 @@ use tinystoragedrivers_api::DocumentStoreExt;
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
 use tinystoragedrivers_types::{Scope, WriteOptions};
-use tinyagents_storage_kit::{Item, MigrateOptions, Registry};
+use tinyagents_storage_kit::Scope;
 
 
 fn scoped() -> ScopedStorage {
@@ -177,7 +177,9 @@ async fn a_workflow_lease_is_a_tsd_lease_and_not_part_of_the_stored_run() {
 
 #[tokio::test]
 async fn archived_public_writer_rows_open_through_current_typed_owners() {
-    let storage = scoped();
+    let backend = memory_backend();
+    let scope = Scope::new("fixture-agent-scope").unwrap();
+    let storage = ScopedStorage::new(backend.for_scope(&scope).unwrap(), scope);
     let fixture: Value = serde_json::from_str(include_str!(
         "fixtures/legacy-31cc-session.json"
     ))
@@ -194,28 +196,19 @@ async fn archived_public_writer_rows_open_through_current_typed_owners() {
         }
     }
 
-    // Hosts run the session-owned in-storage import before composing owner
-    // schemas. This fixture is already on the current schema, so both phases
-    // preserve its rows while still exercising the owner open sequence.
-    import_legacy_ledger(&storage).await.unwrap();
-    for spec in tinyagents_storage_kit::primitives::collection_specs() {
-        storage.documents().ensure_collection(&spec).await.unwrap();
-    }
-    let schemas = [ledger_storage_schema(), history_storage_schema()];
-    for schema in &schemas {
-        for item in &schema.items {
-            if let Item::Collection { spec, .. } = item {
-                storage.documents().ensure_collection(spec).await.unwrap();
-            }
-        }
-    }
-    Registry::compose(schemas)
-        .unwrap()
-        .migrate(&storage, &MigrateOptions::new())
-        .await
-        .unwrap();
-
-    let ledger = DriverRunLedger::new(storage);
+    // The provider's real open path binds the host-supplied scope, runs the
+    // session-owned legacy-state import, and migrates every session owner
+    // before exposing the driver handles.
+    let provider = crate::DriverSessionStores::new(crate::testkit::scoped_storage_factory(
+        backend,
+        std::collections::HashMap::from([(
+            "fixture-agent".to_owned(),
+            "fixture-agent-scope".to_owned(),
+        )]),
+    ))
+    .unwrap();
+    provider.try_for_agent("fixture-agent").unwrap();
+    let ledger = provider.driver_run_ledger("fixture-agent").unwrap();
     let workflow = ledger.get_workflow_run("fixture-workflow").await.unwrap().unwrap();
     assert_eq!(workflow.definition_id, "fixture-definition");
     assert_eq!(workflow.parent_thread_id.as_deref(), Some("fixture-thread"));
