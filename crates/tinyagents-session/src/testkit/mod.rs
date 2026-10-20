@@ -37,15 +37,18 @@ pub mod conformance;
 
 /// Legacy-compatible constructor for tests that need a real, six-port memory
 /// backend. This adapter is compiled only with the session testkit.
+#[cfg(test)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MemoryStorage(std::sync::Arc<tinystoragedrivers_testkit::MemoryBackend>);
 
+#[cfg(test)]
 impl MemoryStorage {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 }
 
+#[cfg(test)]
 impl tinyagents_storage_kit::StorageBackend for MemoryStorage {
     fn for_scope(
         &self,
@@ -62,6 +65,7 @@ pub use in_memory_transcript::InMemoryTranscriptHistory;
 ///
 /// Use this when a test needs the same locator interface used by production
 /// session stores, but should not touch the filesystem.
+#[cfg(test)]
 pub fn in_memory_transcript() -> std::sync::Arc<dyn crate::transcript::TranscriptLocator> {
     use crate::port::{DriverSessionStores, SessionStoreProvider};
     use std::sync::Arc;

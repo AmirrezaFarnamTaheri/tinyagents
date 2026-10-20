@@ -6,7 +6,7 @@ mod dto;
 mod steps;
 
 use tinyagents_storage_kit::{
-    CollectionSpec, DocumentStoreExt, IndexSpec, MigrateOptions, Owner, Registry, Schema,
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema,
     ScopeClass, ScopedStorage,
 };
 

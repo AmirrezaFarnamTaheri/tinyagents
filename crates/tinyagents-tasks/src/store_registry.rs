@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
 use crate::driver_store::DriverTaskStore;
-use crate::store::{InMemoryTaskStore, TaskStore};
+use crate::store::TaskStore;
 
 /// Why a registry lookup could not complete.
 #[derive(Debug, Clone, PartialEq, Eq)]

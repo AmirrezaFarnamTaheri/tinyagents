@@ -65,7 +65,10 @@ pub(super) fn append_spec() -> CollectionSpec {
 /// # Errors
 /// `InvalidInput` when `thread` is empty.
 pub(super) fn stream_name(thread: &str, incarnation: &str) -> Result<String, StorageError> {
-    Ok(format!("{MESSAGES}/{}", Key::of([thread, incarnation])?))
+    Ok(format!(
+        "{MESSAGES}/{}",
+        Key::of([thread, incarnation])?.as_str()
+    ))
 }
 
 /// What the conversation store keeps (owner `conversations`, scope class
