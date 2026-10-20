@@ -244,3 +244,67 @@ async fn a_run_without_a_thread_reads_the_fallback_key() {
         .expect("the fallback key finds the plan");
     assert!(shown.contains("[>] 1. Configure postfix"), "{shown}");
 }
+
+/// A note another middleware pushes in `before_model`, after the block went in.
+fn late_note(request: &mut ModelRequest) {
+    request.messages.push(Message::user("web budget exhausted"));
+}
+
+async fn block_after_a_late_note(
+    profile: Option<tinyinference_llm::model::ModelProfile>,
+) -> ModelRequest {
+    let mw = StateBlockMiddleware::new(Arc::new(InMemoryStore::default()));
+    let mut ctx = ctx();
+    ctx.model_profile = profile;
+    round(
+        &mw,
+        &mut ctx,
+        "shell",
+        serde_json::json!({"command": "make"}),
+        true,
+        "exit code 2",
+    )
+    .await;
+    let mut request = request();
+    Middleware::<(), ()>::before_model_dispatch(&mw, &mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    late_note(&mut request);
+    Middleware::<(), ()>::after_model_rewrite(&mw, &mut ctx, &(), &mut request)
+        .await
+        .unwrap();
+    request
+}
+
+#[tokio::test]
+async fn the_block_stays_last_when_a_later_note_is_pushed() {
+    for profile in [
+        None,
+        Some(tinyinference_llm::model::ModelProfile {
+            hoists_system_messages: true,
+            mid_conversation_system_messages: true,
+            ..Default::default()
+        }),
+    ] {
+        let hoists = profile.is_some();
+        let request = block_after_a_late_note(profile).await;
+        let carrying = request
+            .messages
+            .iter()
+            .filter(|message| message.text().contains(STATE_BLOCK_HEADER))
+            .count();
+        assert_eq!(carrying, 1, "exactly one block (hoists={hoists})");
+        let last = request.messages.last().unwrap().text();
+        assert!(
+            last.contains(STATE_BLOCK_HEADER),
+            "block is last (hoists={hoists}): {last}"
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|m| m.text().contains("web budget exhausted")),
+            "the other note is kept (hoists={hoists})"
+        );
+    }
+}

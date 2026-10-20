@@ -35,7 +35,9 @@ The block is added in `before_model_dispatch` through
 request rewrite removed it. It therefore follows the model profile's
 placement rules (a tail system message, or a `[harness note]` on the last tool
 result or user turn for providers that hoist system messages), stays out of the
-admission estimate, and is never persisted: the next request is rebuilt from
+admission estimate, and is never persisted. `after_model_rewrite` also moves it back to the
+end when a middleware pushed its own note after it in `before_model` (which runs after
+`before_model_dispatch`), so the block is always the last thing the model reads: the next request is rebuilt from
 the transcript, so the previous block is simply absent and the provider's
 cached prefix is untouched.
 

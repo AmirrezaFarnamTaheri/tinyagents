@@ -9,6 +9,7 @@ use tinyagents_harness::middleware::{
     AgentRun, Middleware, ToolInvocationIdentity, push_ephemeral_instruction,
 };
 use tinyagents_harness::store::Store;
+use tinyinference_llm::message::{ContentBlock, Message};
 use tinyinference_llm::model::{ModelRequest, ModelResponse};
 use tinyinference_llm::tool::ToolCall;
 use tinytools::ToolResult;
@@ -92,6 +93,22 @@ impl StateBlockMiddleware {
     }
 }
 
+/// Takes the block out of whichever message carries it, dropping a message that
+/// held nothing else (a tail system message or trailing user turn of its own).
+fn remove_block(request: &mut ModelRequest, block: &str) {
+    request.messages.retain_mut(|message| {
+        let content = match message {
+            Message::System(system) => &mut system.content,
+            Message::User(user) => &mut user.content,
+            Message::Tool(tool) => &mut tool.content,
+            _ => return true,
+        };
+        let before = content.len();
+        content.retain(|part| !matches!(part, ContentBlock::Text(text) if text.contains(block)));
+        !(content.len() != before && content.is_empty())
+    });
+}
+
 /// Notes the step in progress, so the block can say how long it has run.
 fn track_step(ledger: &mut RunLedger, items: &[TodoItem]) {
     let current = items
@@ -149,13 +166,18 @@ impl<S: Send + Sync, C: Send + Sync> Middleware<S, C> for StateBlockMiddleware {
         let Some(block) = self.with_run(ctx.instance_id(), |ledger| ledger.staged.clone()) else {
             return Ok(());
         };
-        if !request
+        // `before_model` runs after `before_model_dispatch`, so a middleware that
+        // pushes its own note there lands after the block. Keep the block last:
+        // it is the current state, and the tail is where a model attends most.
+        if request
             .messages
-            .iter()
-            .any(|message| message.text().contains(&block))
+            .last()
+            .is_some_and(|message| message.text().contains(&block))
         {
-            push_ephemeral_instruction(request, block, ctx.model_profile.as_ref());
+            return Ok(());
         }
+        remove_block(request, &block);
+        push_ephemeral_instruction(request, block, ctx.model_profile.as_ref());
         Ok(())
     }
 
