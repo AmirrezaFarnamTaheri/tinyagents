@@ -7,13 +7,13 @@ mod kv_import;
 mod steps;
 
 use tinyagents_storage_kit::{
-    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema,
-    ScopeClass, ScopedStorage, SealPolicy, SealWhen,
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
+    SealPolicy, SealWhen,
 };
 
 pub(crate) use kv::{CACHE_NS_PREFIX, KV, KvEntry, NAMESPACED_NS_PREFIX, kv_id};
-pub use kv_import::{LegacyKv, import_legacy_kv};
 pub(crate) use kv_import::import_legacy_kv_with_lease;
+pub use kv_import::{LegacyKv, import_legacy_kv};
 
 /// The body version of every harness collection a v1 -> v2 step produces.
 pub(crate) const SCHEMA_VERSION: u32 = 2;

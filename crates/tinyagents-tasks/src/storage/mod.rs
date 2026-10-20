@@ -6,8 +6,7 @@ mod dto;
 mod steps;
 
 use tinyagents_storage_kit::{
-    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema,
-    ScopeClass, ScopedStorage,
+    CollectionSpec, IndexSpec, MigrateOptions, Owner, Registry, Schema, ScopeClass, ScopedStorage,
 };
 
 pub(crate) use dto::{CompletionDoc, TaskDoc, history_id_key, task_id_key, to_ms};

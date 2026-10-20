@@ -12,7 +12,7 @@ use tinystoragedrivers_types::{
 use tokio::sync::Mutex;
 
 use crate::primitives::{self, Acquire, Acquisition, Lease, Leases};
-use crate::{DocumentStoreExt, Key, ScopedStorage, MIGRATIONS_COLLECTION};
+use crate::{DocumentStoreExt, Key, MIGRATIONS_COLLECTION, ScopedStorage};
 
 const MIGRATION_KEY: &str = "owner_migrations";
 const DEFAULT_TTL_MS: i64 = 30_000;
@@ -91,6 +91,11 @@ impl MigrationLease {
             )
             .await?
             .ok_or_else(|| StorageError::conflict("owner migration lease was lost"))?;
+        if lease.holder != self.holder || lease.epoch != self.lease.epoch {
+            return Err(StorageError::conflict(
+                "owner migration lease was taken over",
+            ));
+        }
         let id = lease_id(&self.owner)?;
         let current = self
             .docs
@@ -132,7 +137,6 @@ impl MigrationLease {
             .contains(Capability::ValidatedBatch)
         {
             self.renew().await?;
-            self.renew().await?;
             return self
                 .docs
                 .put(MIGRATIONS_COLLECTION, id.as_str(), body, Precondition::None)
@@ -168,6 +172,7 @@ impl MigrationLease {
         Err(StorageError::conflict(
             "owner migration lease changed while marking completion",
         ))
+    }
 }
 
 /// Run `work` while holding and renewing the migration lease for `owner`.

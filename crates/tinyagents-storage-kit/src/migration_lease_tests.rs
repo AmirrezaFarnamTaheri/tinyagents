@@ -1,7 +1,7 @@
 use super::*;
+use crate::{Scope, StorageBackend};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tinystoragedrivers_testkit::MemoryBackend;
-use crate::{Scope, StorageBackend};
 
 fn storage() -> ScopedStorage {
     MemoryBackend::new()
@@ -71,9 +71,8 @@ async fn a_stale_lease_cannot_mark_owner_migration_complete() {
     let storage = storage();
     let now = Arc::new(AtomicU64::new(1_000));
     let clock_now = now.clone();
-    let leases = Leases::new(storage.documents()).with_clock(Arc::new(move || {
-        clock_now.load(Ordering::SeqCst)
-    }));
+    let leases = Leases::new(storage.documents())
+        .with_clock(Arc::new(move || clock_now.load(Ordering::SeqCst)));
     let stale = MigrationLease::acquire(&storage, "tasks", 5, leases.clone())
         .await
         .unwrap();
@@ -105,13 +104,15 @@ async fn a_stale_lease_cannot_mark_owner_migration_complete() {
             .await
             .unwrap()
     );
-    assert!(leases
-        .release(
-            "tasks",
-            MIGRATION_KEY,
-            &replacement.holder,
-            replacement.epoch,
-        )
-        .await
-        .unwrap());
+    assert!(
+        leases
+            .release(
+                "tasks",
+                MIGRATION_KEY,
+                &replacement.holder,
+                replacement.epoch,
+            )
+            .await
+            .unwrap()
+    );
 }
