@@ -107,7 +107,10 @@ async fn v1_task_records_become_bare_snake_case_documents_under_key_ids() {
     assert!(row.doc.get("record").is_none(), "no wrapper");
     assert!(row.doc.get("updated_at").is_none(), "updated is metadata");
     assert_eq!(row.meta.schema, 2);
-    assert_eq!(row.meta.created_ms, 1_700_000_000_005_i64);
+    assert_ne!(
+        row.meta.created_ms, 1_700_000_000_005_i64,
+        "a cross-collection migration lets the host assign new metadata time"
+    );
     let kept = storage
         .documents()
         .query_all("tasks.records", &tinyagents_storage_kit::Query::all())
@@ -319,7 +322,10 @@ async fn v1_completions_move_with_unwrapped_bodies_and_ms_times() {
     assert_eq!(row.doc["result"]["text"], "hi");
     assert_eq!(row.doc["finished_ms"], 1_700_000_000_005_i64);
     assert!(row.doc.get("updated_at").is_none() && row.doc.get("updatedAtMs").is_none());
-    assert_eq!(row.meta.created_ms, 1_700_000_000_005_i64);
+    assert_ne!(
+        row.meta.created_ms, 1_700_000_000_005_i64,
+        "a cross-collection migration lets the host assign new metadata time"
+    );
     let kept = storage
         .documents()
         .query_all("tasks.completions", &tinyagents_storage_kit::Query::all())
