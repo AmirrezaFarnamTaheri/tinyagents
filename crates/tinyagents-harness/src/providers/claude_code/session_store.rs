@@ -228,12 +228,10 @@ pub async fn import_legacy_sessions(
 ) -> Result<usize, StorageError> {
     let legacy: LegacySessionFile = serde_json::from_slice(bytes)
         .map_err(|error| StorageError::serialization(error.to_string()))?;
-    let mut thread_ids: HashSet<String> = legacy.sessions.keys().cloned().collect();
-    thread_ids.extend(legacy.delivered.keys().cloned());
     let mut imported = 0;
-    for thread_id in thread_ids {
+    for (thread_id, session_id) in legacy.sessions {
         let record = SessionRecord {
-            session_id: legacy.sessions.get(&thread_id).cloned(),
+            session_id: Some(session_id),
             delivered: legacy
                 .delivered
                 .get(&thread_id)
