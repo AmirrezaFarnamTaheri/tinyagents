@@ -29,9 +29,11 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
 async fn migrate(storage: &ScopedStorage) -> tinyagents_storage_kit::MigrationReport {
     let registry = Registry::compose([storage_schema()]).unwrap();
     // `prepare` needs a backend; the scoped handle's documents are enough here.
-    for spec in tinyagents_storage_kit::primitives::collection_specs() {
-        storage.documents().ensure_collection(&spec).await.unwrap();
-    }
+    storage
+        .documents()
+        .ensure_collection(&tinyagents_storage_kit::primitives::kv_collection_spec())
+        .await
+        .unwrap();
     for item in storage_schema().items {
         if let tinyagents_storage_kit::Item::Collection { spec, .. } = item {
             storage.documents().ensure_collection(&spec).await.unwrap();

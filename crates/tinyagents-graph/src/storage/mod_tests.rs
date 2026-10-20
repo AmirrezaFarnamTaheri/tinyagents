@@ -32,6 +32,12 @@ async fn migrate(storage: &ScopedStorage) {
             storage.documents().ensure_collection(&spec).await.unwrap();
         }
     }
+    for spec in [
+        tinyagents_storage_kit::primitives::leases_collection_spec(),
+        tinyagents_storage_kit::primitives::kv_collection_spec(),
+    ] {
+        storage.documents().ensure_collection(&spec).await.unwrap();
+    }
     registry
         .migrate(storage, &MigrateOptions::new())
         .await
