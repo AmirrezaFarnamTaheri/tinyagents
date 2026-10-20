@@ -12,7 +12,7 @@ use tinystoragedrivers_types::{
 use tokio::sync::Mutex;
 
 use crate::primitives::{self, Acquire, Acquisition, Lease, Leases};
-use crate::{Key, MIGRATIONS_COLLECTION, ScopedStorage};
+use crate::{Key, ScopedStorage, MIGRATIONS_COLLECTION};
 
 const MIGRATION_KEY: &str = "owner_migrations";
 const DEFAULT_TTL_MS: i64 = 30_000;
@@ -214,6 +214,7 @@ where
     let lease = MigrationLease::acquire(storage, owner, ttl_ms, leases).await?;
     let heartbeat = lease.clone();
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let (lease_lost_tx, lease_lost_rx) = tokio::sync::oneshot::channel();
     let stop = StopHeartbeat(stop_tx);
     let renew_every = Duration::from_millis((ttl_ms / 3).max(1) as u64);
     let task = tokio::spawn(async move {
@@ -227,11 +228,17 @@ where
                 }
             }
             if heartbeat.renew().await.is_err() {
+                let _ = lease_lost_tx.send(());
                 return;
             }
         }
     });
-    let result = work(lease.clone()).await;
+    let result = tokio::select! {
+        result = work(lease.clone()) => result,
+        _ = lease_lost_rx => Err(StorageError::conflict(
+            "owner migration lease renewal failed",
+        )),
+    };
     let _ = stop.0.send(true);
     let _ = task.await;
     let final_check = lease.renew().await;

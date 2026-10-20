@@ -136,7 +136,7 @@ pub(crate) fn fixed_scope_factory(
         "fixture",
     ]
     .into_iter()
-    .map(|agent| (agent.to_owned(), format!("test fixture {label} {agent}")))
+    .map(|agent| (agent.to_owned(), format!("test-{label}-{agent}")))
     .collect();
     scoped_storage_factory(backend, labels)
 }

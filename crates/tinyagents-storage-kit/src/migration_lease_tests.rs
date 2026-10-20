@@ -97,21 +97,74 @@ async fn a_stale_lease_cannot_mark_owner_migration_complete() {
         .unwrap();
     assert!(ensure_tenure(&lease_doc.doc, &stale.holder, stale.lease.epoch).is_err());
     assert!(stale.mark_done("tasks", "records_v2").await.is_err());
-    assert!(
-        !Migrations::new(&storage)
-            .done("tasks", "records_v2")
-            .await
-            .unwrap()
-    );
-    assert!(
-        leases
-            .release(
-                "tasks",
-                MIGRATION_KEY,
-                &replacement.holder,
-                replacement.epoch,
-            )
-            .await
-            .unwrap()
-    );
+    assert!(!Migrations::new(&storage)
+        .done("tasks", "records_v2")
+        .await
+        .unwrap());
+    assert!(leases
+        .release(
+            "tasks",
+            MIGRATION_KEY,
+            &replacement.holder,
+            replacement.epoch,
+        )
+        .await
+        .unwrap());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lease_loss_cancels_an_in_progress_owner_open() {
+    struct DropSignal(Arc<AtomicUsize>);
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let backend = MemoryBackend::new();
+    let storage = scoped(&backend);
+    let now = Arc::new(AtomicU64::new(1_000));
+    let clock_now = now.clone();
+    let leases = Leases::new(storage.documents())
+        .with_clock(Arc::new(move || clock_now.load(Ordering::SeqCst)));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let dropped_work = dropped.clone();
+    let takeover_now = now.clone();
+    let takeover_leases = leases.clone();
+    let takeover_storage = storage.clone();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+
+    let opening = tokio::spawn(async move {
+        with_migration_lease_using(
+            &takeover_storage,
+            "tasks",
+            30,
+            takeover_leases.clone(),
+            move |_| async move {
+                takeover_now.store(2_000, Ordering::SeqCst);
+                takeover_leases
+                    .acquire("tasks", MIGRATION_KEY, "replacement", 30)
+                    .await?
+                    .expect("expired lease is taken over");
+                let _drop_signal = DropSignal(dropped_work);
+                let _ = entered_tx.send(());
+                std::future::pending::<Result<()>>().await
+            },
+        )
+        .await
+    });
+
+    entered_rx.await.expect("work entered after takeover");
+    let result = tokio::time::timeout(Duration::from_secs(1), opening)
+        .await
+        .expect("lease loss aborts in-progress work")
+        .unwrap();
+    assert_eq!(result.unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    let replacement = leases
+        .current("tasks", MIGRATION_KEY)
+        .await
+        .unwrap()
+        .expect("stale cleanup does not release replacement tenure");
+    assert_eq!(replacement.holder, "replacement");
 }

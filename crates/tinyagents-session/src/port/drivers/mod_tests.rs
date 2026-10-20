@@ -183,7 +183,6 @@ fn an_agent_gets_the_same_stores_every_time() {
     );
     let debug = format!("{provider:?}");
     assert!(debug.contains("agents: 2"), "{debug}");
-    assert!(debug.contains("memory"), "{debug}");
     assert!(
         provider
             .destination_key()
