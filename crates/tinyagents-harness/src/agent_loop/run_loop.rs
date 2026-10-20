@@ -609,10 +609,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
             );
             let hosted_binding = match cached {
                 Some(binding) => Some(binding),
-                None => match self.resolve_host_model(ctx, &request).await? {
-                    Some(binding) => Some(binding),
-                    None => None,
-                },
+                None => self.resolve_host_model(ctx, &request).await?,
             };
             let binding = if let Some(binding) = hosted_binding {
                 binding
