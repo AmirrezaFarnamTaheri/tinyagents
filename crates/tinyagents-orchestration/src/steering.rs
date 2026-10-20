@@ -129,7 +129,10 @@ fn live_handle_or_fallback<M>(
     registry: &DetachedTaskRegistry<M, DetachedSubagentStatus>,
     task_id: &TaskId,
     access: SteerAccess<'_>,
-) -> Result<Option<SteeringHandle>, SteerError> {
+) -> Result<Option<SteeringHandle>, SteerError>
+where
+    M: Clone + Send + Sync + 'static,
+{
     let result = match access {
         SteerAccess::Owner(owner) => registry.steering_handle(task_id, owner),
         SteerAccess::Trusted => registry.steering_handle_trusted(task_id),
