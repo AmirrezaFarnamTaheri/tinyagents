@@ -5,15 +5,15 @@ use crate::run_ledger::{DriverRunLedger, RunLedgerStore};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use std::sync::Arc;
-use tinystoragedrivers_types::{
-    DocumentStoreExt, MemoryStorage, Scope, StorageBackend, WriteOptions,
-};
+use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_testkit::memory_backend;
+use tinystoragedrivers_types::{DocumentStoreExt, Scope, WriteOptions};
 
 fn scoped() -> ScopedStorage {
-    let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
-    backend
-        .for_scope(&Scope::local().agent("a").unwrap())
-        .unwrap()
+    let backend = memory_backend();
+    let scope = Scope::new("legacy-ledger-tests").unwrap();
+    let storage = backend.for_scope(&scope).unwrap();
+    ScopedStorage::new(storage, scope)
 }
 
 async fn put(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
