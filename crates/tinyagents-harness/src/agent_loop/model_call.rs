@@ -1911,9 +1911,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> ModelCallBase<'_, State, Ctx> {
         }
         let binding = if let Some(resolver) = self.harness.model_resolver.as_ref() {
             let (budget, bound) = self.harness.model_call_budget(ctx);
-            ctx.bounded(budget, resolver.resolve_named(requested), || {
+            let named = match ctx.bounded(budget, resolver.resolve_named(requested), || {
                 format!("model override resolution for run `{}` exceeded its {bound}", ctx.run_id())
-            }).await.ok().flatten()
+            }).await {
+                Ok(model) => model,
+                Err(error @ (TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_))) => return Err(error),
+                Err(_) => None,
+            };
+            named
                 .filter(|model| model_is_eligible(model.as_ref(), request.required_capabilities.as_ref()))
                 .map(|model| ModelBinding {
                     resolved: ResolvedModel { name: requested.to_owned(), requested: Some(requested.to_owned()), source: ModelResolutionSource::RequestOverride },

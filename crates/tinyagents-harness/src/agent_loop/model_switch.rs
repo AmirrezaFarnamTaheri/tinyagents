@@ -55,12 +55,12 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         ctx: &mut RunContext<Ctx>,
         request: &mut ModelRequest,
         model_before_switch: &Option<String>,
-    ) {
+    ) -> Result<()> {
         let Some(handle) = ctx.steering.clone() else {
-            return;
+            return Ok(());
         };
         let Some(requested) = handle.model_override() else {
-            return;
+            return Ok(());
         };
         let hosted = !matches!(
             crate::runtime::host_invocation_binding::<State, Ctx>(ctx),
@@ -69,7 +69,14 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
         let candidate = if hosted {
             None
         } else if let Some(resolver) = self.model_resolver.as_ref() {
-            resolver.resolve_named(&requested).await.ok().flatten()
+            let (budget, bound) = self.model_call_budget(ctx);
+            match ctx.bounded(budget, resolver.resolve_named(&requested), || {
+                format!("steered model resolution for run `{}` exceeded its {bound}", ctx.run_id())
+            }).await {
+                Ok(candidate) => candidate,
+                Err(error @ (TinyAgentsError::Cancelled | TinyAgentsError::Timeout(_) | TinyAgentsError::CallTimeout(_))) => return Err(error),
+                Err(_) => None,
+            }
         } else {
             self.fixed_model.clone().filter(|model| model.profile()
                 .and_then(|profile| profile.model.as_deref()) == Some(requested.as_str()))
@@ -96,7 +103,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 }
                 request.model = Some(requested);
             }
-            return;
+            return Ok(());
         }
         if request.model.as_deref() == Some(requested.as_str()) {
             request.model = model_before_switch.clone();
@@ -132,6 +139,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
                 accepted: false,
             });
         }
+        Ok(())
     }
 
     /// Reports a steered switch as applied (`Steered { accepted: true }`, once
