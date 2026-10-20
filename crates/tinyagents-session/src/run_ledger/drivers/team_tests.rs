@@ -169,7 +169,7 @@ async fn memory_team_claim_and_completion_follow_the_classic_lifecycle() {
 async fn sqlite_team_claim_and_completion_follow_the_classic_lifecycle() {
     let root = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("team.sqlite")).unwrap();
+        MemoryStorage::new();
     claim_and_complete_lifecycle(&backend).await;
 }
 

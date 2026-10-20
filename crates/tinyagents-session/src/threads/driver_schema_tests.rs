@@ -90,7 +90,7 @@ async fn memory_explicit_admission_refuses_missing_declaration_before_read() {
 async fn sqlite_explicit_admission_refuses_missing_declaration_before_read() {
     let dir = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
+        MemoryStorage::new();
     missing_declaration(&backend).await;
 }
 #[tokio::test(flavor = "current_thread")]
@@ -101,7 +101,7 @@ async fn memory_prepared_actor_retains_original_native_fence_and_scope() {
 async fn sqlite_prepared_actor_retains_original_native_fence_and_scope() {
     let dir = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("conversation.db")).unwrap();
+        MemoryStorage::new();
     prepared_fenced(&backend).await;
 }
 

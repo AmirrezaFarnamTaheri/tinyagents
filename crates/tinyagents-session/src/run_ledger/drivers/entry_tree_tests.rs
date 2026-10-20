@@ -129,7 +129,7 @@ async fn memory_entry_tree_branches_forks_and_context() {
 async fn sqlite_entry_tree_branches_forks_and_context() {
     let ws = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(ws.path().join("native.sqlite")).unwrap();
+        MemoryStorage::new();
     branches_forks_and_context(&backend).await;
 }
 

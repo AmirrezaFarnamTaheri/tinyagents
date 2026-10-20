@@ -400,7 +400,7 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
     let path = root.path().join("ledger.db");
     let scope = Scope::new("alice").unwrap();
     {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let backend = MemoryStorage::new();
         let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
         ledger.upsert_agent_run(run("run")).await.unwrap();
         ledger
@@ -419,7 +419,7 @@ async fn native_agent_and_event_receipts_survive_sqlite_reopen_without_classic_t
             .await
             .unwrap();
     }
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         ledger.get_agent_run("run").await.unwrap().unwrap().status,

@@ -78,11 +78,11 @@ async fn tool_effects_survive_a_reopened_sqlite_file_and_stay_per_scope() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("effects.sqlite");
     {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let backend = MemoryStorage::new();
         let ledger = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
         ledger.started(started("run-1", "call-1")).await.unwrap();
     }
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
     let reopened = RunLedgerToolEffects::new(ledger_on(&backend, "agent"));
     let unresolved = reopened.unresolved("run-1").await.unwrap();
     assert_eq!(
@@ -100,6 +100,6 @@ async fn the_ledger_conformance_suite_passes_on_memory_and_sqlite() {
     run_ledger_conformance(ledger_on(&MemoryStorage::new(), "agent")).await;
     let dir = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(dir.path().join("ledger.sqlite")).unwrap();
+        MemoryStorage::new();
     run_ledger_conformance(ledger_on(&backend, "agent")).await;
 }

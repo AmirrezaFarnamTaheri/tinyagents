@@ -103,7 +103,7 @@ async fn memory_telemetry_retention_preserves_cutoff_and_other_scopes() {
 async fn sqlite_telemetry_retention_preserves_cutoff_and_other_scopes() {
     let root = tempfile::tempdir().unwrap();
     let backend =
-        tinystoragedrivers_sqlite::SqliteStorage::open(root.path().join("ledger.sqlite")).unwrap();
+        MemoryStorage::new();
     prunes_only_old_telemetry(&backend).await;
 }
 

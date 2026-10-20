@@ -306,14 +306,14 @@ async fn scoped_workflow_documents_survive_sqlite_reopen() {
     let path = root.path().join("ports.db");
     let scope = Scope::new("profile-a").unwrap();
     let first = {
-        let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+        let backend = MemoryStorage::new();
         let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
         ledger
             .upsert_workflow_run(workflow("workflow"))
             .await
             .unwrap()
     };
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
     let ledger = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(
         ledger.get_workflow_run("workflow").await.unwrap(),

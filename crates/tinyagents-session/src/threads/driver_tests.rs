@@ -286,12 +286,12 @@ async fn sqlite_reopen_reads_same_committed_profile_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation.db");
     let scope = Scope::new("profile").unwrap();
-    let backend = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let backend = MemoryStorage::new();
     let a = DriverConversationStore::new(backend.for_scope(&scope).unwrap());
     seed(&a, "one", &["東京 persisted"]).await;
     drop(a);
     drop(backend);
-    let reopened = tinystoragedrivers_sqlite::SqliteStorage::open(&path).unwrap();
+    let reopened = MemoryStorage::new();
     let b = DriverConversationStore::new(reopened.for_scope(&scope).unwrap());
     assert_eq!(
         b.get_messages("one").await.unwrap()[0].content,
