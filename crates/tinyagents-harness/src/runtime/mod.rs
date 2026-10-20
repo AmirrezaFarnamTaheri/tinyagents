@@ -44,7 +44,6 @@ use crate::middleware::{
     AgentMiddleware, Middleware, MiddlewareStack, ModelMiddleware, ToolMiddleware,
 };
 use crate::host::ModelResolver;
-use crate::host::ModelResolveRequest;
 use crate::tool::{ToolDispatch, ToolRegistry, ToolTimeoutSettings};
 use tinytools::Tool;
 
@@ -65,7 +64,7 @@ impl<State: Send + Sync, Ctx: Send + Sync> AgentHarness<State, Ctx> {
     /// the agent loop instead.
     pub async fn resolve_model_for_request(
         &self,
-        ctx: &crate::runtime::RunContext<Ctx>,
+        ctx: &crate::context::RunContext<Ctx>,
         request: &tinyinference_llm::model::ModelRequest,
     ) -> crate::error::Result<(Option<String>, Arc<dyn tinyinference_llm::model::ChatModel<State>>)> {
         let binding = self.resolve_local_model(ctx, request).await?;

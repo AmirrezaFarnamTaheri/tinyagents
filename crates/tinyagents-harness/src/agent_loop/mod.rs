@@ -125,7 +125,7 @@ mod handoff_transform;
 mod host_budget;
 mod lifecycle;
 mod mixed_turn;
-mod model_call;
+pub(crate) mod model_call;
 mod model_switch;
 mod model_turn;
 mod nested;
