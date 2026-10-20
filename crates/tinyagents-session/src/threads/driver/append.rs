@@ -87,7 +87,7 @@ impl DriverConversationStore {
         thread_id: &str,
         message: &ThreadMessage,
     ) -> ConversationResult<Option<ThreadMessage>> {
-        if !is_deterministic_message_id(&message.id)
+        if !is_idempotent_message_id(&message.id)
             && message
                 .extra_metadata
                 .get("scope")

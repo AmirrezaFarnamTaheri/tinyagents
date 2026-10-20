@@ -85,12 +85,19 @@ fn run_reply_id_is_deterministic_and_recognised_as_such() {
 
 #[test]
 fn client_generated_ids_are_not_deterministic() {
-    // These are UUID-fresh per message, so they can never be re-presented and
-    // must keep the constant-time append path.
+    // User ids are not transcript-correlated assistant replies. The user:
+    // prefix is a separate append-idempotency contract.
     assert!(!is_deterministic_message_id(
         "user:5f1d0c3e-1f8b-4c1a-9c2e-2a7b6d4e8f90"
     ));
     assert!(!is_deterministic_message_id(
         "assistant:5f1d0c3e-1f8b-4c1a-9c2e-2a7b6d4e8f90"
     ));
+}
+
+#[test]
+fn queued_user_request_ids_are_append_idempotency_keys() {
+    assert!(is_idempotent_message_id("agent:run-7"));
+    assert!(is_idempotent_message_id("user:request-7"));
+    assert!(!is_idempotent_message_id("ui:message-7"));
 }

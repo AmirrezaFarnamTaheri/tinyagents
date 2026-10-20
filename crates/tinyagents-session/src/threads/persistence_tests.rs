@@ -60,6 +60,26 @@ async fn memory_store_preserves_deterministic_append_and_missing_thread_behavior
 }
 
 #[tokio::test]
+async fn concurrent_user_request_id_appends_are_idempotent() {
+    let store = DriverConversationStore::in_memory().await;
+    store.ensure_thread(thread("one")).await.unwrap();
+    let user = ThreadMessage {
+        sender: "user".into(),
+        ..message("user:request-1", "queued prompt")
+    };
+
+    let (first, retry) = tokio::join!(
+        store.append_message("one", user.clone()),
+        store.append_message("one", user),
+    );
+    let (first, retry) = (first.unwrap(), retry.unwrap());
+    assert_eq!(first, retry);
+    let messages = store.get_messages("one").await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].id, "user:request-1");
+}
+
+#[tokio::test]
 async fn memory_store_preserves_title_labels_and_metadata_patch() {
     let store = DriverConversationStore::in_memory().await;
     store.ensure_thread(thread("one")).await.unwrap();
