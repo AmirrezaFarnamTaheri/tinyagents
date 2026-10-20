@@ -94,10 +94,8 @@ async fn capability_registry_resolves_aliases_and_hands_off_runtime_registries()
 
     assert!(registry.has(ComponentKind::Graph, "nb"));
 
-    let mut model_registry = registry.to_model_registry();
-    model_registry.set_default("fast");
-    assert_eq!(model_registry.names(), vec!["fast", "primary"]);
-    assert!(model_registry.get("fast").is_some());
+    assert!(registry.model("primary").is_some());
+    assert!(registry.model("fast").is_some());
 
     let tool_registry = registry.to_tool_registry::<()>();
     assert_eq!(tool_registry.names(), vec!["lookup"]);
