@@ -1017,7 +1017,7 @@ fn install_depth_only_narrows_the_existing_limit() {
 #[test]
 fn default_matches_new() {
     let harness: AgentHarness<()> = AgentHarness::default();
-    assert!(harness.models().default_name().is_none());
+    assert!(harness.model_resolver.is_none());
 }
 
 #[tokio::test]
@@ -1071,8 +1071,8 @@ async fn host_driven_turn_resolves_and_composes_without_touching_explicit_sdk_de
     );
     yield_until(|| progress.len() == 2).await;
     assert!(
-        harness.models().default_name().is_none(),
-        "host resolution does not mutate SDK model defaults"
+        harness.model_resolver.is_none(),
+        "host resolution does not mutate the SDK resolver"
     );
 }
 

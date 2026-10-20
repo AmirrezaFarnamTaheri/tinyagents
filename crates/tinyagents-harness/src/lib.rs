@@ -64,7 +64,6 @@ pub mod limits;
 #[cfg(feature = "media")]
 pub mod media;
 pub mod middleware;
-pub mod model_registry;
 #[cfg(feature = "multimodal")]
 pub mod multimodal;
 pub mod no_progress;
@@ -115,7 +114,6 @@ pub use cancel::CancellationToken;
 pub use cost::CostTotals;
 pub use error::{Result, TinyAgentsError};
 pub use ids::*;
-pub use model_registry::{ModelRegistry, ModelSelection, ResolvedModelBinding};
 pub use no_progress::{
     ArgumentChurnDetector, CallGate, ClassifiedFailure, ClassifiedFailureTracker,
     DEFAULT_IDENTICAL_HALT_THRESHOLD, DEFAULT_REPEAT_CALL_THRESHOLD,

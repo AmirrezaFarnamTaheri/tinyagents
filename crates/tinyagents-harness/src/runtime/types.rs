@@ -732,7 +732,6 @@ impl Default for RunPolicy {
 ///
 /// let mut harness: AgentHarness<()> = AgentHarness::new();
 /// harness.with_model_resolver(Arc::new(tinyagents_harness::host::FixedModelResolver::new(Arc::new(MockModel::constant("hello")))));
-/// assert_eq!(harness.models().default_name(), Some("mock"));
 /// ```
 pub struct AgentHarness<State: Send + Sync, Ctx: Send + Sync = ()> {
     /// Host-supplied resolver for local SDK turns.
