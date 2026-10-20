@@ -492,6 +492,64 @@ impl<C: Clone + Send + Sync + 'static> Session<C> {
         })
     }
 
+    /// Starts a fresh model context for the bound durable session.
+    ///
+    /// The current generation is sealed and retained as the parent of an
+    /// empty successor. Repeating this operation on an empty or absent
+    /// session is a no-op, so it never manufactures a timestamped identity or
+    /// an unbounded chain of empty generations.
+    pub async fn reset_history(&mut self) -> Result<bool, RuntimeError> {
+        let Some(target) = self.target.as_ref() else {
+            return Ok(false);
+        };
+        let Some(bound) = target.session.as_ref() else {
+            return Ok(false);
+        };
+
+        // Generation locks are keyed by the first generation, so resetting a
+        // current head serializes with turns bound to either the root or head.
+        let root = bound.first_generation();
+        let _turn = lock_session_turn(target.locator.as_ref(), &root).await;
+        let head = target.locator.head_generation(bound);
+        let Some(read) = target.locator.read_session_transcript(&head) else {
+            return Ok(false);
+        };
+        let transcript = read
+            .read_session()
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+        let Some(transcript) = transcript else {
+            return Ok(false);
+        };
+        if transcript.messages.is_empty()
+            && transcript.meta.prefix_message_count.is_none()
+            && transcript.tools.is_none()
+            && transcript.meta.turn_count == 0
+        {
+            return Ok(false);
+        }
+
+        let (successor, handle) = target
+            .locator
+            .begin_generation_from_baseline(&head, transcript.meta.clone(), &transcript.messages)
+            .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
+
+        let target = self.target.as_mut().expect("target was checked above");
+        target.session = Some(successor.clone());
+        target.meta.session_id = Some(successor.session_id());
+        target.meta.parent_session_id = successor.parent_session_id();
+        target.meta.turn_count = 0;
+        target.meta.prefix_message_count = None;
+        self.transcript = Some(handle);
+        self.prefix = PrefixSnapshot::default();
+        self.history.clear();
+        self.persisted.clear();
+        self.persisted_prefix_len = None;
+        self.recorded_tools = None;
+        self.recorded_tools_json = None;
+        self.committed_turns = 0;
+        Ok(true)
+    }
+
     /// Runs one user turn: wraps `input` in a [`SessionTurnRequest`] and drives
     /// [`Session::turn`], the single entry hosts call instead of owning a turn
     /// loop. Host policy rides in `options` and the session's hooks.

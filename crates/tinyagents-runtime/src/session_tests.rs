@@ -134,6 +134,173 @@ impl SessionHooks for PrefixWhenUnfrozen {
     }
 }
 
+#[tokio::test]
+async fn reset_history_seals_old_turns_and_starts_a_fresh_resumable_context() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("reset-thread", "agent-id");
+    let first_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut session = SessionBuilder::new(Arc::new(CapturingDriver(first_requests)))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("original prompt")))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    session
+        .turn(
+            SessionTurnRequest::new(Message::user("before reset")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let old_head = locator.head_generation(&session_ref);
+    let old_before = locator
+        .read_session_transcript(&old_head)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(old_before.messages[0].content, "original prompt");
+    assert!(session.reset_history().await.unwrap());
+
+    let new_head = locator.head_generation(&session_ref);
+    assert_eq!(new_head.generation, old_head.generation + 1);
+    assert_eq!(new_head.parent_session_id(), Some(old_head.session_id()));
+    let old_after = locator
+        .read_session_transcript(&old_head)
+        .unwrap()
+        .read_session()
+        .unwrap()
+        .unwrap();
+    assert_eq!(format!("{old_after:?}"), format!("{old_before:?}"));
+    assert!(
+        locator
+            .read_session_transcript(&new_head)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+
+    assert!(!session.reset_history().await.unwrap());
+    assert_eq!(locator.head_generation(&session_ref), new_head);
+
+    let reset_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut after_reset = SessionBuilder::new(Arc::new(CapturingDriver(reset_requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("fresh prompt")))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    after_reset
+        .turn(
+            SessionTurnRequest::new(Message::user("after reset")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let reset_request = reset_requests.lock().unwrap()[0].clone();
+    assert_eq!(reset_request[0].text(), "fresh prompt");
+    assert_eq!(reset_request[1].text(), "after reset");
+    assert!(
+        !reset_request
+            .iter()
+            .any(|message| message.text() == "before reset")
+    );
+
+    let resumed_requests = Arc::new(Mutex::new(Vec::new()));
+    let mut resumed = SessionBuilder::new(Arc::new(CapturingDriver(resumed_requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("replacement prompt")))
+        .session(locator.clone(), session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    resumed
+        .turn(
+            SessionTurnRequest::new(Message::user("cold resume")),
+            TurnOptions {
+                resume: ResumeMode::Session,
+                session: Some(session_ref.clone()),
+                ..TurnOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let cold_request = resumed_requests.lock().unwrap()[0].clone();
+    assert_eq!(cold_request[0].text(), "fresh prompt");
+    assert!(
+        !cold_request
+            .iter()
+            .any(|message| message.text() == "replacement prompt")
+    );
+    assert!(
+        !cold_request
+            .iter()
+            .any(|message| message.text() == "before reset")
+    );
+}
+
+#[tokio::test]
+async fn reset_history_advances_an_explicit_frozen_empty_prefix() {
+    let locator = memory();
+    let session_ref = SessionRef::scoped("empty-prefix-reset", "agent-id");
+    let mut empty_prefix_meta = meta();
+    empty_prefix_meta.prefix_message_count = Some(0);
+    locator
+        .begin_generation(&session_ref, empty_prefix_meta)
+        .unwrap();
+    let mut session =
+        SessionBuilder::new(Arc::new(CapturingDriver(Arc::new(Mutex::new(Vec::new())))))
+            .codec(Arc::new(RoleCodec))
+            .session(locator.clone(), session_ref.clone(), meta())
+            .build()
+            .unwrap();
+
+    assert!(session.reset_history().await.unwrap());
+    let reset_head = locator.head_generation(&session_ref);
+    assert_eq!(reset_head.generation, 1);
+    assert_eq!(
+        locator
+            .read_session_transcript(&reset_head)
+            .unwrap()
+            .read_session()
+            .unwrap()
+            .unwrap()
+            .meta
+            .prefix_message_count,
+        None
+    );
+
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let mut cold = SessionBuilder::new(Arc::new(CapturingDriver(requests.clone())))
+        .codec(Arc::new(RoleCodec))
+        .hooks(Arc::new(PrefixWhenUnfrozen("after empty reset")))
+        .session(locator, session_ref.clone(), meta())
+        .build()
+        .unwrap();
+    cold.turn(
+        SessionTurnRequest::new(Message::user("new turn")),
+        TurnOptions {
+            resume: ResumeMode::Session,
+            session: Some(session_ref),
+            ..TurnOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(requests.lock().unwrap()[0][0].text(), "after empty reset");
+}
+
 /// An atomic import may create a durable session before its first model turn.
 /// The resumed history must still receive the host's initial prefix, while a
 /// later process must reuse that committed prefix rather than its new prompt.
