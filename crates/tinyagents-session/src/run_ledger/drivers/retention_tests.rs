@@ -197,7 +197,7 @@ impl DocumentStore for RetentionBoundary {
                 .await?;
         }
         if self.refuse {
-            return Err(StorageError::fenced("retention admission expired")
+            return Err(StorageError::unavailable("retention admission expired")
                 .with_source(std::io::Error::other("retained native source")));
         }
         self.inner.atomic_batch_checked(checks, writes).await
@@ -273,7 +273,7 @@ async fn native_retention_refusal_preserves_all_candidates_and_source() {
     let (ledger, _) = wrap(&native, None, true);
     let error = ledger.prune_run_telemetry_before(cutoff).await.unwrap_err();
     assert!(
-        matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Unavailable)
     );
     assert_eq!(
         std::error::Error::source(&error).unwrap().to_string(),
@@ -296,7 +296,7 @@ async fn empty_retention_still_requires_native_admission() {
     let (ledger, boundary) = wrap(&native, None, true);
     let error = ledger.prune_run_telemetry_before(now()).await.unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Unavailable)
     );
     assert_eq!(boundary.calls.load(Ordering::SeqCst), 1);
 }

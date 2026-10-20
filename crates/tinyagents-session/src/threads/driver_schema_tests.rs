@@ -72,7 +72,7 @@ async fn prepared_fenced(backend: &dyn StorageBackend) {
         .update_thread_title("one", "stale", "now")
         .await
         .unwrap_err();
-    assert!(matches!(error, ConversationError::Driver(e) if e.kind() == ErrorKind::Fenced));
+    assert!(matches!(error, ConversationError::Driver(e) if e.kind() == ErrorKind::Unavailable));
     assert_eq!(
         DriverConversationStore::new(raw)
             .get_thread("one")

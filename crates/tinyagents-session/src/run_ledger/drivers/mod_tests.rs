@@ -733,11 +733,11 @@ async fn scoped_workflow_writes_preserve_native_owner_fence_refusal() {
         .unwrap();
     assert!(
         matches!(ledger.upsert_workflow_run(workflow("workflow")).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
+        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Unavailable)
     );
     assert!(
         matches!(ledger.try_claim_workflow_run("workflow", "worker", Duration::hours(1)).await.unwrap_err(),
-        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Fenced)
+        LedgerError::Driver(ref error) if error.kind() == ErrorKind::Unavailable)
     );
     let inspect = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(

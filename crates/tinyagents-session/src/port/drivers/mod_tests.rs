@@ -556,7 +556,7 @@ impl StorageBackend for NativeRefusal {
     }
     /// Refuses admission with the same source Arc supplied by the test.
     fn for_scope(&self, _: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
-        Err(StorageError::fenced("scope rejected").with_source(self.marker.clone()))
+        Err(StorageError::unavailable("scope rejected").with_source(self.marker.clone()))
     }
 }
 
@@ -577,7 +577,7 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     // Unusual keys get the hashed principal segment, and are refused alike.
     for key in ["agent", "unusual key", "sha256:reserved"] {
         let error = provider.try_for_agent(key).unwrap_err();
-        assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Fenced);
+        assert_eq!(error.kind(), tinystoragedrivers_types::ErrorKind::Unavailable);
         let source = error
             .source()
             .unwrap()

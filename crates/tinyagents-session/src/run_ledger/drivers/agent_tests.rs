@@ -218,7 +218,7 @@ impl tinystoragedrivers_api::StreamStore for RefusingProjection {
         _: u64,
         _: Vec<serde_json::Value>,
     ) -> std::result::Result<u64, StorageError> {
-        Err(StorageError::fenced("projection grant expired"))
+        Err(StorageError::unavailable("projection grant expired"))
     }
     async fn read_window(
         &self,
@@ -275,7 +275,7 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
     .await
     .unwrap();
     assert!(
-        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_types::ErrorKind::Fenced)
+        matches!(a.reconcile_run_events("run").await.unwrap_err(), super::super::LedgerError::Driver(ref e) if e.kind() == tinystoragedrivers_types::ErrorKind::Unavailable)
     );
     let reconstructed = DriverRunLedger::new(backend.for_scope(&scope).unwrap());
     assert_eq!(

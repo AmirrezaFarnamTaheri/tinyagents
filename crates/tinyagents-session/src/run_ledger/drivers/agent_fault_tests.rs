@@ -26,7 +26,7 @@ impl DocumentStore for NoPostCommitReads {
     }
     async fn get(&self, collection: &str, id: &str) -> NativeResult<Option<Versioned<Value>>> {
         if collection == storage::TELEMETRY && self.committed.load(Ordering::SeqCst) {
-            return Err(StorageError::fenced(
+            return Err(StorageError::unavailable(
                 "fixture expires reads immediately after committed write",
             ));
         }

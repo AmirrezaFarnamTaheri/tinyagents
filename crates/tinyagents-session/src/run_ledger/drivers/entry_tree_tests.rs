@@ -289,7 +289,7 @@ impl DocumentStore for TreeBoundary {
     }
     async fn get(&self, collection: &str, id: &str) -> NativeResult<Option<Versioned<Value>>> {
         if self.reject_post_commit_reads && self.committed.load(Ordering::SeqCst) {
-            return Err(StorageError::fenced("postcommit read refused"));
+            return Err(StorageError::unavailable("postcommit read refused"));
         }
         self.inner.get(collection, id).await
     }
@@ -313,7 +313,7 @@ impl DocumentStore for TreeBoundary {
     }
     async fn query(&self, collection: &str, query: &Query) -> NativeResult<Page<Versioned<Value>>> {
         if self.reject_post_commit_reads && self.committed.load(Ordering::SeqCst) {
-            return Err(StorageError::fenced("postcommit query refused"));
+            return Err(StorageError::unavailable("postcommit query refused"));
         }
         self.inner.query(collection, query).await
     }
@@ -343,7 +343,7 @@ impl DocumentStore for TreeBoundary {
         let changes = writes.iter().any(|write| matches!(write, WriteOp::Put { collection, .. } if collection == entry_tree::HEADS));
         if changes {
             if self.refuse {
-                return Err(StorageError::fenced("tree commit refused")
+                return Err(StorageError::unavailable("tree commit refused")
                     .with_source(std::io::Error::other("native tree source")));
             }
             if let Some(barrier) = &self.barrier
@@ -431,7 +431,7 @@ async fn tree_batch_refusal_preserves_entries_labels_head_and_native_source() {
     ] {
         let error = result.unwrap_err();
         assert!(
-            matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Fenced)
+            matches!(&error, super::super::LedgerError::Driver(native) if native.kind() == ErrorKind::Unavailable)
         );
         assert_eq!(
             std::error::Error::source(&error).unwrap().to_string(),

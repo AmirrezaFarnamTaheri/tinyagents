@@ -38,7 +38,7 @@ impl DocumentStore for ProbeDocs {
                 tinystoragedrivers_types::Capability::CollectionValidation,
                 "unsupported adapter",
             )),
-            2 => Err(StorageError::fenced("retired actor").with_source(Retired)),
+            2 => Err(StorageError::unavailable("retired actor").with_source(Retired)),
             _ => self.inner.validate_collection_spec(spec).await,
         }
     }
@@ -200,7 +200,7 @@ async fn validation_only_refusals_keep_native_sources_and_retry_without_caching(
             1,
             ErrorKind::Unsupported(tinystoragedrivers_types::Capability::CollectionValidation),
         ),
-        (2, ErrorKind::Fenced),
+        (2, ErrorKind::Unavailable),
     ] {
         observed.refusal.store(refusal, Ordering::SeqCst);
         let error = provider.try_for_agent("agent").unwrap_err();

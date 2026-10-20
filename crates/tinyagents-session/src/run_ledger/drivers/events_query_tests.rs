@@ -46,7 +46,7 @@ impl DocumentStore for BoundedQueries {
         if collection == storage::EVENTS {
             self.limits.lock().push(query.limit);
             if self.refuse {
-                return Err(StorageError::fenced("event admission refused"));
+                return Err(StorageError::unavailable("event admission refused"));
             }
             if query.limit.is_none_or(|limit| limit > 3) {
                 return Err(StorageError::invalid_input(
@@ -232,7 +232,7 @@ async fn zero_limit_event_reads_still_require_native_admission() {
         .await
         .unwrap_err();
     assert!(
-        matches!(error, super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Fenced)
+        matches!(error, super::super::LedgerError::Driver(error) if error.kind() == ErrorKind::Unavailable)
     );
 }
 #[tokio::test]

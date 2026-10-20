@@ -273,7 +273,7 @@ async fn native_scope_fence_rejects_metadata_takeover_without_local_fallback() {
         .await
         .unwrap();
     assert!(
-        matches!(store.update_thread_title("one", "stale", "now").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Fenced)
+        matches!(store.update_thread_title("one", "stale", "now").await, Err(ConversationError::Driver(e)) if e.kind() == ErrorKind::Unavailable)
     );
     assert_eq!(
         scoped(&backend, "profile").get_thread("one").await.unwrap(),

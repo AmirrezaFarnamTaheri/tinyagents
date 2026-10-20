@@ -381,7 +381,7 @@ async fn fenced_phases(backend: &dyn StorageBackend) {
             .unwrap();
         fault.release.notify_one();
         assert!(
-            matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind()==ErrorKind::Fenced)
+            matches!(writer.await, Err(ConversationError::Driver(ref e)) if e.kind()==ErrorKind::Unavailable)
         );
         assert_eq!(store.get_messages("same").await.unwrap().len(), index);
         // An independently admitted fresh writer may reconcile the accepted
