@@ -3,12 +3,13 @@
 //! [`TranscriptMeta`] / [`DisplayMessage`] types.
 
 use super::display::{metadata_with_background, split_background};
-use super::types::{
-    BackgroundOrigin, DisplayMessage, MessageUsage, TRANSCRIPT_SCHEMA_VERSION, TranscriptMeta,
-    TurnUsage,
-};
+use super::types::{BackgroundOrigin, DisplayMessage, MessageUsage, TranscriptMeta, TurnUsage};
+#[cfg(test)]
+use super::types::TRANSCRIPT_SCHEMA_VERSION;
 use super::types::{ToolFailure, TranscriptMessage, TranscriptPart, TranscriptToolCall};
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tinytools_agent::dialect::{

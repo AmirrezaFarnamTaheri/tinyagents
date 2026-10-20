@@ -240,7 +240,7 @@ pub async fn import_legacy_sessions(
                 .cloned()
                 .unwrap_or_default(),
         };
-        let before = store.get(&thread_id).await?;
+        let before = store.record(&thread_id).await?;
         store.import_record(&thread_id, record).await?;
         if before.is_none() {
             imported += 1;

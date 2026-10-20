@@ -660,6 +660,7 @@ pub struct TurnUsage {
 /// Schema version stamped on the `_meta` header line. Bumped when the JSONL
 /// record shape changes in a way future readers may need to branch on. `0`
 /// (absent) denotes pre-append-only files written before this field existed.
+#[cfg(test)]
 pub const TRANSCRIPT_SCHEMA_VERSION: u32 = 1;
 
 /// Metadata header for a session transcript file.
