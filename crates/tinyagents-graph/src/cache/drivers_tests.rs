@@ -27,7 +27,7 @@ async fn memory_backend_passes_the_task_cache_contract() {
 #[tokio::test]
 async fn testkit_backend_passes_the_task_cache_contract() {
     let dir = tempfile::tempdir().unwrap();
-    let storage = crate::test_support::memory_backend(&dir.path().join("cache.sqlite"));
+    let storage = MemoryBackend::new();
     task_cache_contract(DriverTaskCache::new(docs(&storage, "local"))).await;
 }
 
