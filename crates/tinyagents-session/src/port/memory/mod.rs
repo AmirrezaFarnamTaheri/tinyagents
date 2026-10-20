@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tinyagents_harness::store::{InMemoryAppendStore, InMemoryStore};
 
-use super::super::helpers::{
+use super::helpers::{
     COMPLETED_RETENTION, MAX_GENERATIONS, completed_newest_first, is_terminal, newest_first,
 };
 use super::{AgentStores, SessionStoreProvider, TurnStates};
