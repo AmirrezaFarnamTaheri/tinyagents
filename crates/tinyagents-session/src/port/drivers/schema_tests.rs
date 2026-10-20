@@ -29,7 +29,7 @@ async fn put_v1(storage: &ScopedStorage, collection: &str, id: &str, body: Value
         .unwrap();
 }
 
-async fn migrate(storage: &ScopedStorage) -> tinystoragedrivers_types::MigrationReport {
+async fn migrate(storage: &ScopedStorage) -> tinyagents_storage_kit::MigrationReport {
     for spec in tinyagents_storage_kit::primitives::collection_specs() {
         storage.documents().ensure_collection(&spec).await.unwrap();
     }
@@ -70,7 +70,7 @@ fn the_schema_names_what_the_session_crate_owns() {
         schema
             .items
             .iter()
-            .all(|item| item.scope() == tinystoragedrivers_types::ScopeClass::Agent)
+            .all(|item| item.scope() == tinyagents_storage_kit::ScopeClass::Agent)
     );
     Registry::compose([schema]).unwrap();
 }

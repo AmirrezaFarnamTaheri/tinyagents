@@ -6,6 +6,7 @@ use tinyagents_harness::tool::{
     ToolEffectStatus as HarnessStatus,
 };
 use tinyagents_storage_kit::Scope;
+use tinystoragedrivers_api::StorageBackend;
 
 use super::*;
 

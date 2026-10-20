@@ -94,6 +94,10 @@ struct ArrivingReceipts {
 }
 #[async_trait::async_trait]
 impl tinystoragedrivers_api::StreamStore for ArrivingReceipts {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
     async fn append(
         &self,
         stream: &str,

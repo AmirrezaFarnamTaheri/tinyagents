@@ -12,6 +12,8 @@ use serde_json::Value;
 use tinyagents_harness::Result as HarnessResult;
 use tinyagents_harness::store::{AppendStore, Store};
 use tinystoragedrivers_types::StorageError;
+#[cfg(test)]
+use tinyagents_storage_kit::Scope;
 
 use super::{AgentStores, SessionStoreProvider};
 use crate::DriverSessionStores;

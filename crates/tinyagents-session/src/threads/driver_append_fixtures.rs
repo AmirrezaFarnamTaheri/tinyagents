@@ -197,6 +197,10 @@ struct Streams {
 }
 #[async_trait]
 impl StreamStore for Streams {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
     async fn append(&self, s: &str, v: Value) -> tinystoragedrivers_types::Result<u64> {
         self.inner.append(s, v).await
     }

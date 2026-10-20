@@ -111,6 +111,10 @@ pub(super) struct PausedStreams {
 }
 #[async_trait]
 impl StreamStore for PausedStreams {
+    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+        self.inner.capabilities()
+    }
+
     async fn append(
         &self,
         stream: &str,
