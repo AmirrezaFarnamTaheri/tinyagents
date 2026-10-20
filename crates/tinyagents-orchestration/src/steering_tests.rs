@@ -138,7 +138,11 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_r
         .await,
         Err(SteerError::Unknown)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "terminal tasks do not fall back");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "terminal tasks do not fall back"
+    );
     assert!(
         handle.drain().is_empty(),
         "terminal children never use stale handles"
@@ -158,7 +162,10 @@ async fn steer_rejects_followup_unknown_unowned_and_terminal_without_consuming_r
     .await
     .unwrap();
     assert_eq!(receipt.route, Some(SteerRoute::Registry));
-    assert!(!receipt.duplicate, "a rejected terminal steer keeps its request id");
+    assert!(
+        !receipt.duplicate,
+        "a rejected terminal steer keeps its request id"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
