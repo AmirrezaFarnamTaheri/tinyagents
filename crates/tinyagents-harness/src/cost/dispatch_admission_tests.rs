@@ -658,6 +658,57 @@ async fn assert_openai_retry_rechecks_committed_admission(with_money_budget: boo
     assert_eq!(counts.observer_start.load(Ordering::SeqCst), 1);
 }
 
+struct LazyTypedRefusalModel(DispatchRefusalReason);
+
+#[async_trait]
+impl ChatModel<()> for LazyTypedRefusalModel {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        unreachable!("typed refusal fixture is exercised through its stream")
+    }
+
+    async fn stream(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelStream> {
+        let reason = self.0;
+        let mut recorded = false;
+        let stream = futures::stream::poll_fn(move |_| {
+            if !recorded {
+                recorded = true;
+                super::dispatch_admission::record_invocation_refusal(DispatchRefusal::new(reason));
+                Poll::Ready(Some(ModelStreamItem::Failed(
+                    "lazy test stream terminated".to_owned(),
+                )))
+            } else {
+                Poll::Ready(None)
+            }
+        });
+        Ok(ModelStream::new(Box::pin(stream)))
+    }
+}
+
+#[tokio::test]
+async fn turn_keeps_typed_dispatch_outcome_scope_through_lazy_stream_poll() {
+    let mut harness: AgentHarness<()> = AgentHarness::new();
+    harness.register_model(
+        "controlled",
+        Arc::new(LazyTypedRefusalModel(DispatchRefusalReason::CallLimit)),
+    );
+
+    let error = harness
+        .invoke_streaming(
+            &(),
+            (),
+            RunConfig::new("lazy-typed-refusal-scope"),
+            vec![tinyinference_llm::message::Message::user("hello")],
+        )
+        .await
+        .expect_err("poll-time typed refusal survives the stream outcome");
+
+    assert!(matches!(
+        error,
+        TinyAgentsError::PhysicalDispatchAdmission(refusal)
+            if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+}
+
 #[tokio::test]
 async fn money_refusal_does_not_commit_admission() {
     let counts = Arc::new(Counts::default());
