@@ -37,7 +37,7 @@ mod bridge;
 pub mod driver;
 mod event_mapper;
 mod input_builder;
-mod session_store;
+pub mod session_store;
 pub mod settings;
 mod stream_parser;
 pub mod types;
