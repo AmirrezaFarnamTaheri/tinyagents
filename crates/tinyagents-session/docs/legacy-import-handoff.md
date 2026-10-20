@@ -22,13 +22,22 @@ opening code. OpenHuman #440 should take over these paths and behaviors:
 
 For ordinary target writes, the host receives a `ScopedStorage` already bound
 by its own identity policy and can build `DriverSessionStores` with an
-`AgentStorageFactory`. Session history uses `SessionHistoryStore` methods such
+`AgentStorageFactory` (`Arc<dyn Fn(&str) -> Result<ScopedStorage, StorageError>>`).
+The normal `DriverSessionStores::try_for_agent(agent_id)` open path invokes
+`open_agent_storage(&ScopedStorage)` before returning handles. That owner-local
+entry point imports the legacy in-storage lease/counter rows, then runs the
+session, ledger, history, and conversation schemas. The host supplies the
+already-bound scope and does not compose consumer registries or run these model
+migrations itself. `driver_run_ledger(agent_id)` and
+`SessionStoreProvider::run_ledger_for_agent(agent_id)` use the same open path.
+Session history uses `SessionHistoryStore` methods such
 as `record_session_start`, `record_message`, `record_tool_call`, and
 `record_session_end`; turn snapshots use `TurnStates`; transcripts use
 `TranscriptLocator::open_stem` and `TranscriptHistory::append_turn`; chat rows
 use `ConversationPersistence`. There is no entry-tree target API in this
-branch. None of these target methods accepts a path, SQLite connection,
-workspace, tenant grammar, or source authority.
+branch. The imported filesystem/SQLite source is not passed to these methods.
+None of these target methods accepts a path, SQLite connection, workspace,
+tenant grammar, or source authority.
 
 The source files are no longer present in this branch. Their importer tests
 were `src/legacy/{files_tests.rs,mod_tests.rs,rewrite_tests.rs,
