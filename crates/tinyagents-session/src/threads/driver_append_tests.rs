@@ -43,7 +43,7 @@ async fn prepared_append(backend: &dyn StorageBackend) {
         .unwrap();
     let a =
         DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
-    let b = DriverConversationStore::new_validate_only(ScopedStorage::new(raw, alice));
+    let b = DriverConversationStore::new_validate_only(ScopedStorage::new(raw.clone(), alice.clone()));
     let bob_storage = backend.for_scope(&bob).unwrap();
     DriverConversationStore::prepare_append_schema(bob_storage.documents().as_ref())
         .await

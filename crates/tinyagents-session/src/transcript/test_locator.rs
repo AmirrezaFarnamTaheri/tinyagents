@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{TranscriptHistory, TranscriptLocator, TranscriptTurn, read_transcript};
+use crate::port::SessionStoreProvider;
 
 /// An empty driver-backed locator (the production store, over memory).
 pub(crate) fn driver_locator() -> Arc<dyn TranscriptLocator> {

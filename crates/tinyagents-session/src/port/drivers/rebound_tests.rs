@@ -297,7 +297,7 @@ fn concurrent_registration_and_rebind_leave_all_retained_handles_on_current_back
             .await
             .unwrap();
         let independent = DriverSessionStores::new(crate::testkit::fixed_scope_factory(
-            Arc::new(expected_backend),
+            expected_backend,
             "local",
         ))
         .unwrap()

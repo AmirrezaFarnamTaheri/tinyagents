@@ -254,11 +254,9 @@ fn optional_conversation_provider_forwards_selected_handle_and_preserves_absence
         }
     }
     let scope = tinyagents_storage_kit::Scope::new("conversation-fixture").unwrap();
-    let scoped = crate::testkit::MemoryStorage::new()
-        .for_scope(&scope)
-        .unwrap();
+    let scoped = crate::testkit::MemoryStorage::new().for_scope(&scope).unwrap();
     let conversations: Arc<dyn ConversationPersistence> = Arc::new(DriverConversationStore::new(
-        tinyagents_storage_kit::ScopedStorage::new(scoped, scope),
+        scoped,
     ));
     let provider = Arc::new(Provider {
         sessions: InMemorySessionStores::new(),

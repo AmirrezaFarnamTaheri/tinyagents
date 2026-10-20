@@ -261,7 +261,7 @@ async fn committed_status_and_event_survive_projection_refusal_and_process_recon
             ports.queues().clone(),
             ports.secrets().clone(),
         ),
-        scope,
+        scope.clone(),
     );
     let a = DriverRunLedger::new(refused);
     a.upsert_agent_run(run("run")).await.unwrap();

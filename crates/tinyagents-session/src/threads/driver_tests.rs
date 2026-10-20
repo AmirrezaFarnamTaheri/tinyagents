@@ -273,7 +273,7 @@ async fn conflicting_metadata_edits_reread_version_and_preserve_both_fields() {
         .await
         .unwrap();
     let ports = backend.for_scope(&scope).unwrap();
-    let scoped_ports = ScopedStorage::new(ports, scope.clone());
+    let scoped_ports = ports;
     let docs = Arc::new(fixtures::ConflictingDocs {
         inner: scoped_ports.documents().clone(),
         attempts: AtomicUsize::new(0),
@@ -361,13 +361,7 @@ async fn configured_backend_refusal_preserves_native_source_without_selecting_cl
         barrier: tokio::sync::Barrier::new(2),
         refuse_get: true,
     });
-    let store = DriverConversationStore::new(ScopedStorage::new(
-        scope,
-        "refused",
-        docs,
-        ports.streams().clone(),
-        ports.blobs().clone(),
-    ));
+    let store = DriverConversationStore::new(crate::testkit::with_documents(&ports, docs));
     let Err(error) = store.ensure_thread(request("one")).await else {
         panic!("configured refusal became success");
     };
