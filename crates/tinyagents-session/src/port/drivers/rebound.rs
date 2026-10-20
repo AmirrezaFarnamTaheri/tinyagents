@@ -2,8 +2,8 @@
 //!
 //! A handle operation snapshots its current store immediately before the
 //! operation and releases the binding lock before doing I/O. Operations that
-//! already captured a backend finish there; later calls through retained or
-//! cloned `AgentStores` follow the new backend after `rebind` completes.
+//! already captured storage finish there; later calls through retained or
+//! cloned `AgentStores` follow the host's new storage factory after `rebind` completes.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
@@ -59,12 +59,12 @@ impl SessionStoreRegistry {
     }
 }
 
-/// Driver-backed stores whose retained agent handles follow backend rebinds.
+/// Driver-backed stores whose retained agent handles follow host factory rebinds.
 pub struct RebindableSessionStores {
     current: RwLock<Arc<DriverSessionStores>>,
     live: Mutex<HashMap<String, Weak<LiveAgentStores>>>,
     recover_on_open: bool,
-    factory: AgentStorageFactory,
+    factory: RwLock<AgentStorageFactory>,
 }
 
 impl RebindableSessionStores {
@@ -89,7 +89,7 @@ impl RebindableSessionStores {
             current: RwLock::new(Arc::new(driver)),
             live: Mutex::new(HashMap::new()),
             recover_on_open,
-            factory,
+            factory: RwLock::new(factory),
         });
         registry.register(&this);
         Ok(this)
@@ -99,7 +99,7 @@ impl RebindableSessionStores {
         Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Replaces the backend and updates every retained agent handle.
+    /// Replaces the host storage factory and updates every retained agent handle.
     ///
     /// Existing method calls retain the provider snapshot they started with;
     /// subsequent calls through a live handle resolve against the new backend.
@@ -139,9 +139,7 @@ impl RebindableSessionStores {
                 .unwrap_or_else(PoisonError::into_inner) = stores;
         }
         *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
-        // Keep the new host resolver for any future provider rebinding.
-        // The factory field is immutable so providers are normally rebound via
-        // the new `next` instance supplied by the owning registry.
+        *self.factory.write().unwrap_or_else(PoisonError::into_inner) = factory;
         Ok(())
     }
 }

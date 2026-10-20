@@ -1,5 +1,7 @@
 //! Host-bound settings persistence and legacy import tests.
 
+use serde::Serialize;
+
 use super::*;
 use tinyagents_storage_kit::{Scope, StorageBackend};
 use tinystoragedrivers_testkit::MemoryBackend;
@@ -34,8 +36,21 @@ async fn save_then_load_roundtrips_settings() {
 #[tokio::test]
 async fn legacy_settings_import_only_fills_an_empty_target() {
     let (_scoped, kv) = settings_store();
+    // The old writer used serde_json::to_vec_pretty for this DTO. Keep its
+    // serialized output as a fixture from the released file format.
+    #[derive(Serialize)]
+    struct ReleasedSettings {
+        full_access: bool,
+    }
+    let serialized_by_released_writer =
+        serde_json::to_vec_pretty(&ReleasedSettings { full_access: true }).unwrap();
+    let old_release_fixture = include_bytes!("fixtures/claude_code_settings.json");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&serialized_by_released_writer).unwrap(),
+        serde_json::from_slice::<serde_json::Value>(old_release_fixture).unwrap()
+    );
     assert!(
-        import_legacy(&kv, br#"{"full_access":true}"#)
+        import_legacy(&kv, old_release_fixture)
             .await
             .unwrap()
     );
