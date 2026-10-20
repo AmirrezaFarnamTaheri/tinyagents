@@ -56,7 +56,12 @@ fn main() {
     });
 
     let mut collections = serde_json::Map::new();
-    for collection in ["ledger.workflow_runs", "history.sessions", "history.messages"] {
+    for collection in [
+        "ledger.workflow_runs",
+        "history.sessions",
+        "history.messages",
+        "tsd.counters",
+    ] {
         let rows = runtime
             .block_on(scoped.documents().query(collection, &Query::all()))
             .unwrap()
