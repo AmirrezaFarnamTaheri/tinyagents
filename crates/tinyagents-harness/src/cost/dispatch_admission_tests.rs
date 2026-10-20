@@ -216,6 +216,25 @@ struct FirstCallGateModel {
     release: Arc<tokio::sync::Semaphore>,
 }
 
+struct TwoPhysicalAttemptModel {
+    sent: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl ChatModel<()> for TwoPhysicalAttemptModel {
+    fn tracks_physical_attempts(&self) -> bool {
+        true
+    }
+
+    async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
+        tinyinference_llm::model::budget::before_physical_attempt()?;
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        tinyinference_llm::model::budget::before_physical_attempt()?;
+        self.sent.fetch_add(1, Ordering::SeqCst);
+        Ok(ModelResponse::assistant("ok"))
+    }
+}
+
 #[async_trait]
 impl ChatModel<()> for FirstCallGateModel {
     async fn invoke(&self, _: &(), _: ModelRequest) -> tinyinference_llm::Result<ModelResponse> {
@@ -393,6 +412,34 @@ async fn admission_refuses_before_provider_or_physical_observer_start() {
     assert_eq!(admission.acquired.load(Ordering::SeqCst), 1);
     assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 0);
     assert_eq!(admission.permits.active.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn physical_attempt_refusal_is_forwarded_through_controlled_model() {
+    let counts = Arc::new(Counts::default());
+    let sent = Arc::new(AtomicUsize::new(0));
+    let admission = ScriptedAdmission::new([Step::Immediate(Ok(()))]);
+    admission
+        .permits
+        .physical_attempt_limit
+        .store(1, Ordering::SeqCst);
+    let controlled = ControlledChatModel::new(
+        Arc::new(TwoPhysicalAttemptModel { sent: sent.clone() }),
+        options(Some(admission.clone()), None, &counts),
+    );
+
+    let error = controlled
+        .invoke_controlled(&(), text_request())
+        .await
+        .expect_err("the second physical attempt exceeds the host limit");
+    assert!(matches!(
+        error,
+        ControlledDispatchError::Admission(refusal)
+            if refusal.reason() == DispatchRefusalReason::CallLimit
+    ));
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.permits.committed.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.permits.physical_attempts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
