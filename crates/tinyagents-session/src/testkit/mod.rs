@@ -69,6 +69,24 @@ pub(crate) fn scoped_storage_factory(
     mapped_storage_factory(backend, scopes)
 }
 
+/// Test-only replacement for a fixed backend/scope pair. The finite identity
+/// list is an explicit fixture map, not a production identity convention.
+#[cfg(test)]
+pub(crate) fn fixed_scope_factory(
+    backend: std::sync::Arc<dyn tinystoragedrivers_api::StorageBackend>,
+    label: &str,
+) -> crate::port::AgentStorageFactory {
+    let labels = [
+        "a", "b", "alice", "bob", "agent", "agent-1", "other", "local", "allowed",
+        "denied", "one", "two", "profile", "host-prepared-test", "prepared-actor",
+        "contract-store-agent", "contract-iso-a", "contract-iso-b", "winner", "fixture",
+    ]
+    .into_iter()
+    .map(|agent| (agent.to_owned(), format!("test fixture {label} {agent}")))
+    .collect();
+    scoped_storage_factory(backend, labels)
+}
+
 /// Legacy-compatible constructor for tests that need a real, six-port memory
 /// backend. This adapter is compiled only with the session testkit.
 #[cfg(test)]

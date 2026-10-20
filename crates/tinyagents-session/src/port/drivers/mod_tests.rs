@@ -189,13 +189,13 @@ fn an_agent_gets_the_same_stores_every_time() {
 fn data_survives_a_new_provider_on_the_same_backend() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let turn = TurnState::started("t", "r", 8, "2026-01-01T00:00:00Z");
-    DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap())
+    DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::clone(&backend), "local"))
         .unwrap()
         .for_agent("a")
         .turn_states
         .put(&turn)
         .unwrap();
-    let reopened = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    let reopened = DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local"))
         .unwrap()
         .for_agent("a");
     assert_eq!(reopened.turn_states.get("t").unwrap(), Some(turn));
@@ -220,7 +220,7 @@ fn recover_marks_open_agents_turns_interrupted() {
 fn recover_on_open_interrupts_turns_an_earlier_process_left() {
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let earlier =
-        DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::clone(&backend), "local")).unwrap();
     earlier
         .for_agent("a")
         .turn_states
@@ -228,7 +228,7 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
         .unwrap();
 
     let plain =
-        DriverSessionStores::new(Arc::clone(&backend), Scope::new("local").unwrap()).unwrap();
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::clone(&backend), "local")).unwrap();
     assert_eq!(
         plain
             .for_agent("a")
@@ -241,7 +241,7 @@ fn recover_on_open_interrupts_turns_an_earlier_process_left() {
         "without the option nothing is touched"
     );
 
-    let recovering = DriverSessionStores::new(backend, Scope::new("local").unwrap())
+    let recovering = DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local"))
         .unwrap()
         .recover_on_open(true);
     assert!(format!("{recovering:?}").contains("recover_on_open: true"));
@@ -286,7 +286,7 @@ impl StorageBackend for Unbindable {
 #[tokio::test]
 async fn an_unbindable_scope_fails_closed() {
     let provider =
-        DriverSessionStores::new(Arc::new(Unbindable), Scope::new("local").unwrap()).unwrap();
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::new(Unbindable), "local")).unwrap();
     assert!(provider.try_for_agent("a").is_err());
     let stores = provider.for_agent("a");
 
@@ -474,14 +474,11 @@ impl StorageBackend for Flaky {
 #[test]
 fn a_failed_recovery_fails_closed_and_is_retried() {
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let provider = DriverSessionStores::new(
-        Arc::new(Flaky {
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: Arc::clone(&down),
             reject_declaration: false,
-        }),
-        Scope::new("local").unwrap(),
-    )
+        }), "local"))
     .unwrap()
     .recover_on_open(true);
 
@@ -547,12 +544,9 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     use std::error::Error;
     let marker = Arc::new(NativeFailure);
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(
-            Arc::new(NativeRefusal {
+        DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::new(NativeRefusal {
                 marker: marker.clone(),
-            }),
-            Scope::new("local").unwrap(),
-        )
+            }), "local"))
         .unwrap(),
     );
     // Unusual keys get the hashed principal segment, and are refused alike.
@@ -573,14 +567,11 @@ fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
 fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
     use std::error::Error;
     let down = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let provider = DriverSessionStores::new(
-        Arc::new(Flaky {
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: down.clone(),
             reject_declaration: false,
-        }),
-        Scope::new("local").unwrap(),
-    )
+        }), "local"))
     .unwrap()
     .recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
@@ -603,14 +594,11 @@ fn checked_open_preserves_native_recovery_query_refusal_and_retries() {
 /// Pins native declaration errors before turn recovery can proceed.
 fn checked_open_preserves_native_recovery_declaration_refusal() {
     use std::error::Error;
-    let provider = DriverSessionStores::new(
-        Arc::new(Flaky {
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(Arc::new(Flaky {
             storage: MemoryStorage::new(),
             down: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             reject_declaration: true,
-        }),
-        Scope::new("local").unwrap(),
-    )
+        }), "local"))
     .unwrap()
     .recover_on_open(true);
     let error = provider.try_for_agent("agent").unwrap_err();
@@ -630,7 +618,7 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     use std::error::Error;
     let backend: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
     let provider: Arc<dyn SessionStoreProvider> =
-        Arc::new(DriverSessionStores::new(backend.clone(), Scope::new("local").unwrap()).unwrap());
+        Arc::new(DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend.clone(), "local")).unwrap());
     let first = provider.try_for_agent("agent").unwrap();
     let cached = provider.try_for_agent("agent").unwrap();
     assert!(Arc::ptr_eq(&first.turn_states, &cached.turn_states));

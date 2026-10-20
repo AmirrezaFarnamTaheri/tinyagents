@@ -236,7 +236,7 @@ fn migrated_records_are_what_the_provider_reads() {
         })
         .unwrap();
 
-    let provider = DriverSessionStores::new(backend, Scope::new("local").unwrap()).unwrap();
+    let provider = DriverSessionStores::new(crate::testkit::fixed_scope_factory(backend, "local")).unwrap();
     let stores = provider.for_agent("planner");
     let root = stores.transcripts.root_for_thread("t").expect("indexed");
     let session = root.read_session().unwrap().expect("written");
