@@ -541,33 +541,18 @@ impl std::fmt::Display for NativeFailure {
 }
 impl std::error::Error for NativeFailure {}
 
-#[derive(Debug)]
-struct NativeRefusal {
-    marker: Arc<NativeFailure>,
-}
-impl StorageBackend for NativeRefusal {
-    /// Advertises no optional native capabilities.
-    fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
-        Default::default()
-    }
-    /// Refuses admission with the same source Arc supplied by the test.
-    fn for_scope(&self, _: &Scope) -> Result<tinyagents_storage_kit::Storage, StorageError> {
-        Err(StorageError::unavailable("scope rejected").with_source(self.marker.clone()))
-    }
-}
-
 #[test]
 /// Pins native scope error and source identity through object-safe checked opening.
 fn checked_open_preserves_native_scope_refusal_through_dyn_provider() {
     use std::error::Error;
     let marker = Arc::new(NativeFailure);
     let provider: Arc<dyn SessionStoreProvider> = Arc::new(
-        DriverSessionStores::new(crate::testkit::fixed_scope_factory(
-            Arc::new(NativeRefusal {
-                marker: marker.clone(),
-            }),
-            "local",
-        ))
+        DriverSessionStores::new({
+            let marker = marker.clone();
+            Arc::new(move |_| {
+                Err(StorageError::unavailable("scope rejected").with_source(marker.clone()))
+            })
+        })
         .unwrap(),
     );
     // Unusual keys get the hashed principal segment, and are refused alike.
@@ -653,7 +638,10 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
     let first = provider.try_for_agent("agent").unwrap();
     let cached = provider.try_for_agent("agent").unwrap();
     assert!(Arc::ptr_eq(&first.turn_states, &cached.turn_states));
-    let rebound = provider.bind_actor(backend).unwrap().unwrap();
+    let rebound = provider
+        .bind_actor(crate::testkit::fixed_scope_factory(backend, "local"))
+        .unwrap()
+        .unwrap();
     let independent = rebound.try_for_agent("agent").unwrap();
     assert!(!Arc::ptr_eq(&first.turn_states, &independent.turn_states));
     first
@@ -673,9 +661,12 @@ fn checked_open_caches_success_but_actor_rebinding_has_independent_handles() {
 
     let marker = Arc::new(NativeFailure);
     let refused = provider
-        .bind_actor(Arc::new(NativeRefusal {
-            marker: marker.clone(),
-        }))
+        .bind_actor({
+            let marker = marker.clone();
+            Arc::new(move |_| {
+                Err(StorageError::unavailable("scope rejected").with_source(marker.clone()))
+            })
+        })
         .unwrap()
         .unwrap();
     let error = refused.try_for_agent("agent").unwrap_err();
