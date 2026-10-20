@@ -14,8 +14,17 @@ use crate::middleware::AgentRun;
 use crate::steering::PauseState;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use tinyinference_llm::model::{ChatModel, ResolvedModel};
 
 use super::*;
+
+/// A resolved executable model and the metadata produced for this call.
+/// Private to the loop; selection authority remains with `ModelResolver`.
+pub(crate) struct ModelBinding<State: Send + Sync> {
+    pub(crate) resolved: ResolvedModel,
+    pub(crate) model: Arc<dyn ChatModel<State>>,
+}
 
 /// The result of an agent-loop invocation that keeps the partial run even when
 /// the loop fails.
