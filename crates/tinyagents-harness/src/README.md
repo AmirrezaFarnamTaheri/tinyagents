@@ -23,7 +23,6 @@ the module map below.
 | `blocking` (private) | `run_blocking`, the helper that moves synchronous file/DB work off the tokio runtime. |
 | `cache` | Prompt, response, and layout caches for repeated/replayed requests. |
 | `cancel` | Cooperative, runtime-agnostic run cancellation (`CancellationToken`). See [`cancel/README.md`](cancel/README.md). |
-| `capability` | `Capability` bundles (instructions, toolset, middleware, model defaults, exposure, `defer_loading`) composed as one named unit, plus `CapabilityToolSet` / `LoadCapabilityTool` for on-demand loading. |
 | `config` | Crate-owned session configuration, decoupled from any host's config schema. |
 | `context` | `RunContext` — the unit of recursion: run configuration and runtime context threaded through every nested layer. |
 | `cost` | Additive cost accounting (`CostTotals`) that rolls a child run's cost up into its parent. |

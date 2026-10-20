@@ -261,11 +261,7 @@ pub(crate) struct OverrideTool {
     pub(crate) description: Option<String>,
     pub(crate) parameters: Option<Value>,
     pub(crate) policy_transform: Option<Arc<dyn Fn(ToolPolicy) -> ToolPolicy + Send + Sync>>,
-    /// Overrides [`Tool::exposure`] instead of delegating to `inner`. Used by
-    /// [`crate::capability::CapabilityToolSet`] (gap G3) to apply a
-    /// [`crate::capability::Capability::exposure`] uniformly to every tool a
-    /// capability's inner [`ToolSet`] contributes, regardless of what each
-    /// individual tool declares for itself.
+    /// Overrides [`Tool::exposure`] instead of delegating to `inner`.
     pub(crate) exposure_override: Option<ToolExposure>,
 }
 
