@@ -9,6 +9,8 @@ use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::memory_backend;
 use tinystoragedrivers_types::{Scope, WriteOptions};
 
+const LEGACY_WRITER_ROWS: &str = include_str!("fixtures/legacy-31cc-state.json");
+
 fn scoped() -> ScopedStorage {
     let backend = memory_backend();
     let scope = Scope::new("legacy-ledger-tests").unwrap();
@@ -35,31 +37,27 @@ async fn put(storage: &ScopedStorage, collection: &str, id: &str, body: Value) {
 #[tokio::test]
 async fn live_workflow_leases_and_history_counters_move_to_the_shared_primitives() {
     let storage = scoped();
+    let mut legacy: Value = serde_json::from_str(LEGACY_WRITER_ROWS).unwrap();
+    // The checked-in output is reproducible and static. Normalize only the
+    // lease expiry to keep the live-lease behavior independent of wall time.
     let live = (Utc::now() + Duration::hours(1)).to_rfc3339();
-    let lapsed = (Utc::now() - Duration::hours(1)).to_rfc3339();
-    for (run, expires) in [("live", &live), ("lapsed", &lapsed)] {
-        put(
-            &storage,
-            "run_ledger_workflow_runs",
-            &legacy_key(&[run]),
-            json!({"schemaVersion": 1, "record": {"id": run, "leaseOwner": "driver", "leaseExpiresAt": expires}}),
-        )
-        .await;
-    }
-    put(
-        &storage,
+    legacy["run_ledger_workflow_runs"][0]["doc"]["record"]["leaseExpiresAt"] =
+        Value::String(live);
+    for collection in [
+        "run_ledger_workflow_runs",
         "session_history_counters",
-        &legacy_key(&["messages"]),
-        json!({"schemaVersion": 1, "record": {"next": 11}}),
-    )
-    .await;
-    put(
-        &storage,
         "run_ledger_agent_imports",
-        "receipt",
-        json!({"record": {}}),
-    )
-    .await;
+    ] {
+        for row in legacy[collection].as_array().unwrap() {
+            put(
+                &storage,
+                collection,
+                row["id"].as_str().unwrap(),
+                row["doc"].clone(),
+            )
+            .await;
+        }
+    }
 
     let report = import_legacy_ledger(&storage).await.unwrap();
     assert_eq!(
