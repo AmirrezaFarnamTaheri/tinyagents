@@ -78,7 +78,8 @@ pub(crate) fn fixed_scope_factory(
 ) -> crate::port::AgentStorageFactory {
     let labels = [
         "a", "b", "alice", "bob", "agent", "agent-1", "other", "local", "allowed",
-        "denied", "one", "two", "profile", "host-prepared-test", "prepared-actor",
+        "denied", "one", "two", "profile", "host-prepared-test", "prepared-actor", "agent-one",
+        "agent-two", "old-agent", "new-agent",
         "contract-store-agent", "contract-iso-a", "contract-iso-b", "winner", "fixture",
     ]
     .into_iter()
