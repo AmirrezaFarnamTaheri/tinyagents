@@ -48,6 +48,7 @@
 //!   the file and SQLite building blocks, and a host crate decides to use them.
 
 mod drivers;
+mod helpers;
 #[cfg(any(test, feature = "testkit"))]
 mod memory;
 mod types;
